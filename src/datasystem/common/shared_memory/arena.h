@@ -71,6 +71,9 @@ public:
     Status AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd, ptrdiff_t &offset,
                           uint64_t &mmapSize, ServiceType type);
 
+    Status AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd, ptrdiff_t &offset,
+                          uint64_t &mmapSize, uint8_t &numaId, ServiceType type);
+
     /**
      * @brief Free memory from shared memory.
      * @param[in] pointer Pointer to be free.
@@ -453,6 +456,10 @@ public:
      */
     Status Init(AllocatorFuncRegister funcRegister);
 
+    Status BuildNumaRangeTable();
+
+    Status QueryNumaId(void *ptr, uint8_t &numaId) const;
+
     /**
      * @brief Get mmap entry info via pointer, it will traverses 'mmapEntryTable_' to find the
      *        MmapEntry which the pointer belongs (via pointer address), and return the info
@@ -538,6 +545,8 @@ public:
     }
 
 private:
+    void LogNumaRangeTable() const;
+
     /**
      * @brief Jemalloc extent allocate hook, The alloc hook is invoked whenever the arena needs additional
      *        memory from the OS, e.g. when all local mapped memory are in use, and we need more memory to
@@ -647,6 +656,8 @@ private:
 
     // Arena mmap to allocate and manage memory.
     std::unique_ptr<IMmap> mmap_;
+
+    std::map<uintptr_t, uint8_t> numaRanges_;
 };
 }  // namespace memory
 }  // namespace datasystem

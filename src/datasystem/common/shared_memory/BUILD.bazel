@@ -50,9 +50,11 @@ ds_cc_library(
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:common_util_base",
         "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:numa_util",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:common_util_gflag_header",
         "@re2",
     ] + select({
         "//:with_tests": ["@jemalloc_kvc//:jemalloc_shared"],

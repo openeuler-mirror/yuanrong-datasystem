@@ -56,6 +56,11 @@ DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time
 DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR are created per-connection.");
 DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
+DS_DEFINE_bool(enable_ub_numa_affinity, false,
+               "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled.");
+DS_DEFINE_string(shared_memory_distribution_policy, "none",
+                 "Shared memory NUMA distribution policy. Optional values: "
+                 "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");
 DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");
 DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
 DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
@@ -93,5 +98,4 @@ DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");
 DS_DEFINE_bool(enable_pipeline_h2d, false, "Enable pipeline H2D. Default is false");
-DS_DEFINE_int32(pipeline_h2d_thread_num, 64,
-                "Pipeline H2D worker thread number. Default value 64");
+DS_DEFINE_int32(pipeline_h2d_thread_num, 64, "Pipeline H2D worker thread number. Default value 64");

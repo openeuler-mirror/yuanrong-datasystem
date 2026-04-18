@@ -21,6 +21,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <sys/mman.h>
 
@@ -275,6 +276,15 @@ void Allocator::Shutdown()
 Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
                                  ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType, CacheType cacheType)
 {
+    uint8_t numaId = std::numeric_limits<uint8_t>::max();
+    return AllocateMemory(tenantId, needSize, populate, pointer, fd, offset, mmapSize, numaId, serviceType,
+                          cacheType);
+}
+
+Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
+                                 ptrdiff_t &offset, uint64_t &mmapSize, uint8_t &numaId, ServiceType serviceType,
+                                 CacheType cacheType)
+{
     RETURN_RUNTIME_ERROR_IF_NULL(arenaManager_);
 #ifdef WITH_TESTS
     INJECT_POINT("worker.Allocator.AllocateMemory");
@@ -294,7 +304,8 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
     uint64_t realSize;
     if (rc.IsOk()) {
         RETURN_RUNTIME_ERROR_IF_NULL(arenaGroup);
-        rc = arenaGroup->AllocateMemory(needSize, populate, realSize, pointer, fd, offset, mmapSize, serviceType);
+        rc = arenaGroup->AllocateMemory(needSize, populate, realSize, pointer, fd, offset, mmapSize, numaId,
+                                        serviceType);
     }
     auto stats = GetResourcePoolByType(serviceType, cacheType);
     if (rc.IsError()) {

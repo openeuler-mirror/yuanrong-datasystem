@@ -196,9 +196,13 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
             const uint8_t *srcPtr = static_cast<const uint8_t *>(data) + processedSize;
             memcpy_s(chunkPtr, CHUNK_SIZE, srcPtr, writeSize);
             std::vector<uint64_t> eventKeys;
+            const uint8_t srcChipId = NumaIdToChipId(bufHandle->GetNumaId());
+            const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
+                                          ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
+                                          : INVALID_CHIP_ID;
             Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
                                                   bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(chunkPtr), 0,
-                                                  writeSize, 0, false, eventKeys, waiter);
+                                                  writeSize, 0, srcChipId, dstChipId, false, eventKeys, waiter);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
                                              FormatString("Failed to submit UrmaWritePayload, chunkIndex=%u, "
                                                           "writeSize=%llu, processedSize=%llu, totalSize=%llu",
@@ -262,9 +266,16 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
         std::vector<uint64_t> eventKeys;
         void *poolBuf = bufHandle->GetPointer();
         memcpy_s(poolBuf, realSize, data, totalSize);
-        Status writeStatus = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(),
-                                              bufHandle->GetSegmentSize(), reinterpret_cast<uint64_t>(poolBuf), 0,
-                                              bufferInfo->dataSize, bufferInfo->metadataSize, true, eventKeys);
+        const uint8_t srcChipId = NumaIdToChipId(bufHandle->GetNumaId());
+        const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
+                                      ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
+                                      : INVALID_CHIP_ID;
+        VLOG(1) << "call UrmaWritePayload, srcChipId=" << static_cast<int>(srcChipId)
+                << ", dstChipId=" << static_cast<int>(dstChipId);
+        Status writeStatus =
+            UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
+                             reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize, bufferInfo->metadataSize,
+                             srcChipId, dstChipId, true, eventKeys);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
                                          FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
         bufferInfo->ubDataSentByMemoryCopy = true;

@@ -54,6 +54,17 @@ bool ValidateUrmaMode(const char *flagName, const std::string &value)
 #endif
 }
 
+bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::string &value)
+{
+    if (value == "none" || value == "interleave_all_numa" || value == "interleave_affinity_numa") {
+        return true;
+    }
+    LOG(ERROR) << FormatString(
+        "Invalid %s value: %s. Optional values are 'none', 'interleave_all_numa', 'interleave_affinity_numa'.",
+        flagName, value);
+    return false;
+}
+
 bool ValidateEnableRdma(const char *flagName, bool value)
 {
     (void)flagName;
@@ -92,6 +103,7 @@ DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
+DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);

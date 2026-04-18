@@ -36,6 +36,7 @@ ds_cc_library(
             "status.cpp",
             "meta_route_tool.cpp",
             "deadlock_util.cpp",
+            "numa_util.cpp",
         ],
     ),
     hdrs = glob(
@@ -119,6 +120,16 @@ ds_cc_library(
         ":common_util_impl",
         ":status_helper",
         ":meta_route_tool",
+    ],
+)
+
+ds_cc_library(
+    name = "numa_util",
+    srcs = ["numa_util.cpp"],
+    hdrs = ["numa_util.h"],
+    deps = [
+        ":status_helper",
+        ":strings_util",
     ],
 )
 

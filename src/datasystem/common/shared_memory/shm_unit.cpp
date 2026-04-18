@@ -100,7 +100,7 @@ Status ShmUnit::AllocateMemory(const std::string &tenantId, uint64_t needSize, b
     serviceType_ = serviceType;
     cacheType_ = cacheType;
     RETURN_IF_NOT_OK(datasystem::memory::Allocator::Instance()->AllocateMemory(
-        tenantId, needSize, populate, pointer, fd, offset, mmapSize, serviceType_, cacheType_));
+        tenantId, needSize, populate, pointer, fd, offset, mmapSize, numaId, serviceType_, cacheType_));
     size = needSize;
     tenantId_ = tenantId;
     return Status::OK();
@@ -123,6 +123,7 @@ Status ShmOwner::DistributeMemory(uint64_t shmSize, ShmUnit &shmUnit)
     shmUnit.tenantId_ = tenantId_;
     shmUnit.needHardFree_ = needHardFree_;
     shmUnit.shmOwner_ = shared_from_this();
+    shmUnit.numaId = numaId;
     return Status::OK();
 }
 

@@ -33,8 +33,11 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/shared_memory/mmap/allocation.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 
@@ -83,14 +86,21 @@ Status MemMmap::Initialize(uint64_t size, bool populate, bool hugepage)
         flags |= MAP_POPULATE;
     }
     type_ = "memory";
-    Status rc = SetupFileMapping(size, flags, true);
-    if (rc.IsOk()) {
-        // If urma or rdma is enabled, register the memory.
-        RETURN_IF_NOT_OK(RegisterFastTransportMemory(pointer_, mmapSize_));
-        // If Remote H2D is enabled, pin and register the npu memory
-        RETURN_IF_NOT_OK(RegisterHostMemory(pointer_, mmapSize_));
-}
-    return rc;
+    RETURN_IF_NOT_OK(SetupFileMapping(size, flags, true));
+    const std::string &policy = FLAGS_shared_memory_distribution_policy;
+    if (IsUrmaEnabled() && IsRegisterWholeArenaEnabled()
+        && (policy == "interleave_all_numa" || policy == "interleave_affinity_numa")) {
+        Timer timer;
+        Status rc = (policy == "interleave_all_numa") ? DistributeMemoryAcrossAllNumaNodes(pointer_, mmapSize_)
+                                                      : DistributeMemoryAcrossAffinityNumaNodes(pointer_, mmapSize_);
+        LOG_IF_ERROR(rc, "DistributeMemoryAcross failed");
+        LOG(INFO) << "DistributeMemory with policy " << policy << " took " << timer.ElapsedMilliSecond() << "ms";
+    }
+    // If urma or rdma is enabled, register the memory.
+    RETURN_IF_NOT_OK(RegisterFastTransportMemory(pointer_, mmapSize_));
+    // If Remote H2D is enabled, pin and register the npu memory
+    RETURN_IF_NOT_OK(RegisterHostMemory(pointer_, mmapSize_));
+    return Status::OK();
 }
 
 bool MemMmap::InRange(void *pointer, ptrdiff_t &offset)

@@ -30,9 +30,11 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
+#include "datasystem/common/rdma/urma_dlopen_util.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -201,6 +203,7 @@ Status UrmaManager::Init(const HostPort &hostport)
     std::string urmaDeviceName;
     int eidIndex = -1;
     RETURN_IF_NOT_OK(GetUrmaDeviceName(hostport, urmaDeviceName, eidIndex));
+    const bool isBondingDevice = urmaDeviceName.find("bonding", 0) == 0;
     urma_device_t *urmaDevice = nullptr;
     RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
     if (eidIndex < 0) {
@@ -210,7 +213,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         LOG(WARNING) << "Flag urma_connection_size is deprecated and ignored. "
                      << "JFS/JFR are now created per-connection.";
     }
-    RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex));
+    RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
     serverEventThread_ = std::make_unique<std::thread>(&UrmaManager::ServerEventHandleThreadMain, this);
 
@@ -318,6 +321,12 @@ Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandl
     requestAddr->set_port(localUrmaInfo_.localAddress.Port());
     if (!GetClientId().empty()) {
         urmaInfo.set_client_id(GetClientId());
+    }
+    if (IsUbNumaAffinityEnabled()) {
+        auto chipId = NumaIdToChipId(handler->GetNumaId());
+        if (chipId != INVALID_CHIP_ID) {
+            urmaInfo.set_chip_id(chipId);
+        }
     }
     return Status::OK();
 }
@@ -701,9 +710,9 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
             connection != nullptr, K_RUNTIME_ERROR,
             FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
                          remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
-        mapAccessor->second = std::make_shared<UrmaEvent>(requestId, connection, jfs, remoteAddress,
-                                                          connection->GetUrmaJfrInfo().uniqueInstanceId, operationType,
-                                                          waiter);
+        mapAccessor->second =
+            std::make_shared<UrmaEvent>(requestId, connection, jfs, remoteAddress,
+                                        connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
     }
     return Status::OK();
 }
@@ -711,13 +720,12 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
 Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
-    INJECT_POINT("UrmaManager.UrmaWaitError",
-                 []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
+    INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
     if (timeoutMs < 0) {
         const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-        RETURN_STATUS_LOG_ERROR(K_URMA_WAIT_TIMEOUT,
-                                FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s",
-                                             requestIdStr.c_str()));
+        RETURN_STATUS_LOG_ERROR(
+            K_URMA_WAIT_TIMEOUT,
+            FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s", requestIdStr.c_str()));
     }
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
@@ -751,8 +759,8 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     const auto &remoteAddr = event->GetRemoteAddress();
     const auto &remoteInstanceId = event->GetRemoteInstanceId();
     const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-    auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d",
-                               requestIdStr.c_str(), statusCode);
+    auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
+                               statusCode);
     if (policy == UrmaErrorHandlePolicy::RECREATE_JFS) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RECREATE_JFS] requestId=" << requestId << ", op=" << opName << ", remoteAddress=" << remoteAddr
@@ -1037,11 +1045,63 @@ uint64_t UrmaManager::GenerateReqId()
     return requestId_.fetch_add(1);
 }
 
+Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys)
+{
+    urma_jfs_wr_flag_t flag;
+    flag.value = 0;
+    flag.bs.complete_enable = 1;
+    const bool useNumaAffinity =
+        IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
+
+    uint64_t writtenSize = 0;
+    uint64_t remainSize = args.size;
+    Timer timer;
+    while (remainSize > 0) {
+        const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
+        const uint64_t key = requestId_.fetch_add(1);
+        const uint64_t remoteAddress = args.remoteDataAddress + writtenSize;
+        const uint64_t localAddress = args.localDataAddress + writtenSize;
+        PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
+        INJECT_POINT("UrmaManager.UrmaWriteError",
+                     []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
+        RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jfs, args.remoteAddress,
+                                     UrmaEvent::OperationType::WRITE, args.waiter));
+        urma_status_t ret;
+        if (useNumaAffinity) {
+            VLOG(1) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
+                    << ", dst=" << static_cast<uint32_t>(args.dstChipId);
+            INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
+#ifdef BONDP_USER_CTL_BONDING
+            ret = ds_urma_write_affinity(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
+                                         localAddress, writeSize, flag, key, args.srcChipId, args.dstChipId);
+#else
+            LOG(WARNING) << "enable Numa Affinity, but BONDP_USER_CTL_BONDING is not defined, using default urma write";
+            ret = ds_urma_write(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
+                                localAddress, writeSize, flag, key);
+#endif
+        } else {
+            ret = ds_urma_write(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
+                                localAddress, writeSize, flag, key);
+        }
+        if (ret != URMA_SUCCESS) {
+            DeleteEvent(key);
+            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
+                                    FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
+        }
+        pointWrite.Record();
+        remainSize -= writeSize;
+        writtenSize += writeSize;
+        eventKeys.emplace_back(key);
+    }
+    workerOperationTimeCost.Append("Urma total write.", timer.ElapsedMilliSecond());
+    return Status::OK();
+}
+
 Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                                      const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                     bool blocking, std::vector<uint64_t> &eventKeys,
-                                     std::shared_ptr<EventWaiter> waiter)
+                                     uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                                     std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter)
 {
     eventKeys.clear();
     PerfPoint point(PerfKey::URMA_WRITE_TOTAL);
@@ -1073,17 +1133,13 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR, "Local segment is null");
 
-    point.RecordAndReset(PerfKey::URMA_WRITE_LOOP);
-    // Write payload
-    urma_jfs_wr_flag_t flag;
-    flag.value = 0;
-    flag.bs.complete_enable = 1;
-
     // Get jfs and tjfr
     std::shared_ptr<UrmaJfs> jfs;
     RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
     auto *tjfr = connection->GetTargetJfr();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(tjfr != nullptr, K_RUNTIME_ERROR, "Write got empty remote jfr.");
+
+    point.RecordAndReset(PerfKey::URMA_WRITE_LOOP);
 
     if (OsXprtPipln::IsPiplnH2DRequest(urmaInfo)) {
         OsXprtPipln::PiplnSndArgs args;
@@ -1101,36 +1157,24 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         return OsXprtPipln::StartPipelineSender(args);
     }
 
-    uint64_t writtenSize = 0;
-    uint64_t remainSize = readSize;
-    Timer timer;
-    while (remainSize > 0) {
-        const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
-        const uint64_t key = requestId_.fetch_add(1);
-        PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
-        INJECT_POINT("UrmaManager.UrmaWriteError",
-                     []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::WRITE,
-                                     waiter));
-        urma_status_t ret =
-            ds_urma_write(jfs->Raw(), tjfr, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
-                          segVa + urmaInfo.seg_data_offset() + readOffset + writtenSize,
-                          localObjectAddress + readOffset + metaDataSize + writtenSize, writeSize, flag, key);
-        if (ret != URMA_SUCCESS) {
-            DeleteEvent(key);
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                    FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
-        }
-        pointWrite.Record();
-        remainSize -= writeSize;
-        writtenSize += writeSize;
-        eventKeys.emplace_back(key);
-    }
-    workerOperationTimeCost.Append("Urma total write.", timer.ElapsedMilliSecond());
+    UrmaWriteArgs writeLoopArgs;
+    writeLoopArgs.connection = connection;
+    writeLoopArgs.jfs = jfs;
+    writeLoopArgs.waiter = waiter;
+    writeLoopArgs.remoteAddress = remoteAddress;
+    writeLoopArgs.targetJfr = tjfr;
+    writeLoopArgs.remoteSeg = remoteSegAccessor->second->Raw();
+    writeLoopArgs.localSeg = localSegAccessor->second->Raw();
+    writeLoopArgs.remoteDataAddress = segVa + urmaInfo.seg_data_offset() + readOffset;
+    writeLoopArgs.localDataAddress = localObjectAddress + readOffset + metaDataSize;
+    writeLoopArgs.size = readSize;
+    writeLoopArgs.srcChipId = srcChipId;
+    writeLoopArgs.dstChipId = dstChipId;
+    RETURN_IF_NOT_OK(UrmaWriteImpl(writeLoopArgs, eventKeys));
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();
@@ -1285,7 +1329,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma write object, ret = %d", ret));
     }
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();
@@ -1397,6 +1441,7 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
     if (urmaMode == FastTransportMode::UB) {
         FLAGS_enable_urma = true;
         FLAGS_urma_mode = "UB";
+        FLAGS_enable_ub_numa_affinity = true;
         UrmaManager::clientMode_ = true;
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;
         if (UrmaManager::ubTransportMemSize_.compare_exchange_strong(expected, transportSize)) {

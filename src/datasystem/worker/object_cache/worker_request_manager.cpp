@@ -433,9 +433,12 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddressBase, localSegAddress, localSegSize);
         UrmaRemoteAddrPb urmaInfo = ubUrmaInfo_;
         urmaInfo.set_seg_data_offset(ubUrmaInfo_.seg_data_offset() + ubWriteOffset);
+        const uint8_t srcChipId = NumaIdToChipId(shmUnit->GetNumaId());
+        const uint8_t dstChipId =
+            ubUrmaInfo_.has_chip_id() ? static_cast<uint8_t>(ubUrmaInfo_.chip_id()) : INVALID_CHIP_ID;
         std::vector<uint64_t> eventKeys;
         Status ubRc = UrmaWritePayload(urmaInfo, localSegAddress, localSegSize, localObjectAddressBase + readOffset, 0,
-                                       readSize, metaSize, true, eventKeys);
+                                       readSize, metaSize, srcChipId, dstChipId, true, eventKeys);
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
             METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, readSize);

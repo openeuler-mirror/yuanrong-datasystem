@@ -107,7 +107,8 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
  */
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
-                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &eventKeys,
+                        const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                        std::vector<uint64_t> &eventKeys,
                         std::shared_ptr<EventWaiter> waiter = nullptr);
 
 /**
