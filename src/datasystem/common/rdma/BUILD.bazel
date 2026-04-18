@@ -21,9 +21,6 @@ ds_cc_library(
         "/usr/include",
         "/usr/local/include",
     ],
-    linkopts = [
-        "-lurma",
-    ],
     deps = [
         "//src/datasystem/common/log:common_log",
     ],

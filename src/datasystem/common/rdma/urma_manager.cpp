@@ -973,7 +973,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
 
 Status UrmaManager::ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJfr> &targetJfr)
 {
-    urma_rjfr_t remoteJfr;
+    urma_rjfr_t remoteJfr{};
     RETURN_IF_NOT_OK(BuildRemoteJfr(remoteInfo, remoteJfr));
     RETURN_IF_NOT_OK_APPEND_MSG(
         UrmaTargetJfr::Import(urmaResource_->GetContext(), &remoteJfr, urmaResource_->GetUrmaToken(), targetJfr),
