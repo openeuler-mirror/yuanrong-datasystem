@@ -1107,6 +1107,41 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryTakeoverOwnerRestartDataIntact)
     }
 }
 
+TEST_F(SlotEndToEndPassiveScaleDownTest, CleanupBeforeDemoteTimedOutNode)
+{
+    LOG(INFO) << "Scenario: worker0 fails; worker2 cleanup runs before local demote, and slot recovery completes.";
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    InitTestKVClient(2, client2);
+
+    std::vector<std::pair<std::string, std::string>> keyValues;
+    keyValues.reserve(SLOT_NUM);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (uint32_t slotId = 0; slotId < SLOT_NUM; ++slotId) {
+        const std::string key = FindKeyForSlot(slotId, "tenant_slot_orphan_cleanup_worker0");
+        ASSERT_FALSE(key.empty()) << "slotId=" << slotId;
+        const std::string value = "value_orphan_cleanup_worker0_" + std::to_string(slotId);
+        keyValues.emplace_back(key, value);
+        DS_ASSERT_OK(client0->Set(key, value, param));
+    }
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 2, "HandleNodeRemoveEvent.delay", "1*sleep(2000)"));
+
+    client0.reset();
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    for (const auto &keyValue : keyValues) {
+        ASSERT_TRUE(WaitUntilGetSucceeds(client1, keyValue.first, keyValue.second));
+        ASSERT_TRUE(WaitUntilGetSucceeds(client2, keyValue.first, keyValue.second));
+    }
+}
+
 TEST_F(SlotEndToEndPassiveScaleDownTest, RestoreObjectWithTtl)
 {
     std::shared_ptr<KVClient> client0;

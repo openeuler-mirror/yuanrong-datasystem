@@ -1054,6 +1054,12 @@ protected:
     void HandleFailedNode(const HostPort &addr);
 
     /**
+     * @brief Notify slot recovery that workers have been confirmed failed.
+     * @param[in] failedWorkers Workers that need slot recovery.
+     */
+    void NotifySlotRecovery(const std::vector<HostPort> &failedWorkers) const;
+
+    /**
      * @brief Cleanup the resource of worker that has not existed anymore.
      * @param[in] workerAddr the address of worker.
      * @param[in] isFailed true if the node state in clusterNodeTable_ is failed.
