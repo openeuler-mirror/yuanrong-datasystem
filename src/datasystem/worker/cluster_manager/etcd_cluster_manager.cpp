@@ -544,6 +544,8 @@ Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, s
     nodeTableCompletionTimer_.erase(eventNodeKey.ToString());
 
     ClusterNode *foundNode = accessor->second.get();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(foundNode != nullptr, K_RUNTIME_ERROR,
+                                         "The timeout node is null in active nodes list");
     // Fake remove event can only remove the node added by fake addition event. This check is used to minimize the
     // possibility of nodes being removed incorrectly.
     if (eventNode != nullptr && eventNode->EventValue() == FAKE_NODE_EVENT_VALUE
@@ -586,10 +588,7 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
                      "Error occurs when voluntary scale down node mark timeout: "
                          + (eventNode == nullptr ? "" : eventNode->ToString(eventNodeKey)));
         // Trigger slot recovery for the crashed voluntary scale down node.
-        if (IsCurrentNodeMaster()) {
-            LOG_IF_ERROR(SlotRecoveryFailedWorkersEvent::GetInstance().NotifyAll(std::vector<HostPort>{ eventNodeKey }),
-                         "Failed to notify slot recovery for crashed voluntary scale down worker.");
-        }
+        NotifySlotRecovery({ eventNodeKey });
         foundNode->SetFailed();
         return Status::OK();
     }
@@ -1140,6 +1139,15 @@ void EtcdClusterManager::HandleFailedNode(const HostPort &addr)
     LOG_IF_ERROR(StartClearWorkerMeta::GetInstance().NotifyAll(addr), "Failed to clear worker meta data.");
 }
 
+void EtcdClusterManager::NotifySlotRecovery(const std::vector<HostPort> &failedWorkers) const
+{
+    if (!IsCurrentNodeMaster() || failedWorkers.empty()) {
+        return;
+    }
+    LOG_IF_ERROR(SlotRecoveryFailedWorkersEvent::GetInstance().NotifyAll(failedWorkers),
+                 "Failed to notify slot recovery for failed workers.");
+}
+
 void EtcdClusterManager::DemoteTimedOutNodes()
 {
     // tbb concurrent hash table does not support thread-safe iteration
@@ -1161,10 +1169,7 @@ void EtcdClusterManager::DemoteTimedOutNodes()
     for (const auto &addr : failedNode) {
         HandleFailedNode(addr);
     }
-    if (IsCurrentNodeMaster() && !failedNode.empty()) {
-        LOG_IF_ERROR(SlotRecoveryFailedWorkersEvent::GetInstance().NotifyAll(failedNode),
-                     "Failed to notify slot recovery for failed workers.");
-    }
+    NotifySlotRecovery(failedNode);
     LOG_IF(INFO, !failedNode.empty()) << "After demote timeout nodes: " << NodesToString();
 }
 
@@ -1225,6 +1230,7 @@ void EtcdClusterManager::CleanupWorker(const std::string &workerAddr, bool isFai
     if (addr.ParseString(workerAddr).IsError()) {
         return;
     }
+    bool needNotifySlotRecovery = false;
     // 1. clear node table
     {
         // process the node state to failed and then erase.
@@ -1234,8 +1240,17 @@ void EtcdClusterManager::CleanupWorker(const std::string &workerAddr, bool isFai
             HandleFailedNode(addr);                         // node to failed
         }
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+        if (!isFailed) {
+            TbbNodeTable::const_accessor accessor;
+            if (clusterNodeTable_.find(accessor, addr)) {
+                needNotifySlotRecovery = !accessor->second->NodeWasExiting();
+            }
+        }
         (void)clusterNodeTable_.erase(addr);
         (void)nodeTableCompletionTimer_.erase(workerAddr);
+    }
+    if (needNotifySlotRecovery) {
+        NotifySlotRecovery({ addr });
     }
     // 2. clear ocnotify api
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
