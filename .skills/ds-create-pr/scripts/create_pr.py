@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,18 +17,37 @@ from urllib.request import Request, urlopen
 
 TOKEN_ENV_NAMES = ("GITCODE_TOKEN", "GITCODE_ACCESS_TOKEN")
 DEFAULT_TOKEN_FILE = Path.home() / ".local" / "gitcode_token"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_PR_TEMPLATE_FILE = (
+    REPO_ROOT / ".gitee" / "PULL_REQUEST_TEMPLATE" / "PULL_REQUEST_TEMPLATE.zh-cn.md"
+)
+REPO_TEMPLATE_TARGET = ("openeuler", "yuanrong-datasystem")
+
+
+def require_non_empty_token(token: str, source: str, fallback_path: Path) -> str:
+    stripped = token.strip()
+    if stripped:
+        return stripped
+    raise SystemExit(
+        f"{source} is configured but empty. Set a non-empty GitCode token there, "
+        f"or remove it and use GITCODE_TOKEN/GITCODE_ACCESS_TOKEN or {fallback_path}."
+    )
 
 
 def load_token(explicit_token: str | None, token_file: Path | None) -> str:
-    if explicit_token:
-        return explicit_token.strip()
-    for name in TOKEN_ENV_NAMES:
-        value = os.environ.get(name)
-        if value:
-            return value.strip()
     path = token_file or DEFAULT_TOKEN_FILE
+    if explicit_token is not None:
+        return require_non_empty_token(explicit_token, "--token", path)
+    for name in TOKEN_ENV_NAMES:
+        if name in os.environ:
+            return require_non_empty_token(os.environ[name], name, path)
+    if token_file is not None and not path.exists():
+        raise SystemExit(
+            f"GitCode token file not found: {path}. Create it with a non-empty token, "
+            "or set GITCODE_TOKEN/GITCODE_ACCESS_TOKEN."
+        )
     if path.exists():
-        return path.read_text(encoding="utf-8").strip()
+        return require_non_empty_token(path.read_text(encoding="utf-8"), f"GitCode token file {path}", path)
     raise SystemExit(
         "Missing GitCode token. Set GITCODE_TOKEN/GITCODE_ACCESS_TOKEN "
         f"or create {path}."
@@ -40,18 +60,59 @@ def read_body(args: argparse.Namespace) -> str | None:
     return args.body
 
 
+def resolve_template_file(args: argparse.Namespace) -> Path | None:
+    if args.body_template_file is not None:
+        return args.body_template_file.resolve()
+    if (args.owner, args.repo) == REPO_TEMPLATE_TARGET and DEFAULT_PR_TEMPLATE_FILE.exists():
+        return DEFAULT_PR_TEMPLATE_FILE
+    return None
+
+
+def template_required_sections(template_text: str) -> list[str]:
+    sections: list[str] = []
+    for raw_line in template_text.splitlines():
+        line = raw_line.strip()
+        match = re.search(r"(\*\*.+?\*\*)", line)
+        if match:
+            sections.append(match.group(1))
+    return sections
+
+
+def validate_pr_body(body: str | None, template_path: Path | None) -> str | None:
+    if template_path is None:
+        return body
+    if not template_path.exists():
+        raise SystemExit(f"PR body template file not found: {template_path}")
+    if body is None or not body.strip():
+        raise SystemExit(
+            "PR body is required for this repository. Provide --body/--body-file with the "
+            "template filled in, or generate one from "
+            f"{template_path}."
+        )
+    template_text = template_path.read_text(encoding="utf-8")
+    missing_sections = [section for section in template_required_sections(template_text) if section not in body]
+    if missing_sections:
+        raise SystemExit(
+            "PR body does not follow the required template. Missing sections: "
+            + ", ".join(missing_sections)
+            + f". Use {template_path}."
+        )
+    return body
+
+
 def put_if_present(payload: dict[str, Any], key: str, value: Any) -> None:
     if value is not None:
         payload[key] = value
 
 
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
+    body = validate_pr_body(read_body(args), resolve_template_file(args))
     payload: dict[str, Any] = {
         "title": args.title,
         "head": args.head,
         "base": args.base,
     }
-    put_if_present(payload, "body", read_body(args))
+    put_if_present(payload, "body", body)
     put_if_present(payload, "milestone_number", args.milestone_number)
     put_if_present(payload, "labels", args.labels)
     put_if_present(payload, "issue", args.issue)
@@ -146,6 +207,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-base", default="https://api.gitcode.com/api/v5")
     parser.add_argument("--token")
     parser.add_argument("--token-file", type=Path)
+    parser.add_argument("--body-template-file", type=Path)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--check-conflicts", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()

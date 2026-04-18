@@ -19,6 +19,7 @@ Design choices:
 Current canonical records:
 
 - `overview.repository-overview.json`
+- `overview.repository-skills.json`
 - `client.client-sdk.json`
 - `runtime.worker-runtime.json`
 - `runtime.cluster-management.json`

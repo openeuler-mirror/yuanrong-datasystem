@@ -5,6 +5,7 @@ Source of truth: `docs/README_CN.md`
 ## Repository Defaults
 
 - Repository: `https://gitcode.com/openeuler/yuanrong-datasystem`
+- Allowed upstream Git URLs: `https://gitcode.com/openeuler/yuanrong-datasystem.git`, `git@gitcode.com:openeuler/yuanrong-datasystem.git`
 - Online docs branch: `doc_pages`
 - Generated Chinese docs: `docs/build_zh_cn/html/`
 - Online target directory on `doc_pages`: `docs/zh-cn/latest/`
@@ -13,7 +14,7 @@ Source of truth: `docs/README_CN.md`
 
 ## Required Flow
 
-1. Fetch `https://gitcode.com/openeuler/yuanrong-datasystem.git` and create or update a dedicated source worktree from the latest upstream `master`.
+1. Fetch the latest upstream `master` from `https://gitcode.com/openeuler/yuanrong-datasystem.git` or `git@gitcode.com:openeuler/yuanrong-datasystem.git`, then create or update a dedicated source worktree from that upstream `master`.
 2. Build Chinese documentation from that source worktree's `docs/` directory:
 
    ```bash
@@ -28,9 +29,9 @@ Source of truth: `docs/README_CN.md`
    ```
 
 5. Commit all generated page changes on the refresh branch.
-6. Push the refresh branch.
-7. Use `$ds-create-pr` to open a PR from the refresh branch into `doc_pages` and let it check whether the PR has conflicts.
-8. If `$ds-create-pr` reports conflicts, refresh from the latest upstream `doc_pages`, replace `docs/zh-cn/latest/` again, recommit, push, and recreate or update the PR.
+6. Push the refresh branch to your fork or another non-upstream remote, not to the upstream `openeuler/yuanrong-datasystem` repository.
+7. Invoke `$ds-create-pr` immediately after the push so the workflow ends with an opened PR. The PR body must follow `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md`, and it must record the exact upstream `master` commit used for generation plus the generation timestamp.
+8. If `$ds-create-pr` reports conflicts, refresh from the latest upstream `doc_pages`, replace `docs/zh-cn/latest/` again, recommit, push, and rerun the workflow.
 
 ## Why `rsync -a --delete`
 

@@ -17,6 +17,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | If you need to... | Read first | Then verify against |
 | --- | --- | --- |
 | understand overall repo shape | `modules/overview/repository-overview.md` | `generated/repo_index.md` |
+| understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
 | find build, sanitizer, or coverage entrypoints | `modules/quality/build-test-debug.md` | `build.sh`, `CMakeLists.txt` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
@@ -44,6 +45,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | triage a production-style incident or collect first-pass evidence | `playbooks/operations/incident-triage.md` | `modules/infra/observability/diagnosis-and-operations.md`, `modules/quality/tests-and-reproduction.md` |
 | run a structured performance investigation | `playbooks/operations/performance-investigation.md` | `modules/infra/observability/performance-troubleshooting.md`, `tests/perf/*` |
 | generate or backfill repo context for a module | `playbooks/upkeep/module-context-generation.md` | `README.md`, `maintenance.md`, real source paths for the requested area |
+| maintain natural-language routing for repository-local skills | `playbooks/upkeep/skill-trigger-routing.md` | `modules/overview/repository-skills.md`, `.skills/*/SKILL.md` |
 | find canonical module ids or machine-readable routing metadata | `modules/metadata/README.md` | `modules/metadata/*.json`, canonical module docs |
 | decide what kind of context file to update | `playbooks/README.md` | `maintenance.md` |
 
@@ -52,6 +54,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | Area | Primary doc | Typical code paths |
 | --- | --- | --- |
 | global repo map | `modules/overview/repository-overview.md` | `src/datasystem`, `include/datasystem`, `cli`, `tests`, `docs` |
+| repository-local skills and routing | `modules/overview/repository-skills.md` | `.skills`, `.gitee/PULL_REQUEST_TEMPLATE`, `docs/README_CN.md` |
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |

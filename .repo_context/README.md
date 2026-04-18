@@ -73,7 +73,8 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 ├── modules/
 │   ├── overview/
 │   │   ├── README.md
-│   │   └── repository-overview.md
+│   │   ├── repository-overview.md
+│   │   └── repository-skills.md
 │   ├── client/
 │   │   ├── README.md
 │   │   └── client-sdk.md
@@ -87,6 +88,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── infra.observability.json
 │   │   ├── infra.slot.json
 │   │   ├── overview.repository-overview.json
+│   │   ├── overview.repository-skills.json
 │   │   ├── quality.build-test-debug.json
 │   │   ├── quality.tests-and-reproduction.json
 │   │   ├── runtime.cluster-management.json
@@ -135,7 +137,8 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   └── performance-investigation.md
 │   ├── upkeep/
 │   │   ├── README.md
-│   │   └── module-context-generation.md
+│   │   ├── module-context-generation.md
+│   │   └── skill-trigger-routing.md
 │   └── features/
 │       ├── README.md
 │       └── infra/
@@ -176,6 +179,7 @@ The first pass is intentionally coarse. It currently covers:
 - build, test, and debug entrypoints already used by this repository;
 - a generated file-tree index to support fast orientation;
 - first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`;
+- repository-local skill inventory and trigger routing for `.skills/`;
 - a machine-readable module metadata layer describing canonical module ids, entry docs, source roots, and split signals;
 - secondary-storage parent routing, backend selection, and a standalone slot storage and recovery module;
 - an upkeep playbook for formal module-context generation and backfill;

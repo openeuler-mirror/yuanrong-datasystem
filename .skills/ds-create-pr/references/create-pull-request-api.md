@@ -45,6 +45,14 @@ curl --location --request POST \
   }'
 ```
 
+## Repository-Specific PR Body Requirement
+
+For `openeuler/yuanrong-datasystem`, prepare the PR body from `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md`
+and fill in the current change description, verification result, fix linkage, and interface-impact notes before calling the API.
+The bundled `create_pr.py` helper validates that required template sections are present when targeting this repository.
+Also, do not push local source branches to the upstream `openeuler/yuanrong-datasystem` repository. Push the branch to
+your fork or another non-upstream remote first, then open the PR against the upstream target branch.
+
 ## Expected Response
 
 Successful responses include PR identifiers and URLs such as `number`, `html_url`, `web_url`, or API `url`. Prefer reporting the browser URL (`html_url` or `web_url`) when available.

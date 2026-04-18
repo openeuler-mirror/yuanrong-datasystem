@@ -38,6 +38,8 @@ Update `.repo_context/` when a change does any of the following:
 - changes public API entrypoints, service boot paths, or deployment paths;
 - changes build flags, required dependencies, or test execution commands;
 - changes bug reproduction steps, observability/debug workflow, or review-critical interactions;
+- adds, removes, renames, or materially repurposes a repository-local skill under `.skills/`;
+- changes which natural-language requests should auto-trigger a repository-local skill versus ask for confirmation first;
 - reveals that existing context is outdated, ambiguous, or misleading.
 
 ## Minimum Update Policy
@@ -51,6 +53,7 @@ When a task affects repository understanding, do the minimum relevant update:
 - canonical module boundary or routing change: create or update `.repo_context/modules/metadata/<module-id>.json`;
 - non-trivial or compatibility-sensitive feature work: reuse an existing feature playbook under `.repo_context/playbooks/<category>/...` or create/update one from `.repo_context/templates/feature-playbook-template.md`;
 - navigation change: update `.repo_context/index.md` and related routing files when the best entrypoint changes;
+- repository-local skill or routing change: update `modules/overview/repository-skills.md` and the matching upkeep playbook;
 - discovered stale claim: correct it and keep the statement narrow and source-backed.
 
 Exception:

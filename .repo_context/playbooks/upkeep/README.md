@@ -8,3 +8,4 @@ implement a product feature or triage a runtime issue.
 Current docs:
 
 - `module-context-generation.md`
+- `skill-trigger-routing.md`

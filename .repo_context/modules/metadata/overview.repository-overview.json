@@ -26,6 +26,7 @@
   "key_tests": [],
   "module_boundary": {
     "related_modules": [
+      "overview.repository-skills",
       "client.client-sdk",
       "runtime.worker-runtime",
       "infra.common-infra"
