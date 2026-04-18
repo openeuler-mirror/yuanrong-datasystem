@@ -560,7 +560,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;
-    const int32_t minRetryOnceRpcMs = 5; // The second level of retryIntervalsMs
+    const int32_t minRetryOnceRpcMs = 1; // The 1st level of retryIntervalsMs
     do {
         dataSizeChange = false;
         BatchGetObjectRemoteReqPb reqPb;
