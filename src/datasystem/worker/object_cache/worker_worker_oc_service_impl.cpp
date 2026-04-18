@@ -253,6 +253,7 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             .segOffset = urmaInfo.seg_data_offset() - ocClientWorkerSvc_->GetMetadataSize(),
             .host = urmaInfo.request_address().host(),
             .port = urmaInfo.request_address().port(),
+            .dstChipId = urmaInfo.has_chip_id() ? static_cast<uint8_t>(urmaInfo.chip_id()) : INVALID_CHIP_ID,
         };
         rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys);
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
@@ -495,12 +496,16 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                   .sgeAddr = uintptr_t(shmUnit->GetPointer()),
                                   .readOffset = req.read_offset(),
                                   .writeSize = Align4BitsCeiling(entry->GetDataSize() + entry->GetMetadataSize()),
-                                  .metaDataSize = 0 });
+                                  .metaDataSize = 0,
+                                  .srcChipId = NumaIdToChipId(shmUnit->GetNumaId()) });
                 rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META);
             } else if (IsUrmaEnabled()) {
                 // later add a check on data size and read size.
+                const uint8_t srcChipId = NumaIdToChipId(shmUnit->GetNumaId());
+                const uint8_t dstChipId =
+                    req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
                 auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset,
-                                           size, entry->GetMetadataSize(), blocking, eventKeys);
+                                           size, entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
                 RETURN_IF_NOT_OK(markFastTransferResult(rc, "UrmaWrite"));
             } else if (IsUcpEnabled()) {
                 // later add a check on data size and read size.

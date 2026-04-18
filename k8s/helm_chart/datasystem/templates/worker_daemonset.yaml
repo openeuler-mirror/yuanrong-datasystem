@@ -236,6 +236,7 @@ spec:
         - -check_async_queue_empty_time_s={{ $.Values.global.gracefulShutdown.checkAsyncQueueEmptyTimeS }}
         - -enable_lossless_data_exit_mode={{ $.Values.global.gracefulShutdown.enableLosslessDataExitMode }}
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
+        - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}

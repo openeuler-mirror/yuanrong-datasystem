@@ -29,6 +29,8 @@ DS_DECLARE_bool(enable_tcp_direct_for_multi_stubs);
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);
+DS_DECLARE_bool(enable_ub_numa_affinity);
+DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);

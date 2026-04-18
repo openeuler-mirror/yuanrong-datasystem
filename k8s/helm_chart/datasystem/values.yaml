@@ -418,6 +418,16 @@ global:
     ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: false
+    # Shared memory distribution policy.
+    # Optional values:
+    #   - none: do not perform NUMA distribution pre-touch.
+    #   - interleave_all_numa: uniformly interleave pages across all available NUMA nodes.
+    #   - interleave_affinity_numa: uniformly interleave pages only across NUMA nodes covered by current process CPU affinity.
+    # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
+    sharedMemoryDistributionPolicy: "none"
+    # Enable UB numa affinity optimization.
+    # This option only takes effect when both enableUrma=true and urmaRegisterWholeArena=true.
+    enableUbNumaAffinity: false
     # Option to enable URMA over IB or UB, default UB to run with URMA over UB.
     urmaMode: "UB"
     # Number of complete record to poll at a time, 16 is the max this device can poll.

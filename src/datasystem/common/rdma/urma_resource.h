@@ -163,6 +163,12 @@ public:
     static Status Create(urma_device_t *device, uint32_t eidIndex, std::unique_ptr<UrmaContext> &context);
 
     /**
+     * @brief Switch bonding context to balance aggregation mode.
+     * @return Status of the call.
+     */
+    Status ChangeBondingBalanceMode() const;
+
+    /**
      * @brief Get the underlying Urma context handle.
      * @return Raw Urma context handle.
      */
@@ -550,9 +556,10 @@ public:
      * @brief Initialize core Urma resources for the local device.
      * @param[in] device Local Urma device.
      * @param[in] eidIndex EID index used to create the context.
+     * @param[in] isBondingDevice Whether local device name indicates bonding mode.
      * @return Status of the call.
      */
-    Status Init(urma_device_t *device, uint32_t eidIndex);
+    Status Init(urma_device_t *device, uint32_t eidIndex, bool isBondingDevice = false);
 
     /**
      * @brief Release all owned Urma resources.

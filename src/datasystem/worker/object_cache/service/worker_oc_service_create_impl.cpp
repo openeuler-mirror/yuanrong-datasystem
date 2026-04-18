@@ -114,7 +114,8 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     // Fill urma_info for UB Put path (Create+MemoryCopy+Publish)
     if (!ClientShmEnabled(clientId) && IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(
-            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metadataSize, resp));
+            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metadataSize, resp,
+                                shmUnit->GetNumaId()));
     }
 #endif
 
@@ -195,7 +196,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
 #ifdef USE_URMA
             if (!ClientShmEnabled(ClientKey::Intern(req.client_id())) && IsUrmaEnabled()) {
                 Status urmaStatus = FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(),
-                                                        metadataSize, subRsp[i]);
+                                                        metadataSize, subRsp[i], shmUnit->GetNumaId());
                 if (urmaStatus.IsError()) {
                     results[i] = urmaStatus;
                 }

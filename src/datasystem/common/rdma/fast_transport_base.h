@@ -72,11 +72,16 @@ bool IsUcpEnabled();
 bool IsRegisterWholeArenaEnabled();
 
 /**
+ * @brief Check whether UB numa affinity optimization is enabled.
+ * @return True if the feature flag, URMA and whole-arena registration are all enabled.
+ */
+bool IsUbNumaAffinityEnabled();
+
+/**
  * @brief Check if the whole arena needs to be registered.
  * @return True if the whole arena needs to be registered, else false.
  */
 bool NeedRegisterWholeArena();
-
 
 /**
  * @brief Wait for the event of urma_write/ucp_put_nbx finish.
@@ -86,6 +91,6 @@ bool NeedRegisterWholeArena();
  * @return Status of the call.
  */
 Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
-                                  std::function<Status(Status &)> errorHandler);
+                              std::function<Status(Status &)> errorHandler);
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H

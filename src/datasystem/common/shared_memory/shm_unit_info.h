@@ -25,14 +25,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <sstream>
 #include <utility>
 
+#include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/common/immutable_string/immutable_string.h"
 
 namespace datasystem {
 struct ShmView {
@@ -186,6 +188,11 @@ public:
         return pointer;
     }
 
+    uint8_t GetNumaId() const
+    {
+        return numaId;
+    }
+
     /**
      * @brief Set the offset.
      * @param[in] newOffset The new offset.
@@ -239,6 +246,9 @@ public:
 
     // uuid
     ShmKey id;
+
+    // NUMA node id of the backing memory. INVALID_NUMA_ID means unavailable.
+    uint8_t numaId = INVALID_NUMA_ID;
 };
 }  // namespace datasystem
 

@@ -15,6 +15,7 @@ set(UTIL_SRCS
         format.cpp
         memory.cpp
         version.cpp
+        numa_util.cpp
         deadlock_util.cpp
         hash_algorithm.cpp
         thread_local.cpp

@@ -137,6 +137,11 @@ public:
                           ptrdiff_t &offset, uint64_t &mmapSize, ServiceType serviceType = ServiceType::OBJECT,
                           CacheType cacheType = CacheType::MEMORY);
 
+    Status AllocateMemory(const std::string &tenantId, uint64_t needSize, bool populate, void *&pointer, int &fd,
+                          ptrdiff_t &offset, uint64_t &mmapSize, uint8_t &numaId,
+                          ServiceType serviceType = ServiceType::OBJECT,
+                          CacheType cacheType = CacheType::MEMORY);
+
     /**
      * @brief Free memory from shared memory.
      * @param[in] pointer reference to the pointer to free. Sets pointer to nullptr after.

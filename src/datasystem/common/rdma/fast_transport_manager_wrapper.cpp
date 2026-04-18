@@ -129,7 +129,8 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
-                        const uint64_t &metaDataSize, bool blocking, std::vector<uint64_t> &eventKeys,
+                        const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                        std::vector<uint64_t> &eventKeys,
                         std::shared_ptr<EventWaiter> waiter)
 {
     (void)urmaInfo;
@@ -139,13 +140,15 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     (void)readOffset;
     (void)readSize;
     (void)metaDataSize;
+    (void)srcChipId;
+    (void)dstChipId;
     (void)blocking;
     (void)eventKeys;
     (void)waiter;
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
                                                               localObjectAddress, readOffset, readSize, metaDataSize,
-                                                              blocking, eventKeys, waiter));
+                                                              srcChipId, dstChipId, blocking, eventKeys, waiter));
 #endif
     return Status::OK();
 }

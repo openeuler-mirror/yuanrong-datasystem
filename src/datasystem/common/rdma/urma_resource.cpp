@@ -24,6 +24,8 @@
 #include <sstream>
 #include <utility>
 
+#include "securec.h"
+
 #include <ub/umdk/urma/urma_opcode.h>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -70,6 +72,28 @@ Status UrmaContext::Create(urma_device_t *device, uint32_t eidIndex, std::unique
     }
     context = std::make_unique<UrmaContext>(raw);
     LOG(INFO) << "urma create context success";
+    return Status::OK();
+}
+
+Status UrmaContext::ChangeBondingBalanceMode() const
+{
+#ifdef BONDP_USER_CTL_BONDING
+    LOG(INFO) << "Try change binding mode balance";
+    CHECK_FAIL_RETURN_STATUS(raw_ != nullptr, K_INVALID, "URMA context is null");
+
+    bondp_set_bonding_mode_in_t mode{ .bonding_mode = BONDP_BONDING_MODE_BALANCE,
+                                      .bonding_level = BONDP_BONDING_LEVEL_PORT };
+    urma_user_ctl_in_t in{ .addr = reinterpret_cast<uint64_t>(&mode),
+                           .len = sizeof(mode),
+                           .opcode = BONDP_USER_CTL_SET_BONDING_MODE };
+    urma_user_ctl_out_t out;
+    (void)memset_s(&out, sizeof(out), 0, sizeof(out));
+
+    const auto ret = ds_urma_user_ctl(raw_, &in, &out);
+    if (ret != URMA_SUCCESS) {
+        RETURN_STATUS(K_URMA_ERROR, FormatString("Failed to set bonding balance mode, ret = %d", ret));
+    }
+#endif
     return Status::OK();
 }
 
@@ -365,8 +389,9 @@ Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr
             return Status::OK();
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS] Mark JFS " << failedJfs->GetJfsId() << " invalid and recreate, remoteAddress="
-            << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+            << "[URMA_RECREATE_JFS] Mark JFS " << failedJfs->GetJfsId()
+            << " invalid and recreate, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
         CHECK_FAIL_RETURN_STATUS(jfs_ != nullptr, K_RUNTIME_ERROR, "JFS already cleared for connection");
         if (jfs_.get() != failedJfs.get()) {
             LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
@@ -451,7 +476,7 @@ void UrmaConnection::Clear()
     urmaJfrInfo_ = UrmaJfrInfo();
 }
 
-Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex)
+Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondingDevice)
 {
     Clear();
     CHECK_FAIL_RETURN_STATUS(device != nullptr, K_INVALID, "URMA device is null");
@@ -469,6 +494,9 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex)
               << ", useDefaultPriority=" << !foundPriority;
 
     RETURN_IF_NOT_OK(UrmaContext::Create(device, eidIndex, context_));
+    if (isBondingDevice) {
+        LOG_IF_ERROR(context_->ChangeBondingBalanceMode(), "Failed to change bonding balance mode");
+    }
     RETURN_IF_NOT_OK(UrmaJfce::Create(context_->Raw(), jfce_));
     RETURN_IF_NOT_OK(UrmaJfc::Create(context_->Raw(), urmaDeviceAttribute_, jfce_->Raw(), jfc_));
     if (FLAGS_urma_event_mode) {

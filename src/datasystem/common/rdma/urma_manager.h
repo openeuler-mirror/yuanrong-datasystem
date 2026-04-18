@@ -103,6 +103,11 @@ public:
             return shmUnit_->GetOffset();
         }
 
+        uint8_t GetNumaId() const
+        {
+            return shmUnit_ == nullptr ? INVALID_NUMA_ID : shmUnit_->GetNumaId();
+        }
+
         void *GetPointer() const
         {
             return shmUnit_->GetPointer();
@@ -268,7 +273,7 @@ public:
     Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                             const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                            bool blocking,
+                            uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                             std::vector<uint64_t> &eventKeys,
                             std::shared_ptr<EventWaiter> waiter = nullptr);
 
@@ -575,6 +580,23 @@ private:
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                        const std::shared_ptr<UrmaJfs> &jfs, const std::string &remoteAddress,
                        UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr);
+
+    struct UrmaWriteArgs {
+        std::shared_ptr<UrmaConnection> connection;
+        std::shared_ptr<UrmaJfs> jfs;
+        std::shared_ptr<EventWaiter> waiter;
+        std::string remoteAddress;
+        urma_target_jetty_t *targetJfr = nullptr;
+        urma_target_seg_t *remoteSeg = nullptr;
+        urma_target_seg_t *localSeg = nullptr;
+        uint64_t remoteDataAddress = 0;
+        uint64_t localDataAddress = 0;
+        uint64_t size = 0;
+        uint8_t srcChipId = INVALID_CHIP_ID;
+        uint8_t dstChipId = INVALID_CHIP_ID;
+    };
+
+    Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys);
 
     /**
      * @brief Deletes the UrmaEvent object for the request

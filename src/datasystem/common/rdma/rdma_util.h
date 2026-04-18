@@ -24,8 +24,10 @@
 #include <mutex>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 
@@ -33,7 +35,6 @@ DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
-
 template <typename T>
 using custom_unique_ptr = std::unique_ptr<T, std::function<void(T *)>>;
 
@@ -143,6 +144,7 @@ struct LocalSgeInfo {
     uint64_t readOffset;    // read offset
     uint64_t writeSize;     // data size
     uint64_t metaDataSize;  // meta data size
+    uint8_t srcChipId = INVALID_CHIP_ID;
 };
 
 struct RemoteSegInfo {
@@ -150,6 +152,7 @@ struct RemoteSegInfo {
     uint64_t segOffset;  // the seg offset of segAdress
     std::string host;    // the host of remote urma endpoint
     int32_t port;        // the host of remote urma endpoint
+    uint8_t dstChipId = INVALID_CHIP_ID;
 };
 
 /**
@@ -196,7 +199,7 @@ UrmaMode GetUrmaMode();
  */
 template <typename Req>
 Status FillRequestUrmaInfo(const HostPort &localAddress, const void *pointer, uint64_t offset, uint64_t metaSz,
-                           Req &reqPb)
+                           Req &reqPb, uint8_t numaId = INVALID_NUMA_ID)
 {
     uint64_t segAddress;
     uint64_t dataOffset;
@@ -213,6 +216,12 @@ Status FillRequestUrmaInfo(const HostPort &localAddress, const void *pointer, ui
     auto *remoteAddr = urmaInfo->mutable_request_address();
     remoteAddr->set_host(localAddress.Host());
     remoteAddr->set_port(localAddress.Port());
+    if (IsUbNumaAffinityEnabled()) {
+        auto chipId = NumaIdToChipId(numaId);
+        if (chipId != INVALID_CHIP_ID) {
+            urmaInfo->set_chip_id(chipId);
+        }
+    }
     return Status::OK();
 }
 

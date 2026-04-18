@@ -17,8 +17,10 @@
 #include "datasystem/common/shared_memory/arena.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "datasystem/common/shared_memory/arena_group_key.h"
 
@@ -89,6 +91,13 @@ ArenaGroup::~ArenaGroup()
 Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd,
                                   ptrdiff_t &offset, uint64_t &mmapSize, ServiceType type)
 {
+    uint8_t numaId = std::numeric_limits<uint8_t>::max();
+    return AllocateMemory(size, populate, realSize, pointer, fd, offset, mmapSize, numaId, type);
+}
+
+Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSize, void *&pointer, int &fd,
+                                  ptrdiff_t &offset, uint64_t &mmapSize, uint8_t &numaId, ServiceType type)
+{
     CHECK_FAIL_RETURN_STATUS(!destroyed_.load(), StatusCode::K_RUNTIME_ERROR, "ArenaGroup destroyed");
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
 
@@ -130,6 +139,15 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     auto arena = arenas_[index];
     arena->AddRealMemoryUsage(realSize);
     (void)realMemoryUsage_.fetch_add(realSize, std::memory_order_relaxed);
+    if (IsUbNumaAffinityEnabled()) {
+        Status queryRc = arena->QueryNumaId(pointer, numaId);
+        if (queryRc.IsError()) {
+            LOG(WARNING) << "QueryNumaId failed for pointer " << pointer << ": " << queryRc.ToString();
+            numaId = std::numeric_limits<uint8_t>::max();
+        }
+    } else {
+        numaId = std::numeric_limits<uint8_t>::max();
+    }
     VLOG(1) << "[Allocator] Arena " << arena->GetArenaId() << " allocate require size: " << size
             << ", real size: " << realSize << ", offset: " << offset;
     return Status::OK();
@@ -379,7 +397,8 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
         std::vector<std::shared_ptr<Arena>> arenas;
         auto arenasNum = type == CacheType::MEMORY ? FLAGS_arena_per_tenant : FLAGS_shared_disk_arena_per_tenant;
         arenasNum = (type == CacheType::DEV_DEVICE || type == CacheType::DEV_HOST || type == CacheType::UB_TRANSPORT)
-                        ? 1 : arenasNum;
+                        ? 1
+                        : arenasNum;
         arenas.reserve(arenasNum);
         for (uint32_t i = 0; i < arenasNum; i++) {
             uint32_t arenaInd = 0;
@@ -720,7 +739,15 @@ Status Arena::Init(AllocatorFuncRegister funcRegister)
             return Status(StatusCode::K_INVALID,
                           FormatString("Unkowned cache type: %d", static_cast<int32_t>(cacheType_)));
     }
-    return mmap_->Initialize(mmapSize_, populate_, FLAGS_enable_huge_tlb);
+    RETURN_IF_NOT_OK(mmap_->Initialize(mmapSize_, populate_, FLAGS_enable_huge_tlb));
+    if ((cacheType_ == CacheType::MEMORY || cacheType_ == CacheType::UB_TRANSPORT) && IsUbNumaAffinityEnabled()) {
+        Status rc = BuildNumaRangeTable();
+        if (rc.IsError()) {
+            LOG(WARNING) << "BuildNumaRangeTable failed for arena " << arenaId_
+                         << ", affinity optimization will be skipped: " << rc.ToString();
+        }
+    }
+    return Status::OK();
 }
 
 Status Arena::DestroyArena()
@@ -886,6 +913,95 @@ void Arena::SubRealMemoryUsage(uint64_t realSize)
 {
     (void)realMemoryUsage_.fetch_sub(realSize, std::memory_order_relaxed);
     (void)allocatedCount_.fetch_sub(1, std::memory_order_relaxed);
+}
+
+void Arena::LogNumaRangeTable() const
+{
+    constexpr size_t maxPrintEntries = 16;
+    auto baseAddr = reinterpret_cast<uintptr_t>(mmap_->Pointer());
+    auto arenaEndAddr = baseAddr + mmapSize_;
+    size_t index = 0;
+    for (auto it = numaRanges_.cbegin(); it != numaRanges_.cend(); ++it, ++index) {
+        if (index >= maxPrintEntries) {
+            LOG(INFO) << "... (" << (numaRanges_.size() - maxPrintEntries) << " more entries)";
+            break;
+        }
+        auto addr = it->first;
+        auto numaId = it->second;
+        auto next = std::next(it);
+        auto nextAddr = (next == numaRanges_.cend()) ? arenaEndAddr : next->first;
+        auto rangeSize = nextAddr - addr;
+        auto offset = addr - baseAddr;
+        LOG(INFO) << "  [index=" << index << ", offset=" << offset << ", size=" << rangeSize
+                  << ", numaId=" << static_cast<uint32_t>(numaId) << "]";
+    }
+}
+
+Status Arena::BuildNumaRangeTable()
+{
+    auto *base = static_cast<uint8_t *>(mmap_->Pointer());
+    CHECK_FAIL_RETURN_STATUS(base != nullptr, K_RUNTIME_ERROR, "Arena mmap base pointer is null");
+    CHECK_FAIL_RETURN_STATUS(pageSize_ > 0, K_RUNTIME_ERROR, "Arena page size is invalid");
+
+    constexpr size_t pageBatch = 1024;
+    constexpr size_t bytesPerNumaSample = 1 << 20;
+    std::map<uintptr_t, uint8_t> ranges;
+    std::vector<void *> pages;
+    std::vector<int> status;
+    pages.reserve(pageBatch);
+    status.reserve(pageBatch);
+
+    auto flushBatch = [&ranges, &pages, &status]() -> Status {
+        RETURN_OK_IF_TRUE(pages.empty());
+        if (syscall(SYS_move_pages, 0, pages.size(), pages.data(), nullptr, status.data(), 0) != 0) {
+            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("move_pages failed: %s", StrErr(errno)));
+        }
+        for (size_t i = 0; i < pages.size(); ++i) {
+            if (status[i] < 0) {
+                RETURN_STATUS(K_RUNTIME_ERROR,
+                              FormatString("move_pages returned page status %d for address %p", status[i], pages[i]));
+            }
+            auto addr = reinterpret_cast<uintptr_t>(pages[i]);
+            auto numaId = static_cast<uint8_t>(status[i]);
+            auto last = ranges.empty() ? ranges.end() : std::prev(ranges.end());
+            if (last == ranges.end() || last->second != numaId) {
+                ranges.emplace(addr, numaId);
+            }
+        }
+        pages.clear();
+        status.clear();
+        return Status::OK();
+    };
+
+    Timer timer;
+    for (uint64_t off = 0; off < mmapSize_; off += bytesPerNumaSample) {
+        pages.emplace_back(base + off);
+        status.emplace_back(-1);
+        if (pages.size() == pageBatch) {
+            RETURN_IF_NOT_OK(flushBatch());
+        }
+    }
+    RETURN_IF_NOT_OK(flushBatch());
+    CHECK_FAIL_RETURN_STATUS(!ranges.empty(), K_RUNTIME_ERROR, "NUMA range table is empty");
+    auto elapsed = timer.ElapsedMilliSecond();
+    numaRanges_ = std::move(ranges);
+    LOG(INFO) << "NUMA range table for arena " << arenaId_ << ", total " << numaRanges_.size() << " entries, cost "
+              << elapsed << "ms";
+    LogNumaRangeTable();
+    return Status::OK();
+}
+
+Status Arena::QueryNumaId(void *ptr, uint8_t &numaId) const
+{
+    CHECK_FAIL_RETURN_STATUS(ptr != nullptr, K_INVALID, "Input pointer is null");
+    CHECK_FAIL_RETURN_STATUS(!numaRanges_.empty(), K_NOT_FOUND, "NUMA range table is empty");
+    auto addr = reinterpret_cast<uintptr_t>(ptr);
+    auto it = numaRanges_.upper_bound(addr);
+    CHECK_FAIL_RETURN_STATUS(it != numaRanges_.begin(), K_NOT_FOUND,
+                             FormatString("Address %p is before the first NUMA range", ptr));
+    --it;
+    numaId = it->second;
+    return Status::OK();
 }
 }  // namespace memory
 }  // namespace datasystem

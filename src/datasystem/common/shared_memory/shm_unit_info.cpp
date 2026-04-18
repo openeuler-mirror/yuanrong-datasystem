@@ -36,7 +36,8 @@ ShmUnitInfo::ShmUnitInfo(ShmKey id, ShmView shmView, void *pointer)
       offset(shmView.off),
       size(shmView.sz),
       refCount(0),
-      id(std::move(id))
+      id(std::move(id)),
+      numaId(INVALID_NUMA_ID)
 {
 }
 

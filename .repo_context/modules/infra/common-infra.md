@@ -94,7 +94,13 @@ Detailed follow-up docs now exist for:
 
 - Verified:
   - `rpc` contains both generation tooling and the main ZMQ transport implementation.
-  - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends.
+  - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends; when UB
+    numa affinity is enabled it also records per-allocation NUMA ownership. Shared-memory pre-touch distribution is
+    controlled by `shared_memory_distribution_policy` with values `none`, `interleave_all_numa`,
+    `interleave_affinity_numa`; for interleave policies the implementation performs 1GB chunk round-robin across
+    selected NUMA nodes, applies `SYS_mbind` with `MPOL_BIND` per chunk, and then page-touches each chunk. The
+    distribution policy takes effect when `enable_urma=true` and
+    `urma_register_whole_arena=true`.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - `os_transport_pipeline` is optional and only exists when pipeline H2D support is enabled.

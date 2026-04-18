@@ -47,6 +47,9 @@ urma_eid_info_t *ds_urma_get_eid_list(urma_device_t *device, uint32_t *eid_count
 void ds_urma_free_eid_list(urma_eid_info_t *eid_list);
 urma_context_t *ds_urma_create_context(urma_device_t *device, uint32_t eid_index);
 urma_status_t ds_urma_delete_context(urma_context_t *context);
+urma_status_t ds_urma_set_context_opt(urma_context_t *context, urma_opt_name_t opt_name, const void *opt_value,
+                                      size_t opt_len);
+urma_status_t ds_urma_user_ctl(urma_context_t *ctx, urma_user_ctl_in_t *in, urma_user_ctl_out_t *out);
 urma_jfce_t *ds_urma_create_jfce(urma_context_t *context);
 urma_status_t ds_urma_delete_jfce(urma_jfce_t *jfce);
 urma_jfc_t *ds_urma_create_jfc(urma_context_t *context, const urma_jfc_cfg_t *config);
@@ -67,6 +70,10 @@ urma_status_t ds_urma_unimport_jfr(urma_target_jetty_t *tjfr);
 urma_status_t ds_urma_write(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *remote_seg,
                             urma_target_seg_t *local_seg, uint64_t remote_addr, uint64_t local_addr, uint64_t length,
                             urma_jfs_wr_flag_t flag, uint64_t user_ctx);
+urma_status_t ds_urma_write_affinity(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *remote_seg,
+                                     urma_target_seg_t *local_seg, uint64_t remote_addr, uint64_t local_addr,
+                                     uint64_t length, urma_jfs_wr_flag_t flag, uint64_t user_ctx, uint32_t src_chip_id,
+                                     uint32_t dst_chip_id);
 urma_status_t ds_urma_read(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *local_seg,
                            urma_target_seg_t *remote_seg, uint64_t local_addr, uint64_t remote_addr, uint64_t length,
                            urma_jfs_wr_flag_t flag, uint64_t user_ctx);

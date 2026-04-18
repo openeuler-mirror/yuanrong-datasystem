@@ -921,7 +921,8 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
     // Fill in urma info and ucp info
     if (IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(
-            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metaSz, reqPb));
+            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metaSz, reqPb,
+                                shmUnit->GetNumaId()));
     } else if (IsUcpEnabled()) {
         RETURN_IF_NOT_OK(FillRequestUcpInfo(localAddress_, srcIpAddr, shmUnit, metaSz, reqPb));
     }

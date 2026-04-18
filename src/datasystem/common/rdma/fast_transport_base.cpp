@@ -29,58 +29,62 @@
 
 namespace datasystem {
 
-Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize) {
-    (void) segAddress;
-    (void) segSize;
+Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
+{
+    (void)segAddress;
+    (void)segSize;
 #ifdef USE_URMA
     if (IsUrmaEnabled() && IsRegisterWholeArenaEnabled() && segAddress != nullptr) {
-            LOG(INFO) << "Doing URMA memory registration of size " << segSize;
-            RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
-        }
+        LOG(INFO) << "Doing URMA memory registration of size " << segSize;
+        RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
+    }
 #endif
 
 #ifdef USE_RDMA
     if (IsUcpEnabled() && IsRegisterWholeArenaEnabled() && segAddress != nullptr) {
-            LOG(INFO) << "Doing UCP memory registration of size " << segSize;
-            RETURN_IF_NOT_OK(UcpManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
-        }
+        LOG(INFO) << "Doing UCP memory registration of size " << segSize;
+        RETURN_IF_NOT_OK(UcpManager::Instance().RegisterSegment(reinterpret_cast<uint64_t>(segAddress), segSize));
+    }
 #endif
     return Status::OK();
 }
 
-Status RegisterHostMemory(void *segAddress, const uint64_t &segSize) {
-    (void) segAddress;
-    (void) segSize;
+Status RegisterHostMemory(void *segAddress, const uint64_t &segSize)
+{
+    (void)segAddress;
+    (void)segSize;
 #ifdef BUILD_HETERO
     if (IsRemoteH2DEnabled() && FLAGS_urma_register_whole_arena && segAddress != nullptr) {
-            RETURN_IF_NOT_OK(RemoteH2DManager::Instance().RegisterHostMemory(segAddress, segSize));
-        }
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().RegisterHostMemory(segAddress, segSize));
+    }
 #endif
     return Status::OK();
 }
 
- bool IsFastTransportEnabled() {
-     if (IsUrmaEnabled()) {
-         return true;
-     }
+bool IsFastTransportEnabled()
+{
+    if (IsUrmaEnabled()) {
+        return true;
+    }
 
-     if (IsUcpEnabled()) {
-         return true;
-     }
+    if (IsUcpEnabled()) {
+        return true;
+    }
 
-     return false;
- }
+    return false;
+}
 
- bool IsRemoteH2DEnabled() {
+bool IsRemoteH2DEnabled()
+{
 #ifdef BUILD_HETERO
-     return !FLAGS_remote_h2d_device_ids.empty();
+    return !FLAGS_remote_h2d_device_ids.empty();
 #else
-     return false;
+    return false;
 #endif
- }
+}
 
-
-bool IsUrmaEnabled() {
+bool IsUrmaEnabled()
+{
 #ifdef USE_URMA
     return FLAGS_enable_urma;
 #else
@@ -88,7 +92,8 @@ bool IsUrmaEnabled() {
 #endif
 }
 
-bool IsUcpEnabled() {
+bool IsUcpEnabled()
+{
 #ifdef USE_RDMA
     return FLAGS_enable_rdma;
 #else
@@ -96,24 +101,34 @@ bool IsUcpEnabled() {
 #endif
 }
 
-bool IsRegisterWholeArenaEnabled() {
+bool IsRegisterWholeArenaEnabled()
+{
     return FLAGS_urma_register_whole_arena;
 }
 
-bool NeedRegisterWholeArena()
- {
+bool IsUbNumaAffinityEnabled()
+{
 #ifdef USE_URMA
-     if (IsUrmaEnabled() && IsRegisterWholeArenaEnabled()) {
+    return FLAGS_enable_ub_numa_affinity && IsUrmaEnabled() && IsRegisterWholeArenaEnabled();
+#else
+    return false;
+#endif
+}
+
+bool NeedRegisterWholeArena()
+{
+#ifdef USE_URMA
+    if (IsUrmaEnabled() && IsRegisterWholeArenaEnabled()) {
         return true;
     }
 #endif
 
 #ifdef USE_RDMA
-     if (IsUcpEnabled() && IsRegisterWholeArenaEnabled()) {
+    if (IsUcpEnabled() && IsRegisterWholeArenaEnabled()) {
         return true;
     }
 #endif
-     return false;
+    return false;
 }
 Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
                               std::function<Status(Status &)> errorHandler)
@@ -143,4 +158,4 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
     return Status::OK();
 }
 
-} // namespace datasystem
+}  // namespace datasystem

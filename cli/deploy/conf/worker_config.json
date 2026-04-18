@@ -527,6 +527,14 @@
         "value": "false",
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
     },
+    "enable_ub_numa_affinity": {
+        "value": "false",
+        "description": "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled."
+    },
+    "shared_memory_distribution_policy": {
+        "value": "none",
+        "description": "Shared memory NUMA distribution policy. Optional values: none, interleave_all_numa, interleave_affinity_numa. This option takes effect only when both enable_urma and urma_register_whole_arena are true."
+    },
     "urma_connection_size": {
         "value": "0",
         "description": "[DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection."
