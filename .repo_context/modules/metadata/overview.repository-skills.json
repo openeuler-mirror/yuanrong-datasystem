@@ -1,0 +1,49 @@
+{
+  "id": "overview.repository-skills",
+  "title": "Repository Skills",
+  "status": "active",
+  "domain": "overview",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/overview/repository-skills.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/skill-trigger-routing.md",
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    ".skills",
+    ".gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md",
+    "docs/README_CN.md"
+  ],
+  "key_tests": [
+    ".skills/ds-create-pr/tests/test_create_pr.py",
+    ".skills/ds-refresh-docs/tests/test_refresh_online_docs.py"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "overview.repository-overview"
+    ],
+    "split_signals": []
+  },
+  "retrieval": {
+    "keywords": [
+      "repository skills",
+      "skill routing",
+      "trigger skills",
+      "online docs trigger",
+      "ds-refresh-docs"
+    ],
+    "intent_examples": [
+      "understand repository-local skills",
+      "decide whether a natural-language request should trigger a skill",
+      "maintain skill trigger routing"
+    ]
+  }
+}

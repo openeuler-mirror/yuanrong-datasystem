@@ -57,6 +57,7 @@ Task-oriented guidance now starts in:
 - `operations/performance-investigation.md`
 - `upkeep/README.md`
 - `upkeep/module-context-generation.md`
+- `upkeep/skill-trigger-routing.md`
 - `features/README.md`
 - `features/infra/README.md`
 - `features/infra/l2cache/README.md`
