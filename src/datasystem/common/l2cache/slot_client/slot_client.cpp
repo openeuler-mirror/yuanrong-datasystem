@@ -120,6 +120,7 @@ Status SlotClient::Save(const std::string &objectKey, uint64_t version, int64_t 
                         const std::shared_ptr<std::iostream> &body, uint64_t asyncElapse, WriteMode writeMode,
                         uint32_t ttlSecond)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     (void)timeoutMs;
     auto rc = GetSlot(GetSlotId(objectKey)).Save(objectKey, version, body, asyncElapse, writeMode, ttlSecond);
     if (rc.IsOk()) {
@@ -131,6 +132,7 @@ Status SlotClient::Save(const std::string &objectKey, uint64_t version, int64_t 
 Status SlotClient::Get(const std::string &objectKey, uint64_t version, int64_t timeoutMs,
                        std::shared_ptr<std::stringstream> &content)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     (void)timeoutMs;
     return GetSlot(GetSlotId(objectKey)).Get(objectKey, version, content);
 }
@@ -138,6 +140,7 @@ Status SlotClient::Get(const std::string &objectKey, uint64_t version, int64_t t
 Status SlotClient::GetWithoutVersion(const std::string &objectKey, int64_t timeoutMs, uint64_t minVersion,
                                      std::shared_ptr<std::stringstream> &content)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     (void)timeoutMs;
     return GetSlot(GetSlotId(objectKey)).GetWithoutVersion(objectKey, minVersion, content);
 }
@@ -145,6 +148,7 @@ Status SlotClient::GetWithoutVersion(const std::string &objectKey, int64_t timeo
 Status SlotClient::Delete(const std::string &objectKey, uint64_t maxVerToDelete, bool deleteAllVersion,
                           uint64_t asyncElapse)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     (void)asyncElapse;
     auto rc = GetSlot(GetSlotId(objectKey)).Delete(objectKey, maxVerToDelete, deleteAllVersion);
     if (rc.IsOk()) {
@@ -155,22 +159,26 @@ Status SlotClient::Delete(const std::string &objectKey, uint64_t maxVerToDelete,
 
 Status SlotClient::RepairSlot(uint32_t slotId)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     return GetSlot(slotId).Repair();
 }
 
 Status SlotClient::CompactSlot(uint32_t slotId)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     return GetSlot(slotId).Compact();
 }
 
 Status SlotClient::MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     return GetSlot(slotId).Takeover(GetSlotPathForWorker(sourceWorkerAddress, slotId), false);
 }
 
 Status SlotClient::PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
                                const SlotPreloadCallback &callback)
 {
+    RETURN_IF_NOT_OK(EnsureActive());
     if (SanitizeSlotWorkerNamespace(sourceWorkerAddress) == GetSlotWorkerNamespace()) {
         return GetSlot(slotId).PreloadLocal(callback);
     }
@@ -180,9 +188,30 @@ Status SlotClient::PreloadSlot(const std::string &sourceWorkerAddress, uint32_t 
     return GetSlot(slotId).Takeover(GetSlotPathForWorker(sourceWorkerAddress, slotId), request);
 }
 
+Status SlotClient::CleanupLocalSlots()
+{
+    cleanupRequested_.store(true);
+    StopBackgroundCompactThread();
+    {
+        std::unique_lock<std::shared_mutex> lock(mu_);
+        slots_.clear();
+    }
+    RETURN_OK_IF_TRUE(rootPath_.empty() || !FileExist(rootPath_));
+    LOG(INFO) << "Cleaning local slot root path: " << rootPath_;
+    RETURN_IF_NOT_OK(RemoveAll(rootPath_));
+    return Status::OK();
+}
+
 std::string SlotClient::GetRequestSuccessRate() const
 {
     return "";
+}
+
+Status SlotClient::EnsureActive() const
+{
+    CHECK_FAIL_RETURN_STATUS(!cleanupRequested_.load(), StatusCode::K_RUNTIME_ERROR,
+                             "SlotClient is cleaning up local slots");
+    return Status::OK();
 }
 
 void SlotClient::StartBackgroundCompactThread()

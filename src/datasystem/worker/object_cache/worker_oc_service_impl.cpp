@@ -535,6 +535,9 @@ Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
         RETURN_IF_NOT_OK(asyncTasksDoneChecker_(taskId));
     }
     RETURN_IF_NOT_OK(MigrateL2CacheData(needMigrateL2CacheIds, taskId));
+    if (persistenceApi_ != nullptr) {
+        LOG_IF_ERROR(persistenceApi_->CleanupLocalSlots(), "CleanupLocalSlots failed");
+    }
     return Status::OK();
 }
 

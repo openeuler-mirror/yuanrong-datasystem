@@ -221,6 +221,18 @@ protected:
         return FileExist(path);
     }
 
+    bool WaitUntilPathRemoved(const std::string &path) const
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_PATH_TIMEOUT_MS);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!FileExist(path)) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_PATH_INTERVAL_MS));
+        }
+        return !FileExist(path);
+    }
+
     bool WaitUntilManifestCompacted(const std::string &slotPath, SlotManifestData &manifest) const
     {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_GET_TIMEOUT_MS);
@@ -1152,6 +1164,38 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, VoluntaryToPassiveScaleDown)
     }
 }
 
+TEST_F(SlotEndToEndPassiveScaleDownTest, VoluntaryToPassiveScaleDownRemoveOldSlot)
+{
+    std::shared_ptr<KVClient> client0, client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    const auto worker0SlotRoot = WorkerSlotRoot(0);
+    std::vector<std::string> keys;
+    std::string value = "value_" + GenRandomString(128);
+    std::string value1 = "value_" + GenRandomString(128);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (int i = 0; i < 10; ++i) {
+        std::string key = "slot_voluntary_to_passive_" + std::to_string(i);
+        keys.push_back(key);
+        DS_ASSERT_OK(client0->Set(key, value, param));
+        DS_ASSERT_OK(client1->Set(key, value1, param));
+    }
+    ASSERT_TRUE(WaitUntilPathExists(worker0SlotRoot)) << worker0SlotRoot;
+    client0.reset();
+    VoluntaryScaleDownInject(0);
+
+
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    ASSERT_TRUE(WaitUntilPathRemoved(worker0SlotRoot)) << worker0SlotRoot;
+    
+    for (const auto &key : keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value1);
+    }
+}
+
 TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryPreloadOomKeepsReceiverData)
 {
     LOG(INFO) << "Scenario: worker1 is near high water, worker0 fails, and slot recovery preload should stop "
@@ -1198,6 +1242,38 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, RecoveryPreloadOomKeepsReceiverData)
     for (const auto &key : worker1Keys) {
         std::string value;
         DS_ASSERT_OK(client1->Get(key, value));
+    }
+}
+
+TEST_F(SlotEndToEndPassiveScaleDownTest, VoluntaryToPassiveScaleDownRemoveOldSlot)
+{
+    std::shared_ptr<KVClient> client0, client1;
+    InitTestKVClient(0, client0);
+    InitTestKVClient(1, client1);
+    const auto worker0SlotRoot = WorkerSlotRoot(0);
+    std::vector<std::string> keys;
+    std::string value = "value_" + GenRandomString(128);
+    std::string value1 = "value_" + GenRandomString(128);
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    for (int i = 0; i < 10; ++i) {
+        std::string key = "slot_voluntary_to_passive_" + std::to_string(i);
+        keys.push_back(key);
+        DS_ASSERT_OK(client0->Set(key, value, param));
+        DS_ASSERT_OK(client1->Set(key, value1, param));
+    }
+    ASSERT_TRUE(WaitUntilPathExists(worker0SlotRoot)) << worker0SlotRoot;
+    client0.reset();
+    VoluntaryScaleDownInject(0);
+
+
+    WaitAllNodesJoinIntoHashRingFast(2, PASSIVE_NODE_DEAD_TIMEOUT_S + 6);
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    ASSERT_TRUE(WaitUntilPathRemoved(worker0SlotRoot)) << worker0SlotRoot;
+    
+    for (const auto &key : keys) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(key, getValue));
+        ASSERT_EQ(getValue, value1);
     }
 }
 

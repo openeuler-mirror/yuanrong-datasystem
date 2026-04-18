@@ -214,6 +214,11 @@ Status ObjectPersistenceApi::MergeSlot(const std::string &sourceWorkerAddress, u
     return Status(K_NOT_SUPPORTED, "MergeSlot is not supported by object persistence.");
 }
 
+Status ObjectPersistenceApi::CleanupLocalSlots()
+{
+    return Status::OK();
+}
+
 std::string ObjectPersistenceApi::GetL2CacheRequestSuccessRate() const
 {
     if (client_ == nullptr) {

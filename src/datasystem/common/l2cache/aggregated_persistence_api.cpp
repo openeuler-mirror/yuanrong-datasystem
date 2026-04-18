@@ -95,6 +95,12 @@ Status AggregatedPersistenceApi::MergeSlot(const std::string &sourceWorkerAddres
     return storageClient_->MergeSlot(sourceWorkerAddress, slotId);
 }
 
+Status AggregatedPersistenceApi::CleanupLocalSlots()
+{
+    CHECK_FAIL_RETURN_STATUS(storageClient_ != nullptr, K_RUNTIME_ERROR, "storageClient_ is nullptr");
+    return storageClient_->CleanupLocalSlots();
+}
+
 std::string AggregatedPersistenceApi::GetL2CacheRequestSuccessRate() const
 {
     if (storageClient_ == nullptr) {

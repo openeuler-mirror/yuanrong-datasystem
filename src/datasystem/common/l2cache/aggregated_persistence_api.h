@@ -45,6 +45,7 @@ public:
     Status PreloadSlot(const std::string &sourceWorkerAddress, uint32_t slotId,
                        const SlotPreloadCallback &callback) override;
     Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) override;
+    Status CleanupLocalSlots() override;
     std::string GetL2CacheRequestSuccessRate() const override;
 
 private:

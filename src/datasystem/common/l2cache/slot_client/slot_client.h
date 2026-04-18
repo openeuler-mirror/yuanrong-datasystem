@@ -21,6 +21,7 @@
 #ifndef DATASYSTEM_COMMON_L2CACHE_SLOT_CLIENT_SLOT_CLIENT_H
 #define DATASYSTEM_COMMON_L2CACHE_SLOT_CLIENT_SLOT_CLIENT_H
 
+#include <atomic>
 #include <cstdint>
 #include <condition_variable>
 #include <memory>
@@ -136,6 +137,12 @@ public:
                        const SlotPreloadCallback &callback = SlotPreloadCallback{}) override;
 
     /**
+     * @brief Stop local slot background work, release slot instances, and delete the local slot root.
+     * @return Status of the call.
+     */
+    Status CleanupLocalSlots() override;
+
+    /**
      * @brief Return request success metrics. Phase 1 keeps this empty.
      * @return The request success metric string.
      */
@@ -149,6 +156,7 @@ private:
     void WakeBackgroundCompactThread();
     int64_t ComputeNextCompactDelayMs() const;
     std::vector<uint32_t> CollectCompactionCandidates() const;
+    Status EnsureActive() const;
 
     uint32_t GetSlotId(const std::string &objectKey) const;
     Slot &GetSlot(uint32_t slotId);
@@ -167,6 +175,7 @@ private:
     bool stopCompactThread_{ false };
     uint64_t compactWakeupSeq_{ 0 };
     std::thread compactThread_;
+    std::atomic<bool> cleanupRequested_{ false };
 };
 }  // namespace datasystem
 

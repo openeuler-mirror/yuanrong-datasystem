@@ -102,6 +102,11 @@ public:
         return Status::OK();
     }
 
+    Status CleanupLocalSlots() override
+    {
+        return Status::OK();
+    }
+
     std::string GetL2CacheRequestSuccessRate() const override
     {
         return "";
