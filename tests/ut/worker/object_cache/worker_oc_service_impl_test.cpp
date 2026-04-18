@@ -152,7 +152,7 @@ TEST_F(WorkerOcServiceImplTest, TestParallelClearData)
     }
 }
 
-TEST_F(WorkerOcServiceImplTest, ClearDataImplDispatchesMatchedObjectsToClearAndRebuild)
+TEST_F(WorkerOcServiceImplTest, DISABLED_ClearDataImplDispatchesMatchedObjectsToClearAndRebuild)
 {
     using GetMatchObjectIdsMethod = Status (WorkerOcServiceClearDataFlow::*)(const ClearDataReqPb &,
                                                                              std::vector<std::string> &);

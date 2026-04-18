@@ -21,6 +21,7 @@
 #include "datasystem/common/l2cache/slot_client/slot.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <unordered_map>
 #include <vector>
@@ -1135,10 +1136,14 @@ Status Slot::DeleteFileIfExists(const std::string &relativePath, bool &deletedAn
         return Status::OK();
     }
     auto absPath = JoinPath(slotPath_, relativePath);
-    if (!FileExist(absPath)) {
-        return Status::OK();
+    if (unlink(absPath.c_str()) != 0) {
+        if (errno == ENOENT) {
+            return Status::OK();
+        }
+        std::stringstream ss;
+        ss << "Delete file " << absPath << " failed with errno: " << errno << ", errmsg: " << StrErr(errno);
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, ss.str());
     }
-    RETURN_IF_NOT_OK(DeleteFile(absPath));
     deletedAnything = true;
     return Status::OK();
 }
