@@ -95,7 +95,6 @@ Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 
 Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 {
-    CHECK_FAIL_RETURN_STATUS(param.existence != ExistenceOpt::NX, K_INVALID, "Not support NX setting.");
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_CREATE_BUFFER);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_CREATE);
@@ -104,6 +103,7 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     creatParam.ttlSecond = param.ttlSecond;
     creatParam.consistencyType = ConsistencyType::CAUSAL;
     creatParam.cacheType = param.cacheType;
+    creatParam.existence = param.existence;
     Status rc = impl_->Create(key, size, creatParam, buffer);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);

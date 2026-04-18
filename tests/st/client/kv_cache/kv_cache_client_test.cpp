@@ -1331,10 +1331,17 @@ TEST_F(KVCacheClientTest, TestCreateAndSetBufferSuccess)
     SetParam param;
     param.writeMode = WriteMode::NONE_L2_CACHE;
     param.ttlSecond = ttl;
+    param.existence = ExistenceOpt::NX;
     DS_ASSERT_OK(client->Create(key, NON_SHM_SIZE, param, buffer));
     ASSERT_NE(buffer, nullptr);
     ASSERT_EQ(NON_SHM_SIZE, buffer->GetSize());
     DS_ASSERT_OK(client->Set(buffer));
+
+    DS_ASSERT_OK(client->Create(key, NON_SHM_SIZE, param, buffer));
+    ASSERT_NE(buffer, nullptr);
+    ASSERT_EQ(NON_SHM_SIZE, buffer->GetSize());
+    DS_ASSERT_OK(client->Set(buffer));
+
     Optional<Buffer> getBuffer;
     ASSERT_EQ(client->Get(key, getBuffer), Status::OK());
     ASSERT_EQ(NON_SHM_SIZE, getBuffer->GetSize());
