@@ -113,6 +113,8 @@ public:
 
     virtual Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) = 0;
 
+    virtual Status CleanupLocalSlots() = 0;
+
     /**
      * @brief Obtains the request success rate of l2cache.
      * @return Success rate of l2cache request.

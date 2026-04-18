@@ -54,6 +54,8 @@ public:
 
     virtual Status MergeSlot(const std::string &sourceWorkerAddress, uint32_t slotId) = 0;
 
+    virtual Status CleanupLocalSlots() = 0;
+
     virtual std::string GetRequestSuccessRate() const = 0;
 };
 }  // namespace datasystem
