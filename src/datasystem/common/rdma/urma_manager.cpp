@@ -99,6 +99,12 @@ UrmaManager &UrmaManager::Instance()
 UrmaManager::UrmaManager()
 {
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::UrmaManager()";
+    // Zero the whole flag word before setting individual bitfields.
+    // Setting only .bs.xxx members leaves uninitialized bits in the rest of the
+    // word (other bitfields / padding / reserved), which become heap garbage
+    // under bazel -O2 and can cause URMA driver crashes. Same pattern as Issue #12.
+    registerSegmentFlag_.value = 0;
+    importSegmentFlag_.value = 0;
     registerSegmentFlag_.bs.token_policy = URMA_TOKEN_PLAIN_TEXT;
     registerSegmentFlag_.bs.token_id_valid = URMA_TOKEN_ID_INVALID;
     LOG(INFO) << "registerSegmentFlag_.token_id_valid=" << URMA_TOKEN_ID_INVALID;

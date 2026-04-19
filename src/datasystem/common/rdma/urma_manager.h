@@ -613,8 +613,8 @@ private:
 
     std::unique_ptr<UrmaResource> urmaResource_;
     std::atomic<uint64_t> requestId_{ 0 };
-    urma_reg_seg_flag_t registerSegmentFlag_;
-    urma_import_seg_flag_t importSegmentFlag_;
+    urma_reg_seg_flag_t registerSegmentFlag_{};
+    urma_import_seg_flag_t importSegmentFlag_{};
     UrmaJfrInfo localUrmaInfo_;
     // Local JFRs keyed by remote connection ID. JFRs are created/reused per target node
     // and persist across reconnections. Not owned by UrmaConnection.
@@ -631,7 +631,7 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
     std::atomic<bool> serverStop_{ false };
-    urma_log_cb_t urmaLogCallback_;
+    urma_log_cb_t urmaLogCallback_{};
 
     enum InitState { UNINITIALIZED = 0, INITIALIZED, DISABLED };
     std::atomic<InitState> initState_{ UNINITIALIZED };
