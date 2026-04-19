@@ -42,6 +42,30 @@ std::string SelectWorkerAddr(const std::unordered_map<std::string, std::string> 
     }
     return "";
 }
+
+std::unordered_map<std::string, std::string> FilterSameHostWorkers(
+    const std::unordered_map<std::string, std::string> &workerInfo, const std::string &hostId)
+{
+    std::unordered_map<std::string, std::string> sameHostWorkers;
+    if (hostId.empty()) {
+        return sameHostWorkers;
+    }
+    for (const auto &worker : workerInfo) {
+        if (worker.second == hostId) {
+            sameHostWorkers.emplace(worker);
+        }
+    }
+    return sameHostWorkers;
+}
+
+Status ParseWorkerAddr(const std::string &pickedAddr, std::string &workerIp, int &workerPort)
+{
+    HostPort hostPort;
+    RETURN_IF_NOT_OK(hostPort.ParseString(pickedAddr));
+    workerIp = hostPort.Host();
+    workerPort = hostPort.Port();
+    return Status::OK();
+}
 }  // namespace
 
 ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
@@ -127,14 +151,7 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bo
     if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
         pickedAddr = SelectWorkerAddr(activeWorkerInfo_, randomData_.get());
     } else {
-        std::unordered_map<std::string, std::string> sameHostWorkers;
-        if (!hostId_.empty()) {
-            for (const auto &workerInfo : activeWorkerInfo_) {
-                if (workerInfo.second == hostId_) {
-                    sameHostWorkers.emplace(workerInfo);
-                }
-            }
-        }
+        auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
         if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
             CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
             CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
@@ -147,15 +164,29 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bo
     }
 
     // parse worker ip and port from string.
-    HostPort hostPort;
-    auto rc = hostPort.ParseString(pickedAddr);
-    workerIp = hostPort.Host();
-    workerPort = hostPort.Port();
+    RETURN_IF_NOT_OK(ParseWorkerAddr(pickedAddr, workerIp, workerPort));
 
     if (isSameNode != nullptr) {
         auto it = activeWorkerInfo_.find(pickedAddr);
         *isSameNode = !hostId_.empty() && it != activeWorkerInfo_.end() && it->second == hostId_;
     }
     return Status::OK();
+}
+
+Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &workerPort)
+{
+    if (etcdStore_ == nullptr) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
+    }
+
+    CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+    RETURN_IF_NOT_OK(this->ObtainWorkers());
+    if (activeWorkerInfo_.empty()) {
+        return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
+    }
+
+    auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
+    CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
+    return ParseWorkerAddr(SelectWorkerAddr(sameHostWorkers, randomData_.get()), workerIp, workerPort);
 }
 }  // namespace datasystem

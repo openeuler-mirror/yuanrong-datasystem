@@ -171,6 +171,11 @@ void ListenWorker::SetRediscoverHandle(std::function<bool()> callback)
     rediscoverHandle_ = std::move(callback);
 }
 
+void ListenWorker::SetRecoverLocalWorkerHandle(std::function<bool()> callback)
+{
+    recoverLocalWorkerHandle_ = std::move(callback);
+}
+
 void ListenWorker::SetWorkerTimeoutHandle(std::function<void()> callback)
 {
     std::lock_guard<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
@@ -260,6 +265,7 @@ Status ListenWorker::CheckHeartbeat()
         fdReleaseHelper_.Update(std::move(expiredWorkerFds));
         NotifyFirstHeartbeat(true);
         workerAvailable_ = true;
+        TryRecoverLocalWorker();
         TrySwitchBackToLocalWorker();
         waitPost_->WaitFor(intervalMs);
         remainTime = clientDeadTimeoutMs;
@@ -418,6 +424,36 @@ void ListenWorker::TryRediscoverLocalWorker()
         if (rediscoverHandle_()) {
             LOG(INFO) << "[Switch] Local worker rediscovered successfully";
             isSwitched_ = false;
+            waitPost_->Set();
+        }
+    });
+}
+
+void ListenWorker::TryRecoverLocalWorker()
+{
+    if (isLocalWorker_ || isSwitched_ || !recoverLocalWorkerHandle_) {
+        return;
+    }
+    constexpr int64_t recoverIntervalMs = 1000;
+    auto now = GetSteadyClockTimeStampMs();
+    auto last = lastLocalRecoveryAttemptMs_.load(std::memory_order_relaxed);
+    if (now - last < recoverIntervalMs) {
+        return;
+    }
+    if (!lastLocalRecoveryAttemptMs_.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+        return;
+    }
+
+    std::shared_ptr<Raii> raii;
+    if (!TryAcquireAsyncSwitchPool(raii)) {
+        return;
+    }
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        if (recoverLocalWorkerHandle_()) {
+            LOG(INFO) << "[Switch] Preferred same-node worker recovered, remote fallback will drain.";
+            isSwitched_ = true;
             waitPost_->Set();
         }
     });

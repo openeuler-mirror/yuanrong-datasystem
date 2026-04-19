@@ -347,27 +347,39 @@ void ObjectClientImpl::ConstructTreadPool()
 Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker)
 {
     CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, initWithWorker));
+    return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true);
+}
+
+Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
+                                                   bool initWithWorker)
+{
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
-    auto &workerApi = workerApi_[LOCAL_WORKER];
     if (!initWithWorker) {
-        workerApi = std::make_shared<ClientWorkerRemoteApi>(ipAddress_, cred_, heartbeatType, token_, signature_.get(),
-                                                            tenantId_, enableCrossNodeConnection_,
-                                                            enableExclusiveConnection_, deviceId_);
+        workerApi_[node] = std::make_shared<ClientWorkerRemoteApi>(address, cred_, heartbeatType, token_,
+                                                                   signature_.get(), tenantId_,
+                                                                   enableCrossNodeConnection_,
+                                                                   enableExclusiveConnection_, deviceId_);
     } else {
-        workerApi_[LOCAL_WORKER] = std::make_shared<ClientWorkerLocalApi>(
-            ipAddress_, embeddedClientWorkerApi_, worker_, heartbeatType, signature_.get(), false, deviceId_);
+        workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(
+            address, embeddedClientWorkerApi_, worker_, heartbeatType, signature_.get(), false, deviceId_);
     }
-    RETURN_IF_NOT_OK(workerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
+    workerApi_[node]->isUseStandbyWorker_ = node != LOCAL_WORKER;
+    RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
+    return Status::OK();
+}
+
+Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker)
+{
+    auto &workerApi = workerApi_[node];
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
     ConstructTreadPool();
 
     RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
-    // Start worker down listen.
-    heartbeatType = workerApi->heartbeatType_;
-    RETURN_IF_NOT_OK(InitListenWorker());
+    RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
@@ -380,23 +392,47 @@ Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool init
 
 Status ObjectClientImpl::InitListenWorker()
 {
-    auto heartbeatType = workerApi_[LOCAL_WORKER]->heartbeatType_;
+    return InitListenWorkerAt(LOCAL_WORKER, true);
+}
+
+Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
+{
+    auto heartbeatType = workerApi_[node]->heartbeatType_;
     listenWorker_.resize(STANDBY2_WORKER + 1);
-    listenWorker_[LOCAL_WORKER] = std::make_shared<client::ListenWorker>(workerApi_[LOCAL_WORKER], heartbeatType,
-                                                                         LOCAL_WORKER, asyncSwitchWorkerPool_.get());
-    listenWorker_[LOCAL_WORKER]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
-    listenWorker_[LOCAL_WORKER]->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
-    listenWorker_[LOCAL_WORKER]->SetReleaseFdCallBack(
-        [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
-    if (enableCrossNodeConnection_) {
-        listenWorker_[LOCAL_WORKER]->SetSwitchWorkerHandle(
-            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
-        if (serviceDiscovery_ != nullptr) {
-            listenWorker_[LOCAL_WORKER]->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
+    listenWorker_[node] =
+        std::make_shared<client::ListenWorker>(workerApi_[node], heartbeatType, node, asyncSwitchWorkerPool_.get());
+    if (isLocalWorker) {
+        listenWorker_[node]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+        listenWorker_[node]->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
+        listenWorker_[node]->SetReleaseFdCallBack(
+            [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
+    } else {
+        listenWorker_[node]->AddCallBackFunc(this, [this, node]() { ProcessStandbyWorkerLost(node); });
+        if (serviceDiscovery_ != nullptr
+            && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+            listenWorker_[node]->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
         }
     }
-    listenWorker_[LOCAL_WORKER]->SetIsLocalWorker(true);
-    RETURN_IF_NOT_OK(listenWorker_[LOCAL_WORKER]->StartListenWorker());
+    if (enableCrossNodeConnection_) {
+        listenWorker_[node]->SetSwitchWorkerHandle(
+            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+        if (isLocalWorker && serviceDiscovery_ != nullptr) {
+            listenWorker_[node]->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
+        }
+    }
+    listenWorker_[node]->SetIsLocalWorker(isLocalWorker);
+    RETURN_IF_NOT_OK(listenWorker_[node]->StartListenWorker());
+    return Status::OK();
+}
+
+Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat)
+{
+    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, false));
+    currentNode_ = STANDBY1_WORKER;
+    RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false));
+    LOG(INFO) << "[Switch] Preferred same-node local worker is absent, use remote fallback "
+              << remoteAddress.ToString();
     return Status::OK();
 }
 
@@ -413,8 +449,22 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     if (serviceDiscovery_ != nullptr) {
         std::string workerIp;
         int workerPort;
-        RETURN_IF_NOT_OK(serviceDiscovery_->SelectWorker(workerIp, workerPort));
-        ipAddress_ = HostPort(workerIp, workerPort);
+        bool isSameNode = false;
+        RETURN_IF_NOT_OK(serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode));
+        HostPort selectedAddress(workerIp, workerPort);
+        if (serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !isSameNode) {
+            std::string hostPortStr = selectedAddress.ToString();
+            CHECK_FAIL_RETURN_STATUS(
+                Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
+                FormatString("Invalid IP address/port. Host %s, port: %d", selectedAddress.Host(),
+                             selectedAddress.Port()));
+
+            LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
+            RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
+            RETURN_IF_NOT_OK(InitPreferredRemoteFallback(selectedAddress, enableHeartbeat));
+            return Status::OK();
+        }
+        ipAddress_ = selectedAddress;
     }
     std::string hostPortStr = ipAddress_.ToString();
     if (hostPortStr.empty()) {
@@ -631,6 +681,10 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
         listenWorker_[next]->SetSwitchWorkerHandle(
             [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
         listenWorker_[next]->SetIsLocalWorker(false);
+        if (serviceDiscovery_ != nullptr
+            && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+            listenWorker_[next]->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
+        }
         listenWorker_[next]->AddCallBackFunc(this, [this, next]() { ProcessStandbyWorkerLost(next); });
         rc = listenWorker_[next]->StartListenWorker();
         if (rc.IsError()) {
@@ -720,6 +774,126 @@ bool ObjectClientImpl::RediscoverLocalWorker()
 
     LOG(INFO) << "[Switch] Local worker IP changed: " << ipSnapshot.ToString() << " -> " << newAddress.ToString();
     return ReconnectLocalWorkerAt(newAddress);
+}
+
+bool ObjectClientImpl::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress)
+{
+    if (serviceDiscovery_ == nullptr
+        || serviceDiscovery_->GetAffinityPolicy() != ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            return false;
+        }
+        oldNode = currentNode_;
+    }
+
+    std::string workerIp;
+    int workerPort;
+    Status rc = serviceDiscovery_->SelectSameNodeWorker(workerIp, workerPort);
+    if (rc.IsError()) {
+        constexpr int times = 10;
+        LOG_EVERY_T(INFO, times) << "[Switch] Same-node worker is not ready yet: " << rc.ToString();
+        return false;
+    }
+    localAddress = HostPort(workerIp, workerPort);
+    return true;
+}
+
+Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
+                                                     std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
+                                                     std::unique_ptr<client::MmapManager> &localMmapManager,
+                                                     std::shared_ptr<client::ListenWorker> &localListenWorker)
+{
+    localWorkerApi = std::make_shared<ClientWorkerRemoteApi>(
+        localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+        enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
+    Status rc = localWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Switch] Init preferred same-node worker " << localAddress.ToString()
+                   << " failed: " << rc.ToString();
+        return rc;
+    }
+
+    localMmapManager = std::make_unique<client::MmapManager>(localWorkerApi, false);
+    rc = localWorkerApi->PrepairForDecreaseShmRef(
+        std::bind(&client::MmapManager::LookupUnitsAndMmapFd, localMmapManager.get(), std::placeholders::_1,
+                  std::placeholders::_2));
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef for preferred same-node worker failed: " << rc.ToString();
+        return rc;
+    }
+
+    localListenWorker = std::make_shared<client::ListenWorker>(
+        localWorkerApi, localWorkerApi->heartbeatType_, LOCAL_WORKER, asyncSwitchWorkerPool_.get());
+    localListenWorker->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+    localListenWorker->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
+    localListenWorker->SetReleaseFdCallBack(
+        [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
+    if (enableCrossNodeConnection_) {
+        localListenWorker->SetSwitchWorkerHandle(
+            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+        localListenWorker->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
+    }
+    localListenWorker->SetIsLocalWorker(true);
+    rc = localListenWorker->StartListenWorker();
+    if (rc.IsError()) {
+        LOG(ERROR) << "[Switch] Start preferred same-node worker listener failed: " << rc.ToString();
+        return rc;
+    }
+    return Status::OK();
+}
+
+bool ObjectClientImpl::CommitPreferredLocalWorker(WorkerNode oldNode, const HostPort &localAddress,
+                                                  const std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
+                                                  std::unique_ptr<client::MmapManager> localMmapManager,
+                                                  const std::shared_ptr<client::ListenWorker> &localListenWorker)
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (currentNode_ == LOCAL_WORKER || currentNode_ != oldNode
+        || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+        localListenWorker->StopListenWorker(true);
+        return false;
+    }
+    ipAddress_ = localAddress;
+    workerApi_[LOCAL_WORKER] = localWorkerApi;
+    listenWorker_[LOCAL_WORKER] = localListenWorker;
+    mmapManager_ = std::move(localMmapManager);
+    clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
+    memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
+    currentNode_ = LOCAL_WORKER;
+    if (listenWorker_[oldNode] != nullptr) {
+        listenWorker_[oldNode]->SetSwitched();
+    }
+    return true;
+}
+
+bool ObjectClientImpl::RecoverPreferredLocalWorker()
+{
+    WorkerNode oldNode;
+    HostPort localAddress;
+    if (!GetPreferredLocalWorkerToRecover(oldNode, localAddress)) {
+        return false;
+    }
+
+    std::shared_ptr<ClientWorkerRemoteApi> localWorkerApi;
+    std::unique_ptr<client::MmapManager> localMmapManager;
+    std::shared_ptr<client::ListenWorker> localListenWorker;
+    auto rc = PreparePreferredLocalWorker(localAddress, workerApi_[oldNode]->heartbeatType_, localWorkerApi,
+                                          localMmapManager, localListenWorker);
+    if (rc.IsError()) {
+        return false;
+    }
+    if (!CommitPreferredLocalWorker(oldNode, localAddress, localWorkerApi, std::move(localMmapManager),
+                                    localListenWorker)) {
+        return false;
+    }
+
+    LOG(INFO) << "[Switch] Preferred same-node worker recovered at " << localAddress.ToString();
+    return true;
 }
 
 bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)

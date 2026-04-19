@@ -1239,7 +1239,30 @@ private:
 
     Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker);
 
+    Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
+                                     bool initWithWorker);
+
+    Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker);
+
     Status InitListenWorker();
+
+    Status InitListenWorkerAt(WorkerNode node, bool isLocalWorker);
+
+    Status InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat);
+
+    bool RecoverPreferredLocalWorker();
+
+    bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress);
+
+    Status PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
+                                       std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
+                                       std::unique_ptr<client::MmapManager> &localMmapManager,
+                                       std::shared_ptr<client::ListenWorker> &localListenWorker);
+
+    bool CommitPreferredLocalWorker(WorkerNode oldNode, const HostPort &localAddress,
+                                    const std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
+                                    std::unique_ptr<client::MmapManager> localMmapManager,
+                                    const std::shared_ptr<client::ListenWorker> &localListenWorker);
 
     /**
      * @brief Convert a list of devBlobList to a list of device buffer pointers.
