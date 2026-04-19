@@ -3679,11 +3679,27 @@ void ObjectClientImpl::ShmRefReconcileThreadFunc()
             break;
         }
 
-        if (workerApi_.empty() || workerApi_[LOCAL_WORKER] == nullptr) {
+        std::shared_ptr<IClientWorkerApi> reconcileWorkerApi;
+        {
+            std::lock_guard<std::mutex> lock(switchNodeMutex_);
+            WorkerNode reconcileWorker = LOCAL_WORKER;
+#ifdef USE_URMA
+            if (IsUrmaEnabled()) {
+                reconcileWorker = currentNode_;
+            }
+#endif
+            if (workerApi_.size() > static_cast<size_t>(reconcileWorker)) {
+                reconcileWorkerApi = workerApi_[reconcileWorker];
+            }
+            if (reconcileWorkerApi == nullptr && workerApi_.size() > static_cast<size_t>(LOCAL_WORKER)) {
+                reconcileWorkerApi = workerApi_[LOCAL_WORKER];
+            }
+        }
+        if (reconcileWorkerApi == nullptr) {
             continue;
         }
         std::vector<ShmKey> maybeExpiredShmIds;
-        auto rc = workerApi_[LOCAL_WORKER]->ReconcileShmRef(confirmedExpiredShmIds, maybeExpiredShmIds);
+        auto rc = reconcileWorkerApi->ReconcileShmRef(confirmedExpiredShmIds, maybeExpiredShmIds);
         lastRpcFailed = rc.IsError();
         if (lastRpcFailed) {
             LOG(WARNING) << "Reconcile shm ref failed: " << rc.ToString();
