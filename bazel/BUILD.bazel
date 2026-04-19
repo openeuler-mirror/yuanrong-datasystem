@@ -172,6 +172,7 @@ py_wheel(
         "//:cluster_config_file",
         "//:commit_id_file",
         "//:cpp_template_files",
+        "//:datasystem_worker_file",
         "//:dockerentry_files",
         "//:dsbench_file",
         "//:helm_chart_files",
