@@ -330,10 +330,62 @@ copy_directory(
     out = "yr/datasystem/cpp_template",
 )
 
-copy_directory(
-    name = "dockerentry_files",
-    src = "k8s/docker/entrypoint",
-    out = "yr/datasystem/docker_entryfile",
+# Daemonset entrypoint files - use genrule with explicit file listing
+genrule(
+    name = "dockerentry_daemonset_files",
+    srcs = [
+        "k8s/docker/entrypoint/check_taint.sh",
+        "k8s/docker/entrypoint/file_check.sh",
+        "k8s/docker/entrypoint/install.sh",
+        "k8s/docker/entrypoint/liveness_check.sh",
+        "k8s/docker/entrypoint/utils.sh",
+        "k8s/docker/entrypoint/worker_entry.sh",
+        "k8s/docker/exitpoint/uninstall.sh",
+    ],
+    outs = [
+        "yr/datasystem/docker_entryfile/daemonset/check_taint.sh",
+        "yr/datasystem/docker_entryfile/daemonset/file_check.sh",
+        "yr/datasystem/docker_entryfile/daemonset/install.sh",
+        "yr/datasystem/docker_entryfile/daemonset/liveness_check.sh",
+        "yr/datasystem/docker_entryfile/daemonset/utils.sh",
+        "yr/datasystem/docker_entryfile/daemonset/worker_entry.sh",
+        "yr/datasystem/docker_entryfile/daemonset/uninstall.sh",
+    ],
+    cmd = " && ".join([
+        "cp $(location k8s/docker/entrypoint/check_taint.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/entrypoint/file_check.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/entrypoint/install.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/entrypoint/liveness_check.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/entrypoint/utils.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/entrypoint/worker_entry.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+        "cp $(location k8s/docker/exitpoint/uninstall.sh) $(@D)/yr/datasystem/docker_entryfile/daemonset/",
+    ]),
+)
+
+# Deployment entrypoint files
+genrule(
+    name = "dockerentry_deployment_files",
+    srcs = [
+        "k8s_deployment/docker/entrypoint/file_check.sh",
+        "k8s_deployment/docker/entrypoint/liveness_check.sh",
+        "k8s_deployment/docker/entrypoint/utils.sh",
+        "k8s_deployment/docker/entrypoint/worker_entry.sh",
+        "k8s_deployment/docker/exitpoint/uninstall.sh",
+    ],
+    outs = [
+        "yr/datasystem/docker_entryfile/deployment/file_check.sh",
+        "yr/datasystem/docker_entryfile/deployment/liveness_check.sh",
+        "yr/datasystem/docker_entryfile/deployment/utils.sh",
+        "yr/datasystem/docker_entryfile/deployment/worker_entry.sh",
+        "yr/datasystem/docker_entryfile/deployment/uninstall.sh",
+    ],
+    cmd = " && ".join([
+        "cp $(location k8s_deployment/docker/entrypoint/file_check.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
+        "cp $(location k8s_deployment/docker/entrypoint/liveness_check.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
+        "cp $(location k8s_deployment/docker/entrypoint/utils.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
+        "cp $(location k8s_deployment/docker/entrypoint/worker_entry.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
+        "cp $(location k8s_deployment/docker/exitpoint/uninstall.sh) $(@D)/yr/datasystem/docker_entryfile/deployment/",
+    ]),
 )
 
 copy_directory(
