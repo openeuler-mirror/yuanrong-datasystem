@@ -39,7 +39,7 @@ std::string UrmaJfrInfo::ToString() const
     }
     oss << "eid ";
     // eid is not really printable as a string. So we will dump its context in hex
-    urma_eid_t e;
+    urma_eid_t e{};
     if (UrmaManager::StrToEid(eid, e).IsOk()) {
         oss << EidToFmtStr(e);
     } else {
@@ -61,7 +61,7 @@ void UrmaSeg::ToProto(const urma_seg_t &seg, UrmaSegPb &proto)
 
 Status UrmaSeg::FromProto(const UrmaSegPb &proto, urma_seg_t &seg)
 {
-    urma_eid_t eid;
+    urma_eid_t eid{};
     RETURN_IF_NOT_OK(UrmaManager::StrToEid(proto.eid(), eid));
     seg.ubva.eid = eid;
     seg.ubva.uasid = proto.uasid();

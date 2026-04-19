@@ -138,7 +138,7 @@ Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &device
     LOG(INFO) << "urma create jfc";
     CHECK_FAIL_RETURN_STATUS(context != nullptr, K_INVALID, "URMA context is null");
 
-    urma_jfc_cfg_t jfcConfig;
+    urma_jfc_cfg_t jfcConfig{};
     jfcConfig.depth = deviceAttr.dev_cap.max_jfc_depth;
     jfcConfig.flag.value = 0;
     if (GetUrmaMode() == UrmaMode::IB) {
@@ -192,7 +192,7 @@ UrmaJfs::~UrmaJfs()
 
 Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, std::shared_ptr<UrmaJfs> &jfs)
 {
-    urma_jfs_cfg_t jfsConfig;
+    urma_jfs_cfg_t jfsConfig{};
     jfsConfig.depth = JETTY_SIZE;
     jfsConfig.trans_mode = URMA_TM_RM;
     jfsConfig.priority = priority;
@@ -219,7 +219,7 @@ Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priorit
 
 Status UrmaJfs::ModifyToError()
 {
-    urma_jfs_attr_t attr;
+    urma_jfs_attr_t attr{};
     attr.mask = JFS_STATE;
     attr.state = URMA_JETTY_STATE_ERROR;
     auto ret = ds_urma_modify_jfs(raw_, &attr);
@@ -250,7 +250,7 @@ UrmaJfr::~UrmaJfr()
 
 Status UrmaJfr::Create(urma_context_t *context, urma_jfc_t *jfc, urma_token_t urmaToken, std::unique_ptr<UrmaJfr> &jfr)
 {
-    urma_jfr_cfg_t jfrConfig;
+    urma_jfr_cfg_t jfrConfig{};
     jfrConfig.depth = JETTY_SIZE;
     jfrConfig.flag.value = 0;
     jfrConfig.flag.bs.tag_matching = URMA_NO_TAG_MATCHING;
@@ -309,7 +309,7 @@ Status UrmaLocalSegment::Register(urma_context_t *context, uint64_t segAddress, 
                                   urma_token_t urmaToken, urma_reg_seg_flag_t registerSegmentFlag,
                                   std::unique_ptr<UrmaLocalSegment> &segment)
 {
-    urma_seg_cfg_t segmentConfig;
+    urma_seg_cfg_t segmentConfig{};
     segmentConfig.va = segAddress;
     segmentConfig.len = segSize;
     segmentConfig.token_value = urmaToken;
