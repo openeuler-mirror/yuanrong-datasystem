@@ -115,6 +115,7 @@ Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
 - `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.tar`;
 - the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and `cpp/lib/libdatasystem.so`.
+- `//bazel:datasystem_wheel` includes the `yr/datasystem/datasystem_worker` binary in the wheel payload alongside the Python package, CLI/config assets, and `yr/datasystem/lib/` shared libraries.
 
 ## Environment Notes
 
