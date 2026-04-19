@@ -68,7 +68,7 @@ struct UrmaJfrInfo {
 };
 
 struct UrmaSeg {
-    urma_seg_t raw;
+    urma_seg_t raw{};
     static void ToProto(const urma_seg_t &seg, UrmaSegPb &proto);
     static Status FromProto(const UrmaSegPb &proto, urma_seg_t &seg);
     static std::string ToString(const urma_seg_t &seg);
