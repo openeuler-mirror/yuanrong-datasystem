@@ -73,7 +73,7 @@ UrmaErrorHandlePolicy GetUrmaErrorHandlePolicy(int statusCode)
 }
 Status BuildRemoteJfr(const UrmaJfrInfo &info, urma_rjfr_t &remoteJfr)
 {
-    urma_eid_t eid;
+    urma_eid_t eid{};
     RETURN_IF_NOT_OK(UrmaManager::StrToEid(info.eid, eid));
     remoteJfr.jfr_id.eid = eid;
     remoteJfr.jfr_id.uasid = info.uasid;
@@ -1047,8 +1047,7 @@ uint64_t UrmaManager::GenerateReqId()
 
 Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys)
 {
-    urma_jfs_wr_flag_t flag;
-    flag.value = 0;
+    urma_jfs_wr_flag_t flag{};
     flag.bs.complete_enable = 1;
     const bool useNumaAffinity =
         IsUbNumaAffinityEnabled() && args.srcChipId != INVALID_CHIP_ID && args.dstChipId != INVALID_CHIP_ID;
@@ -1209,8 +1208,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     UrmaLocalSegmentMap::const_accessor localSegAccessor;
     RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
 
-    urma_jfs_wr_flag_t flag;
-    flag.value = 0;
+    urma_jfs_wr_flag_t flag{};
     flag.bs.complete_enable = 1;
 
     std::shared_ptr<UrmaJfs> jfs;
