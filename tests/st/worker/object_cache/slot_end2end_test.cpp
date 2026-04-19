@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -31,7 +32,9 @@
 #include "common.h"
 #include "client/kv_cache/kv_client_scale_common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/l2cache/slot_client/slot_client.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -809,6 +812,224 @@ TEST_F(SlotEndToEndTest, BackgroundCompactSurvivesConcurrentMutations)
     ASSERT_TRUE(!client0->Get(deleteKey, deletedValue).IsOk());
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "slotstore.Slot.Compact.BeforeCommit"));
+}
+
+class SlotEndToEndCompactRecoveryRaceTest : public SlotEndToEndTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 1;
+        opts.enableDistributedMaster = "true";
+        opts.waitWorkerReady = false;
+        opts.injectActions = "SlotClient.Init.SetSlotNum:return(1)";
+        distributedDiskPath_ = testCasePath_ + "/distributed_disk";
+        DS_ASSERT_OK(CreateDir(distributedDiskPath_, true));
+        std::stringstream ss;
+        ss << "-l2_cache_type=distributed_disk "
+           << "-distributed_disk_path=" << distributedDiskPath_ << " "
+           << "-cluster_name=" << CLUSTER_NAME << " "
+           << "-distributed_disk_max_data_file_size_mb=1 "
+           << "-distributed_disk_compact_interval_s=3600 "
+           << "-distributed_disk_sync_interval_ms=0 "
+           << "-distributed_disk_sync_batch_bytes=1 "
+           << "-enable_metadata_recovery=true "
+           << "-auto_del_dead_node=false "
+           << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
+           << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
+           << "-node_dead_timeout_s=" << RESTART_NODE_DEAD_TIMEOUT_S << " "
+           << "-v=1 "
+           << "-enable_l2_cache_fallback=false";
+        opts.workerGflagParams = ss.str();
+    }
+
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        FLAGS_cluster_name = CLUSTER_NAME;
+        DS_ASSERT_OK(Init());
+        ASSERT_TRUE(cluster_ != nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        InitTestEtcdInstance();
+        auto createRc = db_->CreateTable(ETCD_SLOT_RECOVERY_TABLE, ETCD_SLOT_RECOVERY_TABLE);
+        ASSERT_TRUE(createRc.IsOk() || createRc.GetCode() == K_DUPLICATED) << createRc.ToString();
+        DS_ASSERT_OK(cluster_->StartWorkers());
+        DS_ASSERT_OK(cluster_->WaitUntilClusterReadyOrTimeout(30));
+        DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+    }
+
+protected:
+    struct RaceAttemptResult {
+        Status workerRc;
+        Status localRc;
+    };
+
+    void CopyFileBytes(const std::string &srcPath, const std::string &dstPath) const
+    {
+        std::string content;
+        ASSERT_TRUE(ReadWholeFile(srcPath, content).IsOk()) << srcPath;
+        ASSERT_TRUE(AtomicWriteTextFile(dstPath, content).IsOk()) << dstPath;
+    }
+
+    SlotManifestData PrepareSyntheticCompactManifest(const std::string &slotPath, uint64_t token) const
+    {
+        SlotManifestData manifest;
+        auto loadRc = SlotManifest::Load(slotPath, manifest);
+        EXPECT_TRUE(loadRc.IsOk()) << slotPath;
+        if (loadRc.IsError()) {
+            return SlotManifestData{};
+        }
+        EXPECT_EQ(manifest.state, SlotState::NORMAL);
+        EXPECT_FALSE(manifest.activeIndex.empty());
+        EXPECT_FALSE(manifest.activeData.empty());
+        if (manifest.state != SlotState::NORMAL || manifest.activeIndex.empty() || manifest.activeData.empty()) {
+            return SlotManifestData{};
+        }
+
+        uint32_t maxFileId = 0;
+        for (const auto &dataFile : manifest.activeData) {
+            uint32_t fileId = 0;
+            auto parseRc = ParseDataFileId(dataFile, fileId);
+            EXPECT_TRUE(parseRc.IsOk()) << dataFile;
+            if (parseRc.IsError()) {
+                return SlotManifestData{};
+            }
+            maxFileId = std::max(maxFileId, fileId);
+        }
+
+        const auto pendingIndex = FormatCompactIndexFileName(token);
+        CopyFileBytes(JoinPath(slotPath, manifest.activeIndex), JoinPath(slotPath, pendingIndex));
+
+        std::vector<std::string> pendingData;
+        pendingData.reserve(manifest.activeData.size());
+        for (const auto &dataFile : manifest.activeData) {
+            ++maxFileId;
+            const auto copiedDataFile = FormatDataFileName(maxFileId);
+            CopyFileBytes(JoinPath(slotPath, dataFile), JoinPath(slotPath, copiedDataFile));
+            pendingData.emplace_back(copiedDataFile);
+        }
+
+        SlotManifestData switching = manifest;
+        switching.state = SlotState::IN_OPERATION;
+        switching.opType = SlotOperationType::COMPACT;
+        switching.opPhase = SlotOperationPhase::COMPACT_COMMITTING;
+        switching.role = SlotOperationRole::LOCAL;
+        switching.txnId = "synthetic_compact_" + std::to_string(token);
+        switching.pendingIndex = pendingIndex;
+        switching.pendingData = pendingData;
+        switching.gcPending = false;
+        switching.obsoleteIndex.clear();
+        switching.obsoleteData.clear();
+        auto writeRc = AtomicWriteTextFile(JoinPath(slotPath, "manifest"), SlotManifest::Encode(switching));
+        EXPECT_TRUE(writeRc.IsOk()) << writeRc.ToString();
+        if (writeRc.IsError()) {
+            return SlotManifestData{};
+        }
+        return switching;
+    }
+
+    RaceAttemptResult RunConflictingRecoveryAttempt(const std::shared_ptr<KVClient> &client,
+                                                    const std::string &slotPath, const std::string &workerNamespace,
+                                                    const std::string &workerKey, const std::string &workerValue,
+                                                    const std::string &localKey, const std::string &localValue,
+                                                    uint64_t token) const
+    {
+        std::atomic<bool> start{ false };
+        RaceAttemptResult result;
+        result.workerRc = Status::OK();
+        result.localRc = Status::OK();
+        auto switching = PrepareSyntheticCompactManifest(slotPath, token);
+        if (switching.pendingIndex.empty() || switching.pendingData.empty()) {
+            result.workerRc = Status(K_RUNTIME_ERROR, "failed to prepare synthetic compact manifest");
+            result.localRc = result.workerRc;
+            return result;
+        }
+
+        std::thread localThread([&, token]() {
+            auto oldNamespace = GetSlotWorkerNamespace();
+            SetSlotWorkerNamespace(workerNamespace);
+            auto setRc = inject::Set("SlotClient.Init.SetSlotNum", "1*call(1)");
+            if (setRc.IsError()) {
+                result.localRc = setRc;
+                SetSlotWorkerNamespace(oldNamespace);
+                return;
+            }
+            auto clearInject = [&]() {
+                (void)inject::Clear("SlotClient.Init.SetSlotNum");
+                SetSlotWorkerNamespace(oldNamespace);
+            };
+
+            SlotClient localClient(distributedDiskPath_);
+            auto initRc = localClient.Init();
+            if (initRc.IsError()) {
+                result.localRc = initRc;
+                clearInject();
+                return;
+            }
+
+            auto body = std::make_shared<std::stringstream>();
+            *body << localValue;
+            while (!start.load()) {
+                std::this_thread::yield();
+            }
+            result.localRc = localClient.Save(localKey, token, 0, body, 0, WriteMode::WRITE_THROUGH_L2_CACHE, 0);
+            clearInject();
+        });
+
+        std::thread workerThread([&]() {
+            SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+            while (!start.load()) {
+                std::this_thread::yield();
+            }
+            result.workerRc = client->Set(workerKey, workerValue, param);
+        });
+
+        start.store(true);
+        workerThread.join();
+        localThread.join();
+        return result;
+    }
+};
+
+TEST_F(SlotEndToEndCompactRecoveryRaceTest, ConcurrentCompactRecoveryDoesNotBreakKvSave)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    const std::string seedValueA(700UL * 1024UL, 'a');
+    const std::string seedValueB(700UL * 1024UL, 'b');
+    const std::string seedValueC(700UL * 1024UL, 'c');
+    DS_ASSERT_OK(client->Set("seed_key_a", seedValueA, param));
+    DS_ASSERT_OK(client->Set("seed_key_b", seedValueB, param));
+    DS_ASSERT_OK(client->Set("seed_key_c", seedValueC, param));
+
+    const auto slotPath = JoinPath(WorkerSlotRoot(0), FormatSlotDir(0));
+    ASSERT_TRUE(WaitUntilPathExists(slotPath)) << slotPath;
+
+    SlotManifestData seedManifest;
+    ASSERT_TRUE(SlotManifest::Load(slotPath, seedManifest).IsOk()) << slotPath;
+    ASSERT_FALSE(seedManifest.activeData.empty());
+
+    const auto workerNamespace = SanitizeSlotWorkerNamespace(WorkerAddress(0));
+    constexpr uint32_t maxAttempts = 32;
+    for (uint32_t attempt = 0; attempt < maxAttempts; ++attempt) {
+        const auto token = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                     std::chrono::steady_clock::now().time_since_epoch())
+                                                     .count())
+                           + attempt;
+        const std::string workerKey = "worker_race_key_" + std::to_string(attempt);
+        const std::string localKey = "local_race_key_" + std::to_string(attempt);
+        const std::string workerValue = "worker_value_" + GenRandomString(256);
+        const std::string localValue = "local_value_" + GenRandomString(256);
+
+        auto result =
+            RunConflictingRecoveryAttempt(client, slotPath, workerNamespace, workerKey, workerValue, localKey,
+                                         localValue, token);
+        ASSERT_TRUE(result.localRc.IsOk()) << "attempt=" << attempt << ", localRc=" << result.localRc.ToString();
+        ASSERT_TRUE(result.workerRc.IsOk()) << "attempt=" << attempt << ", workerRc=" << result.workerRc.ToString();
+        ASSERT_TRUE(WaitUntilGetSucceeds(client, workerKey, workerValue)) << "attempt=" << attempt;
+    }
 }
 
 TEST_F(SlotEndToEndTest, VoluntaryScaleDownMovesSlotAndMetadata)
