@@ -2684,6 +2684,172 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
         func("host_id_env_n", -1);
     }
 }
+
+class KVCacheClientServiceDiscoverySwitchBackTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        // Keep the distributed master on worker 1 so worker 0 can be stopped before the client is created.
+        opts.masterIdx = 1;
+        opts.numEtcd = 1;
+        opts.disableRocksDB = false;
+        // Shorten cluster and client heartbeat windows so the test can observe topology changes quickly.
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
+            "-node_timeout_s=1 -heartbeat_interval_ms=500 -node_dead_timeout_s=2 -client_reconnect_wait_s=1";
+
+        std::string hostIp = "127.0.0.1";
+        for (size_t i = 0; i < opts.numWorkers; i++) {
+            HostPort hostPort(hostIp, GetFreePort());
+            opts.workerConfigs.emplace_back(hostPort);
+            workerAddress_.emplace_back(hostPort);
+
+            // Give every worker a distinct host id. The SDK uses worker 0's host id to represent the local node.
+            std::string envName = "switch_back_host_id_env" + std::to_string(i);
+            std::string envVal = "switch_back_host_id" + std::to_string(i);
+            ASSERT_EQ(setenv(envName.c_str(), envVal.c_str(), 1), 0);
+            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
+        }
+
+        // Speed up the client-side heartbeat loop used by the switch-back path.
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
+        datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
+    }
+
+    void SetUp() override
+    {
+        ExternalClusterTest::SetUp();
+        FLAGS_log_monitor = true;
+        FLAGS_v = 1;
+    }
+
+    void TearDown() override
+    {
+        client_.reset();
+        ExternalClusterTest::TearDown();
+    }
+
+    void InitClientByServiceDiscovery(const std::string &hostIdEnvName, std::shared_ptr<KVClient> &client)
+    {
+        // Use service discovery rather than an explicit worker address, matching the customer scenario.
+        ServiceDiscoveryOptions sdOpts;
+        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.hostIdEnvName = hostIdEnvName;
+        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+        DS_ASSERT_OK(serviceDiscovery->Init());
+
+        ConnectOptions connectOptions;
+        connectOptions.connectTimeoutMs = 60000;
+        connectOptions.requestTimeoutMs = 0;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        // Enable standby/switch logic so the test verifies the best available recovery path.
+        connectOptions.enableCrossNodeConnection = true;
+        connectOptions.serviceDiscovery = serviceDiscovery;
+        client = std::make_shared<KVClient>(connectOptions);
+        DS_ASSERT_OK(client->Init());
+    }
+
+    Status WaitServiceDiscoverySelectsRemoteWorker(const std::string &hostIdEnvName)
+    {
+        // Before worker 0 is restarted, preferred-same-node discovery must fall back to a remote worker.
+        ServiceDiscoveryOptions sdOpts;
+        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.hostIdEnvName = hostIdEnvName;
+        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+        RETURN_IF_NOT_OK(serviceDiscovery->Init());
+
+        std::string workerIp;
+        int workerPort;
+        RETURN_IF_NOT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));
+        HostPort selected(workerIp, workerPort);
+        CHECK_FAIL_RETURN_STATUS(selected != workerAddress_[0], K_NOT_READY,
+                                 FormatString("ServiceDiscovery still selects local worker %s.",
+                                              workerAddress_[0].ToString()));
+        return Status::OK();
+    }
+
+    Status GetWorkerUuid(uint32_t workerIndex, std::string &workerUuid)
+    {
+        auto db = InitTestEtcdInstance();
+        std::unordered_map<HostPort, std::string> uuidMap;
+        GetWorkerUuids(db.get(), uuidMap);
+        auto iter = uuidMap.find(workerAddress_[workerIndex]);
+        CHECK_FAIL_RETURN_STATUS(iter != uuidMap.end(), K_NOT_READY,
+                                 FormatString("Cannot find worker %s in hash ring.",
+                                              workerAddress_[workerIndex].ToString()));
+        workerUuid = iter->second;
+        return Status::OK();
+    }
+
+    Status CurrentClientWorkerUuid(std::string &workerUuid)
+    {
+        std::string key;
+        RETURN_IF_NOT_OK(client_->GenerateKey("", key));
+        // GenerateKey appends ";worker_uuid", so the suffix tells which worker the client is currently using.
+        auto pos = key.rfind(';');
+        CHECK_FAIL_RETURN_STATUS(pos != std::string::npos && pos + 1 < key.size(), K_RUNTIME_ERROR,
+                                 FormatString("Invalid generated key: %s", key));
+        workerUuid = key.substr(pos + 1);
+        return Status::OK();
+    }
+
+    Status CheckClientUsesWorker(const std::string &expectedWorkerUuid)
+    {
+        // Keep normal KV traffic flowing while waiting for the client to switch back.
+        std::string key = "switch_back_" + GetStringUuid();
+        std::string value = "local worker should be preferred after it becomes ready";
+        RETURN_IF_NOT_OK(client_->Set(key, value));
+
+        std::string result;
+        RETURN_IF_NOT_OK(client_->Get(key, result));
+        CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
+
+        std::string currentWorkerUuid;
+        RETURN_IF_NOT_OK(CurrentClientWorkerUuid(currentWorkerUuid));
+        CHECK_FAIL_RETURN_STATUS(currentWorkerUuid == expectedWorkerUuid, K_NOT_READY,
+                                 FormatString("Current worker uuid is %s, expect local worker uuid %s.",
+                                              currentWorkerUuid, expectedWorkerUuid));
+        return Status::OK();
+    }
+
+protected:
+    std::vector<HostPort> workerAddress_;
+    std::shared_ptr<KVClient> client_;
+};
+
+TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
+{
+    // Initial state: the SDK runs on node 0, but worker 0 is unavailable.
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this]() { return WaitServiceDiscoverySelectsRemoteWorker("switch_back_host_id_env0"); }, 10, K_OK));
+
+    // The client is forced to start on a remote worker because no same-node worker is ready.
+    InitClientByServiceDiscovery("switch_back_host_id_env0", client_);
+    std::string initialWorkerUuid;
+    DS_ASSERT_OK(CurrentClientWorkerUuid(initialWorkerUuid));
+
+    // When worker 0 comes online later, the client is expected to switch back quickly without request failures.
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
+
+    std::string localWorkerUuid;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this, &localWorkerUuid]() { return GetWorkerUuid(0, localWorkerUuid); },
+                                                 10, K_OK));
+    ASSERT_NE(initialWorkerUuid, localWorkerUuid);
+
+    // The client should actively recover to the local worker while normal KV traffic keeps succeeding.
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this, &localWorkerUuid]() { return CheckClientUsesWorker(localWorkerUuid); }, 8, K_OK));
+}
+
 class KVCacheClientL2FallBackTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

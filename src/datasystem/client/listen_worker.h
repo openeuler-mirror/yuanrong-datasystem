@@ -165,6 +165,12 @@ public:
     void SetRediscoverHandle(std::function<bool()> callback);
 
     /**
+     * @brief Set the preferred local worker recovery handle.
+     * @param[in] callback Returns true if the client switched back to a same-node worker.
+     */
+    void SetRecoverLocalWorkerHandle(std::function<bool()> callback);
+
+    /**
      * @brief Set the timeout handle for local cleanup when heartbeat timeout happens.
      * @param[in] callback Callback invoked once when workerAvailable_ changes from true to false due to timeout.
      */
@@ -226,6 +232,11 @@ private:
      * @brief Try rediscover local worker via ServiceDiscovery when heartbeat fails and already switched.
      */
     void TryRediscoverLocalWorker();
+
+    /**
+     * @brief Try recover to a same-node worker while the remote fallback is healthy.
+     */
+    void TryRecoverLocalWorker();
 
     /**
      * @brief Check if client is switchable or not.
@@ -306,6 +317,8 @@ private:
     std::atomic<bool> isWorkerVoluntaryScaleDown_{ false };
     FdReleaseHelper fdReleaseHelper_;
     std::function<bool()> rediscoverHandle_;
+    std::function<bool()> recoverLocalWorkerHandle_;
+    std::atomic<int64_t> lastLocalRecoveryAttemptMs_{ 0 };
     std::function<void()> workerTimeoutHandle_;
     std::shared_timed_mutex workerTimeoutHandleMutex_;  // Protect 'workerTimeoutHandle_'.
     ThreadPool *asyncSwitchWorkerPool_;

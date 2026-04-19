@@ -93,6 +93,23 @@ public:
      */
     Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr);
 
+    /**
+     * @brief Select a same-node worker address only.
+     * @param[out] workerIp
+     * @param[out] workerPort
+     * @return Status of the call.
+     */
+    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort);
+
+    /**
+     * @brief Get service affinity policy.
+     * @return Service affinity policy.
+     */
+    ServiceAffinityPolicy GetAffinityPolicy() const
+    {
+        return affinityPolicy_;
+    }
+
 private:
     /**
      * @brief Populate active workers set at startup.
