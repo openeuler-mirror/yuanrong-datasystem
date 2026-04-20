@@ -22,14 +22,38 @@
 #define DATASYSTEM_COMMON_L2CACHE_OBS_CLIENT_OBS_SIGNATURE_H
 
 #include <map>
+#include <memory>
 #include <string>
 
+#include "datasystem/common/l2cache/obs_client/obs_signature_provider.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-class ObsSignature {
+
+class HttpRequest;
+
+class ObsV2Signature : public ObsSignatureProvider {
 public:
-    ~ObsSignature() = default;
+    ObsV2Signature() = default;
+    ~ObsV2Signature() override = default;
+
+    /**
+     * @brief Sign an HTTP request with OBS V2 signature.
+     * @param[in] credential OBS credential (ak, sk, token).
+     * @param[in,out] request HTTP request to sign.
+     * @param[in] contentMd5 MD5 of content (optional).
+     * @param[in] subResources Query sub-resources for canonical resource.
+     * @return Status of the call.
+     */
+    Status SignRequest(const ObsCredential &credential,
+                       std::shared_ptr<HttpRequest> &request,
+                       const std::string &contentMd5,
+                       const std::map<std::string, std::string> &subResources) override;
+
+    SignatureType GetType() const override { return SignatureType::OBS_V2; }
+
+    // Static utility methods (kept for backward compatibility and direct use)
+
     /**
      * @brief Build OBS V2 StringToSign.
      * @param[in] method HTTP method (PUT/GET/DELETE/POST).
@@ -78,5 +102,9 @@ public:
      */
     static std::string FormatDateRFC1123();
 };
+
+// Type alias for backward compatibility
+using ObsSignature = ObsV2Signature;
+
 }  // namespace datasystem
 #endif

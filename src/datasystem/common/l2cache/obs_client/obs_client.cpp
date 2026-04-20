@@ -29,6 +29,8 @@
 #include <securec.h>
 
 #include "datasystem/common/httpclient/curl_http_client.h"
+#include "datasystem/common/l2cache/obs_client/aws_v4_signature.h"
+#include "datasystem/common/l2cache/obs_client/obs_service_detector.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -151,8 +153,43 @@ Status ObsClient::Init()
         status = ObsClientInitByAkSk();
     }
     CHECK_FAIL_RETURN_STATUS(status.IsOk(), K_RUNTIME_ERROR, "OBS client init failed. " + status.ToString());
+
+    // Initialize signature provider (detect service type and create appropriate provider)
+    status = InitSignatureProvider();
+    if (status.IsError()) {
+        LOG(WARNING) << "Signature provider initialization failed, using OBS V2 as default: " << status.ToString();
+        signatureProvider_ = std::make_unique<ObsV2Signature>();
+    }
+
     initialized_.store(true);
-    LOG(INFO) << "ObsClient is initialized.";
+    LOG(INFO) << "ObsClient is initialized with "
+              << (signatureProvider_->GetType() == SignatureType::AWS_V4 ? "AWS V4" : "OBS V2")
+              << " signature.";
+    return Status::OK();
+}
+
+Status ObsClient::InitSignatureProvider()
+{
+    // Detect service type by sending a probe request
+    auto curlHttpClient = std::dynamic_pointer_cast<CurlHttpClient>(httpClient_);
+    if (curlHttpClient == nullptr) {
+        LOG(WARNING) << "Failed to cast httpClient to CurlHttpClient, using OBS V2 signature";
+        signatureProvider_ = std::make_unique<ObsV2Signature>();
+        return Status::OK();
+    }
+
+    SignatureType sigType = ObsServiceDetector::Detect(curlHttpClient, endPoint_, bucketName_,
+                                                        FLAGS_obs_https_enabled);
+
+    if (sigType == SignatureType::AWS_V4) {
+        std::string region = ObsServiceDetector::ParseRegionFromEndpoint(endPoint_);
+        LOG(INFO) << "Detected S3/MinIO service, using AWS V4 signature with region: " << region;
+        signatureProvider_ = std::make_unique<AwsV4Signature>(region);
+    } else {
+        LOG(INFO) << "Detected OBS service, using OBS V2 signature";
+        signatureProvider_ = std::make_unique<ObsV2Signature>();
+    }
+
     return Status::OK();
 }
 
@@ -367,6 +404,7 @@ std::shared_ptr<HttpRequest> ObsClient::BuildRequest(HttpMethod method, const st
     request->SetMethod(std::move(method));
     request->SetRequestTimeoutMs(timeoutMs);
     request->SetConnectTimeoutMs(timeoutMs);
+    request->AddHeader("Host", host);  // Required for AWS V4 signature
     for (const auto &param : subResources) {
         request->AddQueryParam(param.first, param.second);
     }
@@ -378,52 +416,15 @@ Status ObsClient::SignRequest(const ObsCredential &credential, std::shared_ptr<H
                               const std::string &contentMd5,
                               const std::map<std::string, std::string> &subResources)
 {
-    std::string method = HttpRequest::HttpMethodStr(request->GetMethod());
-    std::string date = ObsSignature::FormatDateRFC1123();
-    request->AddHeader("Date", date);
-
-    std::string contentType = request->GetHeader("Content-Type");
-
-    // Collect x-obs-* headers for signing (sorted map)
-    std::map<std::string, std::string> obsHeaders;
-    for (const auto &hdr : request->Headers()) {
-        if (hdr.first.find("x-obs-") == 0) {
-            obsHeaders[hdr.first] = hdr.second;
-        }
+    // Delegate to signature provider
+    if (signatureProvider_ != nullptr) {
+        return signatureProvider_->SignRequest(credential, request, contentMd5, subResources);
     }
 
-    // Add token header if using token rotation
-    if (!credential.token.empty()) {
-        request->AddHeader("x-obs-security-token", credential.token);
-        obsHeaders["x-obs-security-token"] = credential.token;
-    }
-
-    // Extract objectKey from URL for canonical resource
-    std::string objectKey;
-    const auto &url = request->GetUrl();
-    std::string scheme = FLAGS_obs_https_enabled ? "https://" : "http://";
-    std::string prefix;
-    if (FLAGS_obs_https_enabled) {
-        prefix = scheme + bucketName_ + "." + endPoint_ + "/";
-    } else {
-        prefix = scheme + endPoint_ + "/" + bucketName_ + "/";
-    }
-    if (url.size() > prefix.size()) {
-        objectKey = url.substr(prefix.size());
-        auto qpos = objectKey.find('?');
-        if (qpos != std::string::npos) {
-            objectKey = objectKey.substr(0, qpos);
-        }
-    }
-
-    std::string canonicalResource = ObsSignature::BuildCanonicalResource(bucketName_, objectKey, subResources);
-
-    std::string stringToSign = ObsSignature::BuildStringToSign(method, contentMd5, contentType, date, obsHeaders,
-                                                               canonicalResource);
-    std::string signature;
-    RETURN_IF_NOT_OK(ObsSignature::Sign(credential.sk, stringToSign, signature));
-    request->AddHeader("Authorization", ObsSignature::BuildAuthHeader(credential.ak, signature));
-    return Status::OK();
+    // Fallback to OBS V2 signature if provider not initialized
+    LOG(WARNING) << "Signature provider not initialized, using OBS V2 signature";
+    ObsV2Signature obsV2Sig;
+    return obsV2Sig.SignRequest(credential, request, contentMd5, subResources);
 }
 
 Status ObsClient::StreamingUpload(const std::shared_ptr<std::iostream> &body, size_t size, const std::string &objPath,
@@ -728,23 +729,38 @@ Status ObsClient::SendListObjectsRequest(const std::string &objectPrefix, const 
                                          uint16_t maxKeys, int64_t timeoutMs, const ObsCredential &credential,
                                          std::string &respBody)
 {
-    std::string queryString = "?prefix=" + objectPrefix + "&max-keys=" + std::to_string(maxKeys);
+    // Build query string for list request
+    std::string queryString = "prefix=" + objectPrefix + "&max-keys=" + std::to_string(maxKeys);
     if (!marker.empty()) {
         queryString += "&marker=" + marker;
     }
+
+    // Build URL - for list operations, use /bucket?query (no trailing slash before ?)
     std::string scheme = FLAGS_obs_https_enabled ? "https://" : "http://";
+    std::string host;
     std::string url;
     if (FLAGS_obs_https_enabled) {
-        url = scheme + bucketName_ + "." + endPoint_ + "/" + queryString;
+        host = bucketName_ + "." + endPoint_;
+        url = scheme + host + "?" + queryString;
     } else {
-        url = scheme + endPoint_ + "/" + bucketName_ + "/" + queryString;
+        host = endPoint_;
+        url = scheme + host + "/" + bucketName_ + "?" + queryString;
     }
+
     auto request = std::make_shared<HttpRequest>();
     request->SetUrl(std::move(url));
     request->SetMethod(HttpMethod::GET);
     request->SetRequestTimeoutMs(timeoutMs);
     request->SetConnectTimeoutMs(timeoutMs);
+    request->AddHeader("Host", host);  // Required for AWS V4 signature
     request->AddHeader("Content-Type", "application/xml");
+
+    // Parse query params into the request for signing
+    request->AddQueryParam("prefix", objectPrefix);
+    request->AddQueryParam("max-keys", std::to_string(maxKeys));
+    if (!marker.empty()) {
+        request->AddQueryParam("marker", marker);
+    }
 
     std::map<std::string, std::string> subResources;
     RETURN_IF_NOT_OK(SignRequest(credential, request, "", subResources));
