@@ -3,7 +3,11 @@ yr.datasystem.DsClient
 
 .. py:class:: yr.datasystem.DsClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
 
-    数据系统客户端
+    数据系统客户端。
+
+    ``DsClient`` 是聚合客户端，会同时创建 :doc:`KVClient <yr.datasystem.kv_client.KVClient>`、
+    :doc:`HeteroClient <yr.datasystem.hetero_client.HeteroClient>` 和
+    :doc:`ObjectClient <yr.datasystem.object_client.ObjectClient>` 3 个客户端实例，并统一提供初始化、关闭和访问入口。
 
     参数：
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
