@@ -683,6 +683,10 @@ private:
     friend ClientDeviceObjectManager;
     enum WorkerNode : uint32_t { LOCAL_WORKER = 0, STANDBY1_WORKER, STANDBY2_WORKER };
 
+    enum class WorkerSwitchState : uint8_t { AVAILABLE = 0, SWITCHING, NO_SWITCHABLE_WORKER };
+
+    enum class StandbySwitchAttemptResult : uint8_t { SWITCHED = 0, CONTINUE, ABORT };
+
     /**
      * @brief Init ParallelFor thread pool.
      */
@@ -1049,7 +1053,7 @@ private:
      * @param[in] node Worker node index.
      * @return True if switch success.
      */
-    bool SwitchWorkerNode(WorkerNode node);
+    bool SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason);
 
     /**
      * @brief Switch to standby worker impl.
@@ -1057,7 +1061,22 @@ private:
      * @param[in] next Next standby worker index.
      * @return True if switch success.
      */
-    bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode next);
+    bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current,
+                                   WorkerNode next, uint64_t switchGeneration, client::SwitchTriggerReason reason);
+
+    std::vector<HostPort> GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi) const;
+
+    bool CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+                             const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
+                             const std::shared_ptr<client::ListenWorker> &candidateListenWorker);
+
+    StandbySwitchAttemptResult TrySwitchToStandbyWorker(const std::shared_ptr<IClientWorkerApi> &currentApi,
+                                                        WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+                                                        const HostPort &standbyWorker);
+
+    void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
+
+    void RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration);
 
     /**
      * @brief Try switch back to local worker.
@@ -1081,7 +1100,8 @@ private:
      * @brief Check node is ready to exit or not.
      * @return True if node ready to exit.
      */
-    bool ReadyToExit(WorkerNode node);
+    bool ReadyToExit(WorkerNode node, const std::shared_ptr<IClientWorkerApi> &workerApi,
+                     const std::shared_ptr<client::ListenWorker> &listenWorker);
 
     /**
      * @brief Wait standby worker ready.
@@ -1252,6 +1272,12 @@ private:
 
     bool RecoverPreferredLocalWorker();
 
+    void MarkWorkerAvailableLocked();
+
+    void MarkNoSwitchableWorkerLocked();
+
+    Status NoSwitchableWorkerStatus() const;
+
     bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress);
 
     Status PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
@@ -1363,6 +1389,9 @@ private:
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
     std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
+    WorkerSwitchState workerSwitchState_{ WorkerSwitchState::AVAILABLE };
+    bool switchInProgress_{ false };
+    uint64_t switchGeneration_{ 0 };
     std::unique_ptr<client::MmapManager> mmapManager_{ nullptr };
     std::unique_ptr<ClientDeviceObjectManager> devOcImpl_{ nullptr };
     bool enableRemoteH2D_;
