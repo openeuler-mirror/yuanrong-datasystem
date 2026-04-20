@@ -90,6 +90,7 @@ public:
         gRefProc_.reset();
         impl_.reset();
         evictionManager_.reset();
+        RELEASE_STUBS  // Clear global stubs to prevent interference with concurrent tests
         CommonTest::TearDown();
     }
 
