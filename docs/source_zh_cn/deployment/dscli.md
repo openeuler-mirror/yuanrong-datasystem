@@ -706,7 +706,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| max_client_num | int | `200` | openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数 |
+| max_client_num | int | `200` | openYuanrong datasystem单个DaemonSet可同时接入的共享内存客户端数量上限；仅对走共享内存（SHM）路径的客户端生效 |
 | shared_memory_size_mb | int | `1024` | openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位） |
 
 #### IPC/RPC相关配置
