@@ -26,6 +26,7 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -144,8 +145,13 @@ void SharedMemoryRefTable::AddShmUnit(const ClientKey &clientId, std::shared_ptr
     if (shmUnit->GetRefCount() == 1) {
         datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(-1);
         datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES))
+            .Inc(static_cast<int64_t>(shmUnit->size));
     }
     RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL);
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE))
+        .Set(static_cast<int64_t>(shmRefTable_.size()));
     VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
 }
 
@@ -154,6 +160,8 @@ void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &
 {
     TbbMemoryObjectRefTable::accessor objectAccessor;
     const ClientKey &clientId = clientAccessor->first;
+    uint64_t addedCount = 0;
+    uint64_t firstRefBytes = 0;
     for (auto &shmUnit : shmUnits) {
         if (shmUnit == nullptr) {
             continue;
@@ -173,9 +181,20 @@ void SharedMemoryRefTable::AddShmUnits(TbbMemoryClientRefTable::const_accessor &
         if (shmUnit->GetRefCount() == 1) {
             datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(-1);
             datasystem::memory::Allocator::Instance()->ChangeRefPageCount(1);
+            firstRefBytes += shmUnit->size;
         }
         RecordMaybeExpiredShm(clientId, shmId, requestTimeoutMs);
+        ++addedCount;
         VLOG(1) << "AddShmUnit for shmid: " << shmUnit->id << " client id: " << clientId;
+    }
+    if (addedCount > 0) {
+        METRIC_ADD(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL, addedCount);
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE))
+            .Set(static_cast<int64_t>(shmRefTable_.size()));
+    }
+    if (firstRefBytes > 0) {
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES))
+            .Inc(static_cast<int64_t>(firstRefBytes));
     }
 }
 
@@ -201,6 +220,9 @@ Status SharedMemoryRefTable::RemoveShmUnit(const ClientKey &clientId, const ShmK
 #endif
     RemoveShmUnitDetail(clientId, false, shmAccessor, clientAccessor);
     ClearMaybeExpiredShmIds(clientId, { shmId });
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL);
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE))
+        .Set(static_cast<int64_t>(shmRefTable_.size()));
     VLOG(1) << "RemoveShmUnit for shmid: " << shmId << " client id: " << clientId;
     return Status::OK();
 }
@@ -226,6 +248,8 @@ void SharedMemoryRefTable::RemoveShmUnitDetail(const ClientKey &clientId, bool f
     if (shmUnit->GetRefCount() == 0) {
         datasystem::memory::Allocator::Instance()->ChangeNoRefPageCount(1);
         datasystem::memory::Allocator::Instance()->ChangeRefPageCount(-1);
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES))
+            .Dec(static_cast<int64_t>(shmUnit->size));
     }
 
     // skip if the ref count for shmId is not zero.
@@ -330,12 +354,20 @@ Status SharedMemoryRefTable::RemoveClient(const ClientKey &clientId)
     }
     std::vector<ShmKey> shmIds;
     clientAccessor->second->GetRefIds(shmIds);
+    uint64_t removedCount = 0;
     for (const auto &shmId : shmIds) {
         TbbMemoryObjectRefTable::accessor shmAccessor;
         if (!shmRefTable_.find(shmAccessor, shmId)) {
             continue;
         }
         RemoveShmUnitDetail(clientId, true, shmAccessor, clientAccessor);
+        ++removedCount;
+    }
+    if (removedCount > 0) {
+        METRIC_ADD(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL, removedCount);
+        METRIC_ADD(metrics::KvMetricId::WORKER_REMOVE_CLIENT_REFS_TOTAL, removedCount);
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE))
+            .Set(static_cast<int64_t>(shmRefTable_.size()));
     }
     clientRefTable_.erase(clientAccessor);
     std::lock_guard<std::shared_mutex> lock(maybeExpiredShmTableMutex_);

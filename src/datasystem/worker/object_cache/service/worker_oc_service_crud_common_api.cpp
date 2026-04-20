@@ -22,6 +22,7 @@
 
 #include <cstddef>
 
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -280,6 +281,7 @@ Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV)
     INJECT_POINT("worker.ClearObject.BeforeErase");
     RETURN_IF_NOT_OK_APPEND_MSG(objectTable_->Erase(objectKey, entry),
                                 FormatString("Failed to erase object %s from object table", objectKey));
+    METRIC_INC(metrics::KvMetricId::WORKER_OBJECT_ERASE_TOTAL);
     evictionManager_->Erase(objectKey);
     return Status::OK();
 }

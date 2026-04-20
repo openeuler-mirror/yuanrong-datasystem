@@ -46,6 +46,7 @@
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -1667,6 +1668,7 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
 {
     std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
     if (asyncReleasePool_ == nullptr || shmId.Empty()) {
+        METRIC_INC(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL);
         return;
     }
     bool async = true;
@@ -1686,9 +1688,11 @@ Status ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isSh
     VLOG(1) << FormatString("Try decrease ref count for shmId %s on clientId %s, needDecreaseWorkerRef %d", shmId,
                             workerApi_[LOCAL_WORKER]->clientId_, needDecreaseWorkerRef);
     if (!needDecreaseWorkerRef) {
+        METRIC_INC(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL);
         return Status::OK();
     }
     if (isShm && !IsBufferAlive(version)) {
+        METRIC_INC(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL);
         return Status::OK();
     }
     RETURN_IF_NOT_OK(CheckConnection());
@@ -3627,6 +3631,15 @@ void ObjectClientImpl::StartMetricsThread()
                                             [this] { return metricsExitFlag_.load(); });
             locker.unlock();
             if (!exit) {
+                std::shared_ptr<ThreadPool> pool;
+                {
+                    std::shared_lock<std::shared_timed_mutex> lck(shutdownMux_);
+                    pool = asyncReleasePool_;
+                }
+                if (pool != nullptr) {
+                    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_ASYNC_RELEASE_QUEUE_SIZE))
+                        .Set(static_cast<int64_t>(pool->GetWaitingTasksNum()));
+                }
                 metrics::Tick();
             }
         }

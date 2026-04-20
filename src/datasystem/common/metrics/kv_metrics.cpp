@@ -59,6 +59,26 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 33, "zmq_receive_io_latency", MetricType::HISTOGRAM, "us" },
     { 34, "zmq_rpc_serialize_latency", MetricType::HISTOGRAM, "us" },
     { 35, "zmq_rpc_deserialize_latency", MetricType::HISTOGRAM, "us" },
+    // Alloc/free counters: requested/logical bytes (see Allocator::AllocateMemory/FreeMemory comments).
+    { 36, "worker_allocator_alloc_bytes_total", MetricType::COUNTER, "bytes" },
+    { 37, "worker_allocator_free_bytes_total", MetricType::COUNTER, "bytes" },
+    { 38, "worker_shm_unit_created_total", MetricType::COUNTER, "count" },
+    { 39, "worker_shm_unit_destroyed_total", MetricType::COUNTER, "count" },
+    { 40, "worker_shm_ref_add_total", MetricType::COUNTER, "count" },
+    { 41, "worker_shm_ref_remove_total", MetricType::COUNTER, "count" },
+    { 42, "worker_shm_ref_table_size", MetricType::GAUGE, "count" },
+    { 43, "worker_shm_ref_table_bytes", MetricType::GAUGE, "bytes" },
+    { 44, "worker_remove_client_refs_total", MetricType::COUNTER, "count" },
+    { 45, "worker_object_erase_total", MetricType::COUNTER, "count" },
+    { 46, "master_object_meta_table_size", MetricType::GAUGE, "count" },
+    // Depth of TTL time queue (timedObj_); not a separate count of failedObjects_ retry metadata alone.
+    { 47, "master_ttl_pending_size", MetricType::GAUGE, "count" },
+    { 48, "master_ttl_fire_total", MetricType::COUNTER, "count" },
+    { 49, "master_ttl_delete_success_total", MetricType::COUNTER, "count" },
+    { 50, "master_ttl_delete_failed_total", MetricType::COUNTER, "count" },
+    { 51, "master_ttl_retry_total", MetricType::COUNTER, "count" },
+    { 52, "client_async_release_queue_size", MetricType::GAUGE, "count" },
+    { 53, "client_dec_ref_skipped_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])
               == static_cast<size_t>(KvMetricId::KV_METRIC_END));
