@@ -65,8 +65,8 @@ size_t RandomData::GetRandomIndex(size_t containerSize)
     if (containerSize == 0) {
         return 0;
     }
-    thread_local static std::uniform_int_distribution<size_t> indexes(0, containerSize - 1);
     thread_local static auto generator = randomDevice_;
+    std::uniform_int_distribution<size_t> indexes(0, containerSize - 1);
     return indexes(generator);
 }
 
