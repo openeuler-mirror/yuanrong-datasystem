@@ -1573,8 +1573,9 @@ TEST_F(KVClientMSetDMTest, DISABLED_MSetNetFailure)
 TEST_F(KVClientMSetDMTest, PreCommitTtl)
 {
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.CreateMultiMetaPhaseTwo.delay", "1*sleep(3000)"));
+    // pendingTtl must be greater than PhaseTwo delay to ensure pre-commit doesn't expire before PhaseTwo completes
     for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "master.CreateMultiMetaTx.pendingTtl", "call(2'000'000)"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "master.CreateMultiMetaTx.pendingTtl", "call(5'000'000)"));
     }
     const int threadNum = 2;
     ThreadPool threadPool(threadNum);
@@ -1586,6 +1587,11 @@ TEST_F(KVClientMSetDMTest, PreCommitTtl)
     });
     fut.get();
     fut1.get();
+    // Clear inject actions to prevent interference with concurrent tests
+    (void)cluster_->ClearInjectAction(WORKER, 0, "worker.CreateMultiMetaPhaseTwo.delay");
+    for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
+        (void)cluster_->ClearInjectAction(WORKER, i, "master.CreateMultiMetaTx.pendingTtl");
+    }
 }
 
 TEST_F(KVClientMSetDMTest, LEVEL1_MSetRollbackFailed)
