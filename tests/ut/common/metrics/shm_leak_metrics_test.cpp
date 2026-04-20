@@ -41,15 +41,15 @@ class ShmLeakMetricsTest : public ShmLeakMetricsTestBase {};
 // ── [BASIC] all 8 new metrics are registered and start at zero ────────────────
 TEST_F(ShmLeakMetricsTest, all_metrics_registered_and_zero)
 {
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_allocator_alloc_bytes_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_allocator_free_bytes_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_unit_created_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_unit_destroyed_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_add_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_remove_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_table_size=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_table_bytes=0"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_unit_created_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_unit_destroyed_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_size", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), 0);
 }
 
 // ── [BASIC] descriptor count covers all new metrics ──────────────────────────
@@ -92,12 +92,11 @@ TEST_F(ShmLeakMetricsTest, allocator_alloc_free_counter_delta)
     Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL).Inc(kSize);
     Cnt(metrics::KvMetricId::WORKER_ALLOCATOR_FREE_BYTES_TOTAL).Inc(kSize);
 
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_allocator_alloc_bytes_total=" + std::to_string(2 * kSize) + "B"), std::string::npos);
-    EXPECT_NE(s.find("worker_allocator_free_bytes_total=" + std::to_string(kSize) + "B"), std::string::npos);
-    // Compare-segment delta should match the same numbers (since this is the first dump)
-    EXPECT_NE(s.find("worker_allocator_alloc_bytes_total=+" + std::to_string(2 * kSize) + "B"), std::string::npos);
-    EXPECT_NE(s.find("worker_allocator_free_bytes_total=+" + std::to_string(kSize) + "B"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "total"), 2 * kSize);
+    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "total"), kSize);
+    EXPECT_EQ(Scalar(s, "worker_allocator_alloc_bytes_total", "delta"), 2 * kSize);
+    EXPECT_EQ(Scalar(s, "worker_allocator_free_bytes_total", "delta"), kSize);
 }
 
 // ── [SHMUNIT] ctor/dtor counter symmetry pattern ─────────────────────────────
@@ -110,9 +109,9 @@ TEST_F(ShmLeakMetricsTest, shm_unit_ctor_dtor_symmetry)
     for (int i = 0; i < kN; ++i) {
         Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL).Inc();
     }
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_shm_unit_created_total=" + std::to_string(kN)), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_unit_destroyed_total=" + std::to_string(kN)), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_shm_unit_created_total", "total"), kN);
+    EXPECT_EQ(Scalar(s, "worker_shm_unit_destroyed_total", "total"), kN);
 }
 
 // ── [REF] simulate AddShmUnit + RemoveShmUnit pattern: counters + bytes Gauge ─
@@ -127,18 +126,18 @@ TEST_F(ShmLeakMetricsTest, simulated_add_remove_bytes_gauge_round_trip)
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL).Inc();
     bytesG.Inc(static_cast<int64_t>(kSize));
     {
-        auto s = metrics::DumpSummaryForTest();
-        EXPECT_NE(s.find("worker_shm_ref_table_bytes=" + std::to_string(kSize) + "B"), std::string::npos);
+        auto s = DumpSummaryJson();
+        EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), kSize);
     }
 
     // simulate RemoveShmUnit (last ref dropped → -size)
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL).Inc();
     bytesG.Dec(static_cast<int64_t>(kSize));
     {
-        auto s = metrics::DumpSummaryForTest();
-        EXPECT_NE(s.find("worker_shm_ref_table_bytes=0B"), std::string::npos);
-        EXPECT_NE(s.find("worker_shm_ref_add_total=1"), std::string::npos);
-        EXPECT_NE(s.find("worker_shm_ref_remove_total=1"), std::string::npos);
+        auto s = DumpSummaryJson();
+        EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), 0);
+        EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), 1);
+        EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), 1);
     }
 }
 
@@ -155,11 +154,10 @@ TEST_F(ShmLeakMetricsTest, simulated_partial_remove_leaves_residual)
     bytesG.Dec(2000);
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL).Inc();
 
-    auto s = metrics::DumpSummaryForTest();
-    // 1000 + 3000 = 4000 remaining
-    EXPECT_NE(s.find("worker_shm_ref_table_bytes=4000B"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_add_total=3"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_remove_total=1"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), 4000);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), 3);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), 1);
 }
 
 // ── [LEAK] the OOM-direct signal: add without remove keeps gauge positive ────
@@ -174,12 +172,11 @@ TEST_F(ShmLeakMetricsTest, leak_shape_bytes_gauge_stays_positive)
     }
     Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE).Set(kN);
 
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_shm_ref_table_bytes=" + std::to_string(kN * kSize) + "B"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_table_size=" + std::to_string(kN)), std::string::npos);
-    // Counter for add bumped, but remove still 0 → leak signal
-    EXPECT_NE(s.find("worker_shm_ref_add_total=" + std::to_string(kN)), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_remove_total=0"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), kN * kSize);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_size", "total"), kN);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), kN);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), 0);
 }
 
 // ── [CONC] parallel add+remove: bytes Gauge converges back to 0 ──────────────
@@ -207,10 +204,10 @@ TEST_F(ShmLeakMetricsTest, parallel_add_remove_bytes_gauge_consistent)
     for (auto &w : workers) {
         w.join();
     }
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_shm_ref_table_bytes=0B"), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_add_total=" + std::to_string(kThreads * kPerThread)), std::string::npos);
-    EXPECT_NE(s.find("worker_shm_ref_remove_total=" + std::to_string(kThreads * kPerThread)), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_table_bytes", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_add_total", "total"), kThreads * kPerThread);
+    EXPECT_EQ(Scalar(s, "worker_shm_ref_remove_total", "total"), kThreads * kPerThread);
 }
 
 }  // namespace

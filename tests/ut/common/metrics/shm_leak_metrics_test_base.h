@@ -23,6 +23,7 @@
 
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
+#include <nlohmann/json.hpp>
 #include "ut/common.h"
 
 namespace datasystem {
@@ -30,6 +31,8 @@ namespace ut {
 
 class ShmLeakMetricsTestBase : public CommonTest {
 public:
+    using json = nlohmann::json;
+
     void SetUp() override
     {
         CommonTest::SetUp();
@@ -50,6 +53,25 @@ public:
     static metrics::Gauge Gge(metrics::KvMetricId id)
     {
         return metrics::GetGauge(static_cast<uint16_t>(id));
+    }
+
+    static json DumpSummaryJson()
+    {
+        auto summary = metrics::DumpSummaryForTest();
+        return summary.empty() ? json() : json::parse(summary);
+    }
+
+    static int64_t Scalar(const json &summary, const std::string &name, const char *field)
+    {
+        if (!summary.contains("metrics")) {
+            return 0;
+        }
+        for (const auto &metric : summary["metrics"]) {
+            if (metric["name"] == name) {
+                return metric[field].get<int64_t>();
+            }
+        }
+        return 0;
     }
 };
 

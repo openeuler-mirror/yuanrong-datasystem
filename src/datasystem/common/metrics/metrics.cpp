@@ -25,11 +25,14 @@
 #include <vector>
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
 namespace datasystem::metrics {
 namespace {
 constexpr size_t MAX_METRIC_NUM = 1024;
+constexpr size_t MAX_METRICS_LOG_BYTES = 24000;
 constexpr const char *VERSION = "v0";
 
 std::string BuildSuffix(const char *unit)
@@ -114,39 +117,35 @@ void UpdateMax(std::atomic<uint64_t> &target, uint64_t value)
     }
 }
 
-template <typename T>
-std::string SignedValue(T value, const std::string &suffix)
+std::string RenderJsonSummary(
+    uint64_t cycle, int intervalMs, size_t partIndex, size_t partCount, const std::string &body)
 {
     std::ostringstream os;
-    if (value >= 0) {
-        os << '+';
-    }
-    os << value << suffix;
+    os << "{\"event\":\"metrics_summary\",\"version\":\"" << VERSION << "\",\"cycle\":" << cycle
+       << ",\"interval_ms\":" << intervalMs << ",\"part_index\":" << partIndex
+       << ",\"part_count\":" << partCount << ",\"metrics\":[" << body << "]}";
     return os.str();
 }
 
-std::string BuildSummary(int intervalMs)
+std::vector<std::string> BuildSummary(int intervalMs)
 {
     std::lock_guard<std::mutex> lock(g_stateMutex);
     if (!g_inited.load(std::memory_order_acquire)) {
-        return "";
+        return {};
     }
-    std::ostringstream total;
-    std::ostringstream delta;
+    std::vector<std::string> metrics;
     for (auto id : g_ids) {
         auto &slot = g_slots[id];
         auto &last = g_last[id];
-        const auto &name = slot.name;
-        const auto &suffix = slot.suffix;
+        std::ostringstream item;
+        item << "{\"name\":\"" << slot.name << "\",\"total\":";
         if (slot.type == MetricType::COUNTER) {
             auto value = slot.u64Value.load(std::memory_order_relaxed);
-            total << name << '=' << value << suffix << '\n';
-            delta << name << '=' << SignedValue<int64_t>(value - last.u64Value, suffix) << '\n';
+            item << value << ",\"delta\":" << static_cast<int64_t>(value - last.u64Value) << '}';
             last.u64Value = value;
         } else if (slot.type == MetricType::GAUGE) {
             auto value = slot.i64Value.load(std::memory_order_relaxed);
-            total << name << '=' << value << suffix << '\n';
-            delta << name << '=' << SignedValue<int64_t>(value - last.i64Value, suffix) << '\n';
+            item << value << ",\"delta\":" << (value - last.i64Value) << '}';
             last.i64Value = value;
         } else {
             std::lock_guard<std::mutex> histLock(slot.histMutex);
@@ -156,25 +155,40 @@ std::string BuildSummary(int intervalMs)
             auto dCount = count - last.u64Value;
             auto dSum = sum - last.sum;
             auto dMax = slot.periodMax.exchange(0, std::memory_order_relaxed);
-            total << name << ",count=" << count << ",avg=" << (count == 0 ? 0 : sum / count) << suffix;
-            total << ",max=" << max << suffix << '\n';
-            delta << name << ",count=+" << dCount << ",avg=" << (dCount == 0 ? 0 : dSum / dCount) << suffix;
-            delta << ",max=" << dMax << suffix << '\n';
+            item << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
+                 << ",\"max_us\":" << max << "},\"delta\":{\"count\":" << dCount
+                 << ",\"avg_us\":" << (dCount == 0 ? 0 : dSum / dCount) << ",\"max_us\":" << dMax << "}}";
             last.u64Value = count;
             last.sum = sum;
         }
+        metrics.emplace_back(item.str());
     }
-    std::ostringstream os;
-    os << "Metrics Summary, version=" << VERSION << ", cycle=" << ++g_cycle << ", interval=" << intervalMs << "ms\n\n";
-    os << "Total:\n" << total.str() << "\nCompare with " << intervalMs << "ms before:\n" << delta.str();
-    return os.str();
+    const auto cycle = ++g_cycle;
+    std::vector<std::string> bodies(1);
+    for (const auto &metric : metrics) {
+        auto merged = bodies.back().empty() ? metric : bodies.back() + ',' + metric;
+        if (!bodies.back().empty() &&
+            RenderJsonSummary(cycle, intervalMs, 1, 1, merged).size() > MAX_METRICS_LOG_BYTES) {
+            bodies.emplace_back(metric);
+        } else {
+            bodies.back() = std::move(merged);
+        }
+    }
+    std::vector<std::string> summaries;
+    for (size_t i = 0; i < bodies.size(); ++i) {
+        const auto partIndex = i + 1;
+        summaries.emplace_back(RenderJsonSummary(cycle, intervalMs, partIndex, bodies.size(), bodies[i]));
+    }
+    return summaries;
 }
 
 void LogSummary(int intervalMs)
 {
-    auto summary = BuildSummary(intervalMs);
-    if (!summary.empty()) {
-        LOG(INFO) << '\n' << summary;
+    auto summaries = BuildSummary(intervalMs);
+    const auto traceId = (Logging::PodName() + "-metrics").substr(0, Trace::TRACEID_MAX_SIZE);
+    for (const auto &summary : summaries) {
+        auto guard = Trace::Instance().SetTraceNewID(traceId);
+        LOG(INFO) << summary;
     }
 }
 }  // namespace
@@ -302,7 +316,8 @@ ScopedTimer::~ScopedTimer()
 
 std::string DumpSummaryForTest(int intervalMs)
 {
-    return BuildSummary(intervalMs);
+    auto summaries = BuildSummary(intervalMs);
+    return summaries.empty() ? "" : summaries.front();
 }
 
 void ResetForTest()

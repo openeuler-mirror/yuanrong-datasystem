@@ -37,9 +37,9 @@ class ShmLeakMetricsPhase3Test : public ShmLeakMetricsTestBase {};
 // ── [BASIC] both phase-3 metrics registered and zero ─────────────────────────
 TEST_F(ShmLeakMetricsPhase3Test, all_phase3_metrics_registered_and_zero)
 {
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("client_async_release_queue_size=0"), std::string::npos);
-    EXPECT_NE(s.find("client_dec_ref_skipped_total=0"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "client_async_release_queue_size", "total"), 0);
+    EXPECT_EQ(Scalar(s, "client_dec_ref_skipped_total", "total"), 0);
 }
 
 // ── [BASIC] descriptor count covers phase-3 metrics ──────────────────────────
@@ -69,10 +69,8 @@ TEST_F(ShmLeakMetricsPhase3Test, dec_ref_skipped_counter_aggregates_three_sites)
     for (int i = 0; i < kBufferDead; ++i) {
         Cnt(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL).Inc();
     }
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("client_dec_ref_skipped_total="
-                     + std::to_string(kPoolGone + kRefStillPositive + kBufferDead)),
-              std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "client_dec_ref_skipped_total", "total"), kPoolGone + kRefStillPositive + kBufferDead);
 }
 
 // ── [QUEUE] async release Gauge replays last Set() ───────────────────────────
@@ -85,8 +83,8 @@ TEST_F(ShmLeakMetricsPhase3Test, async_release_queue_gauge_replays_size)
     g.Set(13);
     g.Set(42);
     g.Set(7);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("client_async_release_queue_size=7"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "client_async_release_queue_size", "total"), 7);
 }
 
 // ── [LEAK-SHAPE] bugfix §3.3 production signature ────────────────────────────
@@ -96,9 +94,9 @@ TEST_F(ShmLeakMetricsPhase3Test, switch_standby_silent_drop_shape)
 {
     Cnt(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL).Inc(120);
     Gge(metrics::KvMetricId::CLIENT_ASYNC_RELEASE_QUEUE_SIZE).Set(85);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("client_dec_ref_skipped_total=120"), std::string::npos);
-    EXPECT_NE(s.find("client_async_release_queue_size=85"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "client_dec_ref_skipped_total", "total"), 120);
+    EXPECT_EQ(Scalar(s, "client_async_release_queue_size", "total"), 85);
 }
 
 }  // namespace

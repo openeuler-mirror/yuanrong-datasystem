@@ -128,7 +128,9 @@
 
 - Current implementation or baseline behavior:
   - metrics are collected as string payloads, not typed numeric objects, and persisted through a single concrete exporter backend named `"harddisk"`.
-  - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one multi-line `LOG(INFO)` summary block per monitor interval.
+  - `metrics.h/.cpp` also provide a release-scoped lightweight typed API with fixed-descriptor `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and one JSON `LOG(INFO)` summary emission per monitor interval.
+  - oversized typed-metrics summaries are split into multiple one-line JSON log records rather than truncating a single record.
+  - `DumpSummaryForTest()` returns an unsplit JSON snapshot for typed-metrics tests; compatibility-oriented tests that still prefer flat-string parsing should build that view locally from the JSON dump instead of relying on a production-only legacy formatter.
   - the lightweight typed metrics API does not own a background thread; worker main and client runtime code drive periodic `Tick()`/`PrintSummary()` calls, mirroring the `PerfManager` ownership style.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
