@@ -18,6 +18,7 @@ set(COMMON_REF_DEPEND_LIBS
         ${TBB_LIBRARY}
         common_log
         common_util
+        common_metrics
         common_shared_memory
         )
 

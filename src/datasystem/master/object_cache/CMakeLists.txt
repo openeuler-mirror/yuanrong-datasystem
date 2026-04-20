@@ -23,6 +23,7 @@ set(MASTER_OC_DEPEND_LIBS
         ${TBB_LIBRARY}
         common_etcd
         common_log
+        common_metrics
         common_rpc_zmq
         common_ref
         common_event_loop

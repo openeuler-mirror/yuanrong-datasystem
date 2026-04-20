@@ -27,6 +27,7 @@
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -34,12 +35,20 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+
+ShmUnit::ShmUnit() : ShmUnitInfo()
+{
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
+}
+
 ShmUnit::ShmUnit(int fd, uint64_t mmapSz) : ShmUnitInfo(fd, mmapSz)
 {
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
 }
 
 ShmUnit::ShmUnit(ShmKey id, ShmView shmView, void *pointer) : ShmUnitInfo(std::move(id), shmView, pointer)
 {
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_CREATED_TOTAL);
 }
 
 ShmUnit::~ShmUnit()
@@ -49,6 +58,7 @@ ShmUnit::~ShmUnit()
     if (rc.IsError()) {
         LOG(WARNING) << "Destructor for a ShmUnit failed to free memory.";
     }
+    METRIC_INC(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL);
 }
 
 std::string ShmUnit::GetTenantId()

@@ -1582,7 +1582,9 @@ TEST_F(KVClientMSetDMTest, PreCommitTtl)
     auto fut = threadPool.Submit(
         [this]() { ASSERT_EQ(client0_->MSetTx(keys_, valViews_, mParam_).GetCode(), K_OC_KEY_ALREADY_EXIST); });
     auto fut1 = threadPool.Submit([this]() {
-        usleep(sleepTimeUs_);
+        // sleepTimeUs_ (1 ms) is too tight under load: the pool may run client1 first or reorder RPCs so the
+        // expected loser/winner flips. Stagger like PreCommitConflict (sleep(1)) but shorter: still << 3 s inject.
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         DS_ASSERT_OK(client1_->MSetTx(keys_, valViews_, mParam_));
     });
     fut.get();

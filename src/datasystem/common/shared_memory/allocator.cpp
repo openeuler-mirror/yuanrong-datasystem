@@ -34,6 +34,7 @@
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/resource_pool.h"
 #include "datasystem/common/util/file_util.h"
@@ -322,6 +323,10 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
     (void)totalNumOfAllocated_.fetch_add(1, std::memory_order_relaxed);
 
     stats->AddRealUsageNoCheck(realSize);
+    // Counter uses requested size (needSize), aligned with IncrementMemoryUsage/SubUsage on this path.
+    // Real footprint is tracked separately via stats->AddRealUsageNoCheck(realSize); do not use alloc counter
+    // as a proxy for physical bytes (page alignment overhead is in RealUsage).
+    METRIC_ADD(metrics::KvMetricId::WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL, needSize);
     return Status::OK();
 }
 
@@ -379,6 +384,8 @@ Status Allocator::FreeMemory(const std::string &tenantId, void *&pointer, Servic
     pointer = nullptr;  // Memory is freed, set the pointer to nullptr.
     stats->SubUsage(bytesFree);
     stats->SubRealUsage(bytesRealFree);
+    // Pairs with alloc counter: logical release size from arena (symmetric to needSize on allocate).
+    METRIC_ADD(metrics::KvMetricId::WORKER_ALLOCATOR_FREE_BYTES_TOTAL, bytesFree);
     return Status::OK();
 }
 

@@ -22,6 +22,7 @@ set(SHARED_MEM_DEPEND_LIBS
         dl
         common_perf
         common_shm_unit_info
+        common_metrics
         )
 
 add_library(common_shared_memory STATIC ${SHARED_MEM_SRCS})
