@@ -45,6 +45,7 @@ ds_cc_library(
     deps = [
         ":common_shm_unit_info",
         "//src/datasystem/common:common_constants",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_base_header",
         "//src/datasystem/common/string_intern:string_ref",

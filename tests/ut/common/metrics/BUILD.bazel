@@ -1,13 +1,52 @@
 # tests/ut/common/metrics/BUILD.bazel
-load("//bazel:build_defs.bzl", "ds_cc_test")
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
 
 package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "shm_leak_metrics_test_base",
+    hdrs = ["shm_leak_metrics_test_base.h"],
+    deps = [
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
 
 ds_cc_test(
     name = "metrics_test",
     srcs = ["metrics_test.cpp"],
     deps = [
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "shm_leak_metrics_test",
+    srcs = ["shm_leak_metrics_test.cpp"],
+    deps = [
+        ":shm_leak_metrics_test_base",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "shm_leak_metrics_phase2_test",
+    srcs = ["shm_leak_metrics_phase2_test.cpp"],
+    deps = [
+        ":shm_leak_metrics_test_base",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "shm_leak_metrics_phase3_test",
+    srcs = ["shm_leak_metrics_phase3_test.cpp"],
+    deps = [
+        ":shm_leak_metrics_test_base",
         "//src/datasystem/common/metrics:common_metrics",
         "//tests/ut:ut_common",
     ],

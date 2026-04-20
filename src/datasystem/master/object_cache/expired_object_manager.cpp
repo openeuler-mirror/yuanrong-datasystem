@@ -26,6 +26,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
@@ -164,6 +165,7 @@ Status ExpiredObjectManager::InsertObjectUnlock(const std::string &objectKey, co
     VLOG(1) << FormatString("Insert the object %s with version %llu, ttl second %u, expireTime %llu, remain time %llu",
                             objectKey, version, ttlSecond, expiredTime, expiredTime - GetSystemClockTimeStampUs());
     statisticsInfo_.IncreaseObj();
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE)).Inc();
     return Status::OK();
 }
 
@@ -173,7 +175,11 @@ void ExpiredObjectManager::RemoveObjectIfExistUnlock(const std::string &objectKe
         VLOG(1) << "Remove object: " << objectKey << "from ttl queue.";
         (void)timedObj_.erase(obj2Timed_[objectKey]);
         (void)obj2Timed_.erase(objectKey);
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE)).Dec();
     }
+    // MASTER_TTL_PENDING_SIZE tracks |timedObj_| only (InsertObjectUnlock / GetExpiredObject / AddFailedObject).
+    // When the key is no longer in timedObj_, the gauge was already decremented on dequeue; erasing failedObjects_
+    // here only clears per-key retry bookkeeping, so do not Dec the gauge again (would double-count).
     if (failedObjects_.count(objectKey)) {
         (void)failedObjects_.erase(objectKey);
     }
@@ -232,6 +238,10 @@ void ExpiredObjectManager::AddFailedObject(const std::set<std::string> &objectKe
             objectKey, failedObjects_[objectKey], newTtlSecond);
     }
     statisticsInfo_.IncreaseFailedDelObj(objectKeys.size());
+    METRIC_ADD(metrics::KvMetricId::MASTER_TTL_RETRY_TOTAL, objectKeys.size());
+    // One Inc per key: failed deletes are re-queued into timedObj_ above (same +1 as InsertObjectUnlock).
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE))
+        .Inc(static_cast<int64_t>(objectKeys.size()));
 }
 
 std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject()
@@ -250,6 +260,11 @@ std::unordered_map<std::string, uint64_t> ExpiredObjectManager::GetExpiredObject
         (void)readyExpiredObjects_.emplace(iter->second);
         (void)obj2Timed_.erase(iter->second);
         (void)timedObj_.erase(iter++);
+    }
+    if (!expiredObject.empty()) {
+        METRIC_ADD(metrics::KvMetricId::MASTER_TTL_FIRE_TOTAL, expiredObject.size());
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE))
+            .Dec(static_cast<int64_t>(expiredObject.size()));
     }
     return expiredObject;
 }
@@ -296,6 +311,12 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     }
     AddSucceedObject(succeedIds);
     AddFailedObject(failedIds);
+    if (!succeedIds.empty()) {
+        METRIC_ADD(metrics::KvMetricId::MASTER_TTL_DELETE_SUCCESS_TOTAL, succeedIds.size());
+    }
+    if (!failedIds.empty()) {
+        METRIC_ADD(metrics::KvMetricId::MASTER_TTL_DELETE_FAILED_TOTAL, failedIds.size());
+    }
     LOG(INFO) << FormatString("It cost %llu ms to delete expire object, succeed num:%lzu, failed num:%zu",
                               (GetSystemClockTimeStampUs() - startTimeUs) / TIME_UNIT_CONVERSION, succeedIds.size(),
                               failedIds.size());
@@ -320,6 +341,8 @@ void ExpiredObjectManager::Run()
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     auto traceId = Trace::Instance().GetTraceID();
     int intervalMs = SCAN_INTERVAL_MS;
+    constexpr int kMetaTableSizeTickMs = 1000;
+    int sinceLastMetaTick = 0;
     while (!interruptFlag_) {
         auto expiredObjects = GetExpiredObject();
         INJECT_POINT("master.ExpiredObjectManager.Run", [this, &expiredObjects, &intervalMs] {
@@ -335,6 +358,12 @@ void ExpiredObjectManager::Run()
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
                 LOG_IF_ERROR(AsyncDelete(expiredObjectMap), "Async delete expired object failed");
             });
+        }
+        sinceLastMetaTick += intervalMs;
+        if (sinceLastMetaTick >= kMetaTableSizeTickMs && ocMetadataManager_ != nullptr) {
+            metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::MASTER_OBJECT_META_TABLE_SIZE))
+                .Set(static_cast<int64_t>(ocMetadataManager_->GetMetaTableSize()));
+            sinceLastMetaTick = 0;
         }
         cvLock_.WaitFor(intervalMs);
     }

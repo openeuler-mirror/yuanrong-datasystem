@@ -37,7 +37,7 @@ public:
      * ShmUnit is mainly used in the server side which need to allocate or free shared memory.
      * If you don't need to allocate or free shared memory, use ShmUnitInfo directly.
      */
-    ShmUnit() = default;
+    ShmUnit();
 
     /**
      * @brief Constructor 2.

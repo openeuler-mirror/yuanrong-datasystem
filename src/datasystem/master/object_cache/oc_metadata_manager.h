@@ -1098,6 +1098,15 @@ public:
     bool CheckMetaTableEmpty();
 
     /**
+     * @brief Get current size of the master object metadata table.
+     * @return Number of object metadata entries currently held by master.
+     */
+    size_t GetMetaTableSize() const
+    {
+        return metaTable_.size();
+    }
+
+    /**
      * @brief Get the async threadpool usage of master.
      * @return Usage: "idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage".
      */
