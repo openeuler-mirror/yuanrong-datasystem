@@ -965,6 +965,10 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
     if (!rc) {
         RETURN_STATUS_LOG_ERROR(K_NOT_READY, "Worker not ready");
     }
+    if (hasLoggedBeforeWait) {
+        LOG(INFO) << "Finished waiting for the reconFlag, elapsed ms: " << timer.ElapsedMilliSecond()
+                  << ", setHealthFile: " << setHealthFile_.load() << ", numRecon: " << numRecon_;
+    }
     workerOperationTimeCost.Append("ValidateWorkerState", timer.ElapsedMilliSecond());
     return Status::OK();
 }
@@ -1836,42 +1840,74 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     if (etcdCM_->IsCentralized() || rc.IsError() || !isRestart || !etcdCM_->IsEtcdAvailableWhenStart()) {
         return Status::OK();
     }
-    if (FLAGS_enable_reconciliation) {
-        static const int64_t MAX_WAIT_TIME_SEC = 60;  // 60s
-        auto waitMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(MAX_WAIT_TIME_SEC)).count();
-        INJECT_POINT("WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile", [&waitMs](int waitTimeMs) {
-            waitMs = waitTimeMs;
-            return Status::OK();
-        });
-
-        WriteLock haveRecon;
-        haveRecon.Assign(&reconFlag_);
-        bool rec = haveRecon.TryLockIfUnlocked();
-        if (!rec) {
-            return Status::OK();  // loop back and try again later
-        }
-        int hashWorkerNum = 0;
-        RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum, true));
-        // no need to set health or not ready to set health
-        if (setHealthFile_ || (numRecon_ < hashWorkerNum && GetSteadyClockTimeStampMs() - lastReconTime_ <= waitMs)
-            || !etcdStore_->IsCreateFirstLease()) {
-            return Status::OK();
-        }
-
-        if (numRecon_ < hashWorkerNum) {
-            LOG(ERROR) << "Did not finish reconciling with all masters within " << MAX_WAIT_TIME_SEC
-                       << " seconds. Give up."
-                       << " Plan to reconciliate with: " << hashWorkerNum << ", had reconciliated with: " << numRecon_;
-            etcdCM_->CompleteNodeTableWithFakeNode();
-        }
-    } else {
+    if (!FLAGS_enable_reconciliation) {
         LOG_FIRST_N(INFO, 1) << "enable_reconciliation is false, set worker healthy";
         return Status::OK();
     }
+
+    static const int64_t MAX_WAIT_TIME_SEC = 60;  // 60s
+    auto waitMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::seconds(MAX_WAIT_TIME_SEC)).count();
+    INJECT_POINT("WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile", [&waitMs](int waitTimeMs) {
+        waitMs = waitTimeMs;
+        return Status::OK();
+    });
+
+    WriteLock haveRecon;
+    haveRecon.Assign(&reconFlag_);
+    bool rec = haveRecon.TryLockIfUnlocked();
+    if (!rec) {
+        return Status::OK();  // loop back and try again later
+    }
+    Timer holdReconFlagTimer;
+    std::string finishReason = "unknown";
+    Raii logReconFlagCost([&holdReconFlagTimer, &finishReason, this]() {
+        constexpr int logPerCount = 10;
+        LOG_FIRST_AND_EVERY_N(INFO, logPerCount)
+            << "GiveUpReconciliation held reconFlag, elapsed ms: " << holdReconFlagTimer.ElapsedMilliSecond()
+            << ", reason: " << finishReason << ", numRecon: " << numRecon_;
+    });
+    bool shouldSetReady = false;
+    RETURN_IF_NOT_OK(CheckGiveUpReconciliationAfterLock(waitMs, finishReason, shouldSetReady));
+    if (!shouldSetReady) {
+        return Status::OK();
+    }
+
     setHealthFile_.store(true);
     RETURN_IF_NOT_OK(SetHealthProbe());
     RETURN_IF_NOT_OK(etcdStore_->UpdateNodeState(ETCD_NODE_READY));
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason,
+                                                               bool &shouldSetReady)
+{
+    static const int64_t MAX_WAIT_TIME_SEC = 60;  // 60s
+    int hashWorkerNum = 0;
+    RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum, true));
+    // no need to set health or not ready to set health
+    if (setHealthFile_) {
+        finishReason = "health file has already been set";
+        return Status::OK();
+    }
+    if (numRecon_ < hashWorkerNum && GetSteadyClockTimeStampMs() - lastReconTime_ <= waitMs) {
+        finishReason = FormatString("waiting for reconciliation, expected: %d", hashWorkerNum);
+        return Status::OK();
+    }
+    if (!etcdStore_->IsCreateFirstLease()) {
+        finishReason = "first lease is not created";
+        return Status::OK();
+    }
+
+    shouldSetReady = true;
+    if (numRecon_ < hashWorkerNum) {
+        finishReason = FormatString("give up waiting, expected: %d", hashWorkerNum);
+        LOG(ERROR) << "Did not finish reconciling with all masters within " << MAX_WAIT_TIME_SEC << " seconds. Give up."
+                   << " Plan to reconciliate with: " << hashWorkerNum << ", had reconciliated with: " << numRecon_;
+        etcdCM_->CompleteNodeTableWithFakeNode();
+    } else {
+        finishReason = FormatString("all reconciliations received, expected: %d", hashWorkerNum);
+    }
     return Status::OK();
 }
 
