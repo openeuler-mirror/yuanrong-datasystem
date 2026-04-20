@@ -16,6 +16,9 @@
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 
+#include <chrono>
+
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 
@@ -62,6 +65,10 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 Status InitializeFastTransportManager(const HostPort &hostport)
 {
     (void)hostport;
+    INJECT_POINT("FastTransportManager.Initialize", [](int delayMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        return Status(K_URMA_ERROR, "Inject fast transport init failed");
+    });
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         RETURN_IF_NOT_OK(UrmaManager::Instance().Init(hostport));

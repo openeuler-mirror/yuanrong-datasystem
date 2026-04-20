@@ -810,6 +810,7 @@ Status ClientWorkerRemoteCommonApi::Reconnect()
     const int32_t reconnectTimeout = 1 * 1000;  // 1s for reconnect.
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, reconnectTimeout, true));
+    TryFastTransportAfterHeartbeat();
     LOG(INFO) << "Reconnect success! New unix domain socket: " << socketFd_;
     return Status::OK();
 }
@@ -834,8 +835,21 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SetHeartbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
-    LOG_IF_ERROR(FastTransportHandshake(timeoutMs, workerVersion, rsp),
-                 "Fast transport handshake failed, fall back to TCP/IP communication.");
+    pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
+}
+
+void ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
+{
+    if (!pendingFtHandshake_.has_value()) {
+        return;
+    }
+    auto ctx = std::move(*pendingFtHandshake_);
+    pendingFtHandshake_.reset();
+    auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion, ctx.rsp);
+    if (rc.IsError()) {
+        FLAGS_enable_urma = false;
+        LOG(ERROR) << "Fast transport handshake failed, fall back to TCP/IP communication. Detail: " << rc.ToString();
+    }
 }
 
 Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion,

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -231,6 +232,13 @@ public:
     virtual Status Reconnect() = 0;
 
     /**
+     * @brief Try fast transport initialization after heartbeat has started.
+     */
+    virtual void TryFastTransportAfterHeartbeat()
+    {
+    }
+
+    /**
      * @brief Get the standby worker.
      * @return HostPort The standby worker.
      */
@@ -356,6 +364,7 @@ public:
                        const std::string &tenantId) override;
     Status Disconnect(bool isDestruct) override;
     Status Reconnect() override;
+    void TryFastTransportAfterHeartbeat() override;
     std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
@@ -476,6 +485,13 @@ protected:
     std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
     std::atomic_bool stopUrmaHandshakeRetry_{ false };
     std::string deviceId_;
+
+    struct FtHandshakeContext {
+        int32_t timeoutMs{ 0 };
+        uint32_t workerVersion{ 0 };
+        RegisterClientRspPb rsp;
+    };
+    std::optional<FtHandshakeContext> pendingFtHandshake_;
 
 private:
     /**

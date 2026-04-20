@@ -380,6 +380,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
+    workerApi->TryFastTransportAfterHeartbeat();
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
@@ -692,6 +693,7 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
                                        rc.ToString());
             continue;
         }
+        workerApi_[next]->TryFastTransportAfterHeartbeat();
         if (!WaitStandbyWorkerReady(workerApi_[next])) {
             LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
                                        workerApi_[next]->hostPort_.ToString());
@@ -940,6 +942,7 @@ bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
     }
 
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
+    workerApi->TryFastTransportAfterHeartbeat();
     if (listenWorker_[currentNode_] != nullptr) {
         listenWorker_[currentNode_]->SetSwitched();
     }
