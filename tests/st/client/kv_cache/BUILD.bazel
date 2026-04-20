@@ -128,6 +128,13 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_client_init_test",
+    srcs = ["kv_client_init_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
     name = "kv_cache_ttl_test",
     srcs = ["kv_cache_ttl_test.cpp"],
     tags = ["manual"],
