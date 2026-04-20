@@ -44,6 +44,7 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace object_cache {
+constexpr int64_t K_MIN_OOM_RETRY_TIMEOUT_MS = 50;
 
 ObjCacheShmUnit::ObjCacheShmUnit()
 {
@@ -229,10 +230,14 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int t : WAIT_MSECOND) {
             auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
-            if (remainingTime <= 0) {
+            if (remainingTime <= K_MIN_OOM_RETRY_TIMEOUT_MS) {
+                VLOG(1) << FormatString(
+                    "Stop OOM retry to reserve reply time: remainingTime %ld ms, objectKey: %s, needSize %ld",
+                    remainingTime, objectKey, needSize);
                 break;
             }
-            auto sleepTime = std::min<int64_t>(remainingTime, t);
+            auto retryBudget = remainingTime - K_MIN_OOM_RETRY_TIMEOUT_MS;
+            auto sleepTime = std::min<int64_t>(retryBudget, t);
             INJECT_POINT("worker.AllocateMemory.sleepTime", [&sleepTime](int time) {
                 sleepTime = time;
                 return Status::OK();
