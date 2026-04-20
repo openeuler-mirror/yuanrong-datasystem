@@ -21,15 +21,16 @@
 #define DATASYSTEM_COMMON_RPC_RDMA_MANAGER_H
 
 #include <csignal>
+#include <functional>
 #include <memory>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/rpc_channel.h"
-#include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
@@ -43,7 +44,7 @@ DS_DECLARE_bool(rdma_register_whole_arena);
 
 namespace datasystem {
 class UcpWorkerPool;
-using EventMap = LockMap<uint64_t, std::shared_ptr<Event>>;
+using TbbUcpEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<Event>>;
 
 class UcpManager {
 public:
@@ -146,18 +147,6 @@ public:
     std::string GetRecvWorkerAddress(const std::string &ipAddr);
 
     /**
-     * @brief Inserts a successful event.
-     * @param[in] requestId a unique identifier for the request
-     */
-    virtual void InsertSuccessfulEvent(uint64_t requestId);
-
-    /**
-     * @brief Inserts a failed event.
-     * @param[in] requestId a unique identifier for the request
-     */
-    virtual void InsertFailedEvent(uint64_t requestId);
-
-    /**
      * @brief Get local transport unique instance id.
      * @param[out] instanceId The local instance uuid.
      */
@@ -235,9 +224,8 @@ private:
     // Memory address to local segment mapping.
     std::unique_ptr<UcpSegmentMap> localSegmentMap_;
     mutable std::shared_timed_mutex localMapMutex_;
-    mutable std::shared_timed_mutex eventMapMutex_;
     mutable std::mutex instanceTableMutex_;
-    std::unique_ptr<EventMap> eventMap_;
+    TbbUcpEventMap eventMap_;
     std::unordered_map<std::string, std::string> instanceTable_;
     std::string uniqueInstanceId_;
 };

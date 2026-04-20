@@ -19,6 +19,8 @@
  */
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 
 #include "datasystem/utils/status.h"
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "RDMA/UCX性能排查"
+  short_description: "定位UCP提交、flush、batch get和远端拉取链路瓶颈"
+  default_prompt: "Use $rdma-ucx-perf-debug to analyze RDMA/UCX latency or throughput bottlenecks."

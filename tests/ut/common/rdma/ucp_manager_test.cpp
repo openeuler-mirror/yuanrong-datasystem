@@ -37,6 +37,11 @@ namespace datasystem {
 namespace ut {
 class UcpManagerTestFriend {
 public:
+    static void ResetWorkerPool(UcpManager &manager)
+    {
+        manager.workerPool_.reset();
+    }
+
     static void Reset(UcpManager &manager)
     {
         manager.workerPool_.reset();
@@ -44,7 +49,7 @@ public:
         if (manager.ucpContext_) {
             manager.UcpDeleteContext();
         }
-        manager.eventMap_.reset();
+        manager.eventMap_.clear();
     }
 };
 class UcpManagerTest : public ::testing::Test {
@@ -63,6 +68,7 @@ protected:
     }
     void TearDown() override
     {
+        UcpManagerTestFriend::ResetWorkerPool(*manager_);
         remoteServer_.reset();
         localBuffer_.reset();
         UcpManagerTestFriend::Reset(*manager_);
@@ -135,6 +141,22 @@ TEST_F(UcpManagerTest, FillUcpInfoImplementation)
     free(buffer);
 }
 
+TEST_F(UcpManagerTest, FillUcpInfoFailsWhenRecvWorkerAddressIsEmpty)
+{
+    manager_->workerPool_ = std::make_unique<UcpWorkerPool>(manager_->ucpContext_, 0);
+    ASSERT_EQ(manager_->workerPool_->Init(), Status::OK());
+
+    void *buffer = malloc(4096);
+    ASSERT_NE(buffer, nullptr);
+    const uint64_t segAddress = reinterpret_cast<uint64_t>(buffer);
+    UcpRemoteInfoPb pb;
+    Status status = manager_->FillUcpInfoImpl(segAddress, 0, "127.0.0.1:" + std::to_string(PORT), pb);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.GetCode(), K_RDMA_ERROR);
+    EXPECT_TRUE(pb.remote_worker_addr().empty());
+    free(buffer);
+}
+
 TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadBlocking)
 {
     uint64_t localObjectAddress = localBuffer_->Address();
@@ -183,28 +205,6 @@ TEST_F(UcpManagerTest, ImportSegAndUcpPutPayloadNonBlocking)
         Status waitStatus = event->WaitFor(std::chrono::milliseconds(1000));
         EXPECT_TRUE(waitStatus.IsOk());
     }
-}
-
-TEST_F(UcpManagerTest, InsertEventsNotifiesDirectly)
-{
-    uint64_t requestId = 123;
-    std::shared_ptr<Event> event;
-    EXPECT_EQ(manager_->CreateEvent(requestId, event), Status::OK());
-    
-    // InsertSuccessfulEvent should notify the event directly
-    manager_->InsertSuccessfulEvent(requestId);
-    // Event should be ready now (notified)
-    Status waitStatus = event->WaitFor(std::chrono::milliseconds(0));
-    EXPECT_TRUE(waitStatus.IsOk());
-    
-    // Test failed event
-    uint64_t failedRequestId = 456;
-    std::shared_ptr<Event> failedEvent;
-    EXPECT_EQ(manager_->CreateEvent(failedRequestId, failedEvent), Status::OK());
-    manager_->InsertFailedEvent(failedRequestId);
-    waitStatus = failedEvent->WaitFor(std::chrono::milliseconds(0));
-    EXPECT_TRUE(waitStatus.IsOk());
-    EXPECT_TRUE(failedEvent->IsFailed());
 }
 
 TEST_F(UcpManagerTest, EventManagement)
