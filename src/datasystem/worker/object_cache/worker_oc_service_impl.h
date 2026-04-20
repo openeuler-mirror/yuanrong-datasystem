@@ -1069,6 +1069,15 @@ private:
      */
     Status DeleteDevObjects(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp);
 
+    /**
+     * @brief Check whether the worker should give up waiting for reconciliation after reconFlag is locked.
+     * @param[in] waitMs Max wait time before giving up reconciliation.
+     * @param[out] finishReason Reason logged when reconFlag is released.
+     * @param[out] shouldSetReady Whether the caller should set the worker ready after this check.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason, bool &shouldSetReady);
+
     HostPort localMasterAddress_;
 
     // Acquire writer lock before doing reconciliation; read lock before other RPCs
