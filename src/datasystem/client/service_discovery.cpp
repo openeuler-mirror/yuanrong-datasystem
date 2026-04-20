@@ -143,33 +143,38 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bo
     }
 
     RETURN_IF_NOT_OK(this->ObtainWorkers());
-    if (activeWorkerInfo_.empty()) {
-        return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
-    }
-
     std::string pickedAddr;
-    if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
-        pickedAddr = SelectWorkerAddr(activeWorkerInfo_, randomData_.get());
-    } else {
-        auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
-        if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
-            CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
-            CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
-                                     "No available same-node worker is detected.");
-            pickedAddr = SelectWorkerAddr(sameHostWorkers, randomData_.get());
+    {
+        std::shared_lock<std::shared_timed_mutex> lock(workerHostPortMutext_);
+        if (activeWorkerInfo_.empty()) {
+            return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
+        }
+
+        if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
+            pickedAddr = SelectWorkerAddr(activeWorkerInfo_, randomData_.get());
         } else {
-            pickedAddr = sameHostWorkers.empty() ? SelectWorkerAddr(activeWorkerInfo_, randomData_.get())
-                                                 : SelectWorkerAddr(sameHostWorkers, randomData_.get());
+            auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
+            if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
+                CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID,
+                                         "Failed to obtain sdk host_id from hostIdEnvName.");
+                CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
+                                         "No available same-node worker is detected.");
+                pickedAddr = SelectWorkerAddr(sameHostWorkers, randomData_.get());
+            } else {
+                pickedAddr = sameHostWorkers.empty() ? SelectWorkerAddr(activeWorkerInfo_, randomData_.get())
+                                                     : SelectWorkerAddr(sameHostWorkers, randomData_.get());
+            }
+        }
+
+        if (isSameNode != nullptr) {
+            auto it = activeWorkerInfo_.find(pickedAddr);
+            *isSameNode = !hostId_.empty() && it != activeWorkerInfo_.end() && it->second == hostId_;
         }
     }
 
     // parse worker ip and port from string.
     RETURN_IF_NOT_OK(ParseWorkerAddr(pickedAddr, workerIp, workerPort));
 
-    if (isSameNode != nullptr) {
-        auto it = activeWorkerInfo_.find(pickedAddr);
-        *isSameNode = !hostId_.empty() && it != activeWorkerInfo_.end() && it->second == hostId_;
-    }
     return Status::OK();
 }
 
@@ -181,12 +186,18 @@ Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &worker
 
     CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
     RETURN_IF_NOT_OK(this->ObtainWorkers());
-    if (activeWorkerInfo_.empty()) {
-        return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
-    }
+    std::string pickedAddr;
+    {
+        std::shared_lock<std::shared_timed_mutex> lock(workerHostPortMutext_);
+        if (activeWorkerInfo_.empty()) {
+            return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
+        }
 
-    auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
-    CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
-    return ParseWorkerAddr(SelectWorkerAddr(sameHostWorkers, randomData_.get()), workerIp, workerPort);
+        auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
+        CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
+                                 "No available same-node worker is detected.");
+        pickedAddr = SelectWorkerAddr(sameHostWorkers, randomData_.get());
+    }
+    return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
 }
 }  // namespace datasystem
