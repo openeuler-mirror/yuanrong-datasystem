@@ -120,8 +120,8 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
         return rc;
     }
     static const std::vector<int> delayMs = { 1, 10, 30, 50, 100 };
+    LOG(INFO) << FormatString("[ObjectKey %s] TryWLock failed, retry.", objectKey);
     for (auto t : delayMs) {
-        LOG(ERROR) << FormatString("[ObjectKey %s] TryWLock failed, retry.", objectKey);
         std::this_thread::sleep_for(std::chrono::milliseconds(t));
         rc = entry->TryWLock(nullable);
         if (rc.GetCode() != K_TRY_AGAIN) {
