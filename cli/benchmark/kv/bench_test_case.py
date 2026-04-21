@@ -316,33 +316,51 @@ class KVBenchOutputHandler(BenchOutputHandler):
     bench_args: BenchArgs
     index: int
 
-    # Class attributes for column definitions and headers
+    # Compact table columns - config columns extracted to header line
     column_definitions = {
-        "index": {"width": 5, "align": " >"},
-        "action": {"width": 8, "align": " >"},
-        "size": {"width": 8, "align": " >"},
-        "count": {"width": 8, "align": " >"},
-        "batch": {"width": 6, "align": " >"},
-        "client": {"width": 6, "align": " >"},
-        "thread": {"width": 6, "align": " >"},
-        "worker": {"width": 21, "align": " >"},
-        "avg[ms]": {"width": 14, "align": " >"},
-        "min[ms]": {"width": 13, "align": " >"},
-        "p90[ms]": {"width": 14, "align": " >"},
-        "p99[ms]": {"width": 14, "align": " >"},
-        "max[ms]": {"width": 14, "align": " >"},
-        "tps[count/sec]": {"width": 14, "align": " >"},
-        "throughput[MB/sec]": {
-            "width": 17,
-            "align": " >",
-        },
+        "#": {"width": 3, "align": "^"},
+        "action": {"width": 6, "align": "^"},
+        "worker": {"width": 18, "align": "^"},
+        "avg": {"width": 9, "align": "^"},
+        "min": {"width": 9, "align": "^"},
+        "p90": {"width": 9, "align": "^"},
+        "p99": {"width": 9, "align": "^"},
+        "max": {"width": 9, "align": "^"},
+        "tps": {"width": 9, "align": "^"},
+        "MB/s": {"width": 9, "align": "^"},
+    }
+    _col_to_parsed_key = {
+        "#": None,
+        "action": "action",
+        "worker": "worker",
+        "avg": "avg[ms]",
+        "min": "min[ms]",
+        "p90": "p90[ms]",
+        "p99": "p99[ms]",
+        "max": "max[ms]",
+        "tps": "tps[count/sec]",
+        "MB/s": "throughput[MB/sec]",
     }
     screen_headers = [col_key for col_key in column_definitions.keys()]
 
-    def __init__(self, bench_args: BenchArgs, index: int) -> None:
+    def __init__(self, bench_args: BenchArgs, index: int, kv_args: "KVArgs" = None) -> None:
         super().__init__(bench_args)
         self.index = index
         self.final_csv_filepath = None
+        self.kv_args = kv_args
+        self._row_counter = 0
+
+    def _print_config_line(self):
+        """Print a single config summary line from kv_args."""
+        if not self.kv_args:
+            return
+        logger.info(
+            f"Config: keys={self.kv_args.num}, "
+            f"size={self.kv_args.size}, "
+            f"batch={self.kv_args.batch_num}, "
+            f"clients={self.kv_args.client_num}, "
+            f"threads={self.kv_args.thread_num}"
+        )
 
     def after_execute(self, task: BenchTask):
         """Processes a single benchmark task and formats its results for output."""
@@ -364,10 +382,12 @@ class KVBenchOutputHandler(BenchOutputHandler):
         if not parsed_result:
             return
 
-        screen_data = [str(self.index)]
+        self._row_counter += 1
+        screen_data = [str(self._row_counter)]
         for col_key, _ in self.column_definitions.items():
-            if col_key != "index":
-                screen_data.append(parsed_result.get(col_key, ""))
+            parsed_key = self._col_to_parsed_key.get(col_key)
+            if parsed_key is not None:
+                screen_data.append(parsed_result.get(parsed_key, ""))
 
         self._format_table_line(screen_data, line_type="data")
 
@@ -375,7 +395,8 @@ class KVBenchOutputHandler(BenchOutputHandler):
             self._append_to_csv(screen_data)
 
     def print_table_header(self):
-        """Print the table header and separator lines."""
+        """Print config line, table header and separator lines."""
+        self._print_config_line()
         self._format_table_line(line_type="header")
         self._format_table_line(line_type="separator")
 
