@@ -50,10 +50,7 @@ DS_DECLARE_uint64(shared_memory_size_mb);
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_string(monitor_config_file);
-DS_DEFINE_bool(
-    enable_thp, false,
-    "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) "
-    "can enhance performance and reduce page table overhead, but it may also lead to increased memory usage");
+DS_DECLARE_bool(enable_thp);
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(etcd_ca);
 DS_DECLARE_string(etcd_cert);
