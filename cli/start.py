@@ -311,6 +311,8 @@ class Command(BaseCommand):
         """
         if not params.get("etcd_address") and not params.get("metastore_address"):
             raise ValueError("Missing required: either etcd_address or metastore_address must be specified")
+        if params.get("etcd_address") and params.get("metastore_address"):
+            raise ValueError("Only one of etcd_address or metastore_address can be specified, not both")
 
         cmd = self.build_command(params, use_ums, use_numactl, numactl_opts)
         lib_dir = os.path.join(self._base_dir, "lib")

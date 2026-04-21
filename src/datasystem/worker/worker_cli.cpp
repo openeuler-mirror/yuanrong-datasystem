@@ -41,6 +41,10 @@ Status GetEtcdStore(std::unique_ptr<EtcdStore> &etcdStore)
 {
     // Use metastore_address if specified, otherwise use etcd_address
     std::string backendAddress;
+    // Check if both etcd_address and metastore_address are specified
+    if (!FLAGS_metastore_address.empty() && !FLAGS_etcd_address.empty()) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Only one of etcd_address or metastore_address can be specified, not both");
+    }
     if (!FLAGS_metastore_address.empty()) {
         backendAddress = FLAGS_metastore_address;
     } else if (FLAGS_etcd_address.empty()) {

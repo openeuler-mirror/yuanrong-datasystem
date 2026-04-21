@@ -214,6 +214,10 @@ static bool ValidateEtcdOrMetastoreAddress()
         LOG(ERROR) << "At least one of etcd_address or metastore_address must be specified";
         return false;
     }
+    if (!FLAGS_metastore_address.empty() && !FLAGS_etcd_address.empty()) {
+        LOG(ERROR) << "Only one of etcd_address or metastore_address can be specified, not both";
+        return false;
+    }
     return true;
 }
 
