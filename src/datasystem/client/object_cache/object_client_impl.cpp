@@ -3013,8 +3013,10 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
         bufferInfoList[i] = buffer->bufferInfo_;
     }
     const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
-    auto existence = static_cast<ExistenceOpt>(buffers.front()->bufferInfo_->existence);
-    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = existence, .ttlSecond = ttl };
+    // MSet(buffers) is the publish step after MCreate. The existence check was already done
+    // during MCreate, so the publish step should always use NONE to avoid the worker-side
+    // NTX+NX restriction in distributed master mode.
+    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     return HandleShmRefCountAfterMultiPublish(buffers, rsp);
