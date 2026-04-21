@@ -4,7 +4,7 @@ metadata:
   name: pvc-sfsturbo
   namespace: {{ .Values.global.namespace }}
   annotations:
-    volume.beta.kubernetes.io/storage-provisioner: everest-csi-provisioner
+    volume.kubernetes.io/storage-provisioner: everest-csi-provisioner
     everest.io/enterprise-project-id: "{{ .Values.global.l2Cache.sfsTurbo.projectId }}"
 spec:
   accessModes:
