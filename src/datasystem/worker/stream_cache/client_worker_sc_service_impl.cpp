@@ -1441,7 +1441,8 @@ Status ClientWorkerSCServiceImpl::ClosePubSubForClientLost(const std::string &cl
     std::shared_ptr<ClientInfo> clientInfo;
     clientInfo = ClientManager::Instance().GetClientInfo(ClientKey::Intern(clientId));
     if (clientInfo == nullptr) {
-        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "invalid client id");
+        LOG(INFO) << FormatString("client id: %s not exist", clientId);
+        return Status::OK();
     }
     uint32_t lockId;
     RETURN_IF_NOT_OK(clientInfo->GetLockId(lockId));
