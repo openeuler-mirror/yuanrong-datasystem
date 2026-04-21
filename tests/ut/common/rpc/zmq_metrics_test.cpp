@@ -35,12 +35,55 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
 namespace datasystem {
 namespace ut {
 namespace {
+
+using json = nlohmann::json;
+
+json DumpSummaryJson()
+{
+    auto summary = metrics::DumpSummaryForTest();
+    if (summary.empty()) {
+        return json();
+    }
+    return json::parse(summary);
+}
+
+const json *FindMetric(const json &summary, const std::string &name)
+{
+    if (!summary.contains("metrics")) {
+        return nullptr;
+    }
+    for (const auto &metric : summary["metrics"]) {
+        if (metric["name"] == name) {
+            return &metric;
+        }
+    }
+    return nullptr;
+}
+
+int64_t ScalarTotal(const json &summary, const std::string &name)
+{
+    auto metric = FindMetric(summary, name);
+    return metric == nullptr ? 0 : (*metric)["total"].get<int64_t>();
+}
+
+int64_t ScalarDelta(const json &summary, const std::string &name)
+{
+    auto metric = FindMetric(summary, name);
+    return metric == nullptr ? 0 : (*metric)["delta"].get<int64_t>();
+}
+
+uint64_t HistogramField(const json &summary, const std::string &name, const char *section, const char *field)
+{
+    auto metric = FindMetric(summary, name);
+    return metric == nullptr ? 0 : (*metric)[section][field].get<uint64_t>();
+}
 
 class ZmqMetricsTest : public CommonTest {
 public:
@@ -62,22 +105,20 @@ public:
 // Case 1: All 13 metrics registered, initial values are zero
 TEST_F(ZmqMetricsTest, all_metrics_registered_and_zero)
 {
-    auto s = metrics::DumpSummaryForTest();
-    // Fault counters
-    EXPECT_NE(s.find("zmq_send_failure_total=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_failure_total=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_send_try_again_total=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_try_again_total=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_network_error_total=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_last_error_number=0"),  std::string::npos);
-    EXPECT_NE(s.find("zmq_gateway_recreate_total=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_event_disconnect_total=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_event_handshake_failure_total=0"), std::string::npos);
-    // Latency histograms
-    EXPECT_NE(s.find("zmq_send_io_latency,count=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_io_latency,count=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq_rpc_deserialize_latency,count=0"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_failure_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_receive_failure_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_try_again_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_receive_try_again_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_network_error_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_last_error_number"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_gateway_recreate_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_event_disconnect_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_event_handshake_failure_total"), 0);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "count"), 0u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "count"), 0u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "count"), 0u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "count"), 0u);
 }
 
 // Case 2: Total metric count matches descriptor table
@@ -95,9 +136,9 @@ TEST_F(ZmqMetricsTest, send_fail_counter_inc)
 {
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_FAILURE_TOTAL)).Inc();
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_FAILURE_TOTAL)).Inc();
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_send_failure_total=2"),  std::string::npos);
-    EXPECT_NE(s.find("zmq_send_failure_total=+2"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_failure_total"), 2);
+    EXPECT_EQ(ScalarDelta(summary, "zmq_send_failure_total"), 2);
 }
 
 // Case 4: recv.fail + net_error + last_errno linked correctly
@@ -106,10 +147,10 @@ TEST_F(ZmqMetricsTest, recv_fail_net_error_last_errno_linked)
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_FAILURE_TOTAL)).Inc();
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_NETWORK_ERROR_TOTAL)).Inc();
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(ECONNRESET);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_receive_failure_total=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq_network_error_total=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq_last_error_number=" + std::to_string(ECONNRESET)), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_receive_failure_total"), 1);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_network_error_total"), 1);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_last_error_number"), ECONNRESET);
 }
 
 // Case 5: last_errno gauge overwrites correctly (only last Set wins)
@@ -117,30 +158,30 @@ TEST_F(ZmqMetricsTest, last_errno_gauge_overwrite)
 {
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(ECONNREFUSED);
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(EHOSTUNREACH);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_last_error_number=" + std::to_string(EHOSTUNREACH)), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_last_error_number"), EHOSTUNREACH);
 }
 
 // Case 6: delta between two dumps is correct
 TEST_F(ZmqMetricsTest, fault_counter_delta_between_dumps)
 {
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_FAILURE_TOTAL)).Inc(5);
-    (void)metrics::DumpSummaryForTest();            // snapshot 1
+    (void)DumpSummaryJson();            // snapshot 1
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_FAILURE_TOTAL)).Inc(3);
-    auto s = metrics::DumpSummaryForTest();         // snapshot 2
-    EXPECT_NE(s.find("zmq_receive_failure_total=8"),  std::string::npos);  // total
-    EXPECT_NE(s.find("zmq_receive_failure_total=+3"), std::string::npos);  // delta
+    auto summary = DumpSummaryJson();         // snapshot 2
+    EXPECT_EQ(ScalarTotal(summary, "zmq_receive_failure_total"), 8);  // total
+    EXPECT_EQ(ScalarDelta(summary, "zmq_receive_failure_total"), 3);  // delta
 }
 
 // Case 7: zero delta — no new faults → all +0
 TEST_F(ZmqMetricsTest, zero_delta_when_quiet)
 {
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_FAILURE_TOTAL)).Inc(1);
-    (void)metrics::DumpSummaryForTest();
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_send_failure_total=+0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_failure_total=+0"), std::string::npos);
-    EXPECT_NE(s.find("zmq_network_error_total=+0"), std::string::npos);
+    (void)DumpSummaryJson();
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarDelta(summary, "zmq_send_failure_total"), 0);
+    EXPECT_EQ(ScalarDelta(summary, "zmq_receive_failure_total"), 0);
+    EXPECT_EQ(ScalarDelta(summary, "zmq_network_error_total"), 0);
 }
 
 // Case 8: Layer 2 connection event counters
@@ -149,10 +190,10 @@ TEST_F(ZmqMetricsTest, layer2_connection_event_counters)
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_GATEWAY_RECREATE_TOTAL)).Inc();
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_EVENT_DISCONNECT_TOTAL)).Inc(3);
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL)).Inc(2);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_gateway_recreate_total=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq_event_disconnect_total=3"), std::string::npos);
-    EXPECT_NE(s.find("zmq_event_handshake_failure_total=2"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_gateway_recreate_total"), 1);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_event_disconnect_total"), 3);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_event_handshake_failure_total"), 2);
 }
 
 // ── [ERRNO] ──────────────────────────────────────────────────────────────────
@@ -190,9 +231,13 @@ TEST_F(ZmqMetricsTest, io_histogram_observe)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY)).Observe(100);
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY)).Observe(200);
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_IO_LATENCY)).Observe(500);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_send_io_latency,count=2,avg=150us,max=200us"), std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_io_latency,count=1,avg=500us,max=500us"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "count"), 2u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "avg_us"), 150u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "max_us"), 200u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "avg_us"), 500u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "max_us"), 500u);
 }
 
 // Case 12: Serialization histograms
@@ -201,22 +246,28 @@ TEST_F(ZmqMetricsTest, ser_deser_histogram_observe)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_SERIALIZE_LATENCY)).Observe(10);
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_SERIALIZE_LATENCY)).Observe(20);
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_DESERIALIZE_LATENCY)).Observe(8);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=2,avg=15us,max=20us"), std::string::npos);
-    EXPECT_NE(s.find("zmq_rpc_deserialize_latency,count=1,avg=8us,max=8us"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "count"), 2u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "avg_us"), 15u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "max_us"), 20u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "avg_us"), 8u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "max_us"), 8u);
 }
 
 // Case 13: periodMax resets between dumps (delta max reflects only latest period)
 TEST_F(ZmqMetricsTest, histogram_period_max_reset_between_dumps)
 {
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY)).Observe(1000);
-    (void)metrics::DumpSummaryForTest();
+    (void)DumpSummaryJson();
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY)).Observe(200);
-    auto s = metrics::DumpSummaryForTest();
-    // total: count=2, avg=(1000+200)/2=600, max=1000
-    EXPECT_NE(s.find("zmq_send_io_latency,count=2,avg=600us,max=1000us"), std::string::npos);
-    // delta: only the new observation
-    EXPECT_NE(s.find("zmq_send_io_latency,count=+1,avg=200us,max=200us"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "count"), 2u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "avg_us"), 600u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "max_us"), 1000u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "delta", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "delta", "avg_us"), 200u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "delta", "max_us"), 200u);
 }
 
 // Case 14: Histogram delta count increases correctly across dumps
@@ -225,13 +276,13 @@ TEST_F(ZmqMetricsTest, histogram_delta_count)
     for (int i = 0; i < 10; ++i) {
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_IO_LATENCY)).Observe(100);
     }
-    (void)metrics::DumpSummaryForTest();
+    (void)DumpSummaryJson();
     for (int i = 0; i < 5; ++i) {
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_IO_LATENCY)).Observe(100);
     }
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_receive_io_latency,count=15,"), std::string::npos);   // total
-    EXPECT_NE(s.find("zmq_receive_io_latency,count=+5,"), std::string::npos);   // delta
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "count"), 15u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "delta", "count"), 5u);
 }
 
 // ── [CONC] ───────────────────────────────────────────────────────────────────
@@ -254,10 +305,10 @@ TEST_F(ZmqMetricsTest, concurrent_counter_and_histogram)
     for (auto &w : workers) {
         w.join();
     }
-    auto s = metrics::DumpSummaryForTest();
-    const auto expected = std::to_string(threads * loops);
-    EXPECT_NE(s.find("zmq_send_io_latency,count=" + expected), std::string::npos);
-    EXPECT_NE(s.find("zmq_send_failure_total=" + expected), std::string::npos);
+    auto summary = DumpSummaryJson();
+    const auto expected = threads * loops;
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "count"), static_cast<uint64_t>(expected));
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_failure_total"), expected);
 }
 
 // ── [NOOP] ───────────────────────────────────────────────────────────────────
@@ -269,8 +320,8 @@ TEST_F(ZmqMetricsTest, noop_before_init_no_crash)
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_FAILURE_TOTAL)).Inc();
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_IO_LATENCY)).Observe(100);
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(42);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_TRUE(s.empty());    // uninited → empty summary
+    auto summary = DumpSummaryJson();
+    EXPECT_TRUE(summary.is_null());    // uninited → empty summary
 }
 
 // ── [SCENE] ──────────────────────────────────────────────────────────────────
@@ -285,30 +336,30 @@ TEST_F(ZmqMetricsTest, scenario_network_card_failure)
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_LAST_ERROR_NUMBER)).Set(EHOSTUNREACH);
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_EVENT_DISCONNECT_TOTAL)).Inc(2);
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_GATEWAY_RECREATE_TOTAL)).Inc(1);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_network_error_total=8"), std::string::npos);
-    EXPECT_NE(s.find("zmq_last_error_number=" + std::to_string(EHOSTUNREACH)), std::string::npos);
-    EXPECT_NE(s.find("zmq_event_disconnect_total=2"), std::string::npos);
-    EXPECT_NE(s.find("zmq_gateway_recreate_total=1"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_network_error_total"), 8);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_last_error_number"), EHOSTUNREACH);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_event_disconnect_total"), 2);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_gateway_recreate_total"), 1);
 }
 
 // Case 18: Scenario — peer hang (only recv.eagain↑, net_error stays 0)
 TEST_F(ZmqMetricsTest, scenario_peer_hang)
 {
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RECEIVE_TRY_AGAIN_TOTAL)).Inc(10);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_receive_try_again_total=10"), std::string::npos);
-    EXPECT_NE(s.find("zmq_network_error_total=0"),    std::string::npos);
-    EXPECT_NE(s.find("zmq_send_failure_total=0"),    std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_receive_try_again_total"), 10);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_network_error_total"), 0);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_failure_total"), 0);
 }
 
 // Case 19: Scenario — HWM backpressure (send.eagain↑, net_error stays 0)
 TEST_F(ZmqMetricsTest, scenario_hwm_backpressure)
 {
     metrics::GetCounter(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SEND_TRY_AGAIN_TOTAL)).Inc(100);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq_send_try_again_total=100"), std::string::npos);
-    EXPECT_NE(s.find("zmq_network_error_total=0"),     std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(ScalarTotal(summary, "zmq_send_try_again_total"), 100);
+    EXPECT_EQ(ScalarTotal(summary, "zmq_network_error_total"), 0);
 }
 
 // Case 20: Scenario — RPC framework self-proof (I/O dominates, ser/deser small)
@@ -321,13 +372,15 @@ TEST_F(ZmqMetricsTest, scenario_self_prove_framework_innocent)
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_SERIALIZE_LATENCY)).Observe(10);
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_DESERIALIZE_LATENCY)).Observe(8);
     }
-    auto s = metrics::DumpSummaryForTest();
-    // Verify I/O Histogram recorded
-    EXPECT_NE(s.find("zmq_send_io_latency,count=100,avg=500us"), std::string::npos);
-    EXPECT_NE(s.find("zmq_receive_io_latency,count=100,avg=800us"), std::string::npos);
-    // Verify framework Histogram recorded (much smaller avg)
-    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=100,avg=10us"), std::string::npos);
-    EXPECT_NE(s.find("zmq_rpc_deserialize_latency,count=100,avg=8us"), std::string::npos);
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "count"), 100u);
+    EXPECT_EQ(HistogramField(summary, "zmq_send_io_latency", "total", "avg_us"), 500u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "count"), 100u);
+    EXPECT_EQ(HistogramField(summary, "zmq_receive_io_latency", "total", "avg_us"), 800u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "count"), 100u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "avg_us"), 10u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "count"), 100u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "avg_us"), 8u);
 }
 
 }  // namespace

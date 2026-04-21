@@ -87,6 +87,7 @@
 #include <string>
 #include <thread>
 
+#include <nlohmann/json.hpp>
 #include "zmq_test.h"
 
 #include "gtest/gtest.h"
@@ -104,63 +105,55 @@ namespace datasystem {
 namespace st {
 
 // ---------------------------------------------------------------------------
-// Helpers: parse DumpSummaryForTest() string
+// Helpers: parse current JSON summary directly for assertions
 // ---------------------------------------------------------------------------
 namespace {
 
-// Extract uint64 from "name=VALUE" (Counter/Gauge total line)
-uint64_t ExtractMetricValue(const std::string &dump, const std::string &key)
+using json = nlohmann::json;
+
+json DumpSummaryJson()
 {
-    auto pos = dump.find(key + "=");
-    if (pos == std::string::npos) {
-        return 0;
-    }
-    pos += key.size() + 1;
-    // Skip '+' prefix used for delta values so both total and delta are parsed.
-    if (pos < dump.size() && dump[pos] == '+') {
-        ++pos;
-    }
-    try {
-        return std::stoull(dump.substr(pos));
-    } catch (...) {
-        return 0;
-    }
+    auto summary = metrics::DumpSummaryForTest();
+    return summary.empty() ? json() : json::parse(summary);
 }
 
-// Extract delta ("+N") from the compare-with-previous section.
-// Returns 0 if the delta line is absent or is "+0".
-uint64_t ExtractMetricDelta(const std::string &dump, const std::string &key)
+const json *FindMetric(const json &summary, const std::string &name)
 {
-    const std::string deltaKey = key + "=+";
-    auto pos = dump.find(deltaKey);
-    if (pos == std::string::npos) {
-        return 0;
+    if (!summary.contains("metrics")) {
+        return nullptr;
     }
-    pos += deltaKey.size();
-    try {
-        return std::stoull(dump.substr(pos));
-    } catch (...) {
-        return 0;
+    for (const auto &metric : summary["metrics"]) {
+        if (metric["name"] == name) {
+            return &metric;
+        }
     }
+    return nullptr;
 }
 
-// Extract avg from "name,count=N,avg=Xus,max=Yus" → X (microseconds)
-uint64_t ExtractHistogramAvg(const std::string &dump, const std::string &metricName)
+uint64_t ExtractMetricValue(const json &dump, const std::string &key)
 {
-    auto pos = dump.find(metricName + ",count=");
-    if (pos == std::string::npos) {
+    auto pos = key.find(",count");
+    auto metric = FindMetric(dump, pos == std::string::npos ? key : key.substr(0, pos));
+    if (metric == nullptr) {
         return 0;
     }
-    auto avgPos = dump.find(",avg=", pos);
-    if (avgPos == std::string::npos) {
+    return pos == std::string::npos ? (*metric)["total"].get<uint64_t>() : (*metric)["total"]["count"].get<uint64_t>();
+}
+
+uint64_t ExtractMetricDelta(const json &dump, const std::string &key)
+{
+    auto pos = key.find(",count");
+    auto metric = FindMetric(dump, pos == std::string::npos ? key : key.substr(0, pos));
+    if (metric == nullptr) {
         return 0;
     }
-    avgPos += 5;  // skip ",avg="
-    try {
-        return std::stoull(dump.substr(avgPos));
-    } catch (...) {
-        return 0;
-    }
+    return pos == std::string::npos ? (*metric)["delta"].get<uint64_t>() : (*metric)["delta"]["count"].get<uint64_t>();
+}
+
+uint64_t ExtractHistogramAvg(const json &dump, const std::string &metricName)
+{
+    auto metric = FindMetric(dump, metricName);
+    return metric == nullptr ? 0 : (*metric)["total"]["avg_us"].get<uint64_t>();
 }
 
 }  // namespace
@@ -242,7 +235,7 @@ protected:
     }
 
     // Send N successful "Hello" RPCs, return metrics dump.
-    std::string RunNormalRpcs(int n)
+    json RunNormalRpcs(int n)
     {
         for (int i = 0; i < n; ++i) {
             arbitrary::workspace::SayHelloPb req;
@@ -252,7 +245,7 @@ protected:
             EXPECT_TRUE(st.IsOk()) << "RPC failed: " << st.ToString();
             EXPECT_EQ(rsp.reply(), "World");
         }
-        return metrics::DumpSummaryForTest();
+        return DumpSummaryJson();
     }
 
     // High enough for loaded CI/remote hosts; still short vs old 1000ms+ multi-minute ST.
@@ -278,8 +271,8 @@ int ZmqMetricsFaultTest::sharedPort_ = -1;
 TEST_F(ZmqMetricsFaultTest, NormalRpcs_HistogramsPopulate_FaultCountersZero)
 {
     const int kRpcs = 12;
-    std::string dump = RunNormalRpcs(kRpcs);
-    LOG(INFO) << "[METRICS DUMP - Normal RPCs]\n" << dump;
+    json dump = RunNormalRpcs(kRpcs);
+    LOG(INFO) << "[METRICS DUMP - Normal RPCs]\n" << dump.dump();
 
     // Fault counters must all be zero.
     EXPECT_EQ(ExtractMetricValue(dump, "zmq_send_failure_total"),   0u);
@@ -335,7 +328,7 @@ TEST_F(ZmqMetricsFaultTest, SlowServer_ZmqCountersZeroProvesFrameworkInnocent)
     shortOpt.SetTimeout(120);  // 120ms, server sleeps 500ms → guaranteed timeout
 
     RunNormalRpcs(3);
-    (void)metrics::DumpSummaryForTest();  // reset delta
+    (void)DumpSummaryJson();  // reset delta
 
     LOG(INFO) << "[FAULT INJECT] Sending 'World' msg (server sleeps 500ms, timeout=120ms)";
     int timeoutCount = 0;
@@ -349,8 +342,8 @@ TEST_F(ZmqMetricsFaultTest, SlowServer_ZmqCountersZeroProvesFrameworkInnocent)
     }
     LOG(INFO) << "[FAULT INJECT] " << timeoutCount << "/1 RPCs timed out";
 
-    std::string dump = metrics::DumpSummaryForTest();
-    LOG(INFO) << "[METRICS DUMP - Slow Server]\n" << dump;
+    json dump = DumpSummaryJson();
+    LOG(INFO) << "[METRICS DUMP - Slow Server]\n" << dump.dump();
 
     // Confirm RPCs did time out (otherwise this test is vacuously passing).
     EXPECT_GT(timeoutCount, 0)
@@ -399,8 +392,8 @@ TEST_F(ZmqMetricsFaultTest, HighLoad_FrameworkRatioIsLow)
 {
     const int kRpcs = 10;
     RunNormalRpcs(kRpcs);
-    std::string dump = metrics::DumpSummaryForTest();
-    LOG(INFO) << "[METRICS DUMP - High Load]\n" << dump;
+    json dump = DumpSummaryJson();
+    LOG(INFO) << "[METRICS DUMP - High Load]\n" << dump.dump();
 
     const uint64_t sendCnt = ExtractMetricValue(dump, "zmq_send_io_latency,count");
     const uint64_t recvCnt = ExtractMetricValue(dump, "zmq_receive_io_latency,count");
@@ -445,7 +438,7 @@ TEST_F(ZmqMetricsFaultTest, HighLoad_FrameworkRatioIsLow)
 TEST_F(ZmqMetricsFaultTest, ServerKilled_GwRecreateDetectsPeerCrash)
 {
     RunNormalRpcs(5);
-    (void)metrics::DumpSummaryForTest();  // consume baseline delta
+    (void)DumpSummaryJson();  // consume baseline delta
 
     LOG(INFO) << "[FAULT INJECT] Shutting down server to simulate peer crash";
     rpc_->Shutdown();
@@ -454,7 +447,7 @@ TEST_F(ZmqMetricsFaultTest, ServerKilled_GwRecreateDetectsPeerCrash)
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     int failCount = 0;
-    std::string dump;
+    json dump;
     uint64_t gwRecreateDelta = 0;
     for (int i = 0; i < 3; ++i) {
         arbitrary::workspace::SayHelloPb req;
@@ -463,7 +456,7 @@ TEST_F(ZmqMetricsFaultTest, ServerKilled_GwRecreateDetectsPeerCrash)
         if (stub_->SimpleGreeting(opt_, req, rsp).IsError()) {
             ++failCount;
         }
-        dump = metrics::DumpSummaryForTest();
+        dump = DumpSummaryJson();
         gwRecreateDelta = ExtractMetricDelta(dump, "zmq_gateway_recreate_total");
         if (gwRecreateDelta > 0) {
             break;
@@ -471,7 +464,7 @@ TEST_F(ZmqMetricsFaultTest, ServerKilled_GwRecreateDetectsPeerCrash)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     LOG(INFO) << "[FAULT INJECT] " << failCount << "/3 RPCs failed after server kill";
-    LOG(INFO) << "[METRICS DUMP - Server Killed]\n" << dump;
+    LOG(INFO) << "[METRICS DUMP - Server Killed]\n" << dump.dump();
 
     uint64_t recvFail   = ExtractMetricValue(dump, "zmq_receive_failure_total");
     uint64_t evtDisconn = ExtractMetricValue(dump, "zmq_event_disconnect_total");
