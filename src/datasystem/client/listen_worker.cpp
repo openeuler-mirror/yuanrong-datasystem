@@ -233,7 +233,7 @@ Status ListenWorker::CheckHeartbeat()
             constexpr int logInterval = 10;
             LOG_EVERY_T(INFO, logInterval)
                 << "[Switch] Connected worker will scale down, switch worker, client id: " << clientId_;
-            SwitchToRemoteWorker();
+            SwitchToRemoteWorker(SwitchTriggerReason::VOLUNTARY_SCALE_DOWN);
         } else if (clientCommonWorker_->removable_.exchange(false, std::memory_order_relaxed)) {
             LOG(INFO) << "[Switch] Client " << clientId_ << " recover to normal state now";
             continue;
@@ -290,7 +290,7 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
                 workerTimeoutHandle_();
             }
         }
-        SwitchToRemoteWorker();
+        SwitchToRemoteWorker(SwitchTriggerReason::WORKER_UNAVAILABLE);
     }
 }
 
@@ -345,7 +345,7 @@ void ListenWorker::RemoveCallBackFunc(void *pointer)
     deletedCallbacks_.emplace(pointer);
 }
 
-void ListenWorker::SetSwitchWorkerHandle(std::function<bool(uint32_t)> callback)
+void ListenWorker::SetSwitchWorkerHandle(std::function<bool(uint32_t, SwitchTriggerReason)> callback)
 {
     std::lock_guard<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
     switchWorkerHandle_ = std::move(callback);
@@ -368,7 +368,7 @@ bool ListenWorker::TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii)
     return true;
 }
 
-void ListenWorker::SwitchToRemoteWorker()
+void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
 {
     {
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
@@ -381,12 +381,12 @@ void ListenWorker::SwitchToRemoteWorker()
         return;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+    asyncSwitchWorkerPool_->Execute([this, traceId, raii, reason]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Worker " << clientCommonWorker_->workerId_
                   << " will be switched, client id: " << clientId_;
-        isSwitched_ = switchWorkerHandle_(index_);
+        isSwitched_ = switchWorkerHandle_(index_, reason);
     });
 }
 
@@ -407,7 +407,7 @@ void ListenWorker::TrySwitchBackToLocalWorker()
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
-        isSwitched_ = !switchWorkerHandle_(index_);
+        isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::WORKER_UNAVAILABLE);
     });
 }
 

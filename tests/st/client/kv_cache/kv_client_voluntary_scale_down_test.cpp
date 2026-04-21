@@ -26,8 +26,11 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/kv_client.h"
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <memory>
 #include <string>
+#include <sys/wait.h>
 #include <thread>
 #include <vector>
 #include <gtest/gtest.h>
@@ -975,6 +978,67 @@ TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode, LEVEL2_TestVoluntaryTh
     VoluntaryScaleDownInject(2, false);  // scale down worker2
     sleep(10);                           // sleep 10s to wait for task done.
     t1.join();
+}
+
+TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode, LEVEL2_TestAllWorkersGoneRequestFailFast)
+{
+    auto waitSwitchEnd = []() {
+        Timer timer;
+        do {
+            if (datasystem::inject::GetExecuteCount("client.switch_worker_end") >= 1) {
+                datasystem::inject::Clear("client.switch_worker_end");
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } while (timer.ElapsedSecond() < 15);
+        return false;
+    };
+
+    InitTestKVClient(0, client0_, 2000, true);  // Init client0 to worker 0 with 2000ms timeout
+    datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
+    HostPort addr1;
+    HostPort addr2;
+    HostPort addr3;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, addr1));  // Get worker1 address
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, addr2));  // Get worker2 address
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(3, addr3));  // Get worker3 address
+
+    datasystem::inject::Set("client.standby_worker", "1*call(" + addr1.ToString() + ")");
+    VoluntaryScaleDownInject(0, false);
+    sleep(5);  // sleep 5s to wait for worker0 shutdown done.
+    datasystem::inject::Set("client.standby_worker", "1*call(" + addr2.ToString() + ")");
+    VoluntaryScaleDownInject(1, false);  // scale down worker1
+    sleep(5);                            // sleep 5s to wait for worker1 shutdown done.
+    datasystem::inject::Set("client.standby_worker", "1*call(" + addr3.ToString() + ")");
+    VoluntaryScaleDownInject(2, false);  // scale down worker2
+    sleep(5);                            // sleep 5s to wait for worker2 shutdown done.
+    datasystem::inject::Clear("client.switch_worker_end");
+    datasystem::inject::Set("client.switch_worker_end", "call()");
+    VoluntaryScaleDownInject(3, false);  // scale down worker3
+    ASSERT_TRUE(waitSwitchEnd());
+
+    std::promise<int> requestPromise;
+    auto requestFuture = requestPromise.get_future();
+    auto client = client0_;
+    std::thread([client, promise = std::move(requestPromise)]() mutable {
+        auto key = "fail_fast_key_" + std::to_string(GetSteadyClockTimeStampMs());
+        SetParam param;
+        auto setStatus = client->Set(key, "xxx", param);
+        if (setStatus.IsOk()) {
+            promise.set_value(1);
+            return;
+        }
+        std::string value;
+        auto getStatus = client->Get(key, value);
+        if (getStatus.IsOk()) {
+            promise.set_value(2);
+            return;
+        }
+        promise.set_value(0);
+    }).detach();
+
+    ASSERT_EQ(requestFuture.wait_for(std::chrono::seconds(15)), std::future_status::ready);
+    ASSERT_EQ(requestFuture.get(), 0);
 }
 
 class KVClientVoluntaryScaleDownTestWithEnableCrossNode1 : public KVClientVoluntaryScaleDownTestWithEnableCrossNode {
