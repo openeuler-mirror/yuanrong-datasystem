@@ -46,6 +46,12 @@
 namespace datasystem {
 namespace client {
 constexpr int INVALID_SOCKET_FD = -1;
+
+enum class SwitchTriggerReason : uint8_t {
+    WORKER_UNAVAILABLE = 0,
+    VOLUNTARY_SCALE_DOWN,
+};
+
 class FdReleaseHelper {
 public:
     void SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &fds)> callBack)
@@ -130,7 +136,7 @@ public:
      * @brief Set the switch worker handle.
      * @param[in] callback The handle of switch worker.
      */
-    void SetSwitchWorkerHandle(std::function<bool(uint32_t)> callback);
+    void SetSwitchWorkerHandle(std::function<bool(uint32_t, SwitchTriggerReason)> callback);
 
     /**
      * @brief Set the isLocalWorker.
@@ -221,7 +227,7 @@ private:
     /**
      * @brief Call switchWorkerHandle_ to switch worker.
      */
-    void SwitchToRemoteWorker();
+    void SwitchToRemoteWorker(SwitchTriggerReason reason);
 
     /**
      * @brief Try switch back to local worker.
@@ -300,7 +306,7 @@ private:
     std::shared_timed_mutex callbackMutex_;  // Protect 'callBackTable_'.
     std::unordered_set<void *> deletedCallbacks_;
     std::shared_timed_mutex deletedCallbackMutex_;  // Protect 'deletedCallbacks'
-    std::function<bool(uint32_t)> switchWorkerHandle_;
+    std::function<bool(uint32_t, SwitchTriggerReason)> switchWorkerHandle_;
     std::shared_timed_mutex switchWorkerHandleMutex_;  // Protect 'switchWorkerHandle_'.
     std::atomic<bool> isSwitched_{ false };
     std::atomic<bool> isLocalWorker_{ true };
