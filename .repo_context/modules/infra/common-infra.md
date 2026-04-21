@@ -100,7 +100,10 @@ Detailed follow-up docs now exist for:
     `interleave_affinity_numa`; for interleave policies the implementation performs 1GB chunk round-robin across
     selected NUMA nodes, applies `SYS_mbind` with `MPOL_BIND` per chunk, and then page-touches each chunk. The
     distribution policy takes effect when `enable_urma=true` and
-    `urma_register_whole_arena=true`.
+    `urma_register_whole_arena=true`. For `MemMmap`, `enable_huge_tlb=true` still selects explicit hugetlb mappings,
+    while `enable_thp=true` leaves the process THP setting enabled and additionally applies `madvise(...,
+    MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
+    `MAP_HUGETLB`.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - `os_transport_pipeline` is optional and only exists when pipeline H2D support is enabled.
