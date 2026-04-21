@@ -416,8 +416,9 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
         }
     }
     if (enableCrossNodeConnection_) {
-        listenWorker_[node]->SetSwitchWorkerHandle(
-            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+        listenWorker_[node]->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
+            return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
+        });
         if (isLocalWorker && serviceDiscovery_ != nullptr) {
             listenWorker_[node]->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
         }
@@ -545,6 +546,12 @@ void ObjectClientImpl::ProcessWorkerLost()
         return;
     }
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER) {
+            MarkWorkerAvailableLocked();
+        }
+    }
     LOG(INFO) << "[Reconnect] Reconnect to local worker success.";
     INJECT_POINT("ObjectClientImpl.ProcessWorkerLost", []() {});
 }
@@ -582,6 +589,12 @@ void ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node)
     if (listenWorker_[node] != nullptr) {
         listenWorker_[node]->SetWorkerAvailable(true);
     }
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == node) {
+            MarkWorkerAvailableLocked();
+        }
+    }
     LOG(INFO) << FormatString("[Reconnect] Client[%d] %s reconnect to worker %s success.", node,
                               workerApi_[node]->clientId_, workerApi_[node]->hostPort_.ToString());
 }
@@ -607,52 +620,100 @@ void ObjectClientImpl::StopStandbyWorkerListen(WorkerNode id)
     listenWorker_[id]->StopListenWorker(false);
 }
 
-bool ObjectClientImpl::SwitchWorkerNode(WorkerNode node)
+void ObjectClientImpl::MarkWorkerAvailableLocked()
+{
+    workerSwitchState_ = WorkerSwitchState::AVAILABLE;
+    switchInProgress_ = false;
+    ++switchGeneration_;
+}
+
+void ObjectClientImpl::MarkNoSwitchableWorkerLocked()
+{
+    LOG(WARNING) << "[Switch] No switchable worker available, enable fail-fast.";
+    workerSwitchState_ = WorkerSwitchState::NO_SWITCHABLE_WORKER;
+    switchInProgress_ = false;
+    ++switchGeneration_;
+}
+
+Status ObjectClientImpl::NoSwitchableWorkerStatus() const
+{
+    return { K_RPC_UNAVAILABLE, "no switchable worker available" };
+}
+
+bool ObjectClientImpl::SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason)
 {
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
         return true;
     }
-    std::lock_guard<std::mutex> lock(switchNodeMutex_);
-    WorkerNode current = currentNode_;
-    if (current != node && node != LOCAL_WORKER) {
-        LOG(INFO) << FormatString("[Switch] Current node is %d, not %d, just ignore...", current, node);
-        return true;
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::shared_ptr<IClientWorkerApi> nextWorkerApi;
+    std::shared_ptr<client::ListenWorker> nextListenWorker;
+    WorkerNode current;
+    WorkerNode next = LOCAL_WORKER;
+    uint64_t switchGeneration = 0;
+    bool switchBackToLocal = false;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        current = currentNode_;
+        if (current != node && node != LOCAL_WORKER) {
+            LOG(INFO) << FormatString("[Switch] Current node is %d, not %d, just ignore...", current, node);
+            return true;
+        }
+
+        if (current != node && node == LOCAL_WORKER) {
+            switchBackToLocal = true;
+        } else {
+            if (switchInProgress_) {
+                VLOG(1) << "[Switch] Worker switch is already in progress";
+                return false;
+            }
+            workerApi = workerApi_[current];
+            if (workerApi == nullptr) {
+                LOG(ERROR) << "[Switch] current worker is null pointer";
+                return false;
+            }
+            next = GetNextWorkerNode(current);
+            nextWorkerApi = workerApi_[next];
+            nextListenWorker = listenWorker_[next];
+            workerSwitchState_ = WorkerSwitchState::SWITCHING;
+            switchInProgress_ = true;
+            switchGeneration = ++switchGeneration_;
+        }
     }
 
-    // If local worker is available, switch back.
-    if (current != node && node == LOCAL_WORKER) {
+    if (switchBackToLocal) {
         return TrySwitchBackToLocalWorker();
     }
-
-    auto workerApi = workerApi_[current];
-    if (workerApi == nullptr) {
-        LOG(ERROR) << "[Switch] current worker is null pointer";
+    // If next stub still has requests to be processed, wait for next time.
+    if (!ReadyToExit(next, nextWorkerApi, nextListenWorker)) {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (switchInProgress_ && switchGeneration_ == switchGeneration && currentNode_ == current) {
+            MarkWorkerAvailableLocked();
+        }
         return false;
     }
-    WorkerNode next = GetNextWorkerNode(current);
-    // If next stub still have request to be processed, wait for next time.
-    if (!ReadyToExit(next)) {
-        return false;
-    }
-    return SwitchToStandbyWorkerImpl(workerApi, next);
+    return SwitchToStandbyWorkerImpl(workerApi, current, next, switchGeneration, reason);
 }
 
-bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode next)
+bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi,
+                                                 WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+                                                 client::SwitchTriggerReason reason)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_SWITCH_STANDBY_WORKER);
-    auto standbyWorkers = currentApi->GetStandbyWorkers();
-    INJECT_POINT("client.standby_worker", [&standbyWorkers](const std::string &addr) {
-        HostPort hostPort;
-        hostPort.ParseString(addr);
-        standbyWorkers.clear();
-        standbyWorkers.emplace_back(hostPort);
-        return true;
-    });
+    Raii switchEndNotifier([]() { INJECT_POINT_NO_RETURN("client.switch_worker_end", []() { return true; }); });
+    const bool keepCurrentWorker =
+        reason == client::SwitchTriggerReason::VOLUNTARY_SCALE_DOWN && current == LOCAL_WORKER;
+    auto standbyWorkers = GetStandbyWorkersForSwitch(currentApi);
     if (standbyWorkers.empty()) {
         LOG(ERROR) << "[Switch] standby worker list is empty";
+        if (keepCurrentWorker) {
+            RestoreWorkerAvailableIfNeeded(current, switchGeneration);
+        } else {
+            MarkNoSwitchableWorkerIfNeeded(current, switchGeneration);
+        }
         return false;
     }
-    bool result = false;
+
     for (const auto &standbyWorker : standbyWorkers) {
         if (standbyWorker.Empty()) {
             LOG(INFO) << "[Switch] Current worker has not standby worker.";
@@ -661,66 +722,160 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
         LOG(INFO) << FormatString("[Switch] Switch worker to %s", standbyWorker.ToString());
         if (ipAddress_ == standbyWorker) {
             if (TrySwitchBackToLocalWorker()) {
-                result = true;
-                break;
+                return true;
             }
             continue;
         }
-        HeartbeatType heartbeatType = currentApi->heartbeatType_;
-        workerApi_[next] = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
-                                                 tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
-                                                 embeddedClientWorkerApi_, worker_);
-        workerApi_[next]->isUseStandbyWorker_ = true;
-        Status rc = workerApi_[next]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
-                                       rc.ToString());
-            continue;
+        auto attemptResult = TrySwitchToStandbyWorker(currentApi, current, next, switchGeneration, standbyWorker);
+        if (attemptResult == StandbySwitchAttemptResult::SWITCHED) {
+            return true;
         }
-        // Start worker down listen.
-        listenWorker_[next] =
-            std::make_unique<client::ListenWorker>(workerApi_[next], heartbeatType, next, asyncSwitchWorkerPool_.get());
-        listenWorker_[next]->SetSwitchWorkerHandle(
-            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
-        listenWorker_[next]->SetIsLocalWorker(false);
-        if (serviceDiscovery_ != nullptr
-            && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
-            listenWorker_[next]->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
+        if (attemptResult == StandbySwitchAttemptResult::ABORT) {
+            return false;
         }
-        listenWorker_[next]->AddCallBackFunc(this, [this, next]() { ProcessStandbyWorkerLost(next); });
-        rc = listenWorker_[next]->StartListenWorker();
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("[Switch] Listen worker(%s) failed, with status: %s", standbyWorker.ToString(),
-                                       rc.ToString());
-            continue;
-        }
-        workerApi_[next]->TryFastTransportAfterHeartbeat();
-        if (!WaitStandbyWorkerReady(workerApi_[next])) {
-            LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
-                                       workerApi_[next]->hostPort_.ToString());
-            continue;
-        }
-        currentNode_ = next;
-        LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
-                                  workerApi_[currentNode_]->hostPort_.ToString());
-        result = true;
-        break;
     }
-    INJECT_POINT("client.switch_worker_end", []() { return true; });
-    return result;
+    if (keepCurrentWorker) {
+        RestoreWorkerAvailableIfNeeded(current, switchGeneration);
+    } else {
+        MarkNoSwitchableWorkerIfNeeded(current, switchGeneration);
+    }
+    return false;
+}
+
+std::vector<HostPort> ObjectClientImpl::GetStandbyWorkersForSwitch(
+    const std::shared_ptr<IClientWorkerApi> &currentApi) const
+{
+    auto standbyWorkers = currentApi->GetStandbyWorkers();
+    INJECT_POINT_NO_RETURN("client.standby_worker", [&standbyWorkers](const std::string &addr) {
+        HostPort hostPort;
+        hostPort.ParseString(addr);
+        standbyWorkers.clear();
+        standbyWorkers.emplace_back(hostPort);
+        return true;
+    });
+    return standbyWorkers;
+}
+
+bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+                                           const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
+                                           const std::shared_ptr<client::ListenWorker> &candidateListenWorker)
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
+        || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+        return false;
+    }
+    workerApi_[next] = candidateWorkerApi;
+    listenWorker_[next] = candidateListenWorker;
+    currentNode_ = next;
+    MarkWorkerAvailableLocked();
+    return true;
+}
+
+ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandbyWorker(
+    const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+    const HostPort &standbyWorker)
+{
+    HeartbeatType heartbeatType = currentApi->heartbeatType_;
+    auto candidateWorkerApi = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
+                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
+                                                    embeddedClientWorkerApi_, worker_);
+    candidateWorkerApi->isUseStandbyWorker_ = true;
+    Status rc = candidateWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
+                                   rc.ToString());
+        return StandbySwitchAttemptResult::CONTINUE;
+    }
+
+    auto candidateListenWorker =
+        std::make_shared<client::ListenWorker>(candidateWorkerApi, heartbeatType, next, asyncSwitchWorkerPool_.get());
+    candidateListenWorker->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
+        return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
+    });
+    candidateListenWorker->SetIsLocalWorker(false);
+    if (serviceDiscovery_ != nullptr
+        && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+        candidateListenWorker->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
+    }
+    candidateListenWorker->AddCallBackFunc(this, [this, next]() { ProcessStandbyWorkerLost(next); });
+    rc = candidateListenWorker->StartListenWorker();
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("[Switch] Listen worker(%s) failed, with status: %s", standbyWorker.ToString(),
+                                   rc.ToString());
+        return StandbySwitchAttemptResult::CONTINUE;
+    }
+
+    candidateWorkerApi->TryFastTransportAfterHeartbeat();
+    if (!WaitStandbyWorkerReady(candidateWorkerApi)) {
+        LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
+                                   candidateWorkerApi->hostPort_.ToString());
+        candidateListenWorker->StopListenWorker(true);
+        return StandbySwitchAttemptResult::CONTINUE;
+    }
+    if (!CommitStandbySwitch(current, next, switchGeneration, candidateWorkerApi, candidateListenWorker)) {
+        candidateListenWorker->StopListenWorker(true);
+        return StandbySwitchAttemptResult::ABORT;
+    }
+    LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
+                              candidateWorkerApi->hostPort_.ToString());
+    return StandbySwitchAttemptResult::SWITCHED;
+}
+
+void ObjectClientImpl::MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration)
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (switchInProgress_ && switchGeneration_ == switchGeneration && currentNode_ == current) {
+        MarkNoSwitchableWorkerLocked();
+    }
+}
+
+void ObjectClientImpl::RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration)
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (switchInProgress_ && switchGeneration_ == switchGeneration && currentNode_ == current) {
+        MarkWorkerAvailableLocked();
+    }
 }
 
 bool ObjectClientImpl::TrySwitchBackToLocalWorker()
 {
-    auto s = CheckConnection(LOCAL_WORKER);
-    bool scaleDown = IsScaleDown(LOCAL_WORKER);
-    bool healthy = IsHealthy(LOCAL_WORKER);
+    WorkerNode current;
+    std::shared_ptr<IClientWorkerApi> localWorkerApi;
+    std::shared_ptr<client::ListenWorker> localListenWorker;
+    std::shared_ptr<client::ListenWorker> currentListenWorker;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        current = currentNode_;
+        if (current == LOCAL_WORKER) {
+            return false;
+        }
+        localWorkerApi = workerApi_[LOCAL_WORKER];
+        localListenWorker = listenWorker_[LOCAL_WORKER];
+        currentListenWorker = listenWorker_[current];
+    }
+
+    if (localWorkerApi == nullptr || localListenWorker == nullptr) {
+        LOG(ERROR) << "[Switch] Local worker is not ready for switch back";
+        return false;
+    }
+    auto s = localListenWorker->CheckWorkerAvailable();
+    bool scaleDown = localListenWorker->IsWorkerVoluntaryScaleDown();
+    bool healthy = localWorkerApi->healthy_;
     if (s.IsOk() && !scaleDown && healthy) {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER) {
+            return true;
+        }
+        if (currentNode_ != current || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            return false;
+        }
         LOG(INFO) << "[Switch] Restore local worker success.";
-        if (listenWorker_[currentNode_] != nullptr) {
-            listenWorker_[currentNode_]->SetSwitched();
+        if (currentListenWorker != nullptr) {
+            currentListenWorker->SetSwitched();
         }
         currentNode_ = LOCAL_WORKER;
+        MarkWorkerAvailableLocked();
         return true;
     } else {
         constexpr int times = 10;
@@ -837,8 +992,9 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
     localListenWorker->SetReleaseFdCallBack(
         [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
     if (enableCrossNodeConnection_) {
-        localListenWorker->SetSwitchWorkerHandle(
-            [this](uint32_t index) { return SwitchWorkerNode(static_cast<WorkerNode>(index)); });
+        localListenWorker->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
+            return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
+        });
         localListenWorker->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
     }
     localListenWorker->SetIsLocalWorker(true);
@@ -871,6 +1027,7 @@ bool ObjectClientImpl::CommitPreferredLocalWorker(WorkerNode oldNode, const Host
     if (listenWorker_[oldNode] != nullptr) {
         listenWorker_[oldNode]->SetSwitched();
     }
+    MarkWorkerAvailableLocked();
     return true;
 }
 
@@ -944,31 +1101,36 @@ bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
 
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
     workerApi->TryFastTransportAfterHeartbeat();
-    if (listenWorker_[currentNode_] != nullptr) {
-        listenWorker_[currentNode_]->SetSwitched();
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (listenWorker_[currentNode_] != nullptr) {
+            listenWorker_[currentNode_]->SetSwitched();
+        }
+        currentNode_ = LOCAL_WORKER;
+        MarkWorkerAvailableLocked();
     }
-    currentNode_ = LOCAL_WORKER;
 
     LOG(INFO) << "[Switch] Rediscovered and reconnected to local worker at " << newAddress.ToString();
     return true;
 }
 
-bool ObjectClientImpl::ReadyToExit(WorkerNode node)
+bool ObjectClientImpl::ReadyToExit(WorkerNode node, const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                   const std::shared_ptr<client::ListenWorker> &listenWorker)
 {
-    if (!workerApi_[node] || !listenWorker_[node]) {
+    if (!workerApi || !listenWorker) {
         return true;
     }
 
-    auto count = workerApi_[node]->InvokeCount();
-    auto status = listenWorker_[node]->CheckWorkerAvailable();
+    auto count = workerApi->InvokeCount();
+    auto status = listenWorker->CheckWorkerAvailable();
     if (status.IsOk() && count > 0) {
         LOG(INFO) << FormatString("[Switch] Client %d Still have %d invoke count need to process", node, count);
         return false;
     }
     if (status.IsOk()) {
-        (void)workerApi_[node]->Disconnect(false);
+        (void)workerApi->Disconnect(false);
     }
-    listenWorker_[node]->StopListenWorker(true);
+    listenWorker->StopListenWorker(true);
     return true;
 }
 
@@ -998,6 +1160,9 @@ bool ObjectClientImpl::WaitStandbyWorkerReady(const std::shared_ptr<IClientWorke
 Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi> &workerApi)
 {
     std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (workerSwitchState_ == WorkerSwitchState::NO_SWITCHABLE_WORKER) {
+        return NoSwitchableWorkerStatus();
+    }
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
     if (workerApi == nullptr) {
@@ -1011,6 +1176,9 @@ Status ObjectClientImpl::GetAvailableWorkerApi(std::shared_ptr<IClientWorkerApi>
                                                std::unique_ptr<Raii> &raii)
 {
     std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    if (workerSwitchState_ == WorkerSwitchState::NO_SWITCHABLE_WORKER) {
+        return NoSwitchableWorkerStatus();
+    }
     WorkerNode id = currentNode_;
     workerApi = workerApi_[id];
     if (workerApi == nullptr) {
