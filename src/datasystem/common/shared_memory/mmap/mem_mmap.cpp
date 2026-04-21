@@ -53,6 +53,10 @@ DS_DEFINE_bool(enable_fallocate, true,
                "fallocate is employed to link the client and worker nodes for shared memory,"
                "Enabling fallocate will lower the efficiency of memory allocation"
                "By default, fallocate is enabled.");
+DS_DEFINE_bool(
+    enable_thp, false,
+    "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) "
+    "can enhance performance and reduce page table overhead, but it may also lead to increased memory usage");
 
 namespace datasystem {
 namespace memory {
@@ -87,6 +91,12 @@ Status MemMmap::Initialize(uint64_t size, bool populate, bool hugepage)
     }
     type_ = "memory";
     RETURN_IF_NOT_OK(SetupFileMapping(size, flags, true));
+    if (FLAGS_enable_thp && !hugepage) {
+        int ret = madvise(pointer_, mmapSize_, MADV_HUGEPAGE);
+        if (ret != 0) {
+            LOG(WARNING) << "madvise HUGEPAGE " << type_ << " failed: " << StrErr(errno);
+        }
+    }
     const std::string &policy = FLAGS_shared_memory_distribution_policy;
     if (IsUrmaEnabled() && IsRegisterWholeArenaEnabled()
         && (policy == "interleave_all_numa" || policy == "interleave_affinity_numa")) {
