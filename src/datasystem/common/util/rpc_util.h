@@ -174,7 +174,7 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         VLOG(1) << "retryCount: " << retryCount << ", retryIntervalMs: " << retryIntervalMs
                 << ", remainTimeMs: " << remainTimeMs;
 
-        if (remainTimeMs < minOnceRpcTimeoutMs) {
+        if (remainTimeMs <= minOnceRpcTimeoutMs) {
             // If the remaining time is not enough to execute the function once, here need to exit.
             break;
         }
