@@ -38,15 +38,15 @@ class ShmLeakMetricsPhase2Test : public ShmLeakMetricsTestBase {};
 // ── [BASIC] all 8 phase-2 metrics registered and zero ────────────────────────
 TEST_F(ShmLeakMetricsPhase2Test, all_phase2_metrics_registered_and_zero)
 {
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_remove_client_refs_total=0"), std::string::npos);
-    EXPECT_NE(s.find("worker_object_erase_total=0"), std::string::npos);
-    EXPECT_NE(s.find("master_object_meta_table_size=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_pending_size=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_fire_total=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_delete_success_total=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_delete_failed_total=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_retry_total=0"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_remove_client_refs_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "worker_object_erase_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_object_meta_table_size", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_pending_size", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_fire_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_delete_success_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_delete_failed_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_retry_total", "total"), 0);
 }
 
 // ── [BASIC] descriptor count covers phase-2 metrics ──────────────────────────
@@ -64,9 +64,9 @@ TEST_F(ShmLeakMetricsPhase2Test, worker_remove_client_and_object_erase_counters)
     Cnt(metrics::KvMetricId::WORKER_OBJECT_ERASE_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_OBJECT_ERASE_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_OBJECT_ERASE_TOTAL).Inc();
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("worker_remove_client_refs_total=7"), std::string::npos);
-    EXPECT_NE(s.find("worker_object_erase_total=3"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "worker_remove_client_refs_total", "total"), 7);
+    EXPECT_EQ(Scalar(s, "worker_object_erase_total", "total"), 3);
 }
 
 // ── [MASTER-METATABLE] periodic Gauge.Set replay ─────────────────────────────
@@ -79,8 +79,8 @@ TEST_F(ShmLeakMetricsPhase2Test, master_meta_table_size_gauge_replays_size)
     g.Set(150);
     g.Set(200);
     g.Set(180);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("master_object_meta_table_size=180"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "master_object_meta_table_size", "total"), 180);
 }
 
 // ── [MASTER-TTL] pending Gauge round-trip: insert N, fire all → returns to 0 ──
@@ -93,16 +93,16 @@ TEST_F(ShmLeakMetricsPhase2Test, master_ttl_pending_round_trip)
         pending.Inc();
     }
     {
-        auto s = metrics::DumpSummaryForTest();
-        EXPECT_NE(s.find("master_ttl_pending_size=" + std::to_string(kN)), std::string::npos);
+        auto s = DumpSummaryJson();
+        EXPECT_EQ(Scalar(s, "master_ttl_pending_size", "total"), kN);
     }
     // GetExpiredObject pulls them all out; FIRE counter increments by kN.
     Cnt(metrics::KvMetricId::MASTER_TTL_FIRE_TOTAL).Inc(kN);
     pending.Dec(kN);
     {
-        auto s = metrics::DumpSummaryForTest();
-        EXPECT_NE(s.find("master_ttl_pending_size=0"), std::string::npos);
-        EXPECT_NE(s.find("master_ttl_fire_total=" + std::to_string(kN)), std::string::npos);
+        auto s = DumpSummaryJson();
+        EXPECT_EQ(Scalar(s, "master_ttl_pending_size", "total"), 0);
+        EXPECT_EQ(Scalar(s, "master_ttl_fire_total", "total"), kN);
     }
 }
 
@@ -116,10 +116,10 @@ TEST_F(ShmLeakMetricsPhase2Test, master_ttl_fire_equals_success_plus_failed)
     Cnt(metrics::KvMetricId::MASTER_TTL_FIRE_TOTAL).Inc(kFire);
     Cnt(metrics::KvMetricId::MASTER_TTL_DELETE_SUCCESS_TOTAL).Inc(kSuccess);
     Cnt(metrics::KvMetricId::MASTER_TTL_DELETE_FAILED_TOTAL).Inc(kFailed);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("master_ttl_fire_total=" + std::to_string(kFire)), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_delete_success_total=" + std::to_string(kSuccess)), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_delete_failed_total=" + std::to_string(kFailed)), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "master_ttl_fire_total", "total"), kFire);
+    EXPECT_EQ(Scalar(s, "master_ttl_delete_success_total", "total"), kSuccess);
+    EXPECT_EQ(Scalar(s, "master_ttl_delete_failed_total", "total"), kFailed);
 }
 
 // ── [MASTER-TTL] retry counter + pending Gauge re-grow on failure backlog ────
@@ -130,9 +130,9 @@ TEST_F(ShmLeakMetricsPhase2Test, master_ttl_retry_and_pending_grow_on_failure)
     constexpr int kFail = 25;
     Cnt(metrics::KvMetricId::MASTER_TTL_RETRY_TOTAL).Inc(kFail);
     pending.Inc(kFail);
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("master_ttl_retry_total=" + std::to_string(kFail)), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_pending_size=" + std::to_string(kFail)), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "master_ttl_retry_total", "total"), kFail);
+    EXPECT_EQ(Scalar(s, "master_ttl_pending_size", "total"), kFail);
 }
 
 // ── [LEAK-SHAPE] TTL chain stuck pattern: pending grows, fire stagnant ───────
@@ -143,10 +143,10 @@ TEST_F(ShmLeakMetricsPhase2Test, ttl_chain_stuck_shape)
     auto pending = Gge(metrics::KvMetricId::MASTER_TTL_PENDING_SIZE);
     pending.Inc(500);
     // intentionally NO FIRE/SUCCESS/FAILED bumps
-    auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("master_ttl_pending_size=500"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_fire_total=0"), std::string::npos);
-    EXPECT_NE(s.find("master_ttl_delete_success_total=0"), std::string::npos);
+    auto s = DumpSummaryJson();
+    EXPECT_EQ(Scalar(s, "master_ttl_pending_size", "total"), 500);
+    EXPECT_EQ(Scalar(s, "master_ttl_fire_total", "total"), 0);
+    EXPECT_EQ(Scalar(s, "master_ttl_delete_success_total", "total"), 0);
     pending.Dec(500);  // cleanup so test does not leak across cases
 }
 
