@@ -74,8 +74,16 @@ def validate_range_arguments(args: Any):
         logger.error(f"client_num must be between 1 and 128.")
         return False
 
-    if args.thread_num is not None and args.thread_num <= 0:
-        logger.error(f"thread_num must be greater than 0.")
+    if args.thread_num is not None and not 1 <= args.thread_num <= 128:
+        logger.error(f"thread_num must be between 1 and 128.")
+        return False
+
+    if (
+        args.client_num is not None
+        and args.thread_num is not None
+        and args.client_num * args.thread_num > 128
+    ):
+        logger.error(f"client_num * thread_num must be between 1 and 128.")
         return False
 
     if args.batch_num is not None and not 1 <= args.batch_num <= 10000:
