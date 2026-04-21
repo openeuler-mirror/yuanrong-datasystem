@@ -194,14 +194,16 @@ class KVCommand(BenchmarkBaseCommand):
             "--client_num",
             type=int,
             default=None,
-            help="Number of clients per worker (default: 8, max 128)",
+            help="Number of clients per worker (default: 8, range: 1-128). "
+            "client_num * thread_num must be between 1 and 128.",
         )
         parser.add_argument(
             "-t",
             "--thread_num",
             type=int,
             default=None,
-            help="Number of threads per client (default: 1)",
+            help="Number of threads per client (default: 1, range: 1-128). "
+            "client_num * thread_num must be between 1 and 128.",
         )
         parser.add_argument(
             "-b",

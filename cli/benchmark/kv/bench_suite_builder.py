@@ -115,9 +115,16 @@ def validate_kv_args_config(tc_config: dict):
             )
             return False
 
-        if thread_num_int <= 0:
+        if not (1 <= thread_num_int <= 128):
             logger.error(
-                f"Parameter 'thread_num' value '{thread_val}' must be greater than 0. Config: {tc_config}"
+                f"Parameter 'thread_num' value '{thread_val}' must be between 1 and 128. Config: {tc_config}"
+            )
+            return False
+
+        if client_num_int * thread_num_int > 128:
+            logger.error(
+                "Parameter 'client_num * thread_num' must be between 1 and 128. "
+                f"Config: {tc_config}"
             )
             return False
 
