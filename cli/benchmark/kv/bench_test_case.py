@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from ast import Tuple
 import csv
 import logging
 import os
@@ -113,6 +114,7 @@ class KVBenchTestCase(BenchTestCase):
             "access_key": args.access_key,
             "secret_key": args.secret_key,
             "numa": args.numa,
+            "skip_local": args.skip_local,
         }
         return command_args
 
@@ -200,7 +202,7 @@ class KVBenchTestCase(BenchTestCase):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "set"
             command_args["worker_address"] = worker_address
-            command_args["worker_num"] = index
+            command_args["worker_index"] = index
 
             task = self.add_task_from_command_args(command_args)
             if task:
@@ -219,7 +221,7 @@ class KVBenchTestCase(BenchTestCase):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "prefill"
             command_args["worker_address"] = worker_address
-            command_args["worker_num"] = index
+            command_args["worker_index"] = index
 
             task = self.add_task_from_command_args(command_args)
             if task:
@@ -229,14 +231,26 @@ class KVBenchTestCase(BenchTestCase):
             parallel_task = BenchParallelCommandTask(set_tasks)
             self.add_task(parallel_task)
 
+    @staticmethod
+    def _get_worker_index(worker_address: str, worker_list: list[str]) -> int:
+        """Returns the index of worker_address in worker_list, or -1 if not found."""
+        try:
+            return worker_list.index(worker_address)
+        except ValueError:
+            return -1
+
+
     def add_get_task(self, kv_args: KVArgs):
         """Adds 'get' tasks for all configured 'get' worker nodes, sorted by worker_address."""
+        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
         get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
         get_tasks = []
         for worker_address in get_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
-            command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
+            command_args["worker_num"] = len(set_workers)
+            # For --skip_local in get, worker_index must map to the same-address worker in set_worker_addresses.
+            command_args["worker_index"] = self._get_worker_index(worker_address, set_workers)
             command_args["worker_address"] = worker_address
             task = self.add_task_from_command_args(command_args)
             if task:
@@ -257,17 +271,18 @@ class KVBenchTestCase(BenchTestCase):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "set"
             command_args["worker_address"] = worker_address
-            command_args["worker_num"] = index
+            command_args["worker_index"] = index
             task = self.add_task_from_command_args(command_args)
             if task:
                 concurrent_tasks.append(task)
 
+        set_workers_count = len(self.bench_args.args.set_worker_addresses.split(","))
         for worker_address in get_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
-            command_args["worker_num"] = len(
-                self.bench_args.args.set_worker_addresses.split(",")
-            )
+            command_args["worker_num"] = len(set_workers)
+            # For --skip_local in get, worker_index must map to the same-address worker in set_worker_addresses.
+            command_args["worker_index"] = self._get_worker_index(worker_address, set_workers)
             command_args["worker_address"] = worker_address
             task = self.add_task_from_command_args(command_args)
             if task:
@@ -280,7 +295,7 @@ class KVBenchTestCase(BenchTestCase):
     def add_del_task(self, kv_args: KVArgs):
         """Adds 'del' tasks for the first configured 'del' worker node."""
         del_workers = self.bench_args.args.get_worker_addresses.split(",")
-        for worker_address in del_workers:
+        for worker_index, worker_address in enumerate(del_workers):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "del"
             command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))

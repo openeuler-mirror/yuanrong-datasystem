@@ -87,7 +87,8 @@ class BenchCommandTask(BenchTask):
                     continue
                 args_list.append(f"{prefix}{key}={shlex.quote(val)}")
             elif isinstance(val, bool):
-                args_list.append(f"{prefix}{key}={str(val).lower()}")
+                if val:
+                    args_list.append(f"{prefix}{key}")
             elif isinstance(val, int):
                 args_list.append(f"{prefix}{key}={val}")
             else:

@@ -35,6 +35,8 @@ struct KVArgs : public ArgsBase {
     std::string keySize;
     uint64_t batchNum;
     int workerNum;
+    int workerIndex;
+    bool skipLocal;
 };
 }  // namespace bench
 }  // namespace datasystem

@@ -28,7 +28,14 @@
 namespace datasystem {
 namespace bench {
 KVArgs::KVArgs(const std::string &command)
-    : ArgsBase(command), keyPrefix("Bench"), keyNum(1), keySize("1KB"), batchNum(1), workerNum(0)
+    : ArgsBase(command),
+      keyPrefix("Bench"),
+      keyNum(1),
+      keySize("1KB"),
+      batchNum(1),
+      workerNum(0),
+      workerIndex(0),
+      skipLocal(false)
 {
 }
 
@@ -50,7 +57,9 @@ std::string KVArgs::Usage(const std::string &argv0)
     ss << "  -P --perf_workers    Get or reset perf point for those workers\n";
     ss << "  -k --access_key      Access key for authentication\n";
     ss << "  -K --secret_key      Secret key for authentication\n";
-    ss << "  -W --worker_num      Worker number, used for key generation and range fetching (default: 0)\n";
+    ss << "  -W --worker_num      Worker number, used for key range fetching (default: 0)\n";
+    ss << "  -I --worker_index    Worker index, used for key generation (default: 0)\n";
+    ss << "  --skip_local         Skip local worker data during get operations (default: false)\n";
     ss << "  -h                   Show help\n";
     return ss.str();
 }
@@ -71,12 +80,16 @@ std::string KVArgs::ToString()
     ss << "  -P --perf_workers:   " << perfWorkers << "\n";
     ss << "  -k --access_key:     " << accessKey << "\n";
     ss << "  -K --secret_key:     " << secretKey << "\n";
-    ss << "  -W --worker_num:     " << workerNum;
+    ss << "  -W --worker_num:     " << workerNum << "\n";
+    ss << "  -I --worker_index:   " << workerIndex << "\n";
+    ss << "  --skip_local:     " << (skipLocal ? "true" : "false");
     return ss.str();
 }
 
 Status KVArgs::Parse(int argc, char *argv[])
 {
+    const int SKIP_LOCAL = 1;
+    // clang-format off
     static const struct option longOptions[] = {
         { "action", required_argument, nullptr, 'a' },       { "worker_address", required_argument, nullptr, 'w' },
         { "owner_worker", required_argument, nullptr, 'o' }, { "prefix", required_argument, nullptr, 'p' },
@@ -86,11 +99,12 @@ Status KVArgs::Parse(int argc, char *argv[])
         { "show_args", required_argument, nullptr, 'S' },    { "perf_path", required_argument, nullptr, 'f' },
         { "perf_workers", required_argument, nullptr, 'P' }, { "access_key", required_argument, nullptr, 'k' },
         { "secret_key", required_argument, nullptr, 'K' },   { "version", no_argument, nullptr, 'v' },
-        { "worker_num", required_argument, nullptr, 'W' },   { "help", no_argument, nullptr, 'h' }
+        { "worker_num", required_argument, nullptr, 'W' },   { "worker_index", required_argument, nullptr, 'I' },
+        { "skip_local", no_argument, nullptr, SKIP_LOCAL },  { "help", no_argument, nullptr, 'h' }
     };
-
+    // clang-format on
     while (true) {
-        auto c = getopt_long(argc - 1, argv + 1, "ha:w:o:p:c:n:t:b:s:P:f:k:K:W:", longOptions, nullptr);
+        auto c = getopt_long(argc - 1, argv + 1, "ha:w:o:p:c:n:t:b:s:P:f:k:K:W:I", longOptions, nullptr);
         if (c == -1) {
             break;
         }
@@ -137,6 +151,12 @@ Status KVArgs::Parse(int argc, char *argv[])
                 break;
             case 'W':
                 rc = StrToInt(optarg, workerNum);
+                break;
+            case 'I':
+                rc = StrToInt(optarg, workerIndex);
+                break;
+            case SKIP_LOCAL:
+                skipLocal = true;
                 break;
             default:
                 std::cout << Usage(argv[0]);

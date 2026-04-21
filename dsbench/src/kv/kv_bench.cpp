@@ -60,9 +60,14 @@ Status KVBench::Prepare()
     auto totalThreadNum = args_.clientNum * args_.threadNum;
     std::vector<std::string> keys;
     if (args_.action == "set" || args_.action == "prefill") {
+        args_.skipLocal = false;
         GenerateSetKeys(keys);
-    } else if (args_.action == "get" || args_.action == "del") {
-        CHECK_FAIL_RETURN_STATUS(args_.workerNum >= 0, K_INVALID, "worker_index must >= 0");
+    } else if (args_.action == "get") {
+        CHECK_FAIL_RETURN_STATUS(args_.workerNum > 0, K_INVALID, "worker_index must > 0");
+        GenerateGetOrDelKeys(keys);
+    } else if (args_.action == "del") {
+        CHECK_FAIL_RETURN_STATUS(args_.workerNum > 0, K_INVALID, "worker_index must > 0");
+        args_.skipLocal = false;
         GenerateGetOrDelKeys(keys);
     } else {
         RETURN_STATUS(K_INVALID, "unknown action" + args_.action);
@@ -98,13 +103,13 @@ Status KVBench::Prepare()
     return Status::OK();
 }
 
-void KVBench::GenerateSetKeys(std::vector<std::string> &keys)
+void KVBench::GenerateSetKeys(std::vector<std::string> &keys) const
 {
     keys.reserve(args_.keyNum);
     for (size_t index = 0; index < args_.keyNum; index++) {
         std::stringstream ss;
         ss << args_.keyPrefix;
-        ss << "_s" << args_.workerNum;
+        ss << "_s" << args_.workerIndex;
         ss << "_n" << index;
         if (!args_.ownerId.empty()) {
             ss << ";" << args_.ownerId;
@@ -113,10 +118,13 @@ void KVBench::GenerateSetKeys(std::vector<std::string> &keys)
     }
 }
 
-void KVBench::GenerateGetOrDelKeys(std::vector<std::string> &keys)
+void KVBench::GenerateGetOrDelKeys(std::vector<std::string> &keys) const
 {
     keys.reserve(args_.keyNum * args_.workerNum);
     for (int sid = 0; sid < args_.workerNum; sid++) {
+        if (args_.skipLocal && sid == args_.workerIndex) {
+            continue;
+        }
         for (size_t index = 0; index < args_.keyNum; index++) {
             std::stringstream ss;
             ss << args_.keyPrefix;
@@ -132,7 +140,7 @@ void KVBench::GenerateGetOrDelKeys(std::vector<std::string> &keys)
 
 Status KVBench::PrintBenchmarkInfo()
 {
-    std::cout << "BENCHMARK-RESULT:" << GetBenchCost() << std::endl;
+    std::cout << "BENCHMARK-RESULT:" << GetBenchCost() << "\n";
     return Status::OK();
 }
 
@@ -145,8 +153,18 @@ std::string KVBench::GetBenchCost()
             costVec.emplace_back(cost);
         }
     }
+    uint64_t totalKeyNum;
+    if (args_.action == "set" || args_.action == "prefill") {
+        // For set operations, total keys = keyNum (distributed across threads)
+        totalKeyNum = args_.keyNum;
+    } else if (args_.action == "get") {
+        bool oneWorkerSkipped = args_.skipLocal && args_.workerIndex >= 0;
+        totalKeyNum = args_.keyNum * (args_.workerNum - (oneWorkerSkipped ? 1 : 0));
+    } else {
+        totalKeyNum = args_.keyNum * args_.workerNum;
+    }
     std::stringstream ss;
-    ss << args_.action << "-" << args_.clientNum << "-" << args_.threadNum << "-" << args_.keyNum;
+    ss << args_.action << "-" << args_.clientNum << "-" << args_.threadNum << "-" << totalKeyNum;
     ss << "-" << args_.keySize << "-" << args_.batchNum;
     std::sort(costVec.begin(), costVec.end());
     if (costVec.empty()) {
@@ -167,17 +185,7 @@ std::string KVBench::GetBenchCost()
     const size_t PERCENTILE_100 = 100;
 
     double totalTimeCost = std::accumulate(costVec.begin(), costVec.end(), 0.0);  // MicroSecond
-    uint64_t totalKeyNum;
-    uint64_t totalValueSize;
-    if (args_.action == "set" || args_.action == "prefill") {
-        // For set operations, total keys = keyNum (distributed across threads)
-        totalKeyNum = args_.keyNum;
-        totalValueSize = args_.keyNum * valueSize;  // bytes
-    } else {
-        // For get and del operations, total keys = keyNum * workerNum (distributed across threads)
-        totalKeyNum = args_.keyNum * args_.workerNum;
-        totalValueSize = args_.keyNum * args_.workerNum * valueSize;  // bytes
-    }
+    uint64_t totalValueSize = totalKeyNum * valueSize;                            // bytes
 
     double threadCostSum = std::accumulate(perThreadCost_.begin(), perThreadCost_.end(), 0.0);
     double timeCostPerThread =
@@ -227,12 +235,8 @@ Status KVBench::FetchOwnerId(const std::string &ownerWorkerAddr, const std::stri
     connectOptions.secretKey = secretKey;
 
     KVClient client(connectOptions);
-    auto initStatus = client.Init();
-    if (initStatus.IsError()) {
-        return Status(initStatus.GetCode(), __LINE__, __FILE__,
-                      "Failed to connect to owner_worker: " + ownerWorkerAddr +
-                      ". Please check if owner_worker is correct. Error: " + initStatus.GetMsg());
-    }
+    RETURN_IF_NOT_OK_APPEND_MSG(client.Init(), "Failed to connect to owner_worker: " + ownerWorkerAddr
+                                                   + ". Please check if owner_worker is correct");
 
     std::string key;
     RETURN_IF_NOT_OK(client.GenerateKey("No", key));
