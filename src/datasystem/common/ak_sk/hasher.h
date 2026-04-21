@@ -105,6 +105,15 @@ public:
     Status GetHMACSha256(const SensitiveValue &key, const std::string &data, std::string &sha256);
 
     /**
+     * @brief Get HMAC Sha256 with std::string key. Used by AWS V4 signing key derivation.
+     * @param[in] key The secret key (binary string).
+     * @param[in] data The data to calculate.
+     * @param[out] sha256 The sha256 value (binary, 32 bytes).
+     * @return Status of the call.
+     */
+    Status GetHMACSha256(const std::string &key, const std::string &data, std::string &sha256);
+
+    /**
      * @brief Get HMAC Sha256 Hex.
      * @param[in] key The secret key.
      * @param[in] data The data to calculate.
@@ -112,6 +121,16 @@ public:
      * @return Status of the call.
      */
     Status GetHMACSha256Hex(const SensitiveValue &key, const std::string &data, std::string &sha256);
+
+    /**
+     * @brief Get HMAC Sha256 Hex with std::string key. Used by AWS V4 signature calculation.
+     * @param[in] key The secret key (binary string).
+     * @param[in] data The data to calculate.
+     * @param[out] sha256 The sha256 value with hex encode (64 chars).
+     * @return Status of the call.
+     */
+    Status GetHMACSha256Hex(const std::string &key, const std::string &data, std::string &sha256);
+
     /**
      * @brief Get hash256 with hex encode.
      * @param[in] str The string to hash.

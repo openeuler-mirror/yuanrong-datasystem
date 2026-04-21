@@ -1,6 +1,8 @@
 set(OBS_SRCS
+        aws_v4_signature.cpp
         cloud_service_rotation.cpp
         obs_client.cpp
+        obs_service_detector.cpp
         obs_signature.cpp
         obs_xml_util.cpp)
 

@@ -32,10 +32,56 @@ ds_cc_library(
         "obs_signature.h",
     ],
     deps = [
+        ":obs_signature_provider",
         "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/httpclient:http_request",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:sensitive_value",
         "@boringssl//:ssl",
+    ],
+)
+
+ds_cc_library(
+    name = "obs_signature_provider",
+    hdrs = [
+        "obs_signature_provider.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "aws_v4_signature",
+    srcs = [
+        "aws_v4_signature.cpp",
+    ],
+    hdrs = [
+        "aws_v4_signature.h",
+    ],
+    deps = [
+        ":obs_signature_provider",
+        "//src/datasystem/common/ak_sk:common_ak_sk",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/util:status_helper",
+        "@boringssl//:ssl",
+    ],
+)
+
+ds_cc_library(
+    name = "obs_service_detector",
+    srcs = [
+        "obs_service_detector.cpp",
+    ],
+    hdrs = [
+        "obs_service_detector.h",
+    ],
+    deps = [
+        ":obs_signature_provider",
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
     ],
 )
 
@@ -65,6 +111,7 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:l2cache_client",
         "//src/datasystem/common/l2cache/obs_client:cloud_service_rotation",
         "//src/datasystem/common/l2cache/obs_client:obs_signature",
+        "//src/datasystem/common/l2cache/obs_client:obs_signature_provider",
         "//src/datasystem/common/l2cache/obs_client:obs_xml_util",
         "//src/datasystem/common/metrics/metrics_vector",
         "//src/datasystem/common/util:status_helper",
@@ -82,6 +129,8 @@ ds_cc_library(
     ],
     deps = [
         ":obs_client_header",
+        ":aws_v4_signature",
+        ":obs_service_detector",
         ":obs_signature",
         ":obs_xml_util",
         "//include/datasystem/utils:utils_headers",

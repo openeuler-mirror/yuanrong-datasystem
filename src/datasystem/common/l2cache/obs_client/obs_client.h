@@ -34,6 +34,7 @@
 #include "datasystem/common/l2cache/l2cache_client.h"
 #include "datasystem/common/l2cache/obs_client/cloud_service_rotation.h"
 #include "datasystem/common/l2cache/obs_client/obs_signature.h"
+#include "datasystem/common/l2cache/obs_client/obs_signature_provider.h"
 #include "datasystem/common/l2cache/obs_client/obs_xml_util.h"
 #include "datasystem/common/metrics/metrics_vector/metrics_obs_code_vector.h"
 #include "datasystem/common/util/status_helper.h"
@@ -46,15 +47,6 @@
 namespace datasystem {
 class GetObjectInfoListResp;
 class L2CacheClient;
-
-/**
- * @brief Snapshot of OBS credential used for a single HTTP request.
- */
-struct ObsCredential {
-    std::string ak;
-    std::string sk;
-    std::string token;  // empty for AK/SK mode, non-empty for token rotation mode
-};
 
 class ObsClient : public L2CacheClient {
 public:
@@ -337,6 +329,12 @@ private:
     Status TokenRotationInit();
 
     /**
+     * @brief Detect service type and initialize signature provider.
+     * @return Status of the call.
+     */
+    Status InitSignatureProvider();
+
+    /**
      * @brief Streaming upload. Used for objects of small size.
      * @param[in] body iostream holding object
      * @param[in] size object size
@@ -439,7 +437,7 @@ private:
     Status BatchDeleteObjects(const std::vector<std::string> &objects, size_t beg, size_t end);
 
     /**
-     * @brief Sign an HTTP request with OBS V2 signature.
+     * @brief Sign an HTTP request using the configured signature provider.
      * @param[in] credential AK/SK credential snapshot.
      * @param[in,out] request The HTTP request to sign.
      * @param[in] contentMd5 MD5 of request body (optional).
@@ -501,6 +499,7 @@ private:
     std::shared_ptr<HttpClient> httpClient_;
     std::atomic_bool initialized_{ false };
     MetricsObsCodeVector successRateVec_;
+    std::unique_ptr<ObsSignatureProvider> signatureProvider_;  // Signature provider (OBS V2 or AWS V4)
 };
 }  // namespace datasystem
 #endif

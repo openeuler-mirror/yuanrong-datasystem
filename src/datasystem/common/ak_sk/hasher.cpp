@@ -43,7 +43,7 @@ Status Hasher::HexEncode(std::unique_ptr<unsigned char[]> &inputData, unsigned i
 Status Hasher::HexEncode(std::unique_ptr<unsigned char[]> &inputData, unsigned int inputDataSize,
                          std::unique_ptr<unsigned char[]> &outData, unsigned int &outSize)
 {
-    if (inputDataSize <= 0) {
+    if (inputDataSize == 0) {
         return Status::OK();
     }
     if ((UINT_MAX - 1) / DIVIDE_TO_BYTES < inputDataSize) {
@@ -75,14 +75,14 @@ Status Hasher::HexEncodeForAkSk(std::unique_ptr<unsigned char[]> &inputData, uns
 Status Hasher::HexEncodeForAkSk(std::unique_ptr<unsigned char[]> &inputData, unsigned int inputDataSize,
                                 std::unique_ptr<unsigned char[]> &outData, unsigned int &outSize)
 {
-    if (inputDataSize <= 0) {
+    if (inputDataSize == 0) {
         return Status::OK();
     }
     if ((UINT_MAX - 1) / DIVIDE_TO_BYTES < inputDataSize) {
         RETURN_STATUS(K_RUNTIME_ERROR,
             FormatString("Input data is too large to encode to hex, input size %u.", inputDataSize));
     }
-    outSize = inputDataSize * DIVIDE_TO_BYTES + 1;  // the dest size is 2n + 1
+    outSize = (inputDataSize * DIVIDE_TO_BYTES) + 1;  // the dest size is 2n + 1
     outData = std::make_unique<unsigned char[]>(outSize);
     for (size_t i = 0; i < inputDataSize; i++) {
         size_t offset = i * DIVIDE_TO_BYTES;
@@ -113,7 +113,7 @@ Status Hasher::Hmac(const void *key, int keyLen, std::unique_ptr<unsigned char[]
     const EVP_MD *engine = EVP_sha256();
     outData = std::make_unique<unsigned char[]>(SHA256_DIGEST_LENGTH);
     if (HMAC(engine, key, keyLen, (const unsigned char *)(inputData.get()), inputDataSize, outData.get(), &outSize)
-        == NULL) {
+        == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Failed to calc HMAC for AK/SK");
     }
     return Status::OK();
@@ -129,7 +129,7 @@ Status Hasher::GetHMACSha256(const SensitiveValue &key, const std::string &data,
     unsigned int outSize;
     if (HMAC(engine, key.GetData(), keySize, reinterpret_cast<const unsigned char *>(data.data()), data.size(),
              outData.get(), &outSize)
-        == NULL) {
+        == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Failed to calc HMAC for AK/SK");
     }
     sha256 = std::string((char *)outData.get(), outSize);
@@ -146,10 +146,39 @@ Status Hasher::GetHMACSha256Hex(const SensitiveValue &key, const std::string &da
     unsigned int outSize;
     if (HMAC(engine, key.GetData(), keySize, reinterpret_cast<const unsigned char *>(data.data()), data.size(),
              outData.get(), &outSize)
-        == NULL) {
+        == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Failed to calc HMAC for AK/SK");
     }
     RETURN_IF_NOT_OK(HexEncode(outData, outSize, sha256));
+    return Status::OK();
+}
+
+Status Hasher::GetHMACSha256(const std::string &key, const std::string &data, std::string &sha256)
+{
+    CHECK_FAIL_RETURN_STATUS(key.size() <= INT_MAX, K_INVALID,
+                             FormatString("Key size %zu exceed INT_MAX", key.size()));
+    auto keySize = static_cast<int>(key.size());
+    const EVP_MD *engine = EVP_sha256();
+    std::unique_ptr<unsigned char[]> outData = std::make_unique<unsigned char[]>(SHA256_DIGEST_LENGTH);
+    unsigned int outSize;
+    if (HMAC(engine, key.data(), keySize, reinterpret_cast<const unsigned char *>(data.data()), data.size(),
+             outData.get(), &outSize)
+        == nullptr) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Failed to calc HMAC-SHA256");
+    }
+    sha256 = std::string(reinterpret_cast<char *>(outData.get()), outSize);
+    return Status::OK();
+}
+
+Status Hasher::GetHMACSha256Hex(const std::string &key, const std::string &data, std::string &sha256)
+{
+    std::string binary;
+    RETURN_IF_NOT_OK(GetHMACSha256(key, data, binary));
+    std::unique_ptr<unsigned char[]> binaryData = std::make_unique<unsigned char[]>(binary.size());
+    errno_t ret = memcpy_s(binaryData.get(), binary.size(), binary.data(), binary.size());
+    CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR, "memcpy_s failed in GetHMACSha256Hex");
+    unsigned int binarySize = static_cast<unsigned int>(binary.size());
+    RETURN_IF_NOT_OK(HexEncode(binaryData, binarySize, sha256));
     return Status::OK();
 }
 
@@ -158,7 +187,6 @@ Status Hasher::GetSha256Hex(const std::string &str, std::string &hashVal)
     std::unique_ptr<unsigned char[]> outHashData;
     unsigned int outHashSize;
     RETURN_IF_NOT_OK(HashSHA256(str.c_str(), str.size(), outHashData, outHashSize));
-    std::unique_ptr<unsigned char[]> data;
     RETURN_IF_NOT_OK(HexEncode(outHashData, outHashSize, hashVal));
     return Status::OK();
 }
@@ -190,8 +218,9 @@ Status Hasher::Base64Encode(const std::string &input, std::string &output)
     size_t inputSize = input.size();
     size_t encodedLen = 4 * ((inputSize + 2) / 3);
     output.resize(encodedLen);
-    int actualLen = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(&output[0]),
+    int actualLen = EVP_EncodeBlock(reinterpret_cast<unsigned char *>(output.data()),
                     reinterpret_cast<const unsigned char *>(input.data()), static_cast<int>(input.size()));
+    CHECK_FAIL_RETURN_STATUS(actualLen >= 0, K_RUNTIME_ERROR, "EVP_EncodeBlock (Base64) failed.");
     output.resize(actualLen);
     while (!output.empty() && (output.back() == '\n' || output.back() == '\r' || output.back() == '\0')) {
         output.pop_back();
@@ -210,7 +239,9 @@ Status Hasher::GetMD5(const std::string &data, std::string &output)
 {
     unsigned char result[EVP_MAX_MD_SIZE];
     unsigned int resultLen = 0;
-    EVP_Digest(data.data(), data.size(), result, &resultLen, EVP_md5(), nullptr);
+    CHECK_FAIL_RETURN_STATUS(
+        EVP_Digest(data.data(), data.size(), result, &resultLen, EVP_md5(), nullptr) == 1,
+        K_RUNTIME_ERROR, "EVP_Digest (MD5) failed.");
     output.assign(reinterpret_cast<char *>(result), resultLen);
     return Status::OK();
 }

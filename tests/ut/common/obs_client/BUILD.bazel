@@ -42,3 +42,25 @@ ds_cc_test(
         "//src/datasystem/common/log:common_log",
     ],
 )
+
+ds_cc_test(
+    name = "aws_v4_signature_test",
+    srcs = ["aws_v4_signature_test.cpp"],
+    deps = [
+        "//src/datasystem/common/l2cache/obs_client:aws_v4_signature",
+        "//src/datasystem/common/ak_sk:common_ak_sk",
+        "//src/datasystem/common/httpclient:http_request",
+        "//src/datasystem/common/log:common_log",
+    ],
+)
+
+ds_cc_test(
+    name = "obs_service_detector_test",
+    srcs = ["obs_service_detector_test.cpp"],
+    deps = [
+        "//src/datasystem/common/l2cache/obs_client:obs_service_detector",
+        "//src/datasystem/common/httpclient:curl_http_client",
+        "//src/datasystem/common/httpclient:http_response",
+        "//src/datasystem/common/log:common_log",
+    ],
+)
