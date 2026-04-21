@@ -25,9 +25,7 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <memory>
-#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -39,13 +37,11 @@
 
 namespace datasystem {
 
-class UcpManager;
-
 class UcpWorkerPool {
 public:
     UcpWorkerPool() = default;
 
-    explicit UcpWorkerPool(const ucp_context_h &ucpContext, UcpManager *manager, uint32_t workerN);
+    explicit UcpWorkerPool(const ucp_context_h &ucpContext, uint32_t workerN);
     virtual ~UcpWorkerPool();
 
     /**
@@ -70,7 +66,7 @@ public:
      */
     virtual Status Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
                          const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
-                         size_t localSegSize, uint64_t requestID);
+                         size_t localSegSize, uint64_t requestID, std::shared_ptr<Event> event = nullptr);
 
     /**
      * @brief Asynchronously write multiple memory segments to a contiguous remote memory region using IOV mode.
@@ -83,7 +79,8 @@ public:
      * @return Status::OK() if successfully executed write, otherwise error message.
      */
     virtual Status WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
-                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID);
+                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID,
+                          std::shared_ptr<Event> event = nullptr);
 
     /**
      * @brief Obtain the worker that previously talked with this IP, or assign a new one
@@ -100,20 +97,16 @@ public:
     virtual Status RemoveByIp(const std::string &ipAddr);
 
 private:
-    UcpWorker *GetOrSelSendWorker(const std::string &ipAddr);
+    UcpWorker *GetOrSelSendWorker(const std::string &ipAddr, uint64_t requestID);
 
     void Clean();
 
     // env variables
     ucp_context_h context_;
-    UcpManager *manager_;
     uint32_t workerN_;
 
     // all worker info. key: worker index; value: UcpWorker
     std::unordered_map<uint32_t, std::shared_ptr<UcpWorker>> localWorkerPool_;
-
-    // worker for sending. key: remote IP address; value: pointer to an existing UcpWorker for sending
-    std::unordered_map<std::string, UcpWorker *> localWorkerSendMap_;
 
     // worker for receiving. key: remote IP address; value: ucp worker address for receiving
     std::unordered_map<std::string, std::string> localWorkerRecvMap_;
@@ -123,7 +116,6 @@ private:
 
     // locks
     std::shared_mutex recvMapMutex_;  // protect localWorkerRecvMap_
-    std::shared_mutex sendMapMutex_;  // protect localWorkerPool_
 };
 }  // namespace datasystem
 

@@ -22,6 +22,7 @@
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/constants.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/ucp_manager.h"
@@ -31,22 +32,30 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
 
-#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <shared_mutex>
 
-constexpr uint32_t DEFAULT_UCP_WORKER_NUM = 4;
+constexpr uint32_t DEFAULT_UCP_WORKER_NUM = 2;
 constexpr uint64_t MAX_MSG_SIZE = 512 * 1024 * 1024;
+constexpr char UCP_WORKER_NUM_ENV[] = "DATASYSTEM_UCP_SEND_WORKER_NUM";
 
 namespace datasystem {
+namespace {
+uint32_t GetUcpWorkerNum()
+{
+    static const uint32_t workerNum = GetUint32FromEnv(UCP_WORKER_NUM_ENV, DEFAULT_UCP_WORKER_NUM);
+    return workerNum;
+}
+}  // namespace
+
 UcpManager &UcpManager::Instance()
 {
     static UcpManager manager;
     return manager;
 }
 
-UcpManager::UcpManager() : localSegmentMap_(std::make_unique<UcpSegmentMap>()), eventMap_(std::make_unique<EventMap>())
+UcpManager::UcpManager() : localSegmentMap_(std::make_unique<UcpSegmentMap>())
 {
     uniqueInstanceId_ = GetStringUuid();
     VLOG(RPC_LOG_LEVEL) << "UcpManager::UcpManager()";
@@ -57,7 +66,7 @@ UcpManager::~UcpManager()
     VLOG(RPC_LOG_LEVEL) << "UcpManager::~UcpManager()";
     workerPool_.reset();
     localSegmentMap_.reset();
-    eventMap_.reset();
+    eventMap_.clear();
     UcpDeleteContext();
     ucp_dlopen::Cleanup();
     VLOG(RPC_LOG_LEVEL) << "UcpManager::~UcpManager() done";
@@ -122,7 +131,7 @@ Status UcpManager::UcpDeleteContext()
 Status UcpManager::UcpCreateWorkerPool()
 {
     LOG(INFO) << "UcpManager::UcpCreateWorkerPool()";
-    workerPool_ = std::make_unique<UcpWorkerPool>(ucpContext_, this, DEFAULT_UCP_WORKER_NUM);
+    workerPool_ = std::make_unique<UcpWorkerPool>(ucpContext_, GetUcpWorkerNum());
     Status status = workerPool_->Init();
     if (!status.IsOk()) {
         UcpDeleteContext();
@@ -176,7 +185,11 @@ Status UcpManager::FillUcpInfoImpl(uint64_t segAddress, uint64_t dataOffset, con
     RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, 0, constAccessor));
     auto &segment = constAccessor.entry->data;
     ucpInfo.set_rkey(segment.GetPackedRkey());
-    ucpInfo.set_remote_worker_addr(GetRecvWorkerAddress(srcIpAddr));
+    std::string recvWorkerAddr = GetRecvWorkerAddress(srcIpAddr);
+    if (recvWorkerAddr.empty()) {
+        RETURN_STATUS_LOG_ERROR(K_RDMA_ERROR, FormatString("Failed to get UCP recv worker address for %s", srcIpAddr));
+    }
+    ucpInfo.set_remote_worker_addr(std::move(recvWorkerAddr));
     return Status::OK();
 }
 
@@ -203,9 +216,9 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
     const std::string &remoteWorkerAddr = ucpInfo.remote_worker_addr();
     const uint64_t &remoteBuf = ucpInfo.remote_buf();
     const std::string &rkey = ucpInfo.rkey();
-    const std::string &remoteIpAddr =
+    const std::string remoteIpAddr =
         ucpInfo.remote_ip_addr().host() + ":" + std::to_string(ucpInfo.remote_ip_addr().port());
-    LOG(INFO) << "UcpPutPayload to " << remoteIpAddr;
+    VLOG(1) << "UcpPutPayload to " << remoteIpAddr;
     PerfPoint point(PerfKey::RDMA_TOTAL_WRITE);
     uint64_t writtenSize = 0;
     uint64_t remainSize = readSize;
@@ -216,10 +229,10 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
         const uint64_t dst = remoteBuf + readOffset + writtenSize;
         std::shared_ptr<Event> event;
         RETURN_IF_NOT_OK(CreateEvent(key, event));
-        Status status = workerPool_->Write(rkey, dst, remoteWorkerAddr, remoteIpAddr, src, writeSize, key);
+        Status status = workerPool_->Write(rkey, dst, remoteWorkerAddr, remoteIpAddr, src, writeSize, key, event);
         if (!status.IsOk()) {
-            std::string detailed_msg = FormatString("Failed to ucp write object with key = %zu. Underlying error: %s",
-                                                    key, status.ToString().c_str());
+            std::string detailed_msg = FormatString(
+                "Failed to ucp write object with key = %zu. Underlying error: %s", key, status.ToString().c_str());
             RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, detailed_msg);
         }
         eventKeys.emplace_back(key);
@@ -272,7 +285,7 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
     std::shared_ptr<Event> event;
     RETURN_IF_NOT_OK(CreateEvent(key, event));
 
-    Status status = workerPool_->WriteN(rkey, remoteBaseAddr, remoteWorkerAddr, remoteIpAddr, segments, key);
+    Status status = workerPool_->WriteN(rkey, remoteBaseAddr, remoteWorkerAddr, remoteIpAddr, segments, key, event);
     if (!status.IsOk()) {
         std::string detailed_msg = FormatString(
             "Failed to ucp gather write object with key = %zu. Underlying error: %s", key, status.ToString().c_str());
@@ -312,32 +325,9 @@ Status UcpManager::CheckUcpConnectionStable(const std::string &hostAddress, cons
         std::unique_lock<std::mutex> lock(instanceTableMutex_);
         instanceTable_[hostAddress] = instanceId;
     } else {
-        LOG(INFO) << "Successfully checked that ucp connection is stable";
+        VLOG(1) << "Successfully checked that ucp connection is stable";
     }
     return Status::OK();
-}
-
-void UcpManager::InsertSuccessfulEvent(uint64_t requestId)
-{
-    std::shared_ptr<Event> event;
-    if (GetEvent(requestId, event).IsOk()) {
-        event->NotifyAll();
-        VLOG(1) << "[UcpEventHandler] Notifying successful request id: " << requestId;
-    } else {
-        LOG(ERROR) << "UcpManager::InsertSuccessfulEvent " << requestId << " not found in event map";
-    }
-}
-
-void UcpManager::InsertFailedEvent(uint64_t requestId)
-{
-    std::shared_ptr<Event> event;
-    if (GetEvent(requestId, event).IsOk()) {
-        event->SetFailed();
-        event->NotifyAll();
-        VLOG(1) << "[UcpEventHandler] Notifying failed request id: " << requestId;
-    } else {
-        LOG(ERROR) << "UcpManager::InsertFailedEvent " << requestId << " not found in event map";
-    }
 }
 
 Status UcpManager::RemoveEndpoint(const HostPort &remoteAddress)
@@ -380,10 +370,9 @@ Status UcpManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 
 Status UcpManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    if (eventMap_->Find(accessor, requestId)) {
-        event = accessor.entry->data;
+    TbbUcpEventMap::const_accessor accessor;
+    if (eventMap_.find(accessor, requestId)) {
+        event = accessor->second;
         return Status::OK();
     }
     // Can happen if event is not yet inserted by sender thread.
@@ -392,26 +381,21 @@ Status UcpManager::GetEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 
 Status UcpManager::CreateEvent(uint64_t requestId, std::shared_ptr<Event> &event)
 {
-    LOG(INFO) << "UcpManager::CreateEvent()";
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    auto res = eventMap_->Insert(accessor, requestId);
+    VLOG(1) << "UcpManager::CreateEvent()";
+    TbbUcpEventMap::accessor accessor;
+    auto res = eventMap_.insert(accessor, requestId);
     if (!res) {
         // If this happens that means requestId is duplicated.
         RETURN_STATUS_LOG_ERROR(K_DUPLICATED, FormatString("Request id %d already exists in event map", requestId));
     } else {
         event = std::make_shared<Event>(requestId);
-        accessor.entry->data = event;
+        accessor->second = event;
     }
     return Status::OK();
 }
 
 void UcpManager::DeleteEvent(uint64_t requestId)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(eventMapMutex_);
-    EventMap::Accessor accessor;
-    if (eventMap_->Find(accessor, requestId)) {
-        eventMap_->BlockingErase(accessor);
-    }
+    eventMap_.erase(requestId);
 }
 }  // namespace datasystem

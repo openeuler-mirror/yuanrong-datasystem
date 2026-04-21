@@ -1110,6 +1110,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             [&workerStub, &reqPb, &rspPb, &clientApi, &address, this](int32_t) {
                 RETURN_IF_NOT_OK(workerStub->GetObjectRemote(&clientApi));
                 RETURN_IF_NOT_OK(workerStub->GetObjectRemoteWrite(clientApi, reqPb));
+
                 auto rc = clientApi->Read(rspPb);
                 RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                 return Status::OK();
@@ -1156,7 +1157,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
     rpcPoint.Record();
-    LOG(INFO) << "Remote get success";
+    VLOG(1) << "Remote get success";
     return Status::OK();
 }
 
@@ -1651,7 +1652,7 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
     LOG(INFO) << "Query metadata from master: " << masterAddr << ", objects: " << VectorToString(objectKeys)
-              << ", request id: " << queryReqId;
+            << ", request id: " << queryReqId;
     *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
     req.set_request_id(queryReqId);
     req.set_redirect(redirect);

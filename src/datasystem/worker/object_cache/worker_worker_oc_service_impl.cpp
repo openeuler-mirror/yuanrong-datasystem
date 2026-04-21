@@ -615,8 +615,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     LOG(INFO) << "BatchGetObjectRemote request (objectKey, requestId, readOffset, readSize): "
-              << VectorToString(req.requests()) << " remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
-              << "ms";
+            << VectorToString(req.requests()) << " remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
+            << "ms";
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));

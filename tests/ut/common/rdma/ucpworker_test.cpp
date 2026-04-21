@@ -34,9 +34,9 @@
 #include "common/rdma/mimic_remote_server.h"
 #include "common/rdma/prepare_local_server.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/rdma/ucp_endpoint.h"
-#include "datasystem/common/rdma/ucp_manager.h"
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 #define private public
 #include "datasystem/common/rdma/ucp_worker.h"
@@ -51,7 +51,6 @@ protected:
     std::string message_ = "Das ist gut";
 
     std::unique_ptr<MimicRemoteServer> remoteServer_;
-    UcpManager *ucpManager_{ nullptr };
     std::unique_ptr<CreateUcpContext> cUcpContext_;
     std::unique_ptr<PrepareLocalServer> localBuffer_;
 
@@ -63,7 +62,6 @@ protected:
     {
         bool dlopenInitResult = datasystem::ucp_dlopen::Init();
         EXPECT_EQ(dlopenInitResult, true);
-        ucpManager_ = &UcpManager::Instance();
         cUcpContext_ = std::make_unique<CreateUcpContext>();
         context_ = cUcpContext_->GetContext();
 
@@ -73,11 +71,11 @@ protected:
 
         localBuffer_ = std::make_unique<PrepareLocalServer>(context_, message_);
 
-        ucpWorker_ = std::make_shared<UcpWorker>(context_, ucpManager_, 0);
-        EXPECT_EQ(ucpWorker_->progressThread_, nullptr);
+        ucpWorker_ = std::make_shared<UcpWorker>(context_, 0);
+        EXPECT_EQ(ucpWorker_->submitThread_, nullptr);
         Status status = ucpWorker_->Init();
         ASSERT_EQ(status, Status::OK());
-        EXPECT_TRUE(ucpWorker_->progressThread_->joinable());
+        EXPECT_TRUE(ucpWorker_->submitThread_->joinable());
     }
 
     void TearDown() override
@@ -86,7 +84,6 @@ protected:
         remoteServer_.reset();
         localBuffer_.reset();
         ucpWorker_.reset();
-        ucpManager_ = nullptr;
         cUcpContext_.reset();
         auto end = std::chrono::steady_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -106,7 +103,7 @@ TEST_F(UcpWorkerTest, TestInitialization)
     EXPECT_EQ(res1, res2);
     EXPECT_NE(std::addressof(res1), std::addressof(res2));
 
-    EXPECT_TRUE(ucpWorker_->running_);
+    EXPECT_TRUE(ucpWorker_->submitRunning_.load());
 
     EXPECT_TRUE(ucpWorker_->remoteEndpointMap_.empty());
     EXPECT_EQ(ucpWorker_->remoteEndpointMap_.size(), 0);
@@ -153,6 +150,49 @@ TEST_F(UcpWorkerTest, TestWriteOnce)
     EXPECT_NE(ucpWorker_->remoteEndpointMap_.find("aaa"), ucpWorker_->remoteEndpointMap_.end());
 }
 
+TEST_F(UcpWorkerTest, TestWriteNotifiesEventThroughSubmitLoop)
+{
+    auto event = std::make_shared<Event>(10);
+    Status status =
+        ucpWorker_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                          remoteServer_->GetWorkerAddr(), "submit-loop-write", localBuffer_->Address(),
+                          localBuffer_->Size(), event->GetRequestId(), event);
+    ASSERT_EQ(status, Status::OK());
+
+    Status waitStatus = event->WaitFor(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    ASSERT_TRUE(waitStatus.IsOk()) << waitStatus.ToString();
+    EXPECT_FALSE(event->IsFailed());
+    EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+}
+
+TEST_F(UcpWorkerTest, TestWriteNNotifiesEventThroughSubmitLoop)
+{
+    std::vector<IovSegment> segments{ { localBuffer_->Address(), localBuffer_->Size() } };
+    auto event = std::make_shared<Event>(11);
+    Status status =
+        ucpWorker_->WriteN(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                           remoteServer_->GetWorkerAddr(), "submit-loop-writen", segments, event->GetRequestId(),
+                           event);
+    ASSERT_EQ(status, Status::OK());
+
+    Status waitStatus = event->WaitFor(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
+    ASSERT_TRUE(waitStatus.IsOk()) << waitStatus.ToString();
+    EXPECT_FALSE(event->IsFailed());
+    EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+}
+
+TEST_F(UcpWorkerTest, TestWriteFailsAfterSubmitThreadStopped)
+{
+    ucpWorker_->StopSubmitThread();
+    auto event = std::make_shared<Event>(12);
+    Status status =
+        ucpWorker_->Write(remoteServer_->GetPackedRkey(), (uintptr_t)remoteServer_->GetLocalSegAddr(),
+                          remoteServer_->GetWorkerAddr(), "submit-loop-stopped", localBuffer_->Address(),
+                          localBuffer_->Size(), event->GetRequestId(), event);
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.GetCode(), K_RDMA_ERROR);
+}
+
 TEST_F(UcpWorkerTest, TestRmEmptyMap)
 {
     size_t initial_size = ucpWorker_->remoteEndpointMap_.size();
@@ -177,11 +217,11 @@ TEST_F(UcpWorkerTest, TestWriteAndRm)
     LOG(INFO) << "Write took " << duration.count() << "ms";
     // simply testing if blocking returns any error message
     EXPECT_EQ(status, Status::OK());
-    EXPECT_EQ(ucpWorker_->remoteEndpointMap_.size(), initial_size + 1);
-    EXPECT_NE(ucpWorker_->remoteEndpointMap_.find("bbb"), ucpWorker_->remoteEndpointMap_.end());
     std::this_thread::sleep_for(std::chrono::milliseconds(RDMA_WAIT_TIME_MS));
     LOG(INFO) << "Remote received " + remoteServer_->ReadBuffer(message_.size());
     EXPECT_EQ(remoteServer_->ReadBuffer(message_.size()), message_);
+    EXPECT_EQ(ucpWorker_->remoteEndpointMap_.size(), initial_size + 1);
+    EXPECT_NE(ucpWorker_->remoteEndpointMap_.find("bbb"), ucpWorker_->remoteEndpointMap_.end());
 
     start = std::chrono::steady_clock::now();
     status = ucpWorker_->RemoveEndpointByIp(std::string("bbb"));
@@ -203,10 +243,10 @@ TEST_F(UcpWorkerTest, TestClean)
     EXPECT_TRUE(ucpWorker_->remoteEndpointMap_.empty());
 }
 
-TEST_F(UcpWorkerTest, TestStopProgressThread)
+TEST_F(UcpWorkerTest, TestStopSubmitThread)
 {
-    ucpWorker_->StopProgressThread();
-    EXPECT_EQ(ucpWorker_->progressThread_, nullptr);
+    ucpWorker_->StopSubmitThread();
+    EXPECT_EQ(ucpWorker_->submitThread_, nullptr);
 }
 }  // namespace ut
 }  // namespace datasystem

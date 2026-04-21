@@ -50,6 +50,7 @@ DS_DECLARE_bool(enable_data_replication);
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
+
 Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDataSize, ReadObjectKV &objectKV,
                                                              std::vector<RpcMessage> &payloads, uint64_t &payloadIndex)
 {
@@ -605,6 +606,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                     PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemote(&clientApi));
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb));
+
                     auto rc = clientApi->Read(rspPb);
                     RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                     // Fallback to downlevel client as multiple objects can be contained in the payload.

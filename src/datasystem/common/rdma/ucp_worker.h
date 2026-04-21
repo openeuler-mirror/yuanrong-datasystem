@@ -24,22 +24,24 @@
 #define DATASYSTEM_COMMON_RDMA_UCP_WORKER_H
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/ucp_dlopen_util.h"
 #include "datasystem/common/rdma/ucp_endpoint.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-
-class UcpManager;
 
 /**
  * @brief Structure representing a local memory segment for IOV transfer.
@@ -53,7 +55,7 @@ class UcpWorker {
 public:
     UcpWorker() = default;
 
-    explicit UcpWorker(const ucp_context_h &ucpContext, UcpManager *manager, const uint32_t workerId);
+    explicit UcpWorker(const ucp_context_h &ucpContext, const uint32_t workerId);
     virtual ~UcpWorker();
 
     /**
@@ -78,7 +80,7 @@ public:
      */
     virtual Status Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
                          const std::string &remoteWorkerAddr, const std::string &ipAddr, const uintptr_t localSegAddr,
-                         size_t localSegSize, uint64_t requestID);
+                         size_t localSegSize, uint64_t requestID, std::shared_ptr<Event> event = nullptr);
 
     /**
      * @brief Write multiple memory segments to a contiguous remote memory region using IOV mode.
@@ -91,7 +93,8 @@ public:
      * @return Status::OK if successful, otherwise Status with error message.
      */
     virtual Status WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
-                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID);
+                          const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID,
+                          std::shared_ptr<Event> event = nullptr);
 
     /**
      * @brief remove ep tied to a remote worker
@@ -110,9 +113,15 @@ public:
     }
 
 private:
-    void StartProgressThread();
-    void StopProgressThread();
-    void ProgressLoop();
+    void StartSubmitThread();
+    void StopSubmitThread();
+    void SubmitLoop();
+    Status WriteDirect(const std::string &remoteRkey, uintptr_t remoteSegAddr, const std::string &remoteWorkerAddr,
+                       const std::string &ipAddr, uintptr_t localSegAddr, size_t localSegSize, uint64_t requestID,
+                       std::shared_ptr<Event> event);
+    Status WriteNDirect(const std::string &remoteRkey, uintptr_t remoteBaseAddr, const std::string &remoteWorkerAddr,
+                        const std::string &ipAddr, const std::vector<IovSegment> &segments, uint64_t requestID,
+                        std::shared_ptr<Event> event);
 
     /**
      * @brief Prepare IOV buffer for ucp_put_nbx with IOV datatype.
@@ -130,28 +139,63 @@ private:
 
     void Clean();
 
-    static void CallBack(void *request, ucs_status_t status, void *userData);
     struct CallbackContext {
         UcpWorker *worker;
+        ucp_ep_h ep;
+        std::shared_ptr<UcpEndpoint> endpoint;
         uint64_t request_id;
         void *put_request;
         std::vector<ucp_dt_iov_t> *iov;
+        std::shared_ptr<Event> event;
+        uint64_t flush_start_ns;
 
-        CallbackContext(UcpWorker *w, uint64_t id, void *req, std::vector<ucp_dt_iov_t> *iovVec = nullptr)
-            : worker(w), request_id(id), put_request(req), iov(iovVec)
+        CallbackContext(UcpWorker *w, std::shared_ptr<UcpEndpoint> targetEndpoint, uint64_t id, void *req,
+                        std::vector<ucp_dt_iov_t> *iovVec, std::shared_ptr<Event> callbackEvent,
+                        uint64_t flushStartNs = 0)
+            : worker(w),
+              ep(targetEndpoint == nullptr ? nullptr : targetEndpoint->GetEp()),
+              endpoint(std::move(targetEndpoint)),
+              request_id(id),
+              put_request(req),
+              iov(iovVec),
+              event(std::move(callbackEvent)),
+              flush_start_ns(flushStartNs)
         {
         }
     };
+    struct FlushBatchContext {
+        UcpWorker *worker;
+        std::vector<CallbackContext *> contexts;
+        bool inflight{ false };
+    };
+    struct SubmitRequest {
+        bool isIov{ false };
+        std::string remoteRkey;
+        uintptr_t remoteAddr{ 0 };
+        std::string remoteWorkerAddr;
+        std::string ipAddr;
+        uintptr_t localSegAddr{ 0 };
+        size_t localSegSize{ 0 };
+        std::vector<IovSegment> segments;
+        uint64_t requestID{ 0 };
+        std::shared_ptr<Event> event;
+        uint64_t enqueueNs{ 0 };
+    };
+
+    void EnqueueFlush(CallbackContext *ctx);
+    Status EnqueueSubmit(std::shared_ptr<SubmitRequest> req);
+    void FinishContext(CallbackContext *ctx, bool failed);
+    void FinishBatch(FlushBatchContext *batchCtx, bool failed);
+    static void FlushCallBack(void *request, ucs_status_t status, void *userData);
 
     // env variables
     ucp_context_h context_;
-    UcpManager *manager_;
 
     // status variables
     uint32_t workerId_;
     std::string errorMsgHead_;
-    std::unique_ptr<Thread> progressThread_{ nullptr };
-    std::atomic<bool> running_{ false };
+    std::unique_ptr<Thread> submitThread_{ nullptr };
+    std::atomic<bool> submitRunning_{ false };
 
     // variables for endpoint creation
     ucp_worker_h worker_ = nullptr;
@@ -164,10 +208,11 @@ private:
 
     // locks
     std::shared_mutex mapLock_;  // protect Ep map
-    std::mutex writeLock_;       // protect write method
-
-    // Worker Progress max sleep time
-    static constexpr int WORKER_PROGRESS_SLEEP_TIMEOUT_MS = 5;  // ms
+    std::deque<CallbackContext *> flushQueue_;
+    std::mutex submitMutex_;
+    std::condition_variable submitCv_;
+    std::deque<std::shared_ptr<SubmitRequest>> submitQueue_;
+    uint64_t outstandingFlushes_{ 0 };
 };
 
 }  // namespace datasystem

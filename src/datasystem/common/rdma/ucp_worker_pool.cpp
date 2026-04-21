@@ -22,19 +22,16 @@
 
 #include "datasystem/common/rdma/ucp_worker_pool.h"
 
-#include <thread>
-#include <sstream>
+#include <mutex>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rdma/ucp_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-
-UcpWorkerPool::UcpWorkerPool(const ucp_context_h &ucpContext, UcpManager *manager, uint32_t workerN)
-    : context_(ucpContext), manager_(manager), workerN_(workerN)
+UcpWorkerPool::UcpWorkerPool(const ucp_context_h &ucpContext, uint32_t workerN)
+    : context_(ucpContext), workerN_(workerN)
 {
 }
 
@@ -45,46 +42,45 @@ UcpWorkerPool::~UcpWorkerPool()
 
 Status UcpWorkerPool::Init()
 {
-    PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_INIT);
     for (uint32_t i = 0; i < workerN_; i++) {
-        std::shared_ptr<UcpWorker> ucpWorker = std::make_shared<UcpWorker>(context_, manager_, i);
+        std::shared_ptr<UcpWorker> ucpWorker = std::make_shared<UcpWorker>(context_, i);
         RETURN_IF_NOT_OK(ucpWorker->Init());
         localWorkerPool_.emplace(i, std::move(ucpWorker));
     }
 
-    point.Record();
     return Status::OK();
 }
 
 Status UcpWorkerPool::Write(const std::string &remoteRkey, const uintptr_t remoteSegAddr,
                             const std::string &remoteWorkerAddr, const std::string &ipAddr,
-                            const uintptr_t localSegAddr, size_t localSegSize, uint64_t requestID)
+                            const uintptr_t localSegAddr, size_t localSegSize, uint64_t requestID,
+                            std::shared_ptr<Event> event)
 {
-    UcpWorker *worker = GetOrSelSendWorker(ipAddr);
+    UcpWorker *worker = GetOrSelSendWorker(ipAddr, requestID);
     if (worker == nullptr) {
         // no worker found and no worker created
         VLOG(ERROR) << FormatString("Communication with IP %s Failed", ipAddr);
         RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpWorkerPool] Failed to obtain worker for communication."));
     }
     // this process is locked inside UcpWorker so no need to lock here
-    return worker->Write(remoteRkey, remoteSegAddr, remoteWorkerAddr, ipAddr, localSegAddr, localSegSize, requestID);
+    return worker->Write(remoteRkey, remoteSegAddr, remoteWorkerAddr, ipAddr, localSegAddr, localSegSize, requestID,
+                         std::move(event));
 }
 
 Status UcpWorkerPool::WriteN(const std::string &remoteRkey, uintptr_t remoteBaseAddr,
                              const std::string &remoteWorkerAddr, const std::string &ipAddr,
-                             const std::vector<IovSegment> &segments, uint64_t requestID)
+                             const std::vector<IovSegment> &segments, uint64_t requestID, std::shared_ptr<Event> event)
 {
-    UcpWorker *worker = GetOrSelSendWorker(ipAddr);
+    UcpWorker *worker = GetOrSelSendWorker(ipAddr, requestID);
     if (worker == nullptr) {
         VLOG(ERROR) << FormatString("Communication with IP %s Failed", ipAddr);
         RETURN_STATUS(K_RDMA_ERROR, std::string("[UcpWorkerPool] Failed to obtain worker for communication."));
     }
-    return worker->WriteN(remoteRkey, remoteBaseAddr, remoteWorkerAddr, ipAddr, segments, requestID);
+    return worker->WriteN(remoteRkey, remoteBaseAddr, remoteWorkerAddr, ipAddr, segments, requestID, std::move(event));
 }
 
 std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
 {
-    PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_GET_RECV_WORKER_ADDR);
     {
         std::shared_lock<std::shared_mutex> readLock(recvMapMutex_);
         // first check the Recv map to see if the ipAddr has appeared before
@@ -104,13 +100,17 @@ std::string UcpWorkerPool::GetOrSelRecvWorkerAddr(const std::string &ipAddr)
         return it->second;
     }
 
-    LOG(INFO) << "Select new ucp worker " << roundRobin_ << " for " << ipAddr << " to recv";
-    auto &worker = localWorkerPool_[roundRobin_];
-    roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
+    if (localWorkerPool_.empty()) {
+        LOG(ERROR) << "Failed to select recv worker for " << ipAddr << ": UCP worker pool is empty";
+        return "";
+    }
 
+    const size_t workerCount = localWorkerPool_.size();
+    const size_t workerIndex = roundRobin_.fetch_add(1, std::memory_order_relaxed) % workerCount;
+    VLOG(1) << "Select new ucp worker " << workerIndex << " for " << ipAddr << " to recv";
+    auto &worker = localWorkerPool_.at(workerIndex);
     const std::string &workerAddr = worker->GetLocalWorkerAddr();
     localWorkerRecvMap_.emplace(ipAddr, workerAddr);
-    point.Record();
     return workerAddr;
 }
 
@@ -118,8 +118,6 @@ Status UcpWorkerPool::RemoveByIp(const std::string &ipAddr)
 {
     // need to clean both recv and send map. First do recv
 
-    PerfPoint point(PerfKey::RDMA_UCP_WORKER_POOL_RM_IP);
-    std::stringstream errMsg;
     {
         // first check if there is a worker attached to this IP
         std::unique_lock writeLock(recvMapMutex_);
@@ -128,50 +126,27 @@ Status UcpWorkerPool::RemoveByIp(const std::string &ipAddr)
         }
     }
 
-    {
-        // then check for send. Need to go inside UcpWorker and clean ep
-        std::unique_lock writeLock(sendMapMutex_);
-        // get the remoteWorkerAddr
-        auto it = localWorkerSendMap_.find(ipAddr);
-        if (it != localWorkerSendMap_.end()) {
-            Status status = it->second->RemoveEndpointByIp(ipAddr);
-            localWorkerSendMap_.erase(it);
-            if (status.IsError()) {
-                LOG(WARNING) << FormatString("Try to remove by IP %s but failed: %s", ipAddr, status.ToString());
-            }
-        } else {
-            LOG(INFO) << FormatString("Try to remove by IP but never sent to %s", ipAddr);
+    for (auto &[workerId, worker] : localWorkerPool_) {
+        Status status = worker->RemoveEndpointByIp(ipAddr);
+        if (status.IsError()) {
+            LOG(WARNING) << FormatString("Try to remove by IP %s on worker %u but failed: %s", ipAddr, workerId,
+                                         status.ToString());
         }
     }
-    point.Record();
     return Status::OK();
 }
 
-UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr)
+UcpWorker *UcpWorkerPool::GetOrSelSendWorker(const std::string &ipAddr, uint64_t requestID)
 {
-    {
-        std::shared_lock<std::shared_mutex> readLock(sendMapMutex_);
-        // first check the Send map to see if the ipAddr has appeared before
-        // need to lock guard -- read-only
-        auto it = localWorkerSendMap_.find(ipAddr);
-        if (it != localWorkerSendMap_.end()) {
-            return it->second;
-        }
+    (void)ipAddr;
+    (void)requestID;
+    if (localWorkerPool_.empty()) {
+        return nullptr;
     }
 
-    // nothing found, need to get the NEXT worker and add to map
-    // write lock to protect the map
-
-    std::unique_lock<std::shared_mutex> writeLock(sendMapMutex_);
-
-    auto it = localWorkerSendMap_.find(ipAddr);
-    if (it != localWorkerSendMap_.end()) {
-        return it->second;
-    }
-    LOG(INFO) << "Select new ucp worker " << roundRobin_ << " for " << ipAddr << " to send";
-    auto worker = localWorkerPool_[roundRobin_].get();
-    roundRobin_ = (roundRobin_ + 1) % localWorkerPool_.size();
-    localWorkerSendMap_.emplace(ipAddr, worker);
+    const size_t workerCount = localWorkerPool_.size();
+    const size_t workerIndex = roundRobin_.fetch_add(1, std::memory_order_relaxed) % workerCount;
+    auto worker = localWorkerPool_[workerIndex].get();
     return worker;
 }
 
@@ -179,10 +154,6 @@ void UcpWorkerPool::Clean()
 {
     // first clean the maps
     // UcpWorker instances will deconstruct properly by its deconstructor
-    {
-        std::unique_lock<std::shared_mutex> writeLock(sendMapMutex_);
-        localWorkerSendMap_.clear();
-    }
     {
         std::unique_lock<std::shared_mutex> writeLock(recvMapMutex_);
         localWorkerRecvMap_.clear();

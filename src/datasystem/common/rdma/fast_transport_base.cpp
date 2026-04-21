@@ -17,6 +17,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
+
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -28,7 +29,6 @@
 #endif
 
 namespace datasystem {
-
 Status RegisterFastTransportMemory(void *segAddress, const uint64_t &segSize)
 {
     (void)segAddress;
@@ -130,6 +130,7 @@ bool NeedRegisterWholeArena()
 #endif
     return false;
 }
+
 Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
                               std::function<Status(Status &)> errorHandler)
 {
@@ -157,5 +158,4 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
 #endif
     return Status::OK();
 }
-
 }  // namespace datasystem
