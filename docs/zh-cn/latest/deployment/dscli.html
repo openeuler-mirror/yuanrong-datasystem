@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="kubernetes部署配置项" href="k8s_configuration.html"><link rel="prev" title="部署指南" href="deploy.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>dscli命令行工具 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -1491,7 +1491,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>max_client_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
-<td><p>openYuanrong datasystem单个DaemonSet最大可同时连接的客户端数</p></td>
+<td><p>openYuanrong datasystem单个DaemonSet可同时接入的共享内存客户端数量上限；仅对走共享内存（SHM）路径的客户端生效</p></td>
 </tr>
 <tr class="row-odd"><td><p>shared_memory_size_mb</p></td>
 <td><p>int</p></td>
@@ -1800,7 +1800,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>log_rate_limit</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>每秒最大日志条数（0表示不限速）。超出限制后，INFO和WARNING日志将被等间隔采样，日志中标注采样率。ERROR和FATAL不受限速影响</p></td>
+<td><p>每秒最大日志条数（0表示不限速）。超出限制后，INFO、WARNING和ERROR日志将被等间隔采样，日志中标注采样率。FATAL不受限速影响</p></td>
 </tr>
 <tr class="row-odd"><td><p>log_monitor</p></td>
 <td><p>bool</p></td>
@@ -2169,6 +2169,16 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启Urma以实现对象worker之间的数据传输</p></td>
 </tr>
+<tr class="row-even"><td><p>enable_ub_numa_affinity</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是否开启 UB NUMA 亲和优化。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 且 <code class="docutils literal notranslate"><span class="pre">urma_register_whole_arena=true</span></code> 时生效。</p></td>
+</tr>
+<tr class="row-odd"><td><p>shared_memory_distribution_policy</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">none</span></code></p></td>
+<td><p>共享内存在 NUMA 上的分布策略。可选值：<code class="docutils literal notranslate"><span class="pre">none</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_all_numa</span></code>、<code class="docutils literal notranslate"><span class="pre">interleave_affinity_numa</span></code>。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 且 <code class="docutils literal notranslate"><span class="pre">urma_register_whole_arena=true</span></code> 时生效。</p></td>
+</tr>
 <tr class="row-even"><td><p>urma_connection_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
@@ -2227,6 +2237,12 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </tbody>
 </table>
 </div>
+<p><code class="docutils literal notranslate"><span class="pre">shared_memory_distribution_policy</span></code> 策略说明：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">none</span></code>： 不做 NUMA 分布</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">interleave_all_numa</span></code>： 在所有可用 NUMA 节点上均匀分布</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">interleave_affinity_numa</span></code>： 在当前进程绑定的 NUMA 节点上均匀分布。</p></li>
+</ol>
 </section>
 <section id="ak-sk">
 <h4>AK/SK相关配置<a class="headerlink" href="#ak-sk" title="Link to this heading">¶</a></h4>
@@ -2399,15 +2415,15 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
