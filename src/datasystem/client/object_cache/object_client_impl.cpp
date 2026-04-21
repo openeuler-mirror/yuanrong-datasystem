@@ -3919,18 +3919,19 @@ void ObjectClientImpl::ShutdownPerfThread()
 
 void ObjectClientImpl::ShutdownMetricsThread(bool dumpSummary)
 {
-    if (metricsThread_ == nullptr) {
-        return;
-    }
+    std::unique_ptr<Thread> threadToJoin;
     {
         std::lock_guard<std::mutex> locker(metricsMutex_);
+        if (metricsThread_ == nullptr) {
+            return;
+        }
         metricsExitFlag_ = true;
+        threadToJoin = std::move(metricsThread_);
     }
     metricsCv_.notify_all();
-    if (metricsThread_->joinable()) {
-        metricsThread_->join();
+    if (threadToJoin->joinable()) {
+        threadToJoin->join();
     }
-    metricsThread_.reset();
     if (dumpSummary) {
         metrics::PrintSummary();
     }
