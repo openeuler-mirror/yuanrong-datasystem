@@ -1,5 +1,5 @@
 #include "metrics.h"
-#include <spdlog/spdlog.h>
+#include "simple_log.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -96,7 +96,7 @@ void MetricsCollector::FlushWindow() {
 
     std::ofstream f(metricsFile_, std::ios::app);
     if (!f.is_open()) {
-        spdlog::error("Cannot open metrics file: {}", metricsFile_);
+        SLOG_ERROR("Cannot open metrics file: " << metricsFile_);
         return;
     }
 
@@ -135,7 +135,7 @@ void MetricsCollector::WriteSummary() {
     std::string filename = "summary_" + std::to_string(instanceId_) + ".txt";
     std::ofstream f(filename);
     if (!f.is_open()) {
-        spdlog::error("Cannot open summary file: {}", filename);
+        SLOG_ERROR("Cannot open summary file: " << filename);
         return;
     }
 
@@ -177,7 +177,7 @@ void MetricsCollector::WriteSummary() {
         f << "Verify Fail: " << verifyFailCount_ << "\n";
     }
 
-    spdlog::info("Summary written to {}", filename);
+    SLOG_INFO("Summary written to " << filename);
 }
 
 std::string MetricsCollector::GetStatsJson() {

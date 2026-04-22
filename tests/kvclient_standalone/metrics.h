@@ -6,6 +6,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
+#include <thread>
 
 struct OpMetrics {
     std::string opName;

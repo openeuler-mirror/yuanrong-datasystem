@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "metrics.h"
+#include "httplib.h"
 #include <datasystem/kv_client.h>
 #include <memory>
 #include <atomic>

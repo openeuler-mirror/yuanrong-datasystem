@@ -1,7 +1,7 @@
 #include "http_server.h"
 #include "data_pattern.h"
 #include "httplib.h"
-#include <spdlog/spdlog.h>
+#include "simple_log.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <thread>
@@ -29,16 +29,16 @@ void HttpServer::Start() {
     });
 
     server_->Post("/stop", [this](const httplib::Request &, httplib::Response &res) {
-        spdlog::info("Received /stop request");
+        SLOG_INFO("Received /stop request");
         res.status = 200;
         res.set_content("stopping", "text/plain");
         running_ = false;
     });
 
     serverThread_ = std::thread([this]() {
-        spdlog::info("HTTP server listening on port {}", cfg_.listenPort);
+        SLOG_INFO("HTTP server listening on port " << cfg_.listenPort);
         if (!server_->listen("0.0.0.0", cfg_.listenPort)) {
-            spdlog::error("Failed to start HTTP server on port {}", cfg_.listenPort);
+            SLOG_ERROR("Failed to start HTTP server on port " << cfg_.listenPort);
         }
     });
 }
@@ -78,26 +78,25 @@ void HttpServer::HandleNotify(const std::string &body) {
                 metrics_.Record("get", latencyMs, rc.IsOk());
 
                 if (!rc.IsOk()) {
-                    spdlog::warn("Get failed: key={}, error={}", key, rc.GetMsg());
+                    SLOG_WARN("Get failed: key=" << key << ", error=" << rc.GetMsg());
                     return;
                 }
 
                 if (val.size() != expectedSize) {
-                    spdlog::warn("Size mismatch: key={}, expected={}, got={}",
-                                 key, expectedSize, val.size());
+                    SLOG_WARN("Size mismatch: key=" << key << ", expected=" << expectedSize << ", got=" << val.size());
                     metrics_.RecordVerifyFail();
                     return;
                 }
 
                 std::string expected = GenerateExpectedData(expectedSize, sender);
                 if (val != expected) {
-                    spdlog::warn("Content mismatch: key={}", key);
+                    SLOG_WARN("Content mismatch: key=" << key);
                     metrics_.RecordVerifyFail();
                 }
             });
         }
 
     } catch (const std::exception &e) {
-        spdlog::warn("Parse notify body failed: {}", e.what());
+        SLOG_WARN("Parse notify body failed: " << e.what());
     }
 }

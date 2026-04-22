@@ -3,7 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstring>
-#include <spdlog/spdlog.h>
+#include "simple_log.h"
 
 using json = nlohmann::json;
 
@@ -27,7 +27,7 @@ uint64_t ParseSize(const std::string &str) {
 bool LoadConfig(const std::string &path, Config &cfg) {
     std::ifstream f(path);
     if (!f.is_open()) {
-        spdlog::error("Cannot open config file: {}", path);
+        SLOG_ERROR("Cannot open config file: " << path);
         return false;
     }
 
@@ -69,17 +69,20 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         }
 
     } catch (const std::exception &e) {
-        spdlog::error("Parse config failed: {}", e.what());
+        SLOG_ERROR("Parse config failed: " << e.what());
         return false;
     }
 
     if (cfg.etcdAddress.empty()) {
-        spdlog::error("etcd_address is required");
+        SLOG_ERROR("etcd_address is required");
         return false;
     }
 
-    spdlog::info("Config loaded: instance_id={}, port={}, etcd={}, data_sizes_count={}, target_qps={}, threads={}",
-                 cfg.instanceId, cfg.listenPort, cfg.etcdAddress, cfg.dataSizes.size(),
-                 cfg.targetQps, cfg.numSetThreads);
+    SLOG_INFO("Config loaded: instance_id=" << cfg.instanceId
+              << ", port=" << cfg.listenPort
+              << ", etcd=" << cfg.etcdAddress
+              << ", data_sizes_count=" << cfg.dataSizes.size()
+              << ", target_qps=" << cfg.targetQps
+              << ", threads=" << cfg.numSetThreads);
     return true;
 }

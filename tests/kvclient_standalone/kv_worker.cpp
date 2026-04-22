@@ -2,7 +2,7 @@
 #include "data_pattern.h"
 #include "httplib.h"
 #include <datasystem/utils/string_view.h>
-#include <spdlog/spdlog.h>
+#include "simple_log.h"
 #include <chrono>
 #include <random>
 #include <algorithm>
@@ -20,8 +20,7 @@ void KVWorker::Start() {
     int qpsPerThread = cfg_.targetQps / cfg_.numSetThreads;
     if (qpsPerThread <= 0) qpsPerThread = 1;
 
-    spdlog::info("Starting {} set threads, {} QPS each (total target: {})",
-                 cfg_.numSetThreads, qpsPerThread, cfg_.targetQps);
+    SLOG_INFO("Starting " << cfg_.numSetThreads << " set threads, " << qpsPerThread << " QPS each (total target: " << cfg_.targetQps << ")");
 
     for (int i = 0; i < cfg_.numSetThreads; i++) {
         threads_.emplace_back(&KVWorker::SetLoop, this, i);
@@ -48,7 +47,7 @@ void KVWorker::SetLoop(int threadId) {
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
-    spdlog::info("Thread {} started: {} QPS, interval {:.1f}ms", threadId, qpsPerThread, intervalMs);
+    SLOG_INFO("Thread " << threadId << " started: " << qpsPerThread << " QPS, interval " << intervalMs << "ms");
 
     while (running_) {
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
@@ -72,7 +71,7 @@ void KVWorker::SetLoop(int threadId) {
         metrics_.Record("set", latencyMs, rc.IsOk());
 
         if (!rc.IsOk()) {
-            spdlog::warn("Set failed: key={}, error={}", key, rc.GetMsg());
+            SLOG_WARN("Set failed: key=" << key << ", error=" << rc.GetMsg());
         }
 
         if (rc.IsOk()) {
@@ -87,7 +86,7 @@ void KVWorker::SetLoop(int threadId) {
         }
     }
 
-    spdlog::info("Thread {} stopped", threadId);
+    SLOG_INFO("Thread " << threadId << " stopped");
 }
 
 void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
