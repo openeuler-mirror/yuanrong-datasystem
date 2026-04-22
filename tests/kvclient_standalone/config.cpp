@@ -1,0 +1,85 @@
+#include "config.h"
+#include <nlohmann/json.hpp>
+#include <fstream>
+#include <sstream>
+#include <cstring>
+#include <spdlog/spdlog.h>
+
+using json = nlohmann::json;
+
+uint64_t ParseSize(const std::string &str) {
+    if (str.empty()) return 0;
+
+    char *end = nullptr;
+    double val = std::strtod(str.c_str(), &end);
+    if (end == str.c_str()) return 0;
+
+    std::string unit(end);
+    uint64_t multiplier = 1;
+    if (unit == "GB" || unit == "gb") multiplier = 1024ULL * 1024 * 1024;
+    else if (unit == "MB" || unit == "mb") multiplier = 1024ULL * 1024;
+    else if (unit == "KB" || unit == "kb") multiplier = 1024ULL;
+    else if (unit == "B" || unit == "b" || unit.empty()) multiplier = 1;
+
+    return static_cast<uint64_t>(val * multiplier);
+}
+
+bool LoadConfig(const std::string &path, Config &cfg) {
+    std::ifstream f(path);
+    if (!f.is_open()) {
+        spdlog::error("Cannot open config file: {}", path);
+        return false;
+    }
+
+    try {
+        json j = json::parse(f);
+
+        if (j.contains("instance_id")) cfg.instanceId = j["instance_id"];
+        if (j.contains("listen_port")) cfg.listenPort = j["listen_port"];
+        if (j.contains("etcd_address")) cfg.etcdAddress = j["etcd_address"];
+        if (j.contains("cluster_name")) cfg.clusterName = j["cluster_name"];
+        if (j.contains("connect_timeout_ms")) cfg.connectTimeoutMs = j["connect_timeout_ms"];
+        if (j.contains("request_timeout_ms")) cfg.requestTimeoutMs = j["request_timeout_ms"];
+        if (j.contains("ttl_seconds")) cfg.ttlSeconds = j["ttl_seconds"];
+        if (j.contains("target_qps")) cfg.targetQps = j["target_qps"];
+        if (j.contains("num_set_threads")) cfg.numSetThreads = j["num_set_threads"];
+        if (j.contains("notify_count")) cfg.notifyCount = j["notify_count"];
+        if (j.contains("metrics_interval_ms")) cfg.metricsIntervalMs = j["metrics_interval_ms"];
+        if (j.contains("metrics_file")) cfg.metricsFile = j["metrics_file"];
+
+        if (j.contains("data_sizes")) {
+            for (auto &s : j["data_sizes"]) {
+                cfg.dataSizes.push_back(ParseSize(s.get<std::string>()));
+            }
+        }
+        if (cfg.dataSizes.empty()) {
+            cfg.dataSizes.push_back(8 * 1024 * 1024);  // default 8MB
+        }
+
+        if (j.contains("peers")) {
+            for (auto &p : j["peers"]) {
+                cfg.peers.push_back(p.get<std::string>());
+            }
+        }
+
+        // Replace {instance_id} in metrics file name
+        auto pos = cfg.metricsFile.find("{instance_id}");
+        if (pos != std::string::npos) {
+            cfg.metricsFile.replace(pos, 13, std::to_string(cfg.instanceId));
+        }
+
+    } catch (const std::exception &e) {
+        spdlog::error("Parse config failed: {}", e.what());
+        return false;
+    }
+
+    if (cfg.etcdAddress.empty()) {
+        spdlog::error("etcd_address is required");
+        return false;
+    }
+
+    spdlog::info("Config loaded: instance_id={}, port={}, etcd={}, data_sizes_count={}, target_qps={}, threads={}",
+                 cfg.instanceId, cfg.listenPort, cfg.etcdAddress, cfg.dataSizes.size(),
+                 cfg.targetQps, cfg.numSetThreads);
+    return true;
+}

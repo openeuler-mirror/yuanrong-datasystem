@@ -1,0 +1,19 @@
+{
+  "instance_id": 0,
+  "listen_port": 9000,
+  "etcd_address": "http://127.0.0.1:2379",
+  "cluster_name": "default",
+  "connect_timeout_ms": 1000,
+  "request_timeout_ms": 20,
+  "data_sizes": ["8MB", "512KB"],
+  "ttl_seconds": 5,
+  "target_qps": 1600,
+  "num_set_threads": 16,
+  "notify_count": 10,
+  "metrics_interval_ms": 3000,
+  "metrics_file": "metrics_{instance_id}.csv",
+  "peers": [
+    "http://host1:9000",
+    "http://host2:9000"
+  ]
+}
