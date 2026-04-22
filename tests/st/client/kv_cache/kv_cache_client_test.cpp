@@ -1404,7 +1404,8 @@ TEST_F(KVCacheClientTest, TestMCreateWithNXOnExistingKey)
     DS_ASSERT_OK(client->MCreate(keys, sizes, param, buffers));
 
     ASSERT_EQ(buffers.size(), keys.size());
-    ASSERT_EQ(buffers[0], nullptr);
+    ASSERT_NE(buffers[0], nullptr);
+    ASSERT_EQ(buffers[0]->GetSize(), 0);
     ASSERT_NE(buffers[1], nullptr);
     ASSERT_EQ(buffers[1]->GetSize(), newVal.size());
 

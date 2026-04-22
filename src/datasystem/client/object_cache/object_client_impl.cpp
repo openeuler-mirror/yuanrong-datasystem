@@ -1759,6 +1759,10 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     if (!useShmTransfer) {
         for (size_t i = 0; i < objectKeyList.size(); i++) {
             if (!skipCheckExistence && exists[i]) {
+                auto bufferInfo = MakeObjectBufferInfo(objectKeyList[i], nullptr, 0, 0, param, true, 0);
+                std::shared_ptr<Buffer> placeholder;
+                RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), placeholder));
+                bufferList[i] = std::move(placeholder);
                 continue;
             }
             auto &objectKey = objectKeyList[i];
@@ -3187,6 +3191,10 @@ Status ObjectClientImpl::CreateBufferForMultiCreateParamAtIndex(size_t index, bo
     Status injectRC = Status::OK();
     auto &createParam = multiCreateParamList[index];
     if (!skipCheckExistence && exists[createParam.index]) {
+        auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, 0, 0, param, true, 0);
+        std::shared_ptr<Buffer> placeholder;
+        RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), placeholder));
+        bufferList[createParam.index] = std::move(placeholder);
         return Status::OK();
     }
     auto &shmBuf = createParam.shmBuf;
