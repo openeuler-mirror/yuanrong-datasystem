@@ -27,6 +27,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/file_util.h"
@@ -38,6 +39,56 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 
 namespace datasystem {
+namespace {
+// Extract tick timestamp from meta by tick name
+inline uint64_t FindTickTs(const MetaPb& meta, const char* tickName)
+{
+    for (int i = 0; i < meta.ticks_size(); i++) {
+        if (meta.ticks(i).tick_name() == tickName) {
+            return meta.ticks(i).ts();
+        }
+    }
+    return 0;
+}
+
+// Record server-side latency metrics and append SERVER_EXEC_NS tick
+inline void RecordServerLatencyMetrics(MetaPb& meta)
+{
+    int64_t serverRecvTs = FindTickTs(meta, TICK_SERVER_RECV);
+    int64_t serverDequeuTs = FindTickTs(meta, TICK_SERVER_DEQUEUE);
+    int64_t serverExecEndTs = FindTickTs(meta, TICK_SERVER_EXEC_END);
+    int64_t serverSendTs = FindTickTs(meta, TICK_SERVER_SEND);
+
+    // SERVER_QUEUE_WAIT = SERVER_DEQUEUE - SERVER_RECV
+    if (serverDequeuTs > serverRecvTs) {
+        metrics::GetHistogram(
+            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_QUEUE_WAIT_LATENCY))
+            .Observe(serverDequeuTs - serverRecvTs);
+    }
+
+    // SERVER_EXEC = SERVER_EXEC_END - SERVER_DEQUEUE
+    if (serverExecEndTs > serverDequeuTs) {
+        metrics::GetHistogram(
+            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY))
+            .Observe(serverExecEndTs - serverDequeuTs);
+    }
+
+    // SERVER_REPLY = SERVER_SEND - SERVER_EXEC_END
+    if (serverSendTs > serverExecEndTs) {
+        metrics::GetHistogram(
+            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_REPLY_LATENCY))
+            .Observe(serverSendTs - serverExecEndTs);
+    }
+
+    // Calculate SERVER_EXEC_NS = SERVER_EXEC_END - SERVER_RECV and append as a computed tick
+    uint64_t serverExecNs = (serverExecEndTs > serverRecvTs) ? (serverExecEndTs - serverRecvTs) : 0;
+    TickPb execTick;
+    execTick.set_ts(serverExecNs);
+    execTick.set_tick_name("SERVER_EXEC_NS");
+    meta.mutable_ticks()->Add(std::move(execTick));
+}
+}  // anonymous namespace
+
 static const int MAX_EXCLUSIVE_CONNECTIONS_LIMIT = 128;
 ZmqService::ZmqService()
     : proxy_(nullptr),
@@ -704,11 +755,14 @@ Status ZmqService::WorkerCB::WorkerEntry()
         return Status::OK();
     }
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_WORKER, GetLapTime(meta, "ZMQ_FRONTEND_TO_WORKER"));
+    RecordTick(meta, TICK_SERVER_DEQUEUE);
     VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
                                         meta.svc_name(), meta.method_index(), meta.client_id());
     Status rc = WorkerEntryImpl(meta, inMsg.second, replyMsg);
     VLOG(RPC_LOG_LEVEL) << "Service '" << impl_->ServiceName() << "' Method " << meta.method_index() << " rc "
                         << rc.ToString();
+    // Record SERVER_EXEC_END tick after business logic completes
+    RecordTick(meta, TICK_SERVER_EXEC_END);
     // The response will be sent by the calling method. We can just exit and ignore the rc above
     // except lower level code hit some error and didn't send anything back to the client.
     if (rc.IsError()) {
@@ -974,6 +1028,11 @@ Status ZmqService::ServiceToClient(ZmqMetaMsgFrames &p)
     MetaPb &meta = p.first;
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
     PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
+
+    // Record SERVER_SEND tick and calculate server-side metrics
+    RecordTick(meta, TICK_SERVER_SEND);
+    RecordServerLatencyMetrics(meta);
+
     // Before we put the replies onto the appropriate queue, we want to intercept the one with payload.
     // If we are going to send it in two steps (e.g. waiting for the client to allocate the buffer),
     // we want to park the payload or send separately. We need to make sure the client is using V2MTP.
@@ -1163,6 +1222,7 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
         }
     }
     MetaPb &meta = p.first;
+    RecordTick(meta, TICK_SERVER_RECV);
     // Branch prediction. Let the most probably case in the first if-block.
     if (meta.worker_id().empty() && meta.method_index() >= 0) {
         return RouteToRegBackend(p);

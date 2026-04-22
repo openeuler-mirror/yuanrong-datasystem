@@ -106,7 +106,7 @@ void ZmqFrontend::Stop()
     }
 }
 
-Status ZmqFrontend::RouteToZmqSocket(const MetaPb &meta, ZmqMsgFrames &&p)
+Status ZmqFrontend::RouteToZmqSocket(MetaPb &meta, ZmqMsgFrames &&p)
 {
     Status rc;
     // The internal method ZMQ_PAYLOAD_PUT_METHOD needs socket support.
@@ -121,10 +121,11 @@ Status ZmqFrontend::RouteToZmqSocket(const MetaPb &meta, ZmqMsgFrames &&p)
         GetGatewayId(), meta.client_id(), channel_->GetZmqEndPoint(), meta.svc_name(), meta.method_index(),
         LogHelper::IgnoreSensitive(meta));
     rc = frontend_->SendAllFrames(p, meta.method_index() < 0 ? ZmqSendFlags::DONTWAIT : ZmqSendFlags::NONE);
+    RecordTick(meta, TICK_CLIENT_SEND);
     return rc;
 }
 
-Status ZmqFrontend::RouteToUnixSocket(const std::shared_ptr<SockConnEntry> &connInfo, const MetaPb &meta,
+Status ZmqFrontend::RouteToUnixSocket(const std::shared_ptr<SockConnEntry> &connInfo, MetaPb &meta,
                                       ZmqMsgFrames &&frames)
 {
     // Hold a read lock here to block SockConnEntry::SetSvcFdInvalid
@@ -399,6 +400,7 @@ void ZmqFrontend::InterruptAll()
 
 Status ZmqFrontend::SendMsg(SockConnEntry *cInfo, ZmqMetaMsgFrames &&que, int timeout)
 {
+    RecordTick(que.first, TICK_CLIENT_TO_STUB);
     ConnMsgFrames ele = std::make_pair(cInfo, std::move(que));
     RETURN_IF_NOT_OK(msgQue_->Send(std::move(ele), timeout));
     eventfd_write(efd_, 1);
