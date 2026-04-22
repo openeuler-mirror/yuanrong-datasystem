@@ -1,0 +1,11 @@
+{
+  "remote_work_dir": "/home/user/kvclient_test",
+  "binary_path": "build/kvclient_standalone_test",
+  "ssh_user": "root",
+  "ssh_options": "-o StrictHostKeyChecking=no",
+  "nodes": [
+    { "host": "192.168.1.1", "instance_id": 0 },
+    { "host": "192.168.1.2", "instance_id": 1 },
+    { "host": "192.168.1.3", "instance_id": 2, "ssh_user": "ubuntu" }
+  ]
+}
