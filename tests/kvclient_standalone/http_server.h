@@ -6,6 +6,8 @@
 #include <memory>
 #include <atomic>
 #include <thread>
+#include <vector>
+#include <mutex>
 
 class HttpServer {
 public:
@@ -26,4 +28,6 @@ private:
     std::atomic<bool> &running_;
     std::unique_ptr<httplib::Server> server_;
     std::thread serverThread_;
+    std::vector<std::thread> notifyThreads_;
+    std::mutex notifyMutex_;
 };

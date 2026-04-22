@@ -1,4 +1,5 @@
 #include "http_server.h"
+#include "data_pattern.h"
 #include "httplib.h"
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -45,14 +46,17 @@ void HttpServer::Start() {
 void HttpServer::Stop() {
     if (server_) server_->stop();
     if (serverThread_.joinable()) serverThread_.join();
+    {
+        std::lock_guard<std::mutex> lock(notifyMutex_);
+        for (auto &t : notifyThreads_) {
+            if (t.joinable()) t.join();
+        }
+        notifyThreads_.clear();
+    }
 }
 
 std::string HttpServer::GenerateExpectedData(uint64_t size, int senderId) {
-    std::string data(size, '\0');
-    for (uint64_t i = 0; i < size; i++) {
-        data[i] = static_cast<char>((senderId + i) % 256);
-    }
-    return data;
+    return GeneratePatternData(size, senderId);
 }
 
 void HttpServer::HandleNotify(const std::string &body) {
@@ -62,33 +66,36 @@ void HttpServer::HandleNotify(const std::string &body) {
         int sender = j["sender"];
         uint64_t expectedSize = j["size"];
 
-        std::thread([this, key, sender, expectedSize]() {
-            std::string val;
-            auto start = std::chrono::steady_clock::now();
-            Status rc = client_->Get(key, val);
-            auto end = std::chrono::steady_clock::now();
-            double latencyMs = std::chrono::duration<double, std::milli>(end - start).count();
+        {
+            std::lock_guard<std::mutex> lock(notifyMutex_);
+            notifyThreads_.emplace_back([this, key, sender, expectedSize]() {
+                std::string val;
+                auto start = std::chrono::steady_clock::now();
+                Status rc = client_->Get(key, val);
+                auto end = std::chrono::steady_clock::now();
+                double latencyMs = std::chrono::duration<double, std::milli>(end - start).count();
 
-            metrics_.Record("get", latencyMs, rc.IsOk());
+                metrics_.Record("get", latencyMs, rc.IsOk());
 
-            if (!rc.IsOk()) {
-                spdlog::warn("Get failed: key={}, error={}", key, rc.GetMsg());
-                return;
-            }
+                if (!rc.IsOk()) {
+                    spdlog::warn("Get failed: key={}, error={}", key, rc.GetMsg());
+                    return;
+                }
 
-            if (val.size() != expectedSize) {
-                spdlog::warn("Size mismatch: key={}, expected={}, got={}",
-                             key, expectedSize, val.size());
-                metrics_.RecordVerifyFail();
-                return;
-            }
+                if (val.size() != expectedSize) {
+                    spdlog::warn("Size mismatch: key={}, expected={}, got={}",
+                                 key, expectedSize, val.size());
+                    metrics_.RecordVerifyFail();
+                    return;
+                }
 
-            std::string expected = GenerateExpectedData(expectedSize, sender);
-            if (val != expected) {
-                spdlog::warn("Content mismatch: key={}", key);
-                metrics_.RecordVerifyFail();
-            }
-        }).detach();
+                std::string expected = GenerateExpectedData(expectedSize, sender);
+                if (val != expected) {
+                    spdlog::warn("Content mismatch: key={}", key);
+                    metrics_.RecordVerifyFail();
+                }
+            });
+        }
 
     } catch (const std::exception &e) {
         spdlog::warn("Parse notify body failed: {}", e.what());

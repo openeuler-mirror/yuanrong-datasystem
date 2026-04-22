@@ -21,7 +21,6 @@ using namespace datasystem;
 static std::atomic<bool> gRunning{true};
 
 static void SignalHandler(int) {
-    spdlog::info("Received signal, shutting down...");
     gRunning = false;
 }
 

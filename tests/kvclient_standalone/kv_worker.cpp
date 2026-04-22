@@ -1,4 +1,5 @@
 #include "kv_worker.h"
+#include "data_pattern.h"
 #include "httplib.h"
 #include <datasystem/utils/string_view.h>
 #include <spdlog/spdlog.h>
@@ -36,11 +37,7 @@ void KVWorker::Stop() {
 }
 
 std::string KVWorker::GenerateData(uint64_t size, int senderId) {
-    std::string data(size, '\0');
-    for (uint64_t i = 0; i < size; i++) {
-        data[i] = static_cast<char>((senderId + i) % 256);
-    }
-    return data;
+    return GeneratePatternData(size, senderId);
 }
 
 void KVWorker::SetLoop(int threadId) {
@@ -113,8 +110,14 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
         auto colonPos = hostPort.find(':');
         if (colonPos == std::string::npos) continue;
 
-        std::string host = hostPort.substr(0, colonPos);
-        int port = std::stoi(hostPort.substr(colonPos + 1));
+        std::string host;
+        int port;
+        try {
+            host = hostPort.substr(0, colonPos);
+            port = std::stoi(hostPort.substr(colonPos + 1));
+        } catch (...) {
+            continue;
+        }
 
         std::thread([host, port, body]() {
             try {

@@ -38,6 +38,14 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
         m.globalLatencies.push_back(latencyMs);
+        // Cap at 1M entries (~8MB) to prevent unbounded growth
+        if (m.globalLatencies.size() > 1000000) {
+            // Keep every other sample to preserve distribution shape
+            for (size_t i = 1; i < m.globalLatencies.size(); i += 2) {
+                m.globalLatencies[i / 2] = m.globalLatencies[i];
+            }
+            m.globalLatencies.resize(m.globalLatencies.size() / 2);
+        }
     }
 }
 
@@ -46,6 +54,10 @@ void MetricsCollector::RecordVerifyFail() {
 }
 
 void MetricsCollector::Start() {
+    // Pre-create op types to avoid race in GetOrCreateOp
+    GetOrCreateOp("set");
+    GetOrCreateOp("get");
+
     startTime_ = std::chrono::steady_clock::now();
     running_ = true;
 
@@ -182,5 +194,6 @@ std::string MetricsCollector::GetStatsJson() {
         j[m->opName + "_fail"] = m->failCount.load();
     }
     j["verify_fail"] = verifyFailCount_.load();
+    j["get_verify_fail"] = verifyFailCount_.load();
     return j.dump(2);
 }

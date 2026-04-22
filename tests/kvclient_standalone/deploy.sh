@@ -72,6 +72,7 @@ do_deploy() {
     done <<< "$NODES"
     peers="${peers%,}"
 
+    pids=()
     while read -r host instance_id ssh_user; do
         [ -z "$host" ] && continue
         local user="${ssh_user:-$DEFAULT_SSH_USER}"
@@ -79,7 +80,6 @@ do_deploy() {
 
         echo "Deploying to ${ssh_target} (instance_id=${instance_id})..."
 
-        # Generate per-node config
         local node_config="/tmp/config_${instance_id}.json"
         python3 -c "
 import json
@@ -91,20 +91,29 @@ with open('$node_config', 'w') as f:
     json.dump(d, f, indent=2)
 "
 
-        # Create remote dir, copy files, start
-        if ssh $SSH_OPTIONS "${ssh_target}" "mkdir -p ${REMOTE_WORK_DIR}" 2>/dev/null && \
-           scp $SSH_OPTIONS "${BINARY_PATH}" "${ssh_target}:${REMOTE_WORK_DIR}/kvclient_standalone_test" 2>/dev/null && \
-           scp $SSH_OPTIONS "${node_config}" "${ssh_target}:${REMOTE_WORK_DIR}/config_${instance_id}.json" 2>/dev/null && \
-           ssh $SSH_OPTIONS "${ssh_target}" "cd ${REMOTE_WORK_DIR} && chmod +x kvclient_standalone_test && nohup ./kvclient_standalone_test config_${instance_id}.json > stdout_${instance_id}.log 2>&1 &" 2>/dev/null; then
-            echo "  -> OK"
+        (
+            if ssh $SSH_OPTIONS "${ssh_target}" "mkdir -p ${REMOTE_WORK_DIR}" 2>/dev/null && \
+               scp $SSH_OPTIONS "${BINARY_PATH}" "${ssh_target}:${REMOTE_WORK_DIR}/kvclient_standalone_test" 2>/dev/null && \
+               scp $SSH_OPTIONS "${node_config}" "${ssh_target}:${REMOTE_WORK_DIR}/config_${instance_id}.json" 2>/dev/null && \
+               ssh $SSH_OPTIONS "${ssh_target}" "cd ${REMOTE_WORK_DIR} && chmod +x kvclient_standalone_test && nohup ./kvclient_standalone_test config_${instance_id}.json > stdout_${instance_id}.log 2>&1 &" 2>/dev/null; then
+                echo "  ${host} -> OK"
+                exit 0
+            else
+                echo "  ${host} -> FAILED"
+                exit 1
+            fi
+            rm -f "${node_config}"
+        ) &
+        pids+=($!)
+    done <<< "$NODES"
+
+    for pid in "${pids[@]}"; do
+        if wait "$pid"; then
             ok=$((ok + 1))
         else
-            echo "  -> FAILED"
-            failed="${failed} ${host}"
+            failed="${failed} unknown"
         fi
-
-        rm -f "${node_config}"
-    done <<< "$NODES"
+    done
 
     echo ""
     echo "Deploy result: ${ok}/${total} succeeded"
@@ -137,6 +146,7 @@ with open('$full_config', 'w') as f:
 do_clean() {
     local total=0
     local ok=0
+    local pids=()
 
     while read -r host instance_id ssh_user; do
         [ -z "$host" ] && continue
@@ -145,13 +155,23 @@ do_clean() {
         total=$((total + 1))
 
         echo "Cleaning ${ssh_target}..."
-        if ssh $SSH_OPTIONS "${ssh_target}" "pkill -f kvclient_standalone_test; rm -rf ${REMOTE_WORK_DIR}" 2>/dev/null; then
-            echo "  -> OK"
-            ok=$((ok + 1))
-        else
-            echo "  -> FAILED (may already be stopped)"
-        fi
+        (
+            if ssh $SSH_OPTIONS "${ssh_target}" "pkill -f kvclient_standalone_test; rm -rf ${REMOTE_WORK_DIR}" 2>/dev/null; then
+                echo "  ${host} -> OK"
+                exit 0
+            else
+                echo "  ${host} -> FAILED (may already be stopped)"
+                exit 1
+            fi
+        ) &
+        pids+=($!)
     done <<< "$NODES"
+
+    for pid in "${pids[@]}"; do
+        if wait "$pid"; then
+            ok=$((ok + 1))
+        fi
+    done
 
     echo ""
     echo "Clean result: ${ok}/${total}"
