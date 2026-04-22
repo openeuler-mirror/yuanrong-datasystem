@@ -255,27 +255,52 @@ bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
 }
 
 #ifdef USE_URMA
-uint64_t ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId)
+Status ClientWorkerRemoteApi::ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId,
+                                               uint64_t &totalRequiredSize, bool &fallbackToTcp)
 {
-    uint64_t totalRequiredSize = getParam.ubTotalSize;
+    totalRequiredSize = getParam.ubTotalSize;
+    fallbackToTcp = false;
     if (totalRequiredSize > 0) {
-        return totalRequiredSize;
+        return Status::OK();
+    }
+    if (getParam.ubMetaResolved) {
+        fallbackToTcp = true;
+        return Status::OK();
     }
     std::vector<ObjMetaInfo> objMetas;
     Status metaRc = GetObjMetaInfo(tenantId, getParam.objectKeys, objMetas);
     if (metaRc.IsError()) {
-        LOG(WARNING) << "GetObjMetaInfo failed: " << metaRc.ToString();
-        return 0;
+        return metaRc;
     }
     if (objMetas.size() != getParam.objectKeys.size()) {
+        fallbackToTcp = true;
         LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << getParam.objectKeys.size() << " but got "
-                     << objMetas.size();
-        return 0;
+                     << objMetas.size() << ", fallback to TCP/IP payload before get.";
+        return Status::OK();
     }
     for (const auto &meta : objMetas) {
         totalRequiredSize += meta.objSize;
     }
-    return totalRequiredSize;
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::PrepareGetUrmaBuffer(const GetParam &getParam, GetReqPb &req,
+                                                   std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle,
+                                                   uint8_t *&ubBufferPtr, uint64_t &ubBufferSize)
+{
+    if (!IsUrmaEnabled() || IsShmEnable()) {
+        return Status::OK();
+    }
+    uint64_t totalRequiredSize = 0;
+    bool fallbackToTcp = false;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ResolveUBGetSize(getParam, req.tenant_id(), totalRequiredSize, fallbackToTcp),
+                                     "Resolve UB get size failed");
+    if (totalRequiredSize > 0) {
+        PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, totalRequiredSize);
+    } else if (fallbackToTcp) {
+        LOG(WARNING) << "UB meta unavailable, fallback to TCP/IP payload: " << VectorToString(getParam.objectKeys);
+    }
+    return Status::OK();
 }
 #endif
 
@@ -296,12 +321,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     std::shared_ptr<UrmaManager::BufferHandle> ubBufferHandle;
     uint8_t *ubBufferPtr = nullptr;
     uint64_t ubBufferSize = 0;
-    if (IsUrmaEnabled() && !IsShmEnable()) {
-        uint64_t totalRequiredSize = ResolveUBGetSize(getParam, req.tenant_id());
-        if (totalRequiredSize > 0) {
-            PrepareUrmaBuffer(req, ubBufferHandle, ubBufferPtr, ubBufferSize, totalRequiredSize);
-        }
-    }
+    RETURN_IF_NOT_OK(PrepareGetUrmaBuffer(getParam, req, ubBufferHandle, ubBufferPtr, ubBufferSize));
 #endif
     Status getStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);

@@ -706,6 +706,27 @@ TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmall)
     LOG(INFO) << "Test case UrmaRemoteGetSmall success";
 }
 
+TEST_F(UrmaObjectClientTest, UrmaGetObjMetaInfoTimeoutReturnsError)
+{
+    std::shared_ptr<ObjectClient> client1;
+    std::shared_ptr<ObjectClient> client2;
+    constexpr int requestTimeoutMs = 50;
+    constexpr int connectTimeoutMs = 1000;
+    InitTestClient(0, client1, connectTimeoutMs, requestTimeoutMs);
+    InitTestClient(1, client2, connectTimeoutMs, requestTimeoutMs);
+
+    const std::string objectKey = NewObjectKey();
+    const std::string data(1024, 'a');
+    DS_ASSERT_OK(client1->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.size(), CreateParam{}));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.GetObjMetaInfo", "1*sleep(200)"));
+
+    std::vector<Optional<Buffer>> buffers;
+    Status status = client2->Get({ objectKey }, 0, buffers);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_UNAVAILABLE) << status.ToString();
+}
+
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetBig)
 {
     std::shared_ptr<KVClient> client1;

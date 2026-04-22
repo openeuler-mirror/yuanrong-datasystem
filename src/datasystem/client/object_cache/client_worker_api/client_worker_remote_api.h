@@ -143,7 +143,11 @@ public:
 
 private:
 #ifdef USE_URMA
-    uint64_t ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId);
+    Status ResolveUBGetSize(const GetParam &getParam, const std::string &tenantId, uint64_t &totalRequiredSize,
+                            bool &fallbackToTcp);
+    Status PrepareGetUrmaBuffer(const GetParam &getParam, GetReqPb &req,
+                                std::shared_ptr<UrmaManager::BufferHandle> &ubBufferHandle, uint8_t *&ubBufferPtr,
+                                uint64_t &ubBufferSize);
 #endif
 
     /**

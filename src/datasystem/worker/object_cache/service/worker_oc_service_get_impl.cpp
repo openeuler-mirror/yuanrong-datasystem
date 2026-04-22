@@ -2504,6 +2504,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
 Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &resp)
 {
     workerOperationTimeCost.Clear();
+    INJECT_POINT("worker.GetObjMetaInfo");
     RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get(), req));
     // construct objectKey by the input tenantId
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(req.tenantid(), req.object_keys());

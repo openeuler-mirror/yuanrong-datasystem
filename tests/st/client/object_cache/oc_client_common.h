@@ -44,10 +44,12 @@ namespace datasystem {
 namespace st {
 class OCClientCommon : public ExternalClusterTest {
 public:
-    void InitTestClient(uint32_t workerIndex, std::shared_ptr<ObjectClient> &client, int32_t timeoutMs = 60000)
+    void InitTestClient(uint32_t workerIndex, std::shared_ptr<ObjectClient> &client, int32_t timeoutMs = 60000,
+                        int32_t requestTimeoutMs = 0)
     {
         ConnectOptions connectOptions;
         InitConnectOpt(workerIndex, connectOptions, timeoutMs);
+        connectOptions.requestTimeoutMs = requestTimeoutMs;
         client = std::make_shared<ObjectClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
@@ -78,10 +80,11 @@ public:
     }
 
     void InitTestKVClient(uint32_t workerIndex, std::shared_ptr<KVClient> &client, int32_t timeoutMs = 60000,
-                          bool enableCrossNode = false, bool enableExclusive = false)
+                          bool enableCrossNode = false, bool enableExclusive = false, int32_t requestTimeoutMs = 0)
     {
         ConnectOptions connectOptions;
         InitConnectOpt(workerIndex, connectOptions, timeoutMs, enableCrossNode, enableExclusive);
+        connectOptions.requestTimeoutMs = requestTimeoutMs;
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
@@ -98,18 +101,22 @@ public:
         DS_ASSERT_OK(client->Init());
     }
 
-    void InitTestDsClient(uint32_t workerIndex, std::shared_ptr<DsClient> &client, int32_t timeoutMs = 60000)
+    void InitTestDsClient(uint32_t workerIndex, std::shared_ptr<DsClient> &client, int32_t timeoutMs = 60000,
+                          int32_t requestTimeoutMs = 0)
     {
         ConnectOptions connectOptions;
         InitConnectOpt(workerIndex, connectOptions, timeoutMs);
+        connectOptions.requestTimeoutMs = requestTimeoutMs;
         client = std::make_shared<DsClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }
 
-    void InitTestHeteroClient(uint32_t workerIndex, std::shared_ptr<HeteroClient> &client, int32_t timeoutMs = 60000)
+    void InitTestHeteroClient(uint32_t workerIndex, std::shared_ptr<HeteroClient> &client, int32_t timeoutMs = 60000,
+                              int32_t requestTimeoutMs = 0)
     {
         ConnectOptions connectOptions;
         InitConnectOpt(workerIndex, connectOptions, timeoutMs);
+        connectOptions.requestTimeoutMs = requestTimeoutMs;
         client = std::make_shared<HeteroClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
     }

@@ -2365,11 +2365,12 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         std::vector<ObjMetaInfo> objMetas;
         std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
+        getParam.ubMetaResolved = true;
         if (metaRc.IsError()) {
-            LOG(WARNING) << "GetObjMetaInfo failed: " << metaRc.ToString();
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
         } else if (objMetas.size() != objectsNeedToGet.size()) {
             LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size() << " but got "
-                         << objMetas.size();
+                         << objMetas.size() << ", fallback to TCP/IP payload before get.";
         } else {
             uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
             uint64_t totalSize = 0;
@@ -2482,7 +2483,8 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
                               .readParams = subReadParams,
                               .queryL2Cache = getParam.queryL2Cache,
                               .isRH2DSupported = getParam.isRH2DSupported,
-                              .ubTotalSize = batch.totalSize };
+                              .ubTotalSize = batch.totalSize,
+                              .ubMetaResolved = true };
 
         GetRspPb rsp;
         std::vector<RpcMessage> payloads;
