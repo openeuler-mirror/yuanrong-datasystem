@@ -1591,6 +1591,16 @@ private:
     Status RecoveryMetaFromWorker(const std::string &workerAddr, const ObjectMetaPb &meta);
 
     /**
+     * @brief Merge recovered metadata into existing object metadata.
+     * @param[in] objectKey Object key to be recovered.
+     * @param[in] workerAddr Worker address that sent metadata.
+     * @param[in] meta Metadata to be recovered.
+     * @param[in,out] objectMeta Existing object metadata in master.
+     */
+    void MergeRecoveredMeta(const std::string &objectKey, const std::string &workerAddr, const ObjectMetaPb &meta,
+                            ObjectMeta &objectMeta);
+
+    /**
      * @brief Select a location of object for read.
      * @param[in] objectKey Object key to be read.
      * @param[in] sourceWorker Request worker address.
