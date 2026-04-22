@@ -3828,6 +3828,24 @@ Status OCMetadataManager::RequestMetaFromWorker(const std::string &masterAddr, c
     return Status::OK();
 }
 
+void OCMetadataManager::MergeRecoveredMeta(const std::string &objectKey, const std::string &workerAddr,
+                                           const ObjectMetaPb &meta, ObjectMeta &objectMeta)
+{
+    const std::string oldPrimaryAddress = objectMeta.meta.primary_address();
+    objectMeta.locations[workerAddr] = AckState::ACK;
+    if (!meta.is_recovered() || meta.primary_address() != workerAddr) {
+        return;
+    }
+    objectMeta.meta.set_primary_address(workerAddr);
+    if (oldPrimaryAddress.empty() || oldPrimaryAddress == workerAddr) {
+        return;
+    }
+    LOG(INFO) << FormatString("[ObjectKey %s] Remove previous primary location %s after recovery by %s.",
+                              objectKey, oldPrimaryAddress, workerAddr);
+    (void)objectStore_->RemoveObjectLocation(objectKey, oldPrimaryAddress);
+    (void)objectMeta.locations.erase(oldPrimaryAddress);
+}
+
 Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, const ObjectMetaPb &meta)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!workerAddr.empty(), K_INVALID,
@@ -3851,11 +3869,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
                                                              { NotifyWorkerOpType::CACHE_INVALID }, true,
                                                              WriteMode2MetaType(meta.config().write_mode()));
         }
-        accessor->second.locations[workerAddr] = AckState::ACK;
-        if (meta.is_recovered() && meta.primary_address() == workerAddr
-            && accessor->second.meta.primary_address() != workerAddr) {
-            accessor->second.meta.set_primary_address(workerAddr);
-        }
+        MergeRecoveredMeta(objectKey, workerAddr, meta, accessor->second);
     } else {
         ObjectMeta metaCache;
         metaCache.meta = meta;
