@@ -68,6 +68,14 @@ void HttpServer::HandleNotify(const std::string &body) {
 
         {
             std::lock_guard<std::mutex> lock(notifyMutex_);
+            // Join old threads when exceeding limit to prevent unbounded growth
+            constexpr size_t kMaxNotifyThreads = 100;
+            if (notifyThreads_.size() >= kMaxNotifyThreads) {
+                for (auto &t : notifyThreads_) {
+                    if (t.joinable()) t.join();
+                }
+                notifyThreads_.clear();
+            }
             notifyThreads_.emplace_back([this, key, sender, expectedSize]() {
                 std::string val;
                 auto start = std::chrono::steady_clock::now();

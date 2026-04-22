@@ -118,13 +118,11 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
             continue;
         }
 
-        std::thread([host, port, body]() {
-            try {
-                httplib::Client cli(host, port);
-                cli.set_connection_timeout(2);
-                cli.set_read_timeout(2);
-                cli.Post("/notify", body, "application/json");
-            } catch (...) {}
-        }).detach();
+        try {
+            httplib::Client cli(host, port);
+            cli.set_connection_timeout(2);
+            cli.set_read_timeout(2);
+            cli.Post("/notify", body, "application/json");
+        } catch (...) {}
     }
 }

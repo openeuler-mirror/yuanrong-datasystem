@@ -102,8 +102,8 @@ with open('$node_config', 'w') as f:
                 echo "  ${host} -> FAILED"
                 exit 1
             fi
-            rm -f "${node_config}"
         ) &
+        rm -f "${node_config}"
         pids+=($!)
     done <<< "$NODES"
 

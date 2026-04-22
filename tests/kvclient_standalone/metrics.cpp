@@ -40,11 +40,9 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
         m.globalLatencies.push_back(latencyMs);
         // Cap at 1M entries (~8MB) to prevent unbounded growth
         if (m.globalLatencies.size() > 1000000) {
-            // Keep every other sample to preserve distribution shape
-            for (size_t i = 1; i < m.globalLatencies.size(); i += 2) {
-                m.globalLatencies[i / 2] = m.globalLatencies[i];
-            }
-            m.globalLatencies.resize(m.globalLatencies.size() / 2);
+            // Keep last 500K entries (most recent), which represents recent behavior
+            m.globalLatencies.erase(m.globalLatencies.begin(),
+                                     m.globalLatencies.begin() + (m.globalLatencies.size() - 500000));
         }
     }
 }

@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+
+# Local config files (use config.json.example as template)
+config.local.json
+config.notify.json
+config.*.json
+!config.json.example
+
+# Generated metrics and summary files
+metrics_*.csv
+summary_*.txt
+stdout_*.log
+
+# Binary
+kvclient_standalone_test
