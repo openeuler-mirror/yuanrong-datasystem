@@ -66,6 +66,22 @@ static constexpr int64_t MIN_WAIT_MS = 1;
 static constexpr int64_t WAIT_PERCENT = 80;
 static constexpr int64_t PERCENT_BASE = 100;
 
+int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
+{
+    constexpr int32_t rpcMaxTimeout = 600000;  // 10min
+    constexpr int32_t shorterSplitTime = 30000; // 30s
+    constexpr int32_t longerSplitTime = 90000;  // 90s
+    constexpr int32_t retryTimes = 3;
+
+    if (totalTimeoutMs <= shorterSplitTime) {
+        return totalTimeoutMs;
+    } else if (totalTimeoutMs <= longerSplitTime) {
+        return shorterSplitTime;
+    } else {
+        return std::min(totalTimeoutMs / retryTimes, rpcMaxTimeout);
+    }
+}
+
 const char *ShmEnableTypeName(ShmEnableType type)
 {
     switch (type) {
@@ -263,18 +279,7 @@ ClientWorkerRemoteCommonApi::~ClientWorkerRemoteCommonApi()
 
 void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
 {
-    constexpr int32_t rpcMaxTimeout = 600000;  // 10min
-    int32_t rpcTimeout = timeout / retryTimes_;
-
-    int32_t shorterSplitTime = 30000;  // 30s
-    int32_t longerSplitTime = 90000;   // 90s
-    if (timeout <= shorterSplitTime) {
-        rpcTimeoutMs_ = timeout;
-    } else if (timeout <= longerSplitTime) {
-        rpcTimeoutMs_ = shorterSplitTime;
-    } else {
-        rpcTimeoutMs_ = std::min(rpcTimeout, rpcMaxTimeout);
-    }
+    rpcTimeoutMs_ = CalculateSingleRpcTimeout(timeout);
     LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
@@ -410,7 +415,7 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE },
-        rpcTimeoutMs_);
+        CalculateSingleRpcTimeout(timeoutMs));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
 
     isConnectSuccess = false;
@@ -598,7 +603,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE },
-        rpcTimeoutMs_);
+        CalculateSingleRpcTimeout(timeoutMs));
     if (rc.GetCode() == K_SERVER_FD_CLOSED) {
         auto msg = rc.GetMsg();
         rc = Status(K_TRY_AGAIN, std::move(msg));
