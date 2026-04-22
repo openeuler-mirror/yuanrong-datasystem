@@ -237,5 +237,31 @@ TEST_F(EtcdClusterManagerTest, RestartAllClusterManagers2)
     }
     ShutDownAllClusterManagers();
 }
+
+TEST_F(EtcdClusterManagerTest, NoProgressEarlyTermination)
+{
+    int workerNum = 3;
+    InitTestEtcdInstance();
+    InitAllClusterManagers(workerNum);
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : etcdCMs_) {
+        DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
+    }
+    ShutDownAllClusterManagers();
+    std::vector<size_t> restartIdxs = {0};
+    inject::Set("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(120)"));
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
+    InitClusterManagersInList(restartIdxs);
+    auto startTime = std::chrono::steady_clock::now();
+    for (size_t i : restartIdxs) {
+        DS_ASSERT_OK(etcdCMs_[i]->CheckWaitNodeTableComplete());
+    }
+    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::steady_clock::now() - startTime)
+                       .count();
+    ASSERT_LT(elapsed, 15) << "WaitNodeTable should terminate early, but took " << elapsed << "s";
+    ShutDownAllClusterManagers();
+}
 }  // namespace st
 }  // namespace datasystem

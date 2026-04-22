@@ -73,6 +73,7 @@ namespace datasystem {
 static const std::string FAKE_NODE_EVENT_VALUE = "0;start";
 static constexpr int TOTAL_WAIT_NODE_TABLE_TIME_SEC = 60;  // total time of waiting node table complete.
 static constexpr int WAIT_NODE_TABLE_INTERVAL_MS = 10;     // interval of waiting node table complete.
+static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;        // terminate wait early if no new nodes discovered.
 static const std::string ETCD_CLUSTER_SUBSCRIBER = "EtcdClusterManager";
 
 EtcdClusterManager::ClusterNode::ClusterNode(const std::string &timeEpoch, const std::string &additionEventType)
@@ -1667,6 +1668,8 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
 
     LOG(INFO) << "Begin to wait for the completion of node table. Plan to wait: " << hashWorkerNum
               << ". Current: " << tableSize << ", totalWaitTime:" << totalWaitTime << "s";
+    int lastTableSize = tableSize;
+    auto lastProgressTimeUs = start;
     while (!IsTermSignalReceived() && (rc.IsError() || tableSize < hashWorkerNum)
            && GetSteadyClockTimeStampUs() - start < duration_cast<microseconds>(seconds(totalWaitTime)).count()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(WAIT_NODE_TABLE_INTERVAL_MS));
@@ -1680,6 +1683,24 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
             }
         }
         tableSize = GetNodeTableSize();
+        if (tableSize != lastTableSize) {
+            lastProgressTimeUs = GetSteadyClockTimeStampUs();
+            lastTableSize = tableSize;
+        }
+        INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout",
+                     [&lastProgressTimeUs](uint32_t injectSec) {
+                         lastProgressTimeUs =
+                             GetSteadyClockTimeStampUs()
+                             - duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC + injectSec + 1)).count();
+                         return Status::OK();
+                     });
+        if (GetSteadyClockTimeStampUs() - lastProgressTimeUs
+            >= duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC)).count()) {
+            LOG(INFO) << "No progress in node table for " << NO_PROGRESS_TIMEOUT_SEC
+                      << "s, terminating wait early. Current: " << tableSize
+                      << ", expected: " << hashWorkerNum;
+            break;
+        }
     }
     LOG(INFO) << "Finish waiting the node table. Current table size is " << tableSize
               << ", plan to wait: " << hashWorkerNum << ", is terminated: " << IsTermSignalReceived()
