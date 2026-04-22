@@ -1363,6 +1363,38 @@ TEST_F(SlotEndToEndPassiveScaleDownTest, CleanupBeforeDemoteTimedOutNode)
     }
 }
 
+TEST_F(SlotEndToEndPassiveScaleDownTest, DeleteRecoveredObjectAfterPassiveScaleDown)
+{
+    LOG(INFO) << "Scenario: worker0 fails, another worker recovers its slot data, then deleting the recovered object "
+                 "should not fail when worker0 is no longer available.";
+
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client2;
+    constexpr int timeoutMs = 5'000;
+    InitTestKVClient(0, client0, timeoutMs);
+    InitTestKVClient(2, client2, timeoutMs);
+
+    SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
+    const std::string key = client2->GenerateKey("delete_after_passive_scale_down");
+    const std::string value = "delete_after_passive_scale_down_" + std::to_string(128);
+    DS_ASSERT_OK(client0->Set(key, value, param));
+
+    ASSERT_TRUE(WaitUntilGetSucceeds(client0, key, value));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "OCMetadataManager.RemoveMetaByWorker.delay", "return(K_OK)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 2, "OCMetadataManager.RemoveMetaByWorker.delay", "return(K_OK)"));
+    client0.reset();
+    DS_ASSERT_OK(cluster_->KillWorker(0));
+    std::this_thread::sleep_for(std::chrono::milliseconds((PASSIVE_NODE_DEAD_TIMEOUT_S + 1) * S2MS));
+    ASSERT_TRUE(WaitUntilSlotRecoveryIncidentsCleared()) << DumpSlotRecoveryState();
+    ASSERT_TRUE(WaitUntilGetSucceeds(client2, key, value));
+
+    DS_ASSERT_OK(client2->Del(key));
+
+    std::string deletedValue;
+    ASSERT_EQ(client2->Get(key, deletedValue).GetCode(), K_NOT_FOUND);
+}
+
 TEST_F(SlotEndToEndPassiveScaleDownTest, RestoreObjectWithTtl)
 {
     std::shared_ptr<KVClient> client0;
