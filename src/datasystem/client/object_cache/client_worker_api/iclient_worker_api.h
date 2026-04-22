@@ -92,6 +92,7 @@ struct GetParam {
     bool queryL2Cache;
     bool isRH2DSupported = false;
     uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.
+    bool ubMetaResolved = false;  // True means UB meta lookup was already attempted for this request.
 };
 
 struct H2DParam {
