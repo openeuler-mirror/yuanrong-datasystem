@@ -947,14 +947,14 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
     }
     using namespace std::chrono;
     static const int SEC_TO_MS = 1000;
-    static const int TOTAL_WAIT_TIME_MS = std::min(30 * SEC_TO_MS, reqTimeoutMs);
+    const int totalWaitTimeMs = std::min(30 * SEC_TO_MS, reqTimeoutMs);
     static const int INTERVAL_MS = 10;
     auto start = GetSteadyClockTimeStampMs();
 
     noRecon.Assign(&reconFlag_);
     bool rc = noRecon.TryLockIfUnlocked();
     bool hasLoggedBeforeWait = false;
-    while (!rc && GetSteadyClockTimeStampMs() - start < milliseconds(TOTAL_WAIT_TIME_MS).count()) {
+    while (!rc && GetSteadyClockTimeStampMs() - start < milliseconds(totalWaitTimeMs).count()) {
         if (!hasLoggedBeforeWait) {
             LOG(INFO) << "Waiting for the reconFlag...";
             hasLoggedBeforeWait = true;
@@ -1834,6 +1834,7 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
 
 Status WorkerOCServiceImpl::GiveUpReconciliation()
 {
+    RETURN_OK_IF_TRUE(setHealthFile_.load());
     // In case of centralized master, reconciliation is triggered by starting worker. No need to wait for
     // reconciliation requests from master.
     bool isRestart = false;
