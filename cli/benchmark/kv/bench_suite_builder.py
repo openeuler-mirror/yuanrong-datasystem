@@ -276,7 +276,7 @@ class KVBenchSuiteBuilder:
             name = f"{name}_concurrent"
 
         # Create a separate handler for each test case
-        testcase_handler = KVBenchOutputHandler(self.bench_args, testcase_index)
+        testcase_handler = KVBenchOutputHandler(self.bench_args, testcase_index, kv_args)
 
         # Share the CSV file path from the builder to avoid overwriting
         if self.final_csv_filepath:
