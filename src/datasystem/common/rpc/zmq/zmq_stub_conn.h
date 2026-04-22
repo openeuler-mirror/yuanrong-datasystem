@@ -276,12 +276,12 @@ private:
     std::atomic<bool> initialized_ = { false };
     std::atomic<uint64_t> frontendQueLastHandledTimeMs_ = { 0 };
 
-    Status RouteToZmqSocket(const MetaPb &meta, ZmqMsgFrames &&p);
+    Status RouteToZmqSocket(MetaPb &meta, ZmqMsgFrames &&p);
     Status SendHeartBeats();
     Status ZmqSocketToBackend();
     Status HandleEvent(int timeout);
     Status BackendToFrontend();
-    Status RouteToUnixSocket(const std::shared_ptr<SockConnEntry> &connInfo, const MetaPb &meta, ZmqMsgFrames &&p);
+    Status RouteToUnixSocket(const std::shared_ptr<SockConnEntry> &connInfo, MetaPb &meta, ZmqMsgFrames &&p);
 };
 
 struct StubInfo;

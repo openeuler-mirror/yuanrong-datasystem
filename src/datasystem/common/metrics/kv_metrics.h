@@ -37,7 +37,8 @@ enum class KvMetricId : uint16_t {
     CLIENT_GET_TCP_READ_TOTAL_BYTES,
     WORKER_RPC_CREATE_META_LATENCY,
     WORKER_RPC_QUERY_META_LATENCY,
-    WORKER_RPC_GET_REMOTE_OBJECT_LATENCY,
+    /** Worker (caller) -> remote worker GetObject* */
+    WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY,
     WORKER_PROCESS_CREATE_LATENCY,
     WORKER_PROCESS_PUBLISH_LATENCY,
     WORKER_PROCESS_GET_LATENCY,
@@ -61,6 +62,15 @@ enum class KvMetricId : uint16_t {
     ZMQ_RECEIVE_IO_LATENCY,
     ZMQ_RPC_SERIALIZE_LATENCY,
     ZMQ_RPC_DESERIALIZE_LATENCY,
+    // RPC Queue Flow Latency
+    ZMQ_CLIENT_QUEUING_LATENCY,
+    ZMQ_CLIENT_STUB_SEND_LATENCY,
+    ZMQ_SERVER_QUEUE_WAIT_LATENCY,
+    ZMQ_SERVER_EXEC_LATENCY,
+    ZMQ_SERVER_REPLY_LATENCY,
+    ZMQ_RPC_E2E_LATENCY,
+    ZMQ_RPC_NETWORK_LATENCY,
+    // Memory Allocator Metrics
     WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL,
     WORKER_ALLOCATOR_FREE_BYTES_TOTAL,
     WORKER_SHM_UNIT_CREATED_TOTAL,
@@ -82,6 +92,16 @@ enum class KvMetricId : uint16_t {
     // URMA
     URMA_IMPORT_JFR,
     URMA_INFLIGHT_WR_COUNT,
+    /** Other worker's pull: GetObject* service path */
+    WORKER_RPC_REMOTE_GET_INBOUND_LATENCY,
+    /** MsgQ: submit -> thread start */
+    WORKER_GET_THREADPOOL_QUEUE_LATENCY,
+    /** Thread pool: ProcessGetObjectRequest */
+    WORKER_GET_THREADPOOL_EXEC_LATENCY,
+    /** Non-central: hash/resolve master address */
+    WORKER_GET_META_ADDR_HASHRING_LATENCY,
+    /** After QueryMetadataFromMaster OK: local follow-up */
+    WORKER_GET_POST_QUERY_META_PHASE_LATENCY,
     KV_METRIC_END
 };
 

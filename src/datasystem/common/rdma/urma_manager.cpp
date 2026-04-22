@@ -860,7 +860,6 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
     auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
                                statusCode);
-
     return Status(K_URMA_ERROR, errMsg);
 }
 

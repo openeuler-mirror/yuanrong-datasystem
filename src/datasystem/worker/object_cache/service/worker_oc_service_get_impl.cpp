@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
 #include <cstdint>
+#include <chrono>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -33,6 +34,8 @@
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -50,6 +53,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/master/meta_addr_info.h"
@@ -141,11 +145,19 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
 
     timer.Reset();
     if (serverApi->EnableMsgQ()) {
+        const std::chrono::steady_clock::time_point submitToPool = std::chrono::steady_clock::now();
         std::string traceID = Trace::Instance().GetTraceID();
         auto cost = workerOperationTimeCost;
         threadPool_->Execute([=]() mutable {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             workerOperationTimeCost = cost;
+            const std::chrono::steady_clock::time_point poolThreadStart = std::chrono::steady_clock::now();
+            {
+                const uint64_t qUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    poolThreadStart - submitToPool).count());
+                metrics::GetHistogram(
+                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_QUEUE_LATENCY)).Observe(qUs);
+            }
             auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             LOG(INFO) << "Process Get from client: " << clientId
                       << ", objects: " << VectorToString(request->GetRawObjectKeys())
@@ -158,7 +170,18 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             } else {
                 reqTimeoutDuration.Init(timeout - elapsed);
                 auto newSubTimeout = std::max<int64_t>(subTimeout - elapsed, 0);
+                const std::chrono::steady_clock::time_point processStart = std::chrono::steady_clock::now();
                 LOG_IF_ERROR(ProcessGetObjectRequest(newSubTimeout, request), "Process Get failed");
+                {
+                    const uint64_t execUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - processStart).count());
+                    const uint64_t e2EUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - submitToPool).count());
+                    metrics::GetHistogram(
+                        static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY)).Observe(execUs);
+                    metrics::GetHistogram(
+                        static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY)).Observe(e2EUs);
+                }
                 workerOperationTimeCost.Append("ProcessGetObjectRequest",
                                                static_cast<int64_t>(timer.ElapsedMilliSecond()));
                 LOG(INFO) << FormatString(
@@ -169,7 +192,18 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             }
         });
     } else {
-        LOG_IF_ERROR(ProcessGetObjectRequest(subTimeout, request), "Process Get failed");
+        {
+            const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+            LOG_IF_ERROR(ProcessGetObjectRequest(subTimeout, request), "Process Get failed");
+            {
+                const uint64_t e2EUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - t0).count());
+                metrics::GetHistogram(
+                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY)).Observe(e2EUs);
+                metrics::GetHistogram(
+                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY)).Observe(e2EUs);
+            }
+        }
         workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
         LOG(INFO) << FormatString("Process Get done, clientId: %s, objectKeys: %s. The operations of worker Get %s",
                                   clientId, VectorToString(request->GetRawObjectKeys()),
@@ -720,6 +754,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("Query from master failed : %s", result.ToString()));
     }
     INJECT_POINT("worker.after_query_meta");
+    Timer postQueryMetaPhase;
 
     if (FLAGS_oc_io_from_l2cache_need_metadata) {
         point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_NEEDMETA_UNLOCK);
@@ -746,6 +781,11 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         }
     }
     point.Record();
+    {
+        const uint64_t us = static_cast<uint64_t>(postQueryMetaPhase.ElapsedMicroSecond());
+        metrics::GetHistogram(
+            static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY)).Observe(us);
+    }
 
     VLOG(1) << "Get object data from remote node finish, lastRc:" << lastRc.ToString();
     return lastRc;
@@ -1343,7 +1383,6 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
         }
     }
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
-
     if (objKeysUndecidedMaster.empty() && objectKeysNotExistNeedQueryInEtcd.empty() && objectKeysPuzzled.empty()
         && objectKeysMayInOtherAz.empty()) {
         return;
@@ -1547,7 +1586,9 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 5. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
     bool multiReplicaEnabled = etcdCM_->MultiReplicaEnabled();
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata && !multiReplicaEnabled;
-    if (metaStoredInEtcd && queryEtcdMeta) {
+    // If l2cache is disabled, there is no need to query meta in etcd.
+    bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
+    if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {
         ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(objKeysUndecidedMaster, std::move(objectKeysNotExist),
                                                        objectKeysPuzzled, objectKeysMayInOtherAz, queryMetas,
                                                        absentObjectKeys);

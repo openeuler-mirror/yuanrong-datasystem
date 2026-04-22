@@ -66,7 +66,7 @@ Status WorkerRemoteWorkerOCApi::Init()
 Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                 std::vector<RpcMessage> &payload)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY);
     INJECT_POINT("worker.remote_get", []() {
         LOG(ERROR) << "DFX test, try again!";
         RETURN_STATUS(K_TRY_AGAIN, "DFX test, try again!");
@@ -87,7 +87,7 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetOb
 Status WorkerRemoteWorkerOCApi::GetObjectRemote(
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> *clientApi)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY);
     RpcOptions opts;
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
