@@ -291,7 +291,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `host_id_env_name` | string | `""` | ServiceDiscovery 的 hostId 环境变量名 |
 | `connect_timeout_ms` | int | 1000 | 连接超时(ms) |
 | `request_timeout_ms` | int | 20 | 请求超时(ms) |
-| `data_sizes` | string[] | `["8MB", "512KB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀 |
+| `data_sizes` | string[] | `["8MB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀（config.json.example 中为 `["8MB","512KB"]`） |
 | `ttl_seconds` | int | 5 | 写入数据的 TTL(秒) |
 | `target_qps` | int | 1600 | 目标总 QPS |
 | `num_set_threads` | int | 16 | Writer 线程数 |

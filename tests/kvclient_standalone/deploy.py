@@ -21,8 +21,8 @@ class Deployer:
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
-        self.binary_path = os.path.join(self.base_dir, 'output', 'kvclient_standalone_test')
-        self.datasystem_sdk_dir = os.path.join(self.base_dir, 'output', 'lib')
+        self.binary_path = os.path.join(self.base_dir, 'kvclient_standalone_test')
+        self.datasystem_sdk_dir = os.path.join(self.base_dir, 'lib')
         self.default_transport = self.deploy.get('transport', 'ssh')
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
@@ -100,14 +100,16 @@ class Deployer:
                 tar_file.close()
                 try:
                     with tarfile.open(tar_path, 'w:gz') as tar:
-                        tar.add(src, arcname=os.path.basename(src))
+                        tar.add(src, arcname=os.path.basename(dst))
                     remote_tar = f'{dst}.tar.gz'
                     subprocess.run(
                         ['kubectl', 'cp', tar_path, f'{ns}/{target}:{remote_tar}'],
                         check=True)
                     self.run_on(
                         node,
-                        f'mkdir -p {dst} && tar xzf {remote_tar} -C {os.path.dirname(dst)} && rm -f {remote_tar}')
+                        f'mkdir -p {os.path.dirname(dst)} && '
+                        f'tar xzf {remote_tar} -C {os.path.dirname(dst)} && '
+                        f'rm -f {remote_tar}')
                 finally:
                     if os.path.exists(tar_path):
                         os.unlink(tar_path)
@@ -230,8 +232,8 @@ class Deployer:
 
             if os.path.isdir(self.datasystem_sdk_dir):
                 print(f'  Deploying SDK libs to {target}...')
-                self.run_on(node, f'rm -rf {self.remote_work_dir}/sdk_lib')
-                self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/sdk_lib')
+                self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
+                self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
 
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
             self.scp_to(node, tmp_config, remote_config)
@@ -243,7 +245,7 @@ class Deployer:
                     os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
-            ld_path = f'{self.remote_work_dir}/sdk_lib' if os.path.isdir(self.datasystem_sdk_dir) else ''
+            ld_path = f'{self.remote_work_dir}/lib' if os.path.isdir(self.datasystem_sdk_dir) else ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
                 f'cd {self.remote_work_dir} && '
@@ -270,7 +272,7 @@ class Deployer:
     def do_deploy(self):
         if not os.path.isfile(self.binary_path):
             print(f'ERROR: binary not found: {self.binary_path}')
-            print('  Run "make package" first to build the output directory.')
+            print('  Run "build.sh" first to compile and package.')
             sys.exit(1)
 
         results = []
@@ -284,6 +286,11 @@ class Deployer:
         print(f'\nDeploy result: {ok}/{total} succeeded')
 
     def do_stop(self):
+        if not os.path.isfile(self.binary_path):
+            print(f'ERROR: binary not found: {self.binary_path}')
+            print('  Run "build.sh" first to compile and package.')
+            sys.exit(1)
+
         config = dict(self.config_template)
         config['peers'] = self.build_default_peers()
 
@@ -303,11 +310,15 @@ class Deployer:
             env = os.environ.copy()
             if ld_path:
                 env['LD_LIBRARY_PATH'] = f'{ld_path}:{env.get("LD_LIBRARY_PATH", "")}'
-            subprocess.run(
-                [self.binary_path, '--stop', tmp_config],
-                env=env, check=True)
 
-            # Stop procmon on all nodes
+            try:
+                subprocess.run(
+                    [self.binary_path, '--stop', tmp_config],
+                    env=env, check=False)
+            except Exception as e:
+                print(f'WARN: --stop failed: {e}')
+
+            # Stop procmon on all nodes (always attempt, even if stop failed)
             if self.enable_procmon:
                 for node in self.nodes:
                     self.run_on(node, 'pkill -f procmon.py', check=False)

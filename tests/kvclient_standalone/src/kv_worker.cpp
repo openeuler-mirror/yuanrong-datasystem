@@ -52,6 +52,10 @@ void KVWorker::PipelineLoop(int threadId) {
     double intervalMs = 1000.0 / qpsPerThread;
 
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
+    if (cfg_.dataSizes.empty()) {
+        SLOG_WARN("Thread " << threadId << ": no data sizes configured, exiting");
+        return;
+    }
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
     SLOG_INFO("Thread " << threadId << " started: " << qpsPerThread << " QPS");
