@@ -22,7 +22,7 @@ class Deployer:
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
         self.binary_path = os.path.join(self.base_dir, 'output', 'kvclient_standalone_test')
-        self.sdk_lib_dir = os.path.join(self.base_dir, 'output', 'lib')
+        self.datasystem_sdk_dir = os.path.join(self.base_dir, 'output', 'lib')
         self.default_transport = self.deploy.get('transport', 'ssh')
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
@@ -228,10 +228,10 @@ class Deployer:
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
             self.scp_to(node, self.binary_path, remote_binary)
 
-            if os.path.isdir(self.sdk_lib_dir):
+            if os.path.isdir(self.datasystem_sdk_dir):
                 print(f'  Deploying SDK libs to {target}...')
                 self.run_on(node, f'rm -rf {self.remote_work_dir}/sdk_lib')
-                self.scp_to(node, self.sdk_lib_dir, f'{self.remote_work_dir}/sdk_lib')
+                self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/sdk_lib')
 
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
             self.scp_to(node, tmp_config, remote_config)
@@ -243,7 +243,7 @@ class Deployer:
                     os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
-            ld_path = f'{self.remote_work_dir}/sdk_lib' if os.path.isdir(self.sdk_lib_dir) else ''
+            ld_path = f'{self.remote_work_dir}/sdk_lib' if os.path.isdir(self.datasystem_sdk_dir) else ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
                 f'cd {self.remote_work_dir} && '
@@ -291,8 +291,8 @@ class Deployer:
 
         try:
             ld_path = ''
-            if os.path.isdir(self.sdk_lib_dir):
-                ld_path = os.path.abspath(self.sdk_lib_dir)
+            if os.path.isdir(self.datasystem_sdk_dir):
+                ld_path = os.path.abspath(self.datasystem_sdk_dir)
 
             print('Stopping all instances...')
             env = os.environ.copy()

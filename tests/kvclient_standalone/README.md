@@ -323,7 +323,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `ssh_options` | string | SSH 选项，默认 `"-o StrictHostKeyChecking=no"` |
 | `nodes` | array | 节点列表 |
 
-> `binary_path` 和 `sdk_lib_dir` 不再需要配置，deploy.py 自动从 `output/` 目录查找二进制和 SDK 库。
+> `binary_path` 和 `datasystem_sdk_dir` 不再需要配置，deploy.py 自动从 `output/` 目录查找二进制和 SDK 库。
 
 每个 node 支持：
 - `host` — SSH 节点的主机名/IP (`localhost` 表示本机)
