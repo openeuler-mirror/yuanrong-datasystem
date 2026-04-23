@@ -2,10 +2,10 @@
 build/
 
 # Local config files (use config.json.example as template)
-config.local.json
-config.notify.json
-config.*.json
-!config.json.example
+config/config.local.json
+config/config.notify.json
+config/config.*.json
+!config/config.json.example
 
 # Generated metrics and summary files
 metrics_*.csv

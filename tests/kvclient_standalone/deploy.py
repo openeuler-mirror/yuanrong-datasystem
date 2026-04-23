@@ -201,7 +201,7 @@ def main():
 
     action = sys.argv[1]
     deploy_json = sys.argv[2]
-    config_template = sys.argv[3] if len(sys.argv) > 3 else 'config.json.example'
+    config_template = sys.argv[3] if len(sys.argv) > 3 else 'config/config.json.example'
 
     if action not in ('--deploy', '--stop', '--clean'):
         print(f'Unknown action: {action}')

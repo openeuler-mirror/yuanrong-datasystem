@@ -177,8 +177,8 @@ echo ""
 echo "--- Starting local writer ---"
 cd "$SCRIPT_DIR"
 export LD_LIBRARY_PATH="$SDK_LIB_DIR:${LD_LIBRARY_PATH:-}"
-cp /tmp/config_tunnel_local.json config_tunnel_local.json
-./build/kvclient_standalone_test config_tunnel_local.json > stdout_local.log 2>&1 &
+cp /tmp/config_tunnel_local.json config/config_tunnel_local.json
+./build/kvclient_standalone_test config/config_tunnel_local.json > stdout_local.log 2>&1 &
 LOCAL_PID=$!
 echo "  Local writer PID: $LOCAL_PID"
 
