@@ -35,6 +35,22 @@ class Deployer:
     def _ssh_args(self):
         return self.ssh_options.split() if self.ssh_options else []
 
+    def _build_ssh_cmd(self, node):
+        """Build base SSH command list with options and port."""
+        cmd = ['ssh'] + self._ssh_args()
+        port = node.get('ssh_port')
+        if port:
+            cmd += ['-p', str(port)]
+        return cmd
+
+    def _build_scp_cmd(self, node):
+        """Build base SCP command list with options and port."""
+        cmd = ['scp'] + self._ssh_args()
+        port = node.get('ssh_port')
+        if port:
+            cmd += ['-P', str(port)]
+        return cmd
+
     def _user_for(self, node):
         return node.get('ssh_user', self.default_ssh_user)
 
@@ -76,7 +92,7 @@ class Deployer:
         else:
             user = self._user_for(node)
             return subprocess.run(
-                ['ssh'] + self._ssh_args() + [f'{user}@{target}', cmd],
+                self._build_ssh_cmd(node) + [f'{user}@{target}', cmd],
                 check=check, capture_output=True, text=True, timeout=timeout)
 
     def scp_to(self, node, src, dst):
@@ -121,7 +137,7 @@ class Deployer:
         else:
             user = self._user_for(node)
             subprocess.run(
-                ['scp'] + self._ssh_args() + ['-r', src, f'{user}@{target}:{dst}'],
+                self._build_scp_cmd(node) + ['-r', src, f'{user}@{target}:{dst}'],
                 check=True, timeout=120)
 
     def collect_files(self, node, local_dir):
@@ -162,7 +178,7 @@ class Deployer:
             else:
                 user = self._user_for(node)
                 subprocess.run(
-                    ['scp'] + self._ssh_args() +
+                    self._build_scp_cmd(node) +
                     [f'{user}@{target}:{tar_remote}', tar_local],
                     check=True, timeout=120)
 
