@@ -2,7 +2,7 @@ build --cxxopt=-std=c++17
 build --cxxopt=-Wextra
 build --cxxopt=-fsigned-char
 build --cxxopt=-fno-common
-build --cxxopt=-rdynamic
+build --linkopt=-rdynamic
 build --cxxopt=-fPIC
 build --cxxopt=-g3
 build --cxxopt=-Wno-redundant-move
