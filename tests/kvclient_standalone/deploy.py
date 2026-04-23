@@ -231,7 +231,10 @@ class Deployer:
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
             self.scp_to(node, self.binary_path, remote_binary)
 
-            if os.path.isdir(self.datasystem_sdk_dir):
+            remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
+            if remote_sdk:
+                print(f'  Using container SDK: {remote_sdk}')
+            elif os.path.isdir(self.datasystem_sdk_dir):
                 print(f'  Deploying SDK libs to {target}...')
                 self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
                 self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
@@ -246,7 +249,12 @@ class Deployer:
                     os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
-            ld_path = f'{self.remote_work_dir}/lib' if os.path.isdir(self.datasystem_sdk_dir) else ''
+            if remote_sdk:
+                ld_path = remote_sdk
+            elif os.path.isdir(self.datasystem_sdk_dir):
+                ld_path = f'{self.remote_work_dir}/lib'
+            else:
+                ld_path = ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
                 f'cd {self.remote_work_dir} && '
