@@ -3573,7 +3573,7 @@ Status OCMetadataManager::CreateHashMeta(const ObjectMetaPb &meta, const std::st
 void OCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &&matchFunc,
                                       std::vector<std::string> &objKeys, bool *exitEarly)
 {
-    std::lock_guard<std::shared_timed_mutex> lck(metaTableMutex_);
+    std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     for (const auto &it : metaTable_) {
         if (exitEarly && *exitEarly) {
             break;
