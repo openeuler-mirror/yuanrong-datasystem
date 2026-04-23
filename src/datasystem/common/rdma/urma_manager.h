@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/common/rdma/urma_async_event_handler.h"
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 
 #include "datasystem/common/flags/flags.h"
@@ -273,8 +274,7 @@ public:
     Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                             const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                            uint8_t srcChipId, uint8_t dstChipId, bool blocking,
-                            std::vector<uint64_t> &eventKeys,
+                            uint8_t srcChipId, uint8_t dstChipId, bool blocking, std::vector<uint64_t> &eventKeys,
                             std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
@@ -610,7 +610,7 @@ private:
 
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
-
+    UrmaAsyncEventHandler aeHandler_;
     std::unique_ptr<UrmaResource> urmaResource_;
     std::atomic<uint64_t> requestId_{ 0 };
     urma_reg_seg_flag_t registerSegmentFlag_{};
@@ -641,9 +641,9 @@ private:
     void *memoryBuffer_ = nullptr;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    static std::atomic<uint64_t> ubTransportMemSize_;   // 128 MB
-    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;      // 32 MB
-    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;     // 8 MB
+    static std::atomic<uint64_t> ubTransportMemSize_;  // 128 MB
+    uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
+    uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB
 };
 
 }  // namespace datasystem

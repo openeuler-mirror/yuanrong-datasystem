@@ -43,25 +43,24 @@
 namespace datasystem {
 class UrmaConnection;
 class UrmaJfs;
+class UrmaResource;
 class UrmaEvent : public Event {
 public:
-    enum class OperationType : uint8_t {
-        UNKNOWN = 0,
-        READ = 1,
-        WRITE = 2
-    };
+    enum class OperationType : uint8_t { UNKNOWN = 0, READ = 1, WRITE = 2 };
 
     /**
      * @brief Construct an Urma event for an in-flight request.
      * @param[in] requestId Unique request id.
-     * @param[in] connection Connection associated with the request.
+     * @param[in] jfs JFS snapshot at request-submit time. The owning connection is
+     *            recovered via jfs->GetConnection() when needed for recovery.
+     * @param[in] remoteAddress Remote address string for logging.
+     * @param[in] remoteInstanceId Remote instance id for logging.
+     * @param[in] operationType Read or write.
      * @param[in] waiter Optional waiter used for notification.
      */
-    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaConnection> connection, std::weak_ptr<UrmaJfs> jfs,
-              std::string remoteAddress, std::string remoteInstanceId, OperationType operationType,
-              std::shared_ptr<EventWaiter> waiter = nullptr)
+    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaJfs> jfs, std::string remoteAddress, std::string remoteInstanceId,
+              OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr)
         : Event(requestId, std::move(waiter)),
-          connection_(std::move(connection)),
           jfs_(std::move(jfs)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
@@ -82,13 +81,11 @@ public:
     }
 
     /**
-     * @brief Get the connection associated with this request.
-     * @return Weak pointer to the associated connection.
+     * @brief Get the connection that owned the JFS at request-submit time.
+     *        Derived from jfs_->GetConnection() rather than stored directly.
+     * @return Weak pointer to the associated connection (empty if JFS expired).
      */
-    std::weak_ptr<UrmaConnection> GetConnection() const
-    {
-        return connection_;
-    }
+    std::weak_ptr<UrmaConnection> GetConnection() const;
 
     /**
      * @brief Get the JFS associated with this request when it was submitted.
@@ -137,7 +134,6 @@ public:
 
 private:
     int statusCode_{ 0 };
-    std::weak_ptr<UrmaConnection> connection_;
     std::weak_ptr<UrmaJfs> jfs_;
     std::string remoteAddress_;
     std::string remoteInstanceId_;
@@ -252,7 +248,7 @@ private:
 
 class UrmaJfs {
 public:
-    explicit UrmaJfs(urma_jfs_t *raw) : raw_(raw), valid_(true)
+    explicit UrmaJfs(urma_jfs_t *raw, UrmaResource *resource) : raw_(raw), resource_(resource), valid_(true)
     {
         counter_.fetch_add(1);
     }
@@ -261,14 +257,12 @@ public:
     URMA_DISABLE_COPY_AND_MOVE(UrmaJfs);
 
     /**
-     * @brief Create a jetty for send.
-     * @param[in] context Local Urma context.
-     * @param[in] jfc Completion queue bound to this JFS.
-     * @param[in] priority Service priority used for this JFS.
+     * @brief Create a jetty for send, obtaining context/jfc/priority from the owning resource.
+     * @param[in] resource Owning UrmaResource that provides context, jfc, and priority.
      * @param[out] jfs Created JFS wrapper.
      * @return Status of the call.
      */
-    static Status Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, std::shared_ptr<UrmaJfs> &jfs);
+    static Status Create(UrmaResource &resource, std::shared_ptr<UrmaJfs> &jfs);
 
     /**
      * @brief Get the underlying JFS handle.
@@ -313,9 +307,25 @@ public:
         return raw_->jfs_id.id;
     }
 
+    /**
+     * @brief Bind this JFS to its owning connection. Must be called before the JFS
+     *        is published to any other thread or stored in a connection.
+     * @param[in] connection The owning connection.
+     */
+    void BindConnection(const std::shared_ptr<UrmaConnection> &connection);
+
+    /**
+     * @brief Get the connection that owns this JFS.
+     * @return Weak pointer to the owning connection.
+     */
+    std::weak_ptr<UrmaConnection> GetConnection() const;
+
 private:
     static std::atomic<uint32_t> counter_;
     urma_jfs_t *raw_ = nullptr;
+    UrmaResource *resource_ = nullptr;
+    mutable std::mutex connectionMutex_;
+    std::weak_ptr<UrmaConnection> connection_;
     std::atomic<bool> valid_ = false;
 };
 
@@ -331,14 +341,11 @@ public:
 
     /**
      * @brief Create a jetty for receive.
-     * @param[in] context Local Urma context.
-     * @param[in] jfc Completion queue bound to this JFR.
-     * @param[in] urmaToken Token used to protect resource access.
+     * @param[in] resource Owning UrmaResource that provides context, jfc, and token.
      * @param[out] jfr Created JFR wrapper.
      * @return Status of the call.
      */
-    static Status Create(urma_context_t *context, urma_jfc_t *jfc, urma_token_t urmaToken,
-                         std::unique_ptr<UrmaJfr> &jfr);
+    static Status Create(const UrmaResource &resource, std::unique_ptr<UrmaJfr> &jfr);
 
     /**
      * @brief Get the underlying JFR handle.
@@ -461,7 +468,7 @@ using UrmaRemoteSegmentMap = tbb::concurrent_hash_map<uint64_t, std::unique_ptr<
 
 class UrmaResource;
 
-class UrmaConnection {
+class UrmaConnection : public std::enable_shared_from_this<UrmaConnection> {
 public:
     /**
      * @brief Construct a connection with a local JFS and an imported remote target JFR.
@@ -594,6 +601,15 @@ public:
     }
 
     /**
+     * @brief Get the JFS priority used when creating new JFS instances.
+     * @return JFS priority value.
+     */
+    uint8_t GetJfsPriority() const
+    {
+        return jfsPriority_;
+    }
+
+    /**
      * @brief Gets the priority and sl for CTP.
      * @param[out] priority The priority index for current tp_type
      * @param[out] sl The sl for current tp_type
@@ -646,6 +662,35 @@ public:
      */
     void AsyncDeleteJfs(uint32_t jfsId);
 
+    /**
+     * @brief Register a JFS in the resource-level registry for AE lookup.
+     * @param[in] jfs JFS to register.
+     * @return Status of the call.
+     */
+    Status RegisterJfs(const std::shared_ptr<UrmaJfs> &jfs);
+
+    /**
+     * @brief Remove a JFS from the registry.
+     * @param[in] jfsId Urma-assigned JFS id.
+     * @param[in] expected Optional pointer; only unregister if the registered JFS matches.
+     */
+    void UnregisterJfs(uint32_t jfsId, const UrmaJfs *expected = nullptr);
+
+    /**
+     * @brief Look up a JFS by its Urma-assigned id.
+     * @param[in] jfsId JFS id to look up.
+     * @param[out] jfs Locked shared pointer to the JFS.
+     * @return Status of the call.
+     */
+    Status GetJfsById(uint32_t jfsId, std::shared_ptr<UrmaJfs> &jfs);
+
+    /**
+     * @brief Get any valid registered JFS, used by async-event injection tests.
+     * @param[out] jfs Locked shared pointer to a valid JFS.
+     * @return Status of the call.
+     */
+    Status GetAnyValidJfs(std::shared_ptr<UrmaJfs> &jfs);
+
 private:
     struct PendingDeleteJfs {
         std::shared_ptr<UrmaJfs> jfs;
@@ -669,6 +714,8 @@ private:
     std::mutex pendingDeleteMutex_;
     // jfs id to pending delete jfs object with trace context
     std::unordered_map<uint32_t, PendingDeleteJfs> pendingDeleteJfs_;
+    std::mutex jfsRegistryMutex_;
+    std::unordered_map<uint32_t, std::weak_ptr<UrmaJfs>> jfsRegistry_;
 };
 
 }  // namespace datasystem

@@ -235,8 +235,8 @@ urma_status_t ds_urma_set_context_opt(urma_context_t *context, urma_opt_name_t o
 
 urma_status_t ds_urma_user_ctl(urma_context_t *ctx, urma_user_ctl_in_t *in, urma_user_ctl_out_t *out)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_user_ctl)>(
-        "urma_user_ctl", kUrmaDlopenErrorStatus, ctx, in, out);
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_user_ctl)>("urma_user_ctl",
+                                                                                  kUrmaDlopenErrorStatus, ctx, in, out);
 }
 
 urma_jfce_t *ds_urma_create_jfce(urma_context_t *context)
@@ -387,4 +387,15 @@ urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg)
 {
     return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unimport_seg)>("urma_unimport_seg",
                                                                                       kUrmaDlopenErrorStatus, seg);
+}
+
+urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_async_event)>(
+        "urma_get_async_event", kUrmaDlopenErrorStatus, context, event);
+}
+
+void ds_urma_ack_async_event(urma_async_event_t *event)
+{
+    CallVoid<decltype(&ds_urma_ack_async_event)>("urma_ack_async_event", event);
 }
