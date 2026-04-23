@@ -381,7 +381,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
-    workerApi->TryFastTransportAfterHeartbeat();
+    RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
@@ -806,7 +806,11 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         return StandbySwitchAttemptResult::CONTINUE;
     }
 
-    candidateWorkerApi->TryFastTransportAfterHeartbeat();
+    rc = candidateWorkerApi->TryFastTransportAfterHeartbeat();
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[Switch] Fast transport init failed for worker(%s), with status: %s",
+                                     standbyWorker.ToString(), rc.ToString());
+    }
     if (!WaitStandbyWorkerReady(candidateWorkerApi)) {
         LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
                                    candidateWorkerApi->hostPort_.ToString());
@@ -1100,7 +1104,10 @@ bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
     }
 
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
-    workerApi->TryFastTransportAfterHeartbeat();
+    rc = workerApi->TryFastTransportAfterHeartbeat();
+    if (rc.IsError()) {
+        LOG(WARNING) << "[Switch] Fast transport init failed after reconnect: " << rc.ToString();
+    }
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         if (listenWorker_[currentNode_] != nullptr) {
