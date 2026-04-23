@@ -14,16 +14,16 @@ OUTPUT := output
 
 copy-sdk:
 	@mkdir -p $(SDK_DST)
-	@cp $(BAZEL_SDK_DIR)/lib/*.so $(SDK_DST)/
-	@chmod u+w $(SDK_DST)/*.so
+	@cp $(BAZEL_SDK_DIR)/lib/*.so* $(SDK_DST)/
+	@chmod u+w $(SDK_DST)/*.so*
 	@echo "Copied SDK libs to $(SDK_DST)/"
-	@echo "  $$(ls $(SDK_DST)/*.so | sed 's|.*/||')"
+	@echo "  $$(ls $(SDK_DST)/*.so* | sed 's|.*/||')"
 
 package:
 	@if [ ! -f build/kvclient_standalone_test ]; then echo "ERROR: build/kvclient_standalone_test not found. Run cmake/make first."; exit 1; fi
 	@mkdir -p $(OUTPUT)/lib $(OUTPUT)/config
 	@cp build/kvclient_standalone_test $(OUTPUT)/
-	@cp third_party/sdk/*.so $(OUTPUT)/lib/
+	@cp third_party/sdk/*.so* $(OUTPUT)/lib/
 	@cp deploy.py procmon.py $(OUTPUT)/
 	@cp test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/

@@ -1,6 +1,6 @@
 # Build artifacts
 build/
-output/
+/output/
 
 # SDK libs (copied via `make copy-sdk`)
 third_party/sdk/
