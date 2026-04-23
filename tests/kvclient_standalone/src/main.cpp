@@ -20,7 +20,8 @@ using namespace datasystem;
 
 static std::atomic<bool> gRunning{true};
 
-static void SignalHandler(int) {
+static void SignalHandler(int sig) {
+    std::cerr << "Received signal " << sig << ", shutting down..." << std::endl;
     gRunning = false;
 }
 
@@ -58,6 +59,7 @@ static int RunMode(const Config &cfg) {
 
     std::signal(SIGTERM, SignalHandler);
     std::signal(SIGINT, SignalHandler);
+    std::signal(SIGPIPE, SIG_IGN);
 
     HttpServer httpServer(cfg, client, metrics, gRunning);
     httpServer.Start();

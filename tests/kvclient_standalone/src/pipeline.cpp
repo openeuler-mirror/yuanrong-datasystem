@@ -137,6 +137,9 @@ bool ExecutePipeline(
         bool ok = fn(ctx, latencyMs);
         metrics.Record(name, latencyMs, ok);
         if (!ok) {
+            SLOG_WARN("Pipeline op failed: " << name
+                      << " key=" << ctx.key
+                      << " latency=" << latencyMs << "ms");
             allOk = false;
             break;
         }
