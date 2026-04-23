@@ -331,3 +331,98 @@ if (( ELAPSED < 15 )); then
 else
     log_fail "Stop on empty took ${ELAPSED}s (expected < 15s)"
 fi
+
+# === TC7: Runtime Health Report ===
+echo ""
+echo "=== TC7: Runtime Health Report ==="
+
+echo ""
+echo "=== Health Report ==="
+for m in A B; do
+    local_iid=0
+    [[ "$m" == "B" ]] && local_iid=1
+    label="Machine $m"
+    [[ "$m" == "A" ]] && label="Machine $m (writer)"
+    [[ "$m" == "B" ]] && label="Machine $m (reader)"
+    echo "$label:"
+
+    # Process status (should be dead after TC6 stop)
+    if check_process "$m" "kvclient_standalone_test"; then
+        echo "  kvclient process: ALIVE (unexpected after stop)"
+    else
+        echo "  kvclient process: STOPPED"
+    fi
+
+    if check_process "$m" "datasystem_worker"; then
+        echo "  worker process: ALIVE"
+    else
+        echo "  worker process: NOT RUNNING"
+    fi
+
+    # Coredumps
+    CORES=$(run_on "$m" "dmesg | grep -ic 'coredump\|segfault'" 2>/dev/null || echo "0")
+    CORES=$(echo "$CORES" | tr -d '\r\n')
+    if (( CORES > 0 )); then
+        echo "  coredumps: $CORES events detected"
+        log_fail "$label: $CORES coredump/segfault events"
+    else
+        echo "  coredumps: NONE"
+    fi
+
+    # Core files on disk
+    CORE_FILES=$(run_on "$m" "ls ${REMOTE_DIR}/core.* 2>/dev/null; ls /var/lib/apport/coredump/ 2>/dev/null" || echo "")
+    if [[ -n "$CORE_FILES" ]]; then
+        echo "  core files on disk: FOUND"
+        log_fail "$label: core files found on disk"
+    else
+        echo "  core files on disk: NONE"
+    fi
+
+    # Error scan in stdout log
+    ERRORS=$(run_on "$m" "grep -ic 'error\|fail\|exception\|abort' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null" || echo "0")
+    ERRORS=$(echo "$ERRORS" | tr -d '\r\n')
+    # Filter known benign patterns
+    BENIGN=$(run_on "$m" "grep -ic 'connection refused\|ZMQ.*retry\|Timeout waiting for notify' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null" || echo "0")
+    BENIGN=$(echo "$BENIGN" | tr -d '\r\n')
+    UNEXPECTED=$((ERRORS - BENIGN))
+    if (( UNEXPECTED > 0 )); then
+        echo "  errors in stdout_${local_iid}.log: $UNEXPECTED unexpected ($ERRORS total, $BENIGN benign)"
+        log_fail "$label: $UNEXPECTED unexpected errors in stdout"
+    else
+        echo "  errors in stdout_${local_iid}.log: 0 unexpected ($BENIGN benign)"
+    fi
+
+    # Summary check (if collected)
+    for sumf in collected/*_${local_iid}/summary_*.txt; do
+        if [[ -f "$sumf" ]]; then
+            SET_LINE=$(grep "setStringView" "$sumf" 2>/dev/null || echo "")
+            GET_LINE=$(grep "getBuffer" "$sumf" 2>/dev/null || echo "")
+            VF_LINE=$(grep "verify_fail" "$sumf" 2>/dev/null || echo "")
+
+            if [[ -n "$SET_LINE" ]]; then
+                SUCCESS=$(echo "$SET_LINE" | grep -oP 'success.*?(\d+)' | grep -oP '\d+' | head -1)
+                FAIL_CNT=$(echo "$SET_LINE" | grep -oP 'fail.*?(\d+)' | grep -oP '\d+' | head -1)
+                echo "  summary: setStringView success=$SUCCESS fail=${FAIL_CNT:-0}"
+            fi
+            if [[ -n "$GET_LINE" ]]; then
+                SUCCESS=$(echo "$GET_LINE" | grep -oP 'success.*?(\d+)' | grep -oP '\d+' | head -1)
+                FAIL_CNT=$(echo "$GET_LINE" | grep -oP 'fail.*?(\d+)' | grep -oP '\d+' | head -1)
+                echo "  summary: getBuffer success=$SUCCESS fail=${FAIL_CNT:-0}"
+            fi
+            if [[ -n "$VF_LINE" ]]; then
+                VF_COUNT=$(echo "$VF_LINE" | grep -oP '\d+' | head -1)
+                log_fail "$label: verify_fail=$VF_COUNT"
+            else
+                echo "  summary: verify_fail=0"
+            fi
+        fi
+    done
+    echo ""
+done
+
+# === Results ===
+echo "=== Results: $PASS passed, $FAIL failed ==="
+if (( FAIL > 0 )); then
+    exit 1
+fi
+exit 0
