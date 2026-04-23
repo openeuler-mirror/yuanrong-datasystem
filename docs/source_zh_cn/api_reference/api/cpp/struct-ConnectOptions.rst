@@ -67,7 +67,7 @@ ConnectOptions
 
     .. cpp:member:: uint64_t fastTransportMemSize = 128 * 1024 * 1024;
 
-        client侧 fast transport（urma）内存池大小，单位为字节。默认值：128MB，取值范围为 ``(0, 2GB]`` 。仅在 fast transport 场景下生效。
+        client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：128MB，取值范围为 ``(0, 2GB]``。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。
 
     **公共函数**
  

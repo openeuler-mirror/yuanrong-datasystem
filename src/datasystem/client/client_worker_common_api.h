@@ -234,9 +234,7 @@ public:
     /**
      * @brief Try fast transport initialization after heartbeat has started.
      */
-    virtual void TryFastTransportAfterHeartbeat()
-    {
-    }
+    virtual Status TryFastTransportAfterHeartbeat() = 0;
 
     /**
      * @brief Get the standby worker.
@@ -311,6 +309,10 @@ public:
                        const std::string &tenantId) override;
     Status Disconnect(bool isDestruct) override;
     Status Reconnect() override;
+    Status TryFastTransportAfterHeartbeat() override
+    {
+        return Status::OK();
+    }
     std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
@@ -364,7 +366,7 @@ public:
                        const std::string &tenantId) override;
     Status Disconnect(bool isDestruct) override;
     Status Reconnect() override;
-    void TryFastTransportAfterHeartbeat() override;
+    Status TryFastTransportAfterHeartbeat() override;
     std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
