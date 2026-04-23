@@ -19,7 +19,10 @@ kvclient_standalone/
 ├── config/                 # 配置文件
 │   ├── config.json.example # 配置模板
 │   └── deploy.json.example # 部署模板
-├── third_party/            # 第三方头文件 (spdlog, nlohmann_json)
+├── third_party/            # 第三方依赖
+│   ├── spdlog-include/     # ds_spdlog 头文件
+│   ├── json-include/       # nlohmann_json 头文件
+│   └── sdk_lib/            # SDK 动态库 (make copy-sdk, gitignore)
 ├── deploy.py               # 多节点部署脚本
 ├── test_deploy.sh          # 跨子网部署测试脚本
 ├── CMakeLists.txt
@@ -78,9 +81,22 @@ mkdir -p build && cd build
 cmake -DDATASYSTEM_SDK_DIR=/path/to/yuanrong-datasystem/output/datasystem/sdk/cpp ..
 
 make -j$(nproc)
+cd ..
 ```
 
 编译成功后生成 `build/kvclient_standalone_test` 二进制。
+
+### 2.1 拷贝 SDK 动态库（部署用）
+
+部署到远程节点前，需要将 SDK 动态库拷贝到 `third_party/sdk_lib/`：
+
+```bash
+make copy-sdk
+```
+
+这会将 Bazel 构建的 SDK `.so` 文件（~30 个，~84MB）拷贝到 `third_party/sdk_lib/`，deploy.py 部署时会将它们一起发送到远端节点。
+
+> 如果需要指定非默认的 SDK 路径：`make copy-sdk SDK_LIB_SRC=/custom/path/to/sdk/lib`
 
 ### 3. 启动依赖服务
 
@@ -270,7 +286,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 |------|------|------|
 | `remote_work_dir` | string | 远程工作目录 |
 | `binary_path` | string | 本地二进制路径 |
-| `sdk_lib_dir` | string | SDK 动态库目录 (可选) |
+| `sdk_lib_dir` | string | SDK 动态库目录，默认 `third_party/sdk_lib` |
 | `ssh_user` | string | 默认 SSH 用户 |
 | `ssh_options` | string | SSH 选项 |
 | `nodes` | array | 节点列表 |

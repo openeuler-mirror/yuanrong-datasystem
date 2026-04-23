@@ -1,6 +1,9 @@
 # Build artifacts
 build/
 
+# SDK libs (copied via `make copy-sdk`)
+third_party/sdk_lib/
+
 # Local config files (use config.json.example as template)
 config/config.local.json
 config/config.notify.json
