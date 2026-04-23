@@ -12,8 +12,9 @@ kvclient_standalone/
 │   ├── pipeline.h/cpp      # Pipeline 执行引擎 + 6 个原子操作
 │   ├── kv_worker.h/cpp     # Writer 主循环
 │   ├── http_server.h/cpp   # HTTP 服务 (/notify, /stats, /stop)
+│   ├── httplib.h            # cpp-httplib 单文件 HTTP 库
 │   ├── metrics.h/cpp       # 延迟统计 + CSV 输出
-│   ├── stop.cpp            # --stop 模式
+│   ├── stop.h/cpp          # --stop 模式
 │   ├── simple_log.h        # 日志宏 (避免与 SDK spdlog 冲突)
 │   └── data_pattern.h      # 测试数据生成
 ├── config/                 # 配置文件
@@ -26,6 +27,7 @@ kvclient_standalone/
 ├── deploy.py               # 多节点部署脚本（支持 SSH / kubectl）
 ├── procmon.py              # 进程 CPU/内存监控工具
 ├── test_deploy.sh          # 跨子网部署测试脚本
+├── Makefile                # copy-sdk / package / clean
 ├── CMakeLists.txt
 └── build/                  # 构建输出 (gitignore)
 ```
@@ -53,9 +55,9 @@ cd /path/to/yuanrong-datasystem
 bash build.sh -b bazel
 ```
 
-构建产物在 `output/datasystem/` 目录下：
-- `sdk/cpp/` — SDK 头文件 + 动态库
-- `service/` — worker 二进制 + 依赖库
+构建产物在 `output/cpp/` 目录下：
+- `lib/libdatasystem.so` — SDK 动态库（~48MB，已包含 spdlog）
+- `include/` — SDK 头文件
 
 **安装 dscli：**
 
@@ -78,8 +80,8 @@ cd tests/kvclient_standalone
 
 mkdir -p build && cd build
 
-# DATASYSTEM_SDK_DIR 指向 SDK 安装路径
-cmake -DDATASYSTEM_SDK_DIR=/path/to/yuanrong-datasystem/output/datasystem/sdk/cpp ..
+# DATASYSTEM_SDK_DIR 指向 Bazel SDK 产出路径（output/cpp/ 包含 include/ 和 lib/）
+cmake -DDATASYSTEM_SDK_DIR=/path/to/yuanrong-datasystem/output/cpp ..
 
 make -j$(nproc)
 cd ..
@@ -114,6 +116,7 @@ output/
 ├── lib/
 │   └── libdatasystem.so      # SDK 动态库
 ├── deploy.py                 # 部署脚本
+├── procmon.py                # 进程监控脚本
 ├── test_deploy.sh            # 跨子网测试脚本
 └── config/
     ├── config.json.example   # 配置模板
@@ -288,7 +291,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `host_id_env_name` | string | `""` | ServiceDiscovery 的 hostId 环境变量名 |
 | `connect_timeout_ms` | int | 1000 | 连接超时(ms) |
 | `request_timeout_ms` | int | 20 | 请求超时(ms) |
-| `data_sizes` | string[] | `["8MB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀 |
+| `data_sizes` | string[] | `["8MB", "512KB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀 |
 | `ttl_seconds` | int | 5 | 写入数据的 TTL(秒) |
 | `target_qps` | int | 1600 | 目标总 QPS |
 | `num_set_threads` | int | 16 | Writer 线程数 |
@@ -315,7 +318,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 |------|------|------|
 | `remote_work_dir` | string | 远程工作目录 |
 | `binary_path` | string | 本地二进制路径 |
-| `sdk_lib_dir` | string | SDK 动态库目录，默认 `third_party/sdk` |
+| `sdk_lib_dir` | string | SDK 动态库目录，为空时不部署 SDK 库 |
 | `enable_procmon` | bool | 是否部署 procmon.py 监控进程，默认 `true` |
 | `ssh_user` | string | 默认 SSH 用户 |
 | `ssh_options` | string | SSH 选项 |
@@ -325,7 +328,9 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 - `host` — SSH 节点的主机名/IP (`localhost` 表示本机)
 - `instance_id` — 实例 ID
 - `ssh_user` — 覆盖默认 SSH 用户
+- `peers` — 手动指定 peers URL 列表（覆盖自动生成的 peers）
 - `role` / `pipeline` / `notify_pipeline` — 覆盖 config 模板中的值
+- kubectl 节点额外支持：`pod_name`、`pod_ip`、`namespace`、`transport`（详见下方 Kubernetes 部署章节）
 
 ### 部署命令
 

@@ -24,7 +24,7 @@ package:
 	@mkdir -p $(OUTPUT)/lib $(OUTPUT)/config
 	@cp build/kvclient_standalone_test $(OUTPUT)/
 	@cp third_party/sdk/*.so $(OUTPUT)/lib/
-	@cp deploy.py $(OUTPUT)/
+	@cp deploy.py procmon.py $(OUTPUT)/
 	@cp test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
