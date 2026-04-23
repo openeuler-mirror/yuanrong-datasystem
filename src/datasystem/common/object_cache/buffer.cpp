@@ -192,6 +192,10 @@ Buffer::~Buffer()
 
 Status Buffer::MemoryCopy(const void *data, uint64_t length)
 {
+    if (bufferInfo_ == nullptr) {
+        RETURN_STATUS(StatusCode::K_INVALID,
+                      "Buffer is not initialized. Key may already exist with NX option.");
+    }
     auto clientImpl = clientImpl_.lock();
     if (clientImpl == nullptr) {
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
