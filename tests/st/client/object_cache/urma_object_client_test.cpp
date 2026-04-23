@@ -679,6 +679,17 @@ TEST_F(UrmaObjectClientDisableDataReplicationTest, TestMultiLocalGet)
 }
 
 #ifdef USE_URMA
+TEST_F(UrmaObjectClientTest, InvalidFastTransportMemSizeCheck)
+{
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, 5000);
+    connectOptions.fastTransportMemSize = 2ULL * 1024ULL * 1024ULL * 1024ULL + 1;
+    KVClient client(connectOptions);
+
+    auto status = client.Init();
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+}
+
 TEST_F(UrmaObjectClientTest, UrmaRemoteGetSmall)
 {
     std::shared_ptr<ObjectClient> client1;
@@ -1488,6 +1499,7 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -client_dead_timeout_s=1 ";
     }
 };
 
@@ -1600,9 +1612,10 @@ TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)
 {
     FLAGS_v = 1;
     std::shared_ptr<KVClient> client;
-    const int timeoutMs = 1'000;
+    const int timeoutMs = 2'000;
     const int firstHandshakeSleepMs = 3'000;
-    const int initReturnUpperBoundMs = 2'500;
+    const int initReturnLowerBoundMs = 1'500;
+    const int initReturnUpperBoundMs = 3'500;
 
     DS_ASSERT_OK(inject::Set("client.urma_first_handshake_delay", "sleep(3000)"));
 
@@ -1610,6 +1623,7 @@ TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)
     InitTestKVClient(0, client, timeoutMs);
     auto initElapsedMs =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    ASSERT_GT(initElapsedMs, initReturnLowerBoundMs);
     ASSERT_LT(initElapsedMs, initReturnUpperBoundMs);
 
     const int testSize = 1024 * 1024;

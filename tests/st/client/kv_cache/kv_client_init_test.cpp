@@ -56,7 +56,8 @@ TEST_F(KVClientInitTest, FastTransportFailureFallsBack)
 
     DS_ASSERT_OK(inject::Set("FastTransportManager.Initialize", "return(3000)"));
 
-    DS_ASSERT_OK(client_->Init());
+    auto status = client_->Init();
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
 }
 }  // namespace st
 }  // namespace datasystem
