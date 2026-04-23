@@ -35,7 +35,8 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     if (static_cast<uint64_t>(bufSize) != ctx.size) {
         SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
                   << " expected=" << ctx.size << " got=" << bufSize);
-        return true; // op succeeded, but caller checks verify
+        if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+        return true; // op succeeded, but verify failed
     }
 
     // Verify content
@@ -44,7 +45,7 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     std::string actual(bufData, bufSize);
     if (actual != expected) {
         SLOG_WARN("getBuffer content mismatch: key=" << ctx.key);
-        // Don't return false — the Get itself succeeded, data mismatch is a verify fail
+        if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
     }
     return true;
 }
@@ -59,6 +60,7 @@ static bool OpExist(PipelineContext &ctx, double &latencyMs) {
     // Verify key exists
     if (exists.empty() || !exists[0]) {
         SLOG_WARN("exist: key not found: " << ctx.key);
+        if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
     }
     return true;
 }

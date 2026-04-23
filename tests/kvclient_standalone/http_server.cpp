@@ -90,6 +90,7 @@ void HttpServer::HandleNotify(const std::string &body) {
                 ctx.client = client_;
                 ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
                 ctx.param.ttlSecond = cfg_.ttlSeconds;
+                ctx.verifyFailCount = &metrics_.VerifyFailCounter();
 
                 ExecutePipeline(notifyOps_, ctx, metrics_,
                                 metrics_.VerifyFailCounter());

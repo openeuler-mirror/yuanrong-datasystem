@@ -194,6 +194,5 @@ std::string MetricsCollector::GetStatsJson() {
         j[m->opName + "_fail"] = m->failCount.load();
     }
     j["verify_fail"] = verifyFailCount_.load();
-    j["get_verify_fail"] = verifyFailCount_.load();
     return j.dump(2);
 }

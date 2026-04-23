@@ -17,6 +17,7 @@ struct PipelineContext {
     datasystem::SetParam param;
     std::shared_ptr<datasystem::KVClient> client;
     std::shared_ptr<datasystem::Buffer> buffer;
+    std::atomic<uint64_t> *verifyFailCount = nullptr;
 };
 
 // Op function: returns true on success, fills latencyMs.

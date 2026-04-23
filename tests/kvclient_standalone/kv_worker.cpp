@@ -71,6 +71,7 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.client = client_;
         ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
         ctx.param.ttlSecond = cfg_.ttlSeconds;
+        ctx.verifyFailCount = &metrics_.VerifyFailCounter();
 
         auto start = std::chrono::steady_clock::now();
         bool allOk = ExecutePipeline(pipelineOps_, ctx, metrics_,
