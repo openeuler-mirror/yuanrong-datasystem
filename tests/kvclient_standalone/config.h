@@ -19,6 +19,10 @@ struct Config {
     int metricsIntervalMs = 3000;
     std::string metricsFile = "metrics_{instance_id}.csv";
     std::vector<std::string> peers;
+    // Pipeline fields
+    std::string role = "writer";
+    std::vector<std::string> pipeline = {"setStringView"};
+    std::vector<std::string> notifyPipeline = {"getBuffer"};
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024

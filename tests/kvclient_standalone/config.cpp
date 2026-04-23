@@ -62,6 +62,20 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             }
         }
 
+        if (j.contains("role")) cfg.role = j["role"].get<std::string>();
+        if (j.contains("pipeline")) {
+            cfg.pipeline.clear();
+            for (auto &s : j["pipeline"]) {
+                cfg.pipeline.push_back(s.get<std::string>());
+            }
+        }
+        if (j.contains("notify_pipeline")) {
+            cfg.notifyPipeline.clear();
+            for (auto &s : j["notify_pipeline"]) {
+                cfg.notifyPipeline.push_back(s.get<std::string>());
+            }
+        }
+
         // Replace {instance_id} in metrics file name
         auto pos = cfg.metricsFile.find("{instance_id}");
         if (pos != std::string::npos) {
@@ -78,9 +92,21 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         return false;
     }
 
+    auto joinStr = [](const std::vector<std::string> &v) -> std::string {
+        std::string r;
+        for (size_t i = 0; i < v.size(); i++) {
+            if (i > 0) r += ",";
+            r += v[i];
+        }
+        return r;
+    };
+
     SLOG_INFO("Config loaded: instance_id=" << cfg.instanceId
               << ", port=" << cfg.listenPort
               << ", etcd=" << cfg.etcdAddress
+              << ", role=" << cfg.role
+              << ", pipeline=[" << joinStr(cfg.pipeline) << "]"
+              << ", notify_pipeline=[" << joinStr(cfg.notifyPipeline) << "]"
               << ", data_sizes_count=" << cfg.dataSizes.size()
               << ", target_qps=" << cfg.targetQps
               << ", threads=" << cfg.numSetThreads);
