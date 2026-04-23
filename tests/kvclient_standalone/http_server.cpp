@@ -12,7 +12,17 @@ using namespace datasystem;
 HttpServer::HttpServer(const Config &cfg, std::shared_ptr<KVClient> client,
                        MetricsCollector &metrics, std::atomic<bool> &running)
     : cfg_(cfg), client_(client), metrics_(metrics), running_(running),
-      server_(std::make_unique<httplib::Server>()) {}
+      server_(std::make_unique<httplib::Server>()) {
+    // Build notify pipeline ops from config
+    for (auto &name : cfg_.notifyPipeline) {
+        auto fn = GetOpFunc(name);
+        if (!fn) {
+            SLOG_WARN("Unknown notify_pipeline op: " << name << ", skipping");
+            continue;
+        }
+        notifyOps_.emplace_back(name, fn);
+    }
+}
 
 HttpServer::~HttpServer() { Stop(); }
 
@@ -55,10 +65,6 @@ void HttpServer::Stop() {
     }
 }
 
-std::string HttpServer::GenerateExpectedData(uint64_t size, int senderId) {
-    return GeneratePatternData(size, senderId);
-}
-
 void HttpServer::HandleNotify(const std::string &body) {
     try {
         json j = json::parse(body);
@@ -68,7 +74,6 @@ void HttpServer::HandleNotify(const std::string &body) {
 
         {
             std::lock_guard<std::mutex> lock(notifyMutex_);
-            // Join old threads when exceeding limit to prevent unbounded growth
             constexpr size_t kMaxNotifyThreads = 100;
             if (notifyThreads_.size() >= kMaxNotifyThreads) {
                 for (auto &t : notifyThreads_) {
@@ -77,30 +82,17 @@ void HttpServer::HandleNotify(const std::string &body) {
                 notifyThreads_.clear();
             }
             notifyThreads_.emplace_back([this, key, sender, expectedSize]() {
-                std::string val;
-                auto start = std::chrono::steady_clock::now();
-                Status rc = client_->Get(key, val);
-                auto end = std::chrono::steady_clock::now();
-                double latencyMs = std::chrono::duration<double, std::milli>(end - start).count();
+                PipelineContext ctx;
+                ctx.key = key;
+                ctx.size = expectedSize;
+                ctx.senderId = sender;
+                ctx.data = GeneratePatternData(expectedSize, sender);
+                ctx.client = client_;
+                ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
+                ctx.param.ttlSecond = cfg_.ttlSeconds;
 
-                metrics_.Record("get", latencyMs, rc.IsOk());
-
-                if (!rc.IsOk()) {
-                    SLOG_WARN("Get failed: key=" << key << ", error=" << rc.GetMsg());
-                    return;
-                }
-
-                if (val.size() != expectedSize) {
-                    SLOG_WARN("Size mismatch: key=" << key << ", expected=" << expectedSize << ", got=" << val.size());
-                    metrics_.RecordVerifyFail();
-                    return;
-                }
-
-                std::string expected = GenerateExpectedData(expectedSize, sender);
-                if (val != expected) {
-                    SLOG_WARN("Content mismatch: key=" << key);
-                    metrics_.RecordVerifyFail();
-                }
+                ExecutePipeline(notifyOps_, ctx, metrics_,
+                                metrics_.VerifyFailCounter());
             });
         }
 

@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "metrics.h"
+#include "pipeline.h"
 #include "httplib.h"
 #include <datasystem/kv_client.h>
 #include <memory>
@@ -21,7 +22,6 @@ public:
 
 private:
     void HandleNotify(const std::string &body);
-    std::string GenerateExpectedData(uint64_t size, int senderId);
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
@@ -31,4 +31,5 @@ private:
     std::thread serverThread_;
     std::vector<std::thread> notifyThreads_;
     std::mutex notifyMutex_;
+    std::vector<std::pair<std::string, OpFunc>> notifyOps_;
 };
