@@ -15,7 +15,7 @@ def get_pods(namespace, prefix):
         out = subprocess.check_output(
             ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json',
              '--field-selector=status.phase=Running'],
-            text=True)
+            text=True, timeout=30)
     except FileNotFoundError:
         print('ERROR: kubectl not found', file=sys.stderr)
         sys.exit(1)

@@ -121,7 +121,7 @@ void MetricsCollector::FlushWindow() {
         double qps = latencies.size() / intervalSec;
 
         f << ts.str() << "," << m->opName << "," << latencies.size()
-          << std::fixed << std::setprecision(1)
+          << std::fixed << std::setprecision(3)
           << "," << avg << "," << p90 << "," << p99
           << "," << minV << "," << maxV << "," << qps << "\n";
     }
@@ -165,7 +165,7 @@ void MetricsCollector::WriteSummary() {
             double maxV = latencies.back();
             double qps = uptime > 0 ? (double)latencies.size() / uptime : 0;
 
-            f << std::fixed << std::setprecision(1);
+            f << std::fixed << std::setprecision(3);
             f << "Avg: " << avg << "ms, P90: " << p90 << "ms, P99: " << p99
               << "ms, Min: " << minV << "ms, Max: " << maxV << "ms\n";
             f << "QPS: " << qps << "\n";

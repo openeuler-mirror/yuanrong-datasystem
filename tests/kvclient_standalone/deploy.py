@@ -60,24 +60,24 @@ class Deployer:
 
     # --- Transport primitives ---
 
-    def run_on(self, node, cmd, check=True):
+    def run_on(self, node, cmd, check=True, timeout=60):
         """Run command on node via SSH, kubectl exec, or local shell."""
         transport = self._transport(node)
         target = self._exec_target(node)
 
         if transport == 'localhost':
             return subprocess.run(cmd, shell=True, check=check,
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=timeout)
         elif transport == 'kubectl':
             ns = self._namespace(node)
             return subprocess.run(
                 ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', cmd],
-                check=check, capture_output=True, text=True)
+                check=check, capture_output=True, text=True, timeout=timeout)
         else:
             user = self._user_for(node)
             return subprocess.run(
                 ['ssh'] + self._ssh_args() + [f'{user}@{target}', cmd],
-                check=check, capture_output=True, text=True)
+                check=check, capture_output=True, text=True, timeout=timeout)
 
     def scp_to(self, node, src, dst):
         """Copy file or directory to node via SCP, kubectl cp, or local copy."""
@@ -105,7 +105,7 @@ class Deployer:
                     remote_tar = f'{dst}.tar.gz'
                     subprocess.run(
                         ['kubectl', 'cp', tar_path, f'{ns}/{target}:{remote_tar}'],
-                        check=True)
+                        check=True, timeout=120)
                     self.run_on(
                         node,
                         f'mkdir -p {os.path.dirname(dst)} && '
@@ -117,12 +117,12 @@ class Deployer:
             else:
                 subprocess.run(
                     ['kubectl', 'cp', src, f'{ns}/{target}:{dst}'],
-                    check=True)
+                    check=True, timeout=120)
         else:
             user = self._user_for(node)
             subprocess.run(
                 ['scp'] + self._ssh_args() + ['-r', src, f'{user}@{target}:{dst}'],
-                check=True)
+                check=True, timeout=120)
 
     def collect_files(self, node, local_dir):
         """Collect output files from node via tar."""
@@ -158,13 +158,13 @@ class Deployer:
                 ns = self._namespace(node)
                 subprocess.run(
                     ['kubectl', 'cp', f'{ns}/{target}:{tar_remote}', tar_local],
-                    check=True)
+                    check=True, timeout=120)
             else:
                 user = self._user_for(node)
                 subprocess.run(
                     ['scp'] + self._ssh_args() +
                     [f'{user}@{target}:{tar_remote}', tar_local],
-                    check=True)
+                    check=True, timeout=120)
 
             # Verify local file was actually created
             if not os.path.isfile(tar_local):

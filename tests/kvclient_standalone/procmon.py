@@ -10,9 +10,11 @@ import time
 
 
 def find_pid(name):
-    """Find PID by exact process name (first match)."""
+    """Find PID by full command line (first match). Uses pgrep -f to match
+    process names longer than Linux's 15-char comm field limit."""
     try:
-        out = subprocess.check_output(["pgrep", "-x", name], text=True).strip()
+        out = subprocess.check_output(
+            ["pgrep", "-f", name], text=True).strip()
         if not out:
             return None
         return int(out.splitlines()[0])

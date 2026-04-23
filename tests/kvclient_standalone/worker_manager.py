@@ -16,7 +16,7 @@ def get_pods(namespace, prefix):
         out = subprocess.check_output(
             ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json',
              '--field-selector=status.phase=Running'],
-            text=True)
+            text=True, timeout=30)
     except FileNotFoundError:
         print('ERROR: kubectl not found', file=sys.stderr)
         sys.exit(1)
@@ -37,18 +37,18 @@ def get_pods(namespace, prefix):
     return pods
 
 
-def kubectl_exec(pod, namespace, cmd, check=True):
+def kubectl_exec(pod, namespace, cmd, check=True, timeout=30):
     """Execute command in pod via kubectl."""
     return subprocess.run(
         ['kubectl', 'exec', pod, '-n', namespace, '--', 'sh', '-c', cmd],
-        check=check, capture_output=True, text=True)
+        check=check, capture_output=True, text=True, timeout=timeout)
 
 
 def kubectl_cp_to(pod, namespace, src, dst):
     """Copy local file to pod."""
     subprocess.run(
         ['kubectl', 'cp', src, f'{namespace}/{pod}:{dst}'],
-        check=True, capture_output=True, text=True)
+        check=True, capture_output=True, text=True, timeout=120)
 
 
 def start_worker(pod, namespace, config_template, worker_port):
@@ -70,11 +70,28 @@ def start_worker(pod, namespace, config_template, worker_port):
         result = kubectl_exec(pod_name, namespace, f'dscli start -f {remote_config}')
         print(f'  {pod_name} ({pod_ip}) -> started')
         return True
+    except subprocess.TimeoutExpired:
+        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        return False
     except subprocess.CalledProcessError as e:
         print(f'  {pod_name} ({pod_ip}) -> FAILED: {e.stderr.strip()}')
         return False
     finally:
         os.unlink(tmp_path)
+
+
+def check_worker(pod, namespace, process_name='datasystem_worker'):
+    """Check if worker process is alive in a single pod."""
+    pod_name = pod['name']
+    try:
+        result = kubectl_exec(pod_name, namespace,
+            f'pgrep -x {process_name} | wc -l', check=False)
+    except subprocess.TimeoutExpired:
+        return (pod, 'error', 'timeout')
+    if result.returncode != 0:
+        return (pod, 'error', result.stderr.strip())
+    count = int(result.stdout.strip())
+    return (pod, 'alive' if count > 0 else 'dead', count)
 
 
 def stop_worker(pod, namespace, remote_config):
@@ -84,6 +101,9 @@ def stop_worker(pod, namespace, remote_config):
         kubectl_exec(pod_name, namespace, f'dscli stop -f {remote_config}', check=False)
         print(f'  {pod_name} -> stopped')
         return True
+    except subprocess.TimeoutExpired:
+        print(f'  {pod_name} -> FAILED: timeout')
+        return False
     except Exception as e:
         print(f'  {pod_name} -> FAILED: {e}')
         return False
@@ -92,7 +112,7 @@ def stop_worker(pod, namespace, remote_config):
 def main():
     parser = argparse.ArgumentParser(
         description='Batch start/stop datasystem workers in k8s Pods')
-    parser.add_argument('action', choices=['start', 'stop'],
+    parser.add_argument('action', choices=['start', 'stop', 'check'],
                         help='Action to perform')
     parser.add_argument('-p', '--prefix', required=True,
                         help='Pod name prefix to match')
@@ -104,6 +124,8 @@ def main():
                         help='Worker port (default: 31501)')
     parser.add_argument('--remote-config', default='/tmp/worker.config',
                         help='Config path inside pod (default: /tmp/worker.config)')
+    parser.add_argument('--process', default='datasystem_worker',
+                        help='Process name to check (default: datasystem_worker)')
     args = parser.parse_args()
 
     pods = get_pods(args.namespace, args.prefix)
@@ -116,6 +138,33 @@ def main():
     for p in pods:
         print(f'  {p["name"]} ({p["ip"]})')
 
+    if args.action == 'check':
+        print(f'\nChecking worker processes ({args.process})...')
+        results = []
+        with ThreadPoolExecutor(max_workers=len(pods)) as pool:
+            futures = {pool.submit(check_worker, pod, args.namespace, args.process): pod
+                       for pod in pods}
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        alive = 0
+        dead = 0
+        errors = 0
+        for pod, status, detail in results:
+            if status == 'alive':
+                alive += 1
+                print(f'  {pod["name"]} ({pod["ip"]}) -> alive (count={detail})')
+            elif status == 'dead':
+                dead += 1
+                print(f'  {pod["name"]} ({pod["ip"]}) -> dead')
+            else:
+                errors += 1
+                print(f'  {pod["name"]} ({pod["ip"]}) -> error ({detail})')
+
+        total = len(results)
+        print(f'\nResult: {alive} alive / {dead} dead / {errors} error / {total} total')
+        return
+
     if args.action == 'start':
         with open(args.config) as f:
             config_template = json.load(f)
@@ -124,23 +173,21 @@ def main():
         if 'worker_address' in config_template:
             config_template['worker_address']['value'] = '{POD_IP}:' + str(args.port)
 
-        def do_start(pod):
+        def do_op(pod):
             cfg = json.loads(json.dumps(config_template))
             cfg['worker_address']['value'] = f'{pod["ip"]}:{args.port}'
             return start_worker(pod, args.namespace, cfg, args.port)
 
         print(f'\nStarting workers...')
-        workers = len(pods)
     else:
-        def do_start(pod):
+        def do_op(pod):
             return stop_worker(pod, args.namespace, args.remote_config)
 
         print(f'\nStopping workers...')
-        workers = len(pods)
 
     results = []
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(do_start, pod): pod for pod in pods}
+    with ThreadPoolExecutor(max_workers=len(pods)) as pool:
+        futures = {pool.submit(do_op, pod): pod for pod in pods}
         for future in as_completed(futures):
             results.append(future.result())
 
