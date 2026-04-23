@@ -24,29 +24,17 @@ genrule(
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure $$EXTRA_CONF_OPTS --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
         + " --disable-cache-oblivious"
         + " --disable-zone-allocator"
-        + " --without-export"
-        + " --disable-shared"
-        + " --enable-static"
-        + " --disable-cxx"
-        + " --enable-stats"
-        #+ " --disable-initial-exec-tls"
-        + " --with-jemalloc-prefix=datasystem_"
-        + " &>/dev/null",
-        "make -j16 &>/dev/null",
-        "cp -H lib/libjemalloc.a ../$(location libjemalloc.a)",
-        "cp -H include/jemalloc/jemalloc.h ../$(location jemalloc/jemalloc.h)",
-        "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure $$EXTRA_CONF_OPTS --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"
         + " --enable-shared"
-        + " --disable-cache-oblivious"
-        + " --disable-zone-allocator"
-        + " --disable-static"
+        + " --enable-static"
         + " --disable-cxx"
         + " --enable-stats"
         + " --disable-initial-exec-tls"
         + " --with-jemalloc-prefix=datasystem_"
         + " &>/dev/null",
         "make -j16 &>/dev/null",
+        "cp -H lib/libjemalloc.a ../$(location libjemalloc.a)",
         "cp -H lib/libjemalloc.so.2 ../$(location libjemalloc.so.2)",
+        "cp -H include/jemalloc/jemalloc.h ../$(location jemalloc/jemalloc.h)",
         "cd -",
         "rm -rf jemalloc_output",
     ]),

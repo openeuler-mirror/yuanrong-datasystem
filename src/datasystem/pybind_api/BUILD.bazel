@@ -1,12 +1,11 @@
-load("@pybind11_bazel//:build_defs.bzl", "pybind_library")
-load("//bazel:build_python.bzl", "pybind_extension_jemalloc")
+load("@pybind11_bazel//:build_defs.bzl", "pybind_extension", "pybind_library")
 
 package(default_visibility = ["//visibility:public"])
 
-pybind_extension_jemalloc(
+pybind_extension(
     name = "libds_client_py",
     additional_linker_inputs = ["export_symbols.lds"],
-    jemalloc_dynamic = True,
+    dynamic_deps = ["//:datasystem"],
     linkopts = [
         "-Wl,--version-script,$(location export_symbols.lds)",
         "-Wl,--disable-new-dtags",
