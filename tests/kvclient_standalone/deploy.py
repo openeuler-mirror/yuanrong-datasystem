@@ -18,7 +18,7 @@ class Deployer:
         with open(config_template_path) as f:
             self.config_template = json.load(f)
 
-        self.base_dir = os.path.dirname(os.path.abspath(deploy_path))
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
         self.binary_path = os.path.join(self.base_dir, 'output', 'kvclient_standalone_test')
@@ -268,6 +268,11 @@ class Deployer:
             os.unlink(tmp_config)
 
     def do_deploy(self):
+        if not os.path.isfile(self.binary_path):
+            print(f'ERROR: binary not found: {self.binary_path}')
+            print('  Run "make package" first to build the output directory.')
+            sys.exit(1)
+
         results = []
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
             futures = {pool.submit(self.deploy_node, n): n for n in self.nodes}
