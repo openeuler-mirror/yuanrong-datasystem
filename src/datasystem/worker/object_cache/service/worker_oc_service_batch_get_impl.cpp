@@ -477,7 +477,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     auto iter = infos.begin();
     std::vector<std::string> needEvictObjs;
     std::shared_ptr<std::string> commId = nullptr;
-    if (IsRemoteH2DEnabled()) {
+    if (IsRemoteH2DEnabled() && request != nullptr) {
         commId = std::make_shared<std::string>(request->GetClientCommUuid());
     }
     for (int i = 0; iter != infos.end(); i++) {
@@ -558,6 +558,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
     std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas)
 {
+    bool isMigrateData = request == nullptr;
+    const int64_t migrateDataTimeoutMs = 200;
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;
@@ -599,6 +601,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             // data failed.
             int64_t timeoutMs =
                 reqTimeoutDuration.CalcRealRemainingTime() / (etcdCM_->CheckIfOtherAzNodeConnected(hostAddr) ? 4 : 1);
+            timeoutMs = !isMigrateData ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
             RETURN_IF_NOT_OK(RetryOnErrorRepent(
                 timeoutMs,
@@ -616,8 +619,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 },
                 []() { return Status::OK(); },
                 { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                  StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED,
-                  StatusCode::K_URMA_WAIT_TIMEOUT }, minRetryOnceRpcMs));
+                  StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
+                minRetryOnceRpcMs));
             return Status::OK();
         };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
