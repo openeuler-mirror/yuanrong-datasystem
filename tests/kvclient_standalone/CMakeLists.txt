@@ -9,7 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(DATASYSTEM_SDK_DIR "" CACHE PATH "Path to datasystem SDK installation")
 
 add_executable(kvclient_standalone_test
-    main.cpp config.cpp kv_worker.cpp http_server.cpp metrics.cpp stop.cpp)
+    main.cpp config.cpp kv_worker.cpp http_server.cpp metrics.cpp stop.cpp pipeline.cpp)
 
 # Use the shared libds-spdlog.so instead of header-only spdlog to avoid
 # conflicting singleton registries between the binary and the SDK.

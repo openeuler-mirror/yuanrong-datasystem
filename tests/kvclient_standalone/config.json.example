@@ -12,6 +12,9 @@
   "notify_count": 10,
   "metrics_interval_ms": 3000,
   "metrics_file": "metrics_{instance_id}.csv",
+  "role": "writer",
+  "pipeline": ["setStringView"],
+  "notify_pipeline": ["getBuffer"],
   "peers": [
     "http://host1:9000",
     "http://host2:9000"
