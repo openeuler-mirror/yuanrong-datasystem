@@ -29,6 +29,8 @@ public:
     void Record(const std::string &op, double latencyMs, bool success);
     void RecordVerifyFail();
 
+    std::atomic<uint64_t> &VerifyFailCounter() { return verifyFailCount_; }
+
     void Start();
     void Stop();
 

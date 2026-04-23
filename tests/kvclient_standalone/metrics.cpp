@@ -1,4 +1,5 @@
 #include "metrics.h"
+#include "pipeline.h"
 #include "simple_log.h"
 #include <algorithm>
 #include <cmath>
@@ -52,9 +53,10 @@ void MetricsCollector::RecordVerifyFail() {
 }
 
 void MetricsCollector::Start() {
-    // Pre-create op types to avoid race in GetOrCreateOp
-    GetOrCreateOp("set");
-    GetOrCreateOp("get");
+    // Pre-create all pipeline op types to avoid race in GetOrCreateOp
+    for (auto *name : GetAllOpNames()) {
+        GetOrCreateOp(name);
+    }
 
     startTime_ = std::chrono::steady_clock::now();
     running_ = true;
