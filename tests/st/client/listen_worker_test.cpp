@@ -388,7 +388,7 @@ TEST_F(ListenWorkerSwitchTest, TestStandbyConnectionShutdownAndRestartConcurrent
     ASSERT_EQ(asyncSwitchWorkerPool->GetWaitingTasksNum(), 0ul);
 }
 
-class ListenWorkerRediscoverTest : public ExternalClusterTest {
+class ListenWorkerRecoverLocalTest : public ExternalClusterTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -415,63 +415,32 @@ public:
     std::unique_ptr<Signature> signature_ = std::make_unique<Signature>(accessKey_, secretKey_);
 };
 
-TEST_F(ListenWorkerRediscoverTest, TestRediscoverSkippedWhenNotSwitched)
+TEST_F(ListenWorkerRecoverLocalTest, TestRecoverNotCalledForLocalWorker)
 {
-    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_, RpcCredential(),
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort1_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
     int timeoutMs = 5000;
     DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
     auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
     auto listenWorker =
         std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 0, asyncSwitchWorkerPool.get());
-    listenWorker->SetIsLocalWorker(true);
+    listenWorker->SetIsLocalWorker(true);  // Local listener.
 
-    std::atomic<int> rediscoverCount{ 0 };
-    listenWorker->SetRediscoverHandle([&rediscoverCount]() {
-        rediscoverCount++;
+    std::atomic<int> recoverCount{ 0 };
+    listenWorker->SetRecoverLocalWorkerHandle([&recoverCount]() {
+        recoverCount++;
         return false;
     });
 
     DS_ASSERT_OK(listenWorker->StartListenWorker());
     DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
-
     cluster_->ShutdownNode(WORKER, 0);
     sleep(3);
 
-    ASSERT_EQ(rediscoverCount.load(), 0) << "Rediscover handle should NOT be called before switch";
+    ASSERT_EQ(recoverCount.load(), 0) << "Recover should NOT be called on the local worker listener.";
 }
 
-TEST_F(ListenWorkerRediscoverTest, TestRediscoverSuccessClearsSwitched)
-{
-    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_, RpcCredential(),
-                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
-    int timeoutMs = 5000;
-    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
-    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
-    auto listenWorker =
-        std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 0, asyncSwitchWorkerPool.get());
-    listenWorker->SetIsLocalWorker(true);
-
-    std::atomic<bool> rediscoverCalled{ false };
-    listenWorker->SetRediscoverHandle([&rediscoverCalled]() {
-        rediscoverCalled = true;
-        return true;  // Simulate: local worker found at new IP, reconnection succeeded
-    });
-
-    DS_ASSERT_OK(listenWorker->StartListenWorker());
-    DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
-    listenWorker->SetSwitched();
-
-    cluster_->ShutdownNode(WORKER, 0);
-    sleep(3);
-
-    ASSERT_TRUE(rediscoverCalled.load()) << "Rediscover handle should have been called";
-    // isSwitched_ is cleared because rediscoverHandle_ returned true.
-    // This means TrySwitchBackToLocalWorker() will no longer fire on subsequent heartbeat successes,
-    // which is the correct behavior after rediscovery has already reconnected to the new IP.
-}
-
-TEST_F(ListenWorkerRediscoverTest, TestRediscoverNotCalledForStandbyWorker)
+TEST_F(ListenWorkerRecoverLocalTest, TestRecoverSkippedWhenSwitched)
 {
     auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort1_, RpcCredential(),
                                                              HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
@@ -480,22 +449,46 @@ TEST_F(ListenWorkerRediscoverTest, TestRediscoverNotCalledForStandbyWorker)
     auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
     auto listenWorker =
         std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 1, asyncSwitchWorkerPool.get());
-    listenWorker->SetIsLocalWorker(false);  // This is a standby worker listener.
+    listenWorker->SetIsLocalWorker(false); // Standby listener.
+    listenWorker->SetSwitched();
 
-    std::atomic<int> rediscoverCount{ 0 };
-    listenWorker->SetRediscoverHandle([&rediscoverCount]() {
-        rediscoverCount++;
+    std::atomic<int> recoverCount{ 0 };
+    listenWorker->SetRecoverLocalWorkerHandle([&recoverCount]() {
+        recoverCount++;
         return false;
     });
 
     DS_ASSERT_OK(listenWorker->StartListenWorker());
     DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
-    listenWorker->SetSwitched();
-
-    cluster_->ShutdownNode(WORKER, 1);
+    cluster_->ShutdownNode(WORKER, 0);
     sleep(3);
 
-    ASSERT_EQ(rediscoverCount.load(), 0) << "Rediscover should NOT be called for standby workers";
+    ASSERT_EQ(recoverCount.load(), 0) << "Recover should NOT be called once the standby listener is switched-away";
+}
+
+TEST_F(ListenWorkerRecoverLocalTest, TestRecoverSuccessMarksSwitched)
+{
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort1_, RpcCredential(),
+                                                             HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+    int timeoutMs = 5000;
+    DS_ASSERT_OK(workerApi->Init(timeoutMs, timeoutMs));
+    auto asyncSwitchWorkerPool = std::make_shared<ThreadPool>(0, 1);
+    auto listenWorker =
+        std::make_shared<ListenWorker>(workerApi, workerApi->heartbeatType_, 1, asyncSwitchWorkerPool.get());
+    listenWorker->SetIsLocalWorker(false); // Standby listener, currently active.
+
+    std::atomic<bool> recoverCalled{ false };
+    listenWorker->SetRecoverLocalWorkerHandle([&recoverCalled]() {
+        recoverCalled = true;
+        return true;  // Same-node worker appeared, client reconnected.
+    });
+
+    DS_ASSERT_OK(listenWorker->StartListenWorker());
+    DS_ASSERT_OK(listenWorker->CheckWorkerAvailable());
+    cluster_->ShutdownNode(WORKER, 0);
+    sleep(3);
+
+    ASSERT_TRUE(recoverCalled.load()) << "Recover handle should have been called on an active standby listener";
 }
 }  // namespace st
 }  // namespace datasystem
