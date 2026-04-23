@@ -162,6 +162,19 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
             }
             const auto &objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_key(i));
 
+            // Second atomic existence check for NX mode: between the initial CheckExistence
+            // and this point, a concurrent RPC may have published the same key. Use GetAndLock
+            // to atomically verify the key still does not exist before allocating memory.
+            std::shared_ptr<SafeObjType> atomicEntry;
+            if (!req.skip_check_existence() && !resp.exists(i)
+                && objectTable_->GetAndLock(objectKey, atomicEntry).IsOk()) {
+                Raii unlock([&atomicEntry]() { atomicEntry->WUnlock(); });
+                if (atomicEntry->Get() != nullptr && (*atomicEntry)->IsBinary() && !(*atomicEntry)->IsInvalid()) {
+                    resp.set_exists(i, true);
+                    continue;
+                }
+            }
+
             PerfPoint point(PerfKey::WORKER_MULTI_CREATE_ALLOC_FOR_OBJECT);
             std::shared_ptr<ShmOwner> shmOwner = nullptr;
             if (shmIndexMapping.size() > static_cast<size_t>(i) && shmOwners.size() > shmIndexMapping[i]) {

@@ -345,5 +345,245 @@ TEST_F(KVCacheNXCentralMasterTest, GetAfterPutFailed)
         ASSERT_EQ(rc.GetMsg().find("Invalid parameter"), std::string::npos);
     });
 }
+
+TEST_F(KVCacheExistenceOptTest, DISABLED_TestMCreateNXConcurrentClients)
+{
+    // Test: two clients concurrently MCreate NX on pre-existing keys.
+    // Both should get placeholder buffers (GetSize == 0), and MemoryCopy
+    // should safely return K_INVALID instead of crashing on null pointer.
+    // Both clients connect to the same worker: MCreate sends to the
+    // connected worker (not hash-routed), so both must see the same
+    // object table state for deterministic NX rejection.
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(0, client2);
+
+    constexpr int keyCount = 3;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    for (int i = 0; i < keyCount; i++) {
+        keys.emplace_back("mcreate_nx_concurrent_" + std::to_string(i) + "_" + client1->GenerateKey());
+        values.emplace_back("value_" + std::to_string(i));
+    }
+
+    // Pre-create all keys so NX will reject both clients
+    for (int i = 0; i < keyCount; i++) {
+        DS_ASSERT_OK(client1->Set(keys[i], values[i]));
+    }
+
+    std::vector<uint64_t> sizes;
+    for (const auto &val : values) {
+        sizes.emplace_back(val.size());
+    }
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::shared_ptr<Buffer>> buffers1;
+    std::vector<std::shared_ptr<Buffer>> buffers2;
+
+    // Both clients MCreate with NX concurrently
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(2);
+    auto fut1 = pool.Submit([&]() {
+        start.wait();
+        DS_ASSERT_OK(client1->MCreate(keys, sizes, param, buffers1));
+    });
+    auto fut2 = pool.Submit([&]() {
+        start.wait();
+        DS_ASSERT_OK(client2->MCreate(keys, sizes, param, buffers2));
+    });
+    ready.set_value();
+    fut1.get();
+    fut2.get();
+
+    // Both clients should get placeholder buffers for all keys
+    ASSERT_EQ(buffers1.size(), static_cast<size_t>(keyCount));
+    ASSERT_EQ(buffers2.size(), static_cast<size_t>(keyCount));
+    for (int i = 0; i < keyCount; i++) {
+        ASSERT_NE(buffers1[i], nullptr) << "Client1 buffer should be placeholder, not null";
+        ASSERT_EQ(buffers1[i]->GetSize(), 0) << "Client1 buffer for existing key should have zero size";
+        ASSERT_NE(buffers2[i], nullptr) << "Client2 buffer should be placeholder, not null";
+        ASSERT_EQ(buffers2[i]->GetSize(), 0) << "Client2 buffer for existing key should have zero size";
+
+        // Core assertion: MemoryCopy on NX-rejected buffer returns error, does not crash
+        std::string testData = "test_data";
+        Status rc1 = buffers1[i]->MemoryCopy(testData.data(), testData.size());
+        ASSERT_FALSE(rc1.IsOk()) << "MemoryCopy on NX-rejected buffer should return error";
+        Status rc2 = buffers2[i]->MemoryCopy(testData.data(), testData.size());
+        ASSERT_FALSE(rc2.IsOk()) << "MemoryCopy on NX-rejected buffer should return error";
+    }
+
+    // Verify original values are unchanged
+    for (int i = 0; i < keyCount; i++) {
+        std::string val;
+        DS_ASSERT_OK(client1->Get(keys[i], val));
+        ASSERT_EQ(val, values[i]);
+    }
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXNullBufferMemoryCopySafe)
+{
+    std::shared_ptr<KVClient> testClient;
+    InitTestKVClient(0, testClient);
+
+    std::string key = "mcreate_nx_null_buf_" + testClient->GenerateKey();
+    std::string originalValue = "original_value";
+
+    // Pre-create the key so NX will return nullptr buffer
+    DS_ASSERT_OK(testClient->Set(key, originalValue));
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::string> keys{ key };
+    std::vector<uint64_t> sizes{ originalValue.size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(testClient->MCreate(keys, sizes, param, buffers));
+
+    ASSERT_EQ(buffers.size(), 1u);
+    ASSERT_NE(buffers[0], nullptr) << "Buffer should be a valid placeholder for existing key with NX";
+    ASSERT_EQ(buffers[0]->GetSize(), 0) << "NX-rejected buffer should have zero size";
+
+    // Verify that calling MemoryCopy on NX-rejected buffer returns error rather than crashing
+    std::string testData = "test_data";
+    Status rc = buffers[0]->MemoryCopy(testData.data(), testData.size());
+    ASSERT_FALSE(rc.IsOk()) << "MemoryCopy on NX-rejected buffer should return error";
+    ASSERT_EQ(rc.GetCode(), K_INVALID) << "MemoryCopy on NX-rejected buffer should return K_INVALID";
+
+    // Verify original value is unchanged
+    std::string val;
+    DS_ASSERT_OK(testClient->Get(key, val));
+    ASSERT_EQ(val, originalValue);
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXPartialNullBuffers)
+{
+    std::shared_ptr<KVClient> testClient;
+    InitTestKVClient(0, testClient);
+
+    std::string existingKey1 = "mcreate_nx_exist1_" + testClient->GenerateKey();
+    std::string existingKey2 = "mcreate_nx_exist2_" + testClient->GenerateKey();
+    std::string newKey1 = "mcreate_nx_new1_" + testClient->GenerateKey();
+    std::string newKey2 = "mcreate_nx_new2_" + testClient->GenerateKey();
+
+    std::string existVal1 = "existing_val_1";
+    std::string existVal2 = "existing_val_2";
+    std::string newVal1 = "new_val_1";
+    std::string newVal2 = "new_val_2";
+
+    // Pre-create some keys
+    DS_ASSERT_OK(testClient->Set(existingKey1, existVal1));
+    DS_ASSERT_OK(testClient->Set(existingKey2, existVal2));
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::string> keys{ existingKey1, newKey1, existingKey2, newKey2 };
+    std::vector<uint64_t> sizes{ existVal1.size(), newVal1.size(), existVal2.size(), newVal2.size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(testClient->MCreate(keys, sizes, param, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+
+    // Existing key buffers should have zero size (NX-rejected), new key buffers should have valid size
+    ASSERT_EQ(buffers[0]->GetSize(), 0) << "Buffer for existing key1 should have zero size (NX-rejected)";
+    ASSERT_GT(buffers[1]->GetSize(), 0) << "Buffer for new key1 should have valid size";
+    ASSERT_EQ(buffers[2]->GetSize(), 0) << "Buffer for existing key2 should have zero size (NX-rejected)";
+    ASSERT_GT(buffers[3]->GetSize(), 0) << "Buffer for new key2 should have valid size";
+
+    // Only do MemoryCopy + MSet on valid buffers
+    DS_ASSERT_OK(buffers[1]->MemoryCopy(newVal1.data(), newVal1.size()));
+    DS_ASSERT_OK(buffers[3]->MemoryCopy(newVal2.data(), newVal2.size()));
+    std::vector<std::shared_ptr<Buffer>> validBuffers{ buffers[1], buffers[3] };
+    DS_ASSERT_OK(testClient->MSet(validBuffers));
+
+    // Verify new keys have correct values
+    std::string val;
+    DS_ASSERT_OK(testClient->Get(newKey1, val));
+    ASSERT_EQ(val, newVal1);
+    DS_ASSERT_OK(testClient->Get(newKey2, val));
+    ASSERT_EQ(val, newVal2);
+
+    // Verify existing keys are unchanged
+    DS_ASSERT_OK(testClient->Get(existingKey1, val));
+    ASSERT_EQ(val, existVal1);
+    DS_ASSERT_OK(testClient->Get(existingKey2, val));
+    ASSERT_EQ(val, existVal2);
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadRace)
+{
+    // Test: multiple threads race to MCreate NX the same key.
+    // Verifies no crash occurs. At least one thread should complete
+    // the full MCreate+MemoryCopy+MSet flow. Others get NX-rejected
+    // placeholders where MemoryCopy safely returns error.
+    std::shared_ptr<KVClient> raceClient;
+    InitTestKVClient(0, raceClient);
+
+    std::string key = "mcreate_nx_race_" + raceClient->GenerateKey();
+    std::string value = "race_value";
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    constexpr int numThreads = 4;
+    std::atomic<int> msetSuccessCount(0);
+
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(numThreads);
+
+    std::vector<std::future<void>> futures;
+    futures.reserve(numThreads);
+    for (int t = 0; t < numThreads; t++) {
+        futures.emplace_back(pool.Submit([&, t]() {
+            start.wait();
+            std::vector<std::string> keys{ key };
+            std::vector<uint64_t> sizes{ value.size() };
+            std::vector<std::shared_ptr<Buffer>> buffers;
+
+            Status rc = raceClient->MCreate(keys, sizes, param, buffers);
+            if (!rc.IsOk() || buffers.empty()) {
+                return;
+            }
+            if (buffers[0]->GetSize() > 0) {
+                // This thread won the NX race - valid buffer
+                Status copyRc = buffers[0]->MemoryCopy(value.data(), value.size());
+                if (!copyRc.IsOk()) {
+                    return;
+                }
+                Status msetRc = raceClient->MSet(buffers);
+                if (msetRc.IsOk()) {
+                    msetSuccessCount++;
+                }
+            } else {
+                // NX-rejected: MemoryCopy should return error, not crash
+                std::string testData = "x";
+                buffers[0]->MemoryCopy(testData.data(), testData.size());
+            }
+        }));
+    }
+
+    ready.set_value();
+    for (auto &f : futures) {
+        f.get();
+    }
+
+    // At least one thread should complete MSet
+    ASSERT_GE(msetSuccessCount.load(), 1) << "At least one thread should complete MCreate+MSet";
+
+    // Verify final value
+    std::string val;
+    DS_ASSERT_OK(raceClient->Get(key, val));
+    ASSERT_EQ(val, value);
+}
+
 }  // namespace st
 }  // namespace datasystem
