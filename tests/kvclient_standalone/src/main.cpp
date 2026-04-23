@@ -30,6 +30,7 @@ static int RunMode(const Config &cfg) {
     ServiceDiscoveryOptions sdOpts;
     sdOpts.etcdAddress = cfg.etcdAddress;
     sdOpts.clusterName = cfg.clusterName;
+    sdOpts.hostIdEnvName = cfg.hostIdEnvName;
 
     auto sd = std::make_shared<ServiceDiscovery>(sdOpts);
     Status rc = sd->Init();

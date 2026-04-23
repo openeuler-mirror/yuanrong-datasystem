@@ -8,7 +8,8 @@ struct Config {
     int instanceId = 0;
     int listenPort = 9000;
     std::string etcdAddress;
-    std::string clusterName = "default";
+    std::string clusterName = "";
+    std::string hostIdEnvName = "";
     int32_t connectTimeoutMs = 1000;
     int32_t requestTimeoutMs = 20;
     std::vector<uint64_t> dataSizes;          // parsed bytes

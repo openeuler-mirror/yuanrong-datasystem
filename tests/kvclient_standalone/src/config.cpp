@@ -38,6 +38,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("listen_port")) cfg.listenPort = j["listen_port"];
         if (j.contains("etcd_address")) cfg.etcdAddress = j["etcd_address"];
         if (j.contains("cluster_name")) cfg.clusterName = j["cluster_name"];
+        if (j.contains("host_id_env_name")) cfg.hostIdEnvName = j["host_id_env_name"];
         if (j.contains("connect_timeout_ms")) cfg.connectTimeoutMs = j["connect_timeout_ms"];
         if (j.contains("request_timeout_ms")) cfg.requestTimeoutMs = j["request_timeout_ms"];
         if (j.contains("ttl_seconds")) cfg.ttlSeconds = j["ttl_seconds"];

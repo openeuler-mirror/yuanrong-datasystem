@@ -264,6 +264,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `listen_port` | int | 9000 | HTTP 服务端口 |
 | `etcd_address` | string | (必填) | etcd 地址，格式 `ip:port`，不加 `http://` |
 | `cluster_name` | string | `""` | 集群名，本地测试留空 |
+| `host_id_env_name` | string | `""` | ServiceDiscovery 的 hostId 环境变量名 |
 | `connect_timeout_ms` | int | 1000 | 连接超时(ms) |
 | `request_timeout_ms` | int | 20 | 请求超时(ms) |
 | `data_sizes` | string[] | `["8MB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀 |
