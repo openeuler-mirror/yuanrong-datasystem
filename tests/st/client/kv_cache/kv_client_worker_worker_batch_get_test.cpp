@@ -18,8 +18,8 @@
  * Description: Reproduce concurrent set/get on the same key among workers when worker-worker batch get is enabled.
  */
 
-#include <cstdint>
 #include <algorithm>
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <numeric>
