@@ -133,18 +133,24 @@ class Deployer:
 
         os.makedirs(local_dir, exist_ok=True)
 
-        # Pack on remote
+        # Pack on remote, skip if no files
         self.run_on(
             node,
-            f'cd {self.remote_work_dir} && ls -la *.csv *.txt *.log 2>/dev/null && '
-            f'tar czf {tar_remote} *.csv *.txt *.log 2>/dev/null || true',
+            f'cd {self.remote_work_dir} && '
+            f'{{ ls *.csv *.txt *.log 2>/dev/null && '
+            f'tar czf {tar_remote} *.csv *.txt *.log; }} || true',
             check=False)
+
+        # Check if tar was created on remote
+        check = self.run_on(
+            node, f'test -f {tar_remote}', check=False)
+        if check.returncode != 0:
+            print(f'  {target} -> no output files')
+            return
 
         # Pull to local
         try:
             if transport == 'localhost':
-                if not os.path.exists(tar_remote):
-                    return
                 tar_local = tar_remote
             elif transport == 'kubectl':
                 ns = self._namespace(node)
