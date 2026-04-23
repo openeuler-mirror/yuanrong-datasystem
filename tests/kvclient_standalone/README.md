@@ -42,11 +42,11 @@ kvclient_standalone/
 
 **安装 datasystem SDK：**
 
-在项目根目录执行构建（约13分钟）：
+在项目根目录执行构建（使用 Bazel）：
 
 ```bash
 cd /path/to/yuanrong-datasystem
-bash build.sh
+bash build.sh -b bazel
 ```
 
 构建产物在 `output/datasystem/` 目录下：
