@@ -136,7 +136,8 @@ class Deployer:
         # Pack on remote
         self.run_on(
             node,
-            f'cd {self.remote_work_dir} && tar czf {tar_remote} *.csv *.txt *.log 2>/dev/null || true',
+            f'cd {self.remote_work_dir} && ls -la *.csv *.txt *.log 2>/dev/null && '
+            f'tar czf {tar_remote} *.csv *.txt *.log 2>/dev/null || true',
             check=False)
 
         # Pull to local
