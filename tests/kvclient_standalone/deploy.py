@@ -40,7 +40,18 @@ class Deployer:
             full_cmd = ['ssh'] + self._ssh_args() + [f'{user}@{host}', cmd]
             return subprocess.run(full_cmd, check=check, capture_output=True, text=True)
 
-    def scp_to(self, host, user, src, dst):
+    def scp_from(self, host, user, remote_pattern, local_dir):
+        """SCP files matching remote_pattern from host to local_dir."""
+        os.makedirs(local_dir, exist_ok=True)
+        if host == 'localhost':
+            import glob
+            for src in glob.glob(remote_pattern):
+                shutil.copy2(src, local_dir)
+        else:
+            subprocess.run(
+                ['scp'] + self._ssh_args() + [f'{user}@{host}:{remote_pattern}', local_dir],
+                check=True
+            )
         if host == 'localhost':
             if os.path.isdir(src):
                 if os.path.exists(dst):
@@ -208,21 +219,63 @@ class Deployer:
         ok = sum(1 for r in results if r)
         print(f'\nClean result: {ok}/{len(results)}')
 
+    def do_collect(self):
+        collect_dir = 'collected'
+        results = []
+
+        def collect_node(node):
+            host = node['host']
+            instance_id = node['instance_id']
+            user = self._user_for(node)
+            local_dir = os.path.join(collect_dir, f'{host}_{instance_id}')
+            print(f'Collecting from {host} (instance_id={instance_id})...')
+            try:
+                self.scp_from(
+                    host, user,
+                    f'{self.remote_work_dir}/*.csv',
+                    local_dir
+                )
+                self.scp_from(
+                    host, user,
+                    f'{self.remote_work_dir}/*.txt',
+                    local_dir
+                )
+                self.scp_from(
+                    host, user,
+                    f'{self.remote_work_dir}/*.log',
+                    local_dir
+                )
+                count = len([f for f in os.listdir(local_dir) if os.path.isfile(os.path.join(local_dir, f))])
+                print(f'  {host} -> {count} files collected to {local_dir}/')
+                return True
+            except Exception as e:
+                print(f'  {host} -> FAILED ({e})')
+                return False
+
+        with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+            futures = [pool.submit(collect_node, node) for node in self.nodes]
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        ok = sum(1 for r in results if r)
+        print(f'\nCollect result: {ok}/{len(results)} -> {collect_dir}/')
+
 
 def main():
     if len(sys.argv) < 3:
-        print('Usage: deploy.py --deploy|--stop|--clean <deploy.json> [config_template.json]')
+        print('Usage: deploy.py --deploy|--stop|--collect|--clean <deploy.json> [config_template.json]')
         print()
-        print('  --deploy  Deploy binary + SDK libs + config to all nodes and start')
-        print('  --stop    Stop all instances via kvclient_standalone_test --stop')
-        print('  --clean   Kill processes and remove remote work dirs')
+        print('  --deploy   Deploy binary + SDK libs + config to all nodes and start')
+        print('  --stop     Stop all instances via kvclient_standalone_test --stop')
+        print('  --collect  Collect output files from all nodes to collected/')
+        print('  --clean    Kill processes and remove remote work dirs')
         sys.exit(1)
 
     action = sys.argv[1]
     deploy_json = sys.argv[2]
     config_template = sys.argv[3] if len(sys.argv) > 3 else 'config/config.json.example'
 
-    if action not in ('--deploy', '--stop', '--clean'):
+    if action not in ('--deploy', '--stop', '--collect', '--clean'):
         print(f'Unknown action: {action}')
         sys.exit(1)
 
@@ -232,6 +285,8 @@ def main():
         deployer.do_deploy()
     elif action == '--stop':
         deployer.do_stop()
+    elif action == '--collect':
+        deployer.do_collect()
     elif action == '--clean':
         deployer.do_clean()
 

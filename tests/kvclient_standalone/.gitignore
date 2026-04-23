@@ -18,3 +18,6 @@ stdout_*.log
 
 # Binary
 kvclient_standalone_test
+
+# Collected output files
+collected/
