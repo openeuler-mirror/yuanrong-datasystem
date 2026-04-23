@@ -16,8 +16,9 @@
   "role": "writer",
   "pipeline": ["setStringView"],
   "notify_pipeline": ["getBuffer"],
-  "peers": [
-    "http://host1:9000",
-    "http://host2:9000"
+  "nodes": [
+    {"host": "192.168.1.1", "port": 9000, "instance_id": 0},
+    {"host": "192.168.1.2", "port": 9000, "instance_id": 1},
+    {"host": "192.168.1.3", "port": 9000, "instance_id": 2}
   ]
 }

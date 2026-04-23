@@ -63,6 +63,24 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             }
         }
 
+        if (j.contains("nodes")) {
+            for (auto &n : j["nodes"]) {
+                NodeInfo ni;
+                ni.host = n.value("host", "");
+                ni.port = n.value("port", 9000);
+                ni.instanceId = n.value("instance_id", 0);
+                cfg.nodes.push_back(ni);
+            }
+        }
+
+        // Auto-generate peers from nodes if peers not explicitly set
+        if (cfg.peers.empty() && !cfg.nodes.empty()) {
+            for (auto &n : cfg.nodes) {
+                if (n.instanceId == cfg.instanceId) continue;
+                cfg.peers.push_back("http://" + n.host + ":" + std::to_string(n.port));
+            }
+        }
+
         if (j.contains("role")) cfg.role = j["role"].get<std::string>();
         if (j.contains("pipeline")) {
             cfg.pipeline.clear();
@@ -108,6 +126,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
               << ", role=" << cfg.role
               << ", pipeline=[" << joinStr(cfg.pipeline) << "]"
               << ", notify_pipeline=[" << joinStr(cfg.notifyPipeline) << "]"
+              << ", nodes=" << cfg.nodes.size()
+              << ", peers=" << cfg.peers.size()
               << ", data_sizes_count=" << cfg.dataSizes.size()
               << ", target_qps=" << cfg.targetQps
               << ", threads=" << cfg.numSetThreads);

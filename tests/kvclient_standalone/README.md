@@ -277,7 +277,12 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `role` | string | `"writer"` | 角色：`writer` 或 `reader` |
 | `pipeline` | string[] | `["setStringView"]` | Writer 主循环的操作序列 |
 | `notify_pipeline` | string[] | `["getBuffer"]` | `/notify` 触发的操作序列 |
-| `peers` | string[] | `[]` | 对等节点 URL 列表 |
+| `peers` | string[] | `[]` | 对等节点 URL 列表（手动配置，优先级高于 nodes） |
+| `nodes` | object[] | `[]` | 节点列表，自动生成 peers（排除自身 instance_id） |
+
+> **peers 与 nodes**：若 `peers` 非空则直接使用；否则从 `nodes` 自动生成。多实例部署推荐用 `nodes`，所有实例共享同一份配置。
+
+`nodes` 每项格式：`{"host": "ip", "port": 9000, "instance_id": 0}`
 
 ## 多节点部署
 

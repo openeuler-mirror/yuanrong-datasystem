@@ -4,6 +4,12 @@
 #include <vector>
 #include <cstdint>
 
+struct NodeInfo {
+    std::string host;
+    int port = 9000;
+    int instanceId = 0;
+};
+
 struct Config {
     int instanceId = 0;
     int listenPort = 9000;
@@ -19,7 +25,8 @@ struct Config {
     int notifyCount = 10;
     int metricsIntervalMs = 3000;
     std::string metricsFile = "metrics_{instance_id}.csv";
-    std::vector<std::string> peers;
+    std::vector<NodeInfo> nodes;
+    std::vector<std::string> peers;           // from config or auto-generated from nodes
     // Pipeline fields
     std::string role = "writer";
     std::vector<std::string> pipeline = {"setStringView"};
