@@ -24,6 +24,7 @@ ds_cc_test(
     srcs = ["object_base_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:object_ref_info",
+        "//src/datasystem/common/object_cache:buffer",
         "//tests/ut:ut_common",
     ],
 )
@@ -34,6 +35,7 @@ ds_cc_test(
     srcs = ["rwlock_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:object_ref_info",
         "//tests/ut:ut_common",
     ],

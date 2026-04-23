@@ -7,6 +7,8 @@ ds_cc_test(
     srcs = ["mmap_manager_test.cpp"],
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/client/object_cache/device:client_device_object_manager",
+        "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:mmap_manager",
         "//tests/ut:ut_common",
