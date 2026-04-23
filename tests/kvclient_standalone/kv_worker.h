@@ -2,6 +2,7 @@
 
 #include "config.h"
 #include "metrics.h"
+#include "pipeline.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
 #include <memory>
@@ -18,13 +19,13 @@ public:
     void Stop();
 
 private:
-    void SetLoop(int threadId);
+    void PipelineLoop(int threadId);
     void NotifyPeers(const std::string &key, uint64_t size);
-    std::string GenerateData(uint64_t size, int senderId);
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
     MetricsCollector &metrics_;
     std::atomic<bool> running_{false};
     std::vector<std::thread> threads_;
+    std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
 };
