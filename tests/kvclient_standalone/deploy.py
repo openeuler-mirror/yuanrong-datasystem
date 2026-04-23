@@ -383,21 +383,29 @@ class Deployer:
             print(f'Collecting from {target} (instance_id={instance_id})...')
             try:
                 self.collect_files(node, local_dir)
+                if not os.path.isdir(local_dir):
+                    return 'empty'
                 count = len([f for f in os.listdir(local_dir)
                              if os.path.isfile(os.path.join(local_dir, f))])
+                if count == 0:
+                    print(f'  {target} -> 0 files')
+                    return 'empty'
                 print(f'  {target} -> {count} files collected to {local_dir}/')
-                return True
+                return 'ok'
             except Exception as e:
                 print(f'  {target} -> FAILED ({e})')
-                return False
+                return 'fail'
 
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
             futures = [pool.submit(collect_node, n) for n in self.nodes]
             for future in as_completed(futures):
                 results.append(future.result())
 
-        ok = sum(1 for r in results if r)
-        print(f'\nCollect result: {ok}/{len(results)} -> {collect_dir}/')
+        ok = sum(1 for r in results if r == 'ok')
+        empty = sum(1 for r in results if r == 'empty')
+        fail = sum(1 for r in results if r == 'fail')
+        total = len(results)
+        print(f'\nCollect result: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
 
 
 def main():
