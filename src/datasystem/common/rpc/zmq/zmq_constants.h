@@ -22,6 +22,9 @@
 
 #include "datasystem/common/rpc/rpc_constants.h"
 
+#include <chrono>
+#include "datasystem/protos/meta_zmq.pb.h"
+
 namespace datasystem {
 static constexpr int64_t ZMQ_END_SEQNO = -1;             // Mark the end of stream.
 static constexpr int64_t ZMQ_INVALID_PAYLOAD_INX = -1;   // Initial value of payload index.
@@ -39,6 +42,42 @@ static constexpr uint32_t K_LIVENESS = 120;              // Peer liveness check 
 #define ZMQ_NO_FILE_FD RPC_NO_FILE_FD
 #define ZMQ_EIGHT RPC_EIGHT
 #define ZMQ_SOCKET_BACKLOG RPC_SOCKET_BACKLOG
+
+// ==================== RPC Tracing Ticks ====================
+inline constexpr const char* TICK_CLIENT_ENQUEUE = "CLIENT_ENQUEUE";
+inline constexpr const char* TICK_CLIENT_TO_STUB = "CLIENT_TO_STUB";
+inline constexpr const char* TICK_CLIENT_SEND = "CLIENT_SEND";
+inline constexpr const char* TICK_CLIENT_RECV = "CLIENT_RECV";
+inline constexpr const char* TICK_SERVER_RECV = "SERVER_RECV";
+inline constexpr const char* TICK_SERVER_DEQUEUE = "SERVER_DEQUEUE";
+inline constexpr const char* TICK_SERVER_EXEC_END = "SERVER_EXEC_END";
+inline constexpr const char* TICK_SERVER_SEND = "SERVER_SEND";
+
+// ==================== RPC Tracing Helpers (always enabled) ====================
+inline uint64_t GetTimeSinceEpoch()
+{
+    return std::chrono::high_resolution_clock::now().time_since_epoch().count();
+}
+
+inline uint64_t RecordTick(MetaPb& meta, const char* tickName)
+{
+    auto ts = GetTimeSinceEpoch();
+    TickPb tick;
+    tick.set_ts(ts);
+    tick.set_tick_name(tickName);
+    meta.mutable_ticks()->Add(std::move(tick));
+    return ts;
+}
+
+inline uint64_t GetTotalTicksTime(const MetaPb& meta)
+{
+    auto n = meta.ticks_size();
+    if (n > 1) {
+        return meta.ticks(n - 1).ts() - meta.ticks(0).ts();
+    }
+    return 0;
+}
+
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_CONSTANTS_H
