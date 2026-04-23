@@ -419,9 +419,6 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
         listenWorker_[node]->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
             return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
         });
-        if (isLocalWorker && serviceDiscovery_ != nullptr) {
-            listenWorker_[node]->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
-        }
     }
     listenWorker_[node]->SetIsLocalWorker(isLocalWorker);
     RETURN_IF_NOT_OK(listenWorker_[node]->StartListenWorker());
@@ -703,8 +700,11 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
     Raii switchEndNotifier([]() { INJECT_POINT_NO_RETURN("client.switch_worker_end", []() { return true; }); });
     const bool keepCurrentWorker =
         reason == client::SwitchTriggerReason::VOLUNTARY_SCALE_DOWN && current == LOCAL_WORKER;
-    auto standbyWorkers = GetStandbyWorkersForSwitch(currentApi);
-    if (standbyWorkers.empty()) {
+
+    std::vector<HostPort> sameHost;
+    std::vector<HostPort> others;
+    GetStandbyWorkersForSwitch(currentApi, sameHost, others);
+    if (sameHost.empty() && others.empty()) {
         LOG(ERROR) << "[Switch] standby worker list is empty";
         if (keepCurrentWorker) {
             RestoreWorkerAvailableIfNeeded(current, switchGeneration);
@@ -714,25 +714,20 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
         return false;
     }
 
-    for (const auto &standbyWorker : standbyWorkers) {
-        if (standbyWorker.Empty()) {
-            LOG(INFO) << "[Switch] Current worker has not standby worker.";
-            continue;
-        }
-        LOG(INFO) << FormatString("[Switch] Switch worker to %s", standbyWorker.ToString());
-        if (ipAddress_ == standbyWorker) {
-            if (TrySwitchBackToLocalWorker()) {
-                return true;
-            }
-            continue;
-        }
-        auto attemptResult = TrySwitchToStandbyWorker(currentApi, current, next, switchGeneration, standbyWorker);
-        if (attemptResult == StandbySwitchAttemptResult::SWITCHED) {
-            return true;
-        }
-        if (attemptResult == StandbySwitchAttemptResult::ABORT) {
-            return false;
-        }
+    // Same-host candidates replace the LOCAL_WORKER slot; others go into a standby slot.
+    auto result = TrySwitchToCandidateList(currentApi, current, next, switchGeneration, sameHost, true);
+    if (result == StandbySwitchAttemptResult::SWITCHED) {
+        return true;
+    }
+    if (result == StandbySwitchAttemptResult::ABORT) {
+        return false;
+    }
+    result = TrySwitchToCandidateList(currentApi, current, next, switchGeneration, others, false);
+    if (result == StandbySwitchAttemptResult::SWITCHED) {
+        return true;
+    }
+    if (result == StandbySwitchAttemptResult::ABORT) {
+        return false;
     }
     if (keepCurrentWorker) {
         RestoreWorkerAvailableIfNeeded(current, switchGeneration);
@@ -742,18 +737,73 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
     return false;
 }
 
-std::vector<HostPort> ObjectClientImpl::GetStandbyWorkersForSwitch(
-    const std::shared_ptr<IClientWorkerApi> &currentApi) const
+ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToCandidateList(
+    const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current, WorkerNode next,
+    uint64_t switchGeneration, const std::vector<HostPort> &candidates, bool isSameHost)
 {
-    auto standbyWorkers = currentApi->GetStandbyWorkers();
-    INJECT_POINT_NO_RETURN("client.standby_worker", [&standbyWorkers](const std::string &addr) {
+    for (const auto &addr : candidates) {
+        if (addr.Empty()) {
+            if (!isSameHost) {
+                LOG(INFO) << "[Switch] Current worker has not standby worker.";
+            }
+            continue;
+        }
+        LOG(INFO) << FormatString("[Switch] Switch worker to %s", addr.ToString());
+        if (addr == ipAddress_) {
+            if (TrySwitchBackToLocalWorker()) {
+                return StandbySwitchAttemptResult::SWITCHED;
+            }
+            continue;
+        }
+        auto attemptResult = isSameHost
+                                 ? TrySwitchToLocalSameHost(current, switchGeneration, addr)
+                                 : TrySwitchToStandbyWorker(currentApi, current, next, switchGeneration, addr);
+        if (attemptResult != StandbySwitchAttemptResult::CONTINUE) {
+            return attemptResult;
+        }
+    }
+    return StandbySwitchAttemptResult::CONTINUE;
+}
+
+void ObjectClientImpl::GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi,
+                                                  std::vector<HostPort> &sameHost,
+                                                  std::vector<HostPort> &others) const
+{
+    sameHost.clear();
+    others.clear();
+    if (serviceDiscovery_ != nullptr) {
+        std::vector<std::string> sdSameHost;
+        std::vector<std::string> sdOthers;
+        Status rc = serviceDiscovery_->GetAllWorkers(sdSameHost, sdOthers);
+        if (rc.IsError()) {
+            LOG(WARNING) << "[Switch] Service discovery failed, falling back to heartbeat standby list: "
+                         << rc.ToString();
+            others = currentApi->GetStandbyWorkers();
+        } else {
+            const HostPort &selfAddr = currentApi->hostPort_;
+            auto append = [&selfAddr](const std::vector<std::string> &addrs, std::vector<HostPort> &out) {
+                for (const auto &addr : addrs) {
+                    HostPort hp;
+                    if (hp.ParseString(addr).IsError() || hp == selfAddr) {
+                        continue;
+                    }
+                    out.emplace_back(std::move(hp));
+                }
+            };
+            append(sdSameHost, sameHost);
+            append(sdOthers, others);
+        }
+    } else {
+        others = currentApi->GetStandbyWorkers();
+    }
+    INJECT_POINT_NO_RETURN("client.standby_worker", [&sameHost, &others](const std::string &addr) {
         HostPort hostPort;
         hostPort.ParseString(addr);
-        standbyWorkers.clear();
-        standbyWorkers.emplace_back(hostPort);
+        sameHost.clear();
+        others.clear();
+        others.emplace_back(hostPort);
         return true;
     });
-    return standbyWorkers;
 }
 
 bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
@@ -768,6 +818,11 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
     workerApi_[next] = candidateWorkerApi;
     listenWorker_[next] = candidateListenWorker;
     currentNode_ = next;
+    // With service discovery, the LOCAL_WORKER listener is no longer the recovery driver
+    // (TryRecoverLocalWorker on the standby is); stop it to avoid heartbeating a dead address.
+    if (serviceDiscovery_ != nullptr && listenWorker_[LOCAL_WORKER] != nullptr) {
+        listenWorker_[LOCAL_WORKER]->StopListenWorker(false);
+    }
     MarkWorkerAvailableLocked();
     return true;
 }
@@ -823,6 +878,40 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
     }
     LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
                               candidateWorkerApi->hostPort_.ToString());
+    return StandbySwitchAttemptResult::SWITCHED;
+}
+
+ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalSameHost(
+    WorkerNode current, uint64_t switchGeneration, const HostPort &localAddress)
+{
+    HeartbeatType heartbeatType = workerApi_[current]->heartbeatType_;
+    std::shared_ptr<ClientWorkerRemoteApi> localWorkerApi;
+    std::unique_ptr<client::MmapManager> localMmapManager;
+    std::shared_ptr<client::ListenWorker> localListenWorker;
+    if (PreparePreferredLocalWorker(localAddress, heartbeatType, localWorkerApi, localMmapManager, localListenWorker)
+            .IsError()) {
+        return StandbySwitchAttemptResult::CONTINUE;
+    }
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
+            || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            localListenWorker->StopListenWorker(true);
+            return StandbySwitchAttemptResult::ABORT;
+        }
+        ipAddress_ = localAddress;
+        workerApi_[LOCAL_WORKER] = localWorkerApi;
+        listenWorker_[LOCAL_WORKER] = localListenWorker;
+        mmapManager_ = std::move(localMmapManager);
+        clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
+        memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
+        currentNode_ = LOCAL_WORKER;
+        if (current != LOCAL_WORKER && listenWorker_[current] != nullptr) {
+            listenWorker_[current]->SetSwitched();
+        }
+        MarkWorkerAvailableLocked();
+    }
+    LOG(INFO) << "[Switch] LOCAL_WORKER replaced with same-host worker at " << localAddress.ToString();
     return StandbySwitchAttemptResult::SWITCHED;
 }
 
@@ -890,55 +979,8 @@ bool ObjectClientImpl::TrySwitchBackToLocalWorker()
     }
 }
 
-bool ObjectClientImpl::RediscoverLocalWorker()
-{
-    WorkerNode nodeSnapshot;
-    HostPort ipSnapshot;
-    {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        if (currentNode_ == LOCAL_WORKER) {
-            return false;
-        }
-        nodeSnapshot = currentNode_;
-        ipSnapshot = ipAddress_;
-    }
-
-    std::string workerIp;
-    int workerPort;
-    bool isSameNode = false;
-    Status rc = serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode);
-    if (rc.IsError()) {
-        constexpr int times = 10;
-        LOG_EVERY_T(WARNING, times) << "[Switch] SelectWorker failed: " << rc.ToString();
-        return false;
-    }
-    if (!isSameNode) {
-        return false;
-    }
-
-    HostPort newAddress(workerIp, workerPort);
-    if (newAddress == ipSnapshot) {
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        if (currentNode_ == LOCAL_WORKER) {
-            return false;
-        }
-        if (newAddress == ipAddress_) {
-            return false;
-        }
-        if (currentNode_ != nodeSnapshot || ipAddress_ != ipSnapshot) {
-            return false;
-        }
-    }
-
-    LOG(INFO) << "[Switch] Local worker IP changed: " << ipSnapshot.ToString() << " -> " << newAddress.ToString();
-    return ReconnectLocalWorkerAt(newAddress);
-}
-
-bool ObjectClientImpl::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress)
+bool ObjectClientImpl::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress,
+                                                        HeartbeatType &heartbeatType)
 {
     if (serviceDiscovery_ == nullptr
         || serviceDiscovery_->GetAffinityPolicy() != ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
@@ -951,6 +993,10 @@ bool ObjectClientImpl::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, Hos
             return false;
         }
         oldNode = currentNode_;
+        if (workerApi_[oldNode] == nullptr) {
+            return false;
+        }
+        heartbeatType = workerApi_[oldNode]->heartbeatType_;
     }
 
     std::string workerIp;
@@ -999,7 +1045,6 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
         localListenWorker->SetSwitchWorkerHandle([this](uint32_t index, client::SwitchTriggerReason reason) {
             return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
         });
-        localListenWorker->SetRediscoverHandle([this]() { return RediscoverLocalWorker(); });
     }
     localListenWorker->SetIsLocalWorker(true);
     rc = localListenWorker->StartListenWorker();
@@ -1039,15 +1084,16 @@ bool ObjectClientImpl::RecoverPreferredLocalWorker()
 {
     WorkerNode oldNode;
     HostPort localAddress;
-    if (!GetPreferredLocalWorkerToRecover(oldNode, localAddress)) {
+    HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT;
+    if (!GetPreferredLocalWorkerToRecover(oldNode, localAddress, heartbeatType)) {
         return false;
     }
 
     std::shared_ptr<ClientWorkerRemoteApi> localWorkerApi;
     std::unique_ptr<client::MmapManager> localMmapManager;
     std::shared_ptr<client::ListenWorker> localListenWorker;
-    auto rc = PreparePreferredLocalWorker(localAddress, workerApi_[oldNode]->heartbeatType_, localWorkerApi,
-                                          localMmapManager, localListenWorker);
+    auto rc = PreparePreferredLocalWorker(localAddress, heartbeatType, localWorkerApi, localMmapManager,
+                                          localListenWorker);
     if (rc.IsError()) {
         return false;
     }
@@ -1057,67 +1103,6 @@ bool ObjectClientImpl::RecoverPreferredLocalWorker()
     }
 
     LOG(INFO) << "[Switch] Preferred same-node worker recovered at " << localAddress.ToString();
-    return true;
-}
-
-bool ObjectClientImpl::ReconnectLocalWorkerAt(const HostPort &newAddress)
-{
-    auto &workerApi = workerApi_[LOCAL_WORKER];
-    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
-    mmapManager_->CleanInvalidMmapTable();
-    memoryRefCount_.Clear();
-
-    HostPort oldAddress = ipAddress_;
-    ipAddress_ = newAddress;
-    workerApi->hostPort_ = newAddress;
-
-    std::vector<std::string> gRefIds;
-    {
-        std::lock_guard<std::shared_timed_mutex> l(globalRefMutex_);
-        gRefIds.reserve(globalRefCount_.size());
-        for (const auto &entry : globalRefCount_) {
-            gRefIds.emplace_back(entry.first);
-        }
-    }
-
-    Status rc = workerApi->ReconnectWorker(gRefIds);
-    if (rc.IsError()) {
-        LOG(ERROR) << "[Switch] Reconnect to new local worker " << newAddress.ToString()
-                   << " failed: " << rc.ToString();
-        ipAddress_ = oldAddress;
-        workerApi->hostPort_ = oldAddress;
-        return false;
-    }
-
-    // Recreate the OC service stub for the new address.
-    // ReconnectWorker only updates rpc channel, not the OC stub.
-    auto remoteApi = std::dynamic_pointer_cast<ClientWorkerRemoteApi>(workerApi);
-    if (remoteApi != nullptr) {
-        remoteApi->RecreateOCStub();
-    }
-
-    memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
-    rc = workerApi->PrepairForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(),
-                                                       std::placeholders::_1, std::placeholders::_2));
-    if (rc.IsError()) {
-        LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef failed: " << rc.ToString();
-    }
-
-    listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
-    rc = workerApi->TryFastTransportAfterHeartbeat();
-    if (rc.IsError()) {
-        LOG(WARNING) << "[Switch] Fast transport init failed after reconnect: " << rc.ToString();
-    }
-    {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        if (listenWorker_[currentNode_] != nullptr) {
-            listenWorker_[currentNode_]->SetSwitched();
-        }
-        currentNode_ = LOCAL_WORKER;
-        MarkWorkerAvailableLocked();
-    }
-
-    LOG(INFO) << "[Switch] Rediscovered and reconnected to local worker at " << newAddress.ToString();
     return true;
 }
 
