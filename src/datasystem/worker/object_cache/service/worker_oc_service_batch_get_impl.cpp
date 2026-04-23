@@ -612,6 +612,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                     RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                     // Fallback to downlevel client as multiple objects can be contained in the payload.
                     // Only spill case would actually send payload via RPC, so performance-wise it would be acceptable.
+                    INJECT_POINT("worker.BatchGetObjectFromRemoteWorker.beforeReceivePayload");
                     RETURN_IF_NOT_OK(clientApi->ReceivePayload(payloads));
                     return Status::OK();
                 },
