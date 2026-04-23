@@ -981,7 +981,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
     std::vector<uint32_t> shmIndexMapping(infos.size(), std::numeric_limits<uint32_t>::max());
     // Skip early allocate if the request is both RH2D enabled and supported.
-    if (!IsRemoteH2DEnabled() || request->GetClientCommUuid().empty()) {
+    if (!IsRemoteH2DEnabled() || request == nullptr || request->GetClientCommUuid().empty()) {
         RETURN_IF_NOT_OK(AggregateAllocateHelper(infos, shmOwners, shmIndexMapping));
     } else {
         // Assume the client works with only one device id, so only one connection is needed.
@@ -1041,9 +1041,12 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         }
 
         // start pipeline receiver and prepare pipeline h2d tag in request
-        OsXprtPipln::TriggerRemotePipelineRH2D(request->GetH2DChunkManager(), objectKV.GetObjKey(),
-            objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(),
-            objectKV.GetReadSize(), objectKV.GetObjEntry()->GetShmUnit(), address, subReq);
+        if (request) {
+            OsXprtPipln::TriggerRemotePipelineRH2D(request->GetH2DChunkManager(), objectKV.GetObjKey(),
+                                                   objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(),
+                                                   objectKV.GetReadSize(), objectKV.GetObjEntry()->GetShmUnit(),
+                                                   address, subReq);
+        }
 
         reqPb.mutable_requests()->Add(std::move(subReq));
         if (objectKV.IsOffsetRead()) {
@@ -2823,7 +2826,9 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     // Check version consistency and build ReadKey set.
     // If Master's version differs from the leaving worker's version, the object has been
     // modified and the leaving worker's data is stale. Mark it as success (no need to migrate).
-    std::set<ReadKey> objectsNeedGetRemote;
+    const int maxBatchSize = 32;
+    std::set<ReadKey> batchObjects;
+    Status lastRc;
     for (const auto &kv : queryMetas) {
         const auto &objectKey = kv.first;
         const auto &meta = kv.second;
@@ -2836,9 +2841,25 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
             continue;
         }
         ReadKey readKey(objectKey, 0, meta.meta().data_size());
-        objectsNeedGetRemote.insert(readKey);
+        batchObjects.insert(readKey);
+
+        if (batchObjects.size() >= maxBatchSize) {
+            Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp);
+            if (rc.IsError()) {
+                lastRc = rc;
+            }
+            batchObjects.clear();
+        }
     }
-    return ProcessRemoteGetInNotification(req, std::move(objectsNeedGetRemote), queryMetas, rsp);
+
+    // Process remaining objects in the last batch
+    if (!batchObjects.empty()) {
+        Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp);
+        if (rc.IsError()) {
+            lastRc = rc;
+        }
+    }
+    return lastRc;
 }
 }  // namespace object_cache
 }  // namespace datasystem
