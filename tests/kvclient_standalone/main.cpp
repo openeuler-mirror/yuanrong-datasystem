@@ -3,6 +3,7 @@
 #include "stop.h"
 #include "kv_worker.h"
 #include "http_server.h"
+#include "pipeline.h"
 
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
@@ -60,15 +61,20 @@ static int RunMode(const Config &cfg) {
     HttpServer httpServer(cfg, client, metrics, gRunning);
     httpServer.Start();
 
-    KVWorker worker(cfg, client, metrics);
-    worker.Start();
+    std::unique_ptr<KVWorker> worker;
+    if (cfg.role == "writer") {
+        worker = std::make_unique<KVWorker>(cfg, client, metrics);
+        worker->Start();
+    } else {
+        std::cerr << "Reader mode: waiting for notifications..." << std::endl;
+    }
 
     while (gRunning) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
     std::cerr << "Shutting down..." << std::endl;
-    worker.Stop();
+    if (worker) worker->Stop();
     httpServer.Stop();
     metrics.Stop();
 
