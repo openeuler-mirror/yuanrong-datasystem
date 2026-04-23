@@ -22,15 +22,10 @@
 #ifndef DATASYSTEM_SERVICE_DISCOVERY_H
 #define DATASYSTEM_SERVICE_DISCOVERY_H
 
-#include <condition_variable>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <shared_mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
-#include <map>
 
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
@@ -102,6 +97,17 @@ public:
     Status SelectSameNodeWorker(std::string &workerIp, int &workerPort);
 
     /**
+     * @brief Return every ready worker ("host:port") visible via etcd keepalive, split by host
+     *        affinity. Under REQUIRED_SAME_NODE only same-node workers are returned; under RANDOM
+     *        every worker is returned via otherAddrs with sameHostAddrs empty; otherwise same-node
+     *        workers go in sameHostAddrs and the rest in otherAddrs.
+     * @param[out] sameHostAddrs Addresses of workers whose hostId matches the local hostId.
+     * @param[out] otherAddrs    Addresses of all remaining workers.
+     * @return Status of the call.
+     */
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs);
+
+    /**
      * @brief Get service affinity policy.
      * @return Service affinity policy.
      */
@@ -112,9 +118,13 @@ public:
 
 private:
     /**
-     * @brief Populate active workers set at startup.
+     * @brief Fetch ready worker addresses from etcd and partition by host affinity. When hostId_
+     *        is empty, every worker goes into `other`.
+     * @param[out] sameHost Addresses of workers whose hostId matches the local hostId.
+     * @param[out] other    Remaining ready worker addresses.
+     * @return Status of the call.
      */
-    Status ObtainWorkers();
+    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
 
     std::string etcdAddress_;
     std::string clusterName_;
@@ -128,12 +138,7 @@ private:
     std::string hostIdEnvName_;
     std::string hostId_;
     ServiceAffinityPolicy affinityPolicy_;
-    // key is worker_address, value is worker_id.
-    std::unordered_map<std::string, std::string> activeWorkerInfo_;
     std::shared_ptr<RandomData> randomData_;
-    // workerHostPortMutext_ is used to protect the read and write of activeWorkerInfo_.
-    mutable std::shared_timed_mutex workerHostPortMutext_;
-    // etcdStore_ uses workerHostPortMutext_ and activeWorkerInfo_, so needs to be destructed first.
     std::shared_ptr<EtcdStore> etcdStore_;
 };
 }  // namespace datasystem

@@ -166,11 +166,6 @@ void ListenWorker::SetReleaseFdCallBack(std::function<void(const std::vector<int
     fdReleaseHelper_.SetReleaseFdCallBack(std::move(callback));
 }
 
-void ListenWorker::SetRediscoverHandle(std::function<bool()> callback)
-{
-    rediscoverHandle_ = std::move(callback);
-}
-
 void ListenWorker::SetRecoverLocalWorkerHandle(std::function<bool()> callback)
 {
     recoverLocalWorkerHandle_ = std::move(callback);
@@ -198,8 +193,8 @@ Status ListenWorker::CheckHeartbeat()
     Timer timer;
     bool prevSwitchedState = isSwitched_;
     while (!stop_) {
-        // Reset heartbeat timer after any switch transition (to standby or back to local
-        // via rediscovery). Without this, the stale timer accumulated during the original
+        // Reset heartbeat timer after any switch transition (to remote or back to local).
+        // Without this, the stale timer accumulated during the original
         // disconnection would instantly exceed nodeTimeoutMs and trigger another switch.
         if (isSwitched_ != prevSwitchedState) {
             timer.Reset();
@@ -214,7 +209,6 @@ Status ListenWorker::CheckHeartbeat()
                                                fdReleaseHelper_.GetReleasedWorkerFds(), expiredWorkerFds);
         if (status.IsError()) {
             CheckAndSetClientTimeout(timer.ElapsedMilliSecond(), clientDeadTimeoutMs, status);
-            TryRediscoverLocalWorker();
             auto interval = GetErrorWaitInterval(timer, clientDeadTimeoutMs, heartbeatIntervalMs[lostHeartbeatTimes]);
             waitPost_->WaitFor(interval);
             if (isSwitched_ != prevSwitchedState) {
@@ -408,24 +402,6 @@ void ListenWorker::TrySwitchBackToLocalWorker()
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
         isSwitched_ = !switchWorkerHandle_(index_, SwitchTriggerReason::WORKER_UNAVAILABLE);
-    });
-}
-
-void ListenWorker::TryRediscoverLocalWorker()
-{
-    std::shared_ptr<Raii> raii;
-    if (!isSwitched_ || !isLocalWorker_ || !rediscoverHandle_ || !TryAcquireAsyncSwitchPool(raii)) {
-        return;
-    }
-    VLOG(1) << "[Switch] Attempting to rediscover local worker";
-    auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        if (rediscoverHandle_()) {
-            LOG(INFO) << "[Switch] Local worker rediscovered successfully";
-            isSwitched_ = false;
-            waitPost_->Set();
-        }
     });
 }
 
