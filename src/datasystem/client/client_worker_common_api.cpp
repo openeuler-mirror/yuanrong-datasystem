@@ -63,8 +63,6 @@
 namespace datasystem {
 namespace {
 static constexpr int64_t MIN_WAIT_MS = 1;
-static constexpr int64_t WAIT_PERCENT = 80;
-static constexpr int64_t PERCENT_BASE = 100;
 
 int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
 {
@@ -815,7 +813,7 @@ Status ClientWorkerRemoteCommonApi::Reconnect()
     const int32_t reconnectTimeout = 1 * 1000;  // 1s for reconnect.
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, reconnectTimeout, true));
-    TryFastTransportAfterHeartbeat();
+    RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
     LOG(INFO) << "Reconnect success! New unix domain socket: " << socketFd_;
     return Status::OK();
 }
@@ -843,10 +841,10 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
 }
 
-void ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
+Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
 {
     if (!pendingFtHandshake_.has_value()) {
-        return;
+        return Status::OK();
     }
     auto ctx = std::move(*pendingFtHandshake_);
     pendingFtHandshake_.reset();
@@ -854,7 +852,9 @@ void ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
     if (rc.IsError()) {
         FLAGS_enable_urma = false;
         LOG(ERROR) << "Fast transport handshake failed, fall back to TCP/IP communication. Detail: " << rc.ToString();
+        return rc;
     }
+    return Status::OK();
 }
 
 Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, uint32_t workerVersion,
@@ -879,12 +879,7 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, ui
         auto future =
             urmaHandshakePool_->Submit([this, workerVersion]() { return AsyncFirstUrmaHandshake(workerVersion); });
 
-        int64_t waitMs = timeoutMs;
-        int64_t clientDeadTimeoutMs = static_cast<int64_t>(rsp.client_dead_timeout_s()) * TO_MILLISECOND;
-        if (clientDeadTimeoutMs > 0) {
-            waitMs = std::min(waitMs, clientDeadTimeoutMs * WAIT_PERCENT / PERCENT_BASE);
-        }
-        waitMs = std::max<int64_t>(waitMs, MIN_WAIT_MS);
+        int64_t waitMs = std::max<int64_t>(timeoutMs, MIN_WAIT_MS);
 
         if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
             Status status = future.get();
