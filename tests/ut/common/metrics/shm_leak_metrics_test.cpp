@@ -70,8 +70,8 @@ TEST_F(ShmLeakMetricsTest, metric_names_present_in_summary)
     Cnt(metrics::KvMetricId::WORKER_SHM_UNIT_DESTROYED_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_ADD_TOTAL).Inc();
     Cnt(metrics::KvMetricId::WORKER_SHM_REF_REMOVE_TOTAL).Inc();
-    Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE).Set(0);
-    Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES).Set(0);
+    Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_SIZE).Set(1);
+    Gge(metrics::KvMetricId::WORKER_SHM_REF_TABLE_BYTES).Set(1);
 
     auto s = metrics::DumpSummaryForTest();
     EXPECT_NE(s.find("worker_allocator_alloc_bytes_total"), std::string::npos);

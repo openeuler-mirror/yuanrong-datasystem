@@ -119,15 +119,17 @@ TEST_F(MetricsTest, histogram_empty_test)
 {
     InitMetrics();
     auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 0, 0, 0, 0, 0, 0)), std::string::npos);
+    EXPECT_EQ(summary.find("test_histogram"), std::string::npos);
 }
 
 TEST_F(MetricsTest, scoped_timer_test)
 {
     InitMetrics();
-    { metrics::ScopedTimer timer(HISTOGRAM_ID); }
+    metrics::GetHistogram(HISTOGRAM_ID).Observe(1);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find("\"name\":\"test_histogram\""), std::string::npos);
+    InitMetrics();
+    { metrics::ScopedTimer timer(HISTOGRAM_ID); }
     EXPECT_NE(summary.find("\"count\":1"), std::string::npos);
 }
 
@@ -231,6 +233,9 @@ TEST_F(MetricsTest, print_summary_splits_large_payload_test)
         descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
     }
     DS_ASSERT_OK(metrics::Init(descs.data(), descs.size()));
+    for (uint16_t i = 0; i < 80; ++i) {
+        METRIC_ADD(i, 6);
+    }
     testing::internal::CaptureStderr();
     metrics::PrintSummary();
     auto output = testing::internal::GetCapturedStderr();
@@ -291,7 +296,7 @@ TEST_F(MetricsTest, writer_zero_delta_test)
     (void)metrics::DumpSummaryForTest();
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find(ScalarMetricJson("test_counter", 5, 0)), std::string::npos);
-    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 0, 0, 0, 0, 0, 0)), std::string::npos);
+    EXPECT_EQ(summary.find("test_histogram"), std::string::npos);
 }
 
 TEST_F(MetricsTest, writer_tick_updates_delta_snapshot_test)
@@ -381,9 +386,12 @@ TEST_F(MetricsTest, kv_metric_name_unique_test)
 TEST_F(MetricsTest, kv_metric_id_mapping_test)
 {
     DS_ASSERT_OK(metrics::InitKvMetrics());
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_ALLOCATED_MEMORY_SIZE))
+        .Set(10);
     auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(ScalarMetricJson("client_put_request_total", 0, 0)), std::string::npos);
-    EXPECT_NE(summary.find(ScalarMetricJson("worker_allocated_memory_size", 0, 0)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("client_put_request_total", 1, 1)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_allocated_memory_size", 10, 10)), std::string::npos);
 }
 
 TEST_F(MetricsTest, kv_metric_helper_inc_test)
@@ -398,7 +406,7 @@ TEST_F(MetricsTest, kv_metric_helper_inc_test)
 TEST_F(MetricsTest, kv_metric_helper_timer_test)
 {
     DS_ASSERT_OK(metrics::InitKvMetrics());
-    { METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY)).Observe(10);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find("\"name\":\"client_rpc_get_latency\""), std::string::npos);
     EXPECT_NE(summary.find("\"count\":1"), std::string::npos);
@@ -453,63 +461,63 @@ TEST_F(MetricsTest, client_get_metrics_error_counter_test)
 TEST_F(MetricsTest, client_rpc_create_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"client_rpc_create_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, client_rpc_publish_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"client_rpc_publish_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, client_rpc_get_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"client_rpc_get_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_process_create_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_process_create_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_process_publish_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_process_publish_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_process_get_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_process_get_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_create_meta_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_rpc_create_meta_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_query_meta_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_rpc_query_meta_latency\""), std::string::npos);
 }
 
 TEST_F(MetricsTest, worker_remote_get_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    { METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY); }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_rpc_get_remote_object_latency\""), std::string::npos);
 }
 

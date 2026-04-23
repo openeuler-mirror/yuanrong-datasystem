@@ -138,14 +138,22 @@ std::vector<std::string> BuildSummary(int intervalMs)
         auto &slot = g_slots[id];
         auto &last = g_last[id];
         std::ostringstream item;
-        item << "{\"name\":\"" << slot.name << "\",\"total\":";
+        bool needAdd = false;
         if (slot.type == MetricType::COUNTER) {
             auto value = slot.u64Value.load(std::memory_order_relaxed);
-            item << value << ",\"delta\":" << static_cast<int64_t>(value - last.u64Value) << '}';
+            if (value > 0) {
+                needAdd = true;
+                item << "{\"name\":\"" << slot.name << "\",\"total\":"
+                     << value << ",\"delta\":" << static_cast<int64_t>(value - last.u64Value) << '}';
+            }
             last.u64Value = value;
         } else if (slot.type == MetricType::GAUGE) {
             auto value = slot.i64Value.load(std::memory_order_relaxed);
-            item << value << ",\"delta\":" << (value - last.i64Value) << '}';
+            if (value > 0) {
+                needAdd = true;
+                item << "{\"name\":\"" << slot.name << "\",\"total\":"
+                     << value << ",\"delta\":" << (value - last.i64Value) << '}';
+            }
             last.i64Value = value;
         } else {
             std::lock_guard<std::mutex> histLock(slot.histMutex);
@@ -155,13 +163,19 @@ std::vector<std::string> BuildSummary(int intervalMs)
             auto dCount = count - last.u64Value;
             auto dSum = sum - last.sum;
             auto dMax = slot.periodMax.exchange(0, std::memory_order_relaxed);
-            item << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
-                 << ",\"max_us\":" << max << "},\"delta\":{\"count\":" << dCount
-                 << ",\"avg_us\":" << (dCount == 0 ? 0 : dSum / dCount) << ",\"max_us\":" << dMax << "}}";
+            if (sum > 0) {
+                needAdd = true;
+                item << "{\"name\":\"" << slot.name << "\",\"total\":"
+                     << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
+                     << ",\"max_us\":" << max << "},\"delta\":{\"count\":" << dCount
+                     << ",\"avg_us\":" << (dCount == 0 ? 0 : dSum / dCount) << ",\"max_us\":" << dMax << "}}";
+            }
             last.u64Value = count;
             last.sum = sum;
         }
-        metrics.emplace_back(item.str());
+        if (needAdd) {
+            metrics.emplace_back(item.str());
+        }
     }
     const auto cycle = ++g_cycle;
     std::vector<std::string> bodies(1);
