@@ -23,7 +23,8 @@ kvclient_standalone/
 │   ├── spdlog-include/     # ds_spdlog 头文件
 │   ├── json-include/       # nlohmann_json 头文件
 │   └── sdk/               # SDK 动态库 libdatasystem.so (make copy-sdk, gitignore)
-├── deploy.py               # 多节点部署脚本
+├── deploy.py               # 多节点部署脚本（支持 SSH / kubectl）
+├── procmon.py              # 进程 CPU/内存监控工具
 ├── test_deploy.sh          # 跨子网部署测试脚本
 ├── CMakeLists.txt
 └── build/                  # 构建输出 (gitignore)
@@ -98,6 +99,27 @@ make copy-sdk
 
 > 如果 SDK 产物在其他路径：`make copy-sdk BAZEL_SDK_DIR=/path/to/output/cpp`
 
+### 2.2 打包部署产物
+
+```bash
+# 打包二进制 + SDK 库 + 脚本 + 配置到 output/
+make package
+```
+
+`output/` 目录结构：
+
+```
+output/
+├── kvclient_standalone_test  # 二进制
+├── lib/
+│   └── libdatasystem.so      # SDK 动态库
+├── deploy.py                 # 部署脚本
+├── test_deploy.sh            # 跨子网测试脚本
+└── config/
+    ├── config.json.example   # 配置模板
+    └── deploy.json.example   # 部署模板
+```
+
 ### 3. 启动依赖服务
 
 **启动 etcd：**
@@ -149,12 +171,11 @@ cp config/config.json.example config/my_config.json
   "metrics_file": "metrics_0.csv",
   "role": "writer",
   "pipeline": ["setStringView"],
-  "notify_pipeline": ["getBuffer"],
-  "peers": []
+  "notify_pipeline": ["getBuffer"]
 }
 ```
 
-> **注意**：`etcd_address` 不要加 `http://` 前缀，用 `127.0.0.1:2379`。本地测试 `cluster_name` 设为空字符串 `""`。
+> **注意**：`etcd_address` 不要加 `http://` 前缀，用 `127.0.0.1:2379`。本地测试 `cluster_name` 设为空字符串 `""`。单节点运行时需要手动指定 `instance_id`；通过 deploy.py 多节点部署时，`instance_id`、`nodes`、`peers` 会由 deploy.py 自动注入。
 
 #### 4.2 运行
 
@@ -260,7 +281,7 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `instance_id` | int | 0 | 实例唯一标识 |
+| `instance_id` | int | 0 | 实例唯一标识（单机运行时手动指定，deploy.py 部署时自动注入） |
 | `listen_port` | int | 9000 | HTTP 服务端口 |
 | `etcd_address` | string | (必填) | etcd 地址，格式 `ip:port`，不加 `http://` |
 | `cluster_name` | string | `""` | 集群名，本地测试留空 |
@@ -280,6 +301,8 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `peers` | string[] | `[]` | 对等节点 URL 列表（手动配置，优先级高于 nodes） |
 | `nodes` | object[] | `[]` | 节点列表，自动生成 peers（排除自身 instance_id） |
 
+> **deploy.py 部署时自动注入的字段**：`instance_id`、`nodes`、`peers` 由 deploy.py 从 deploy.json 生成并注入到每个实例的配置中。config.json.example 中不包含这些字段。
+
 > **peers 与 nodes**：若 `peers` 非空则直接使用；否则从 `nodes` 自动生成。多实例部署推荐用 `nodes`，所有实例共享同一份配置。
 
 `nodes` 每项格式：`{"host": "ip", "port": 9000, "instance_id": 0}`
@@ -293,15 +316,15 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | `remote_work_dir` | string | 远程工作目录 |
 | `binary_path` | string | 本地二进制路径 |
 | `sdk_lib_dir` | string | SDK 动态库目录，默认 `third_party/sdk` |
+| `enable_procmon` | bool | 是否部署 procmon.py 监控进程，默认 `true` |
 | `ssh_user` | string | 默认 SSH 用户 |
 | `ssh_options` | string | SSH 选项 |
 | `nodes` | array | 节点列表 |
 
 每个 node 支持：
-- `host` — 主机名/IP (`localhost` 表示本机)
+- `host` — SSH 节点的主机名/IP (`localhost` 表示本机)
 - `instance_id` — 实例 ID
 - `ssh_user` — 覆盖默认 SSH 用户
-- `peers` — 覆盖默认 peers 列表
 - `role` / `pipeline` / `notify_pipeline` — 覆盖 config 模板中的值
 
 ### 部署命令
@@ -313,8 +336,93 @@ python3 deploy.py --deploy config/deploy.json config/config.json.example
 # 停止所有实例
 python3 deploy.py --stop config/deploy.json config/config.json.example
 
+# 收集所有节点的输出文件到 collected/
+python3 deploy.py --collect config/deploy.json config/config.json.example
+
 # 清理：杀进程 + 删除远程目录
 python3 deploy.py --clean config/deploy.json config/config.json.example
+```
+
+### SSH 部署示例
+
+```json
+{
+  "remote_work_dir": "/home/user/kvclient_test",
+  "binary_path": "build/kvclient_standalone_test",
+  "sdk_lib_dir": "third_party/sdk",
+  "enable_procmon": true,
+  "ssh_user": "root",
+  "ssh_options": "-o StrictHostKeyChecking=no",
+  "nodes": [
+    { "host": "192.168.1.1", "instance_id": 0 },
+    { "host": "192.168.1.2", "instance_id": 1, "ssh_user": "ubuntu" }
+  ]
+}
+```
+
+### Kubernetes (kubectl) 部署
+
+deploy.py 支持 kubectl 传输方式，适用于无法配置 SSH 的 k8s 容器环境。使用 `kubectl exec` 执行命令、`kubectl cp` 拷贝文件。
+
+#### kubectl 节点配置
+
+kubectl 节点使用以下字段（区别于 SSH 节点）：
+
+| 字段 | 说明 |
+|------|------|
+| `pod_name` | kubectl 操作的目标 Pod 名称（必填） |
+| `pod_ip` | kvclient 实例间通信地址，Pod IP 或 DNS（可选，默认用 pod_name） |
+| `namespace` | kubectl 命名空间（可选，默认 `"default"`） |
+| `transport` | 设为 `"kubectl"` |
+
+> `pod_name` 用于 kubectl exec/cp 命令；`pod_ip` 用于 kvclient 实例之间的 P2P HTTP 通信（生成 config 中的 peers）。如果 Pod 名称在集群内网络可达（如通过 headless service DNS），则可省略 `pod_ip`。
+
+#### kubectl 部署示例
+
+```json
+{
+  "remote_work_dir": "/home/user/kvclient_test",
+  "binary_path": "build/kvclient_standalone_test",
+  "sdk_lib_dir": "third_party/sdk",
+  "enable_procmon": true,
+  "nodes": [
+    {
+      "pod_name": "ds-worker-0",
+      "pod_ip": "10.244.1.5",
+      "namespace": "datasystem",
+      "instance_id": 0,
+      "transport": "kubectl"
+    },
+    {
+      "pod_name": "ds-worker-1",
+      "pod_ip": "10.244.2.3",
+      "namespace": "datasystem",
+      "instance_id": 1,
+      "transport": "kubectl"
+    }
+  ]
+}
+```
+
+> **前提条件**：执行 deploy.py 的主机需要能通过 kubectl 访问目标集群（已配置 kubeconfig），且 Pod 内需要 tar 命令（用于目录拷贝和文件收集）。
+
+#### 混合部署
+
+SSH 节点和 kubectl 节点可以在同一个 deploy.json 中混用：
+
+```json
+{
+  "nodes": [
+    { "host": "192.168.1.1", "instance_id": 0 },
+    {
+      "pod_name": "ds-worker-0",
+      "pod_ip": "10.244.1.5",
+      "namespace": "datasystem",
+      "instance_id": 1,
+      "transport": "kubectl"
+    }
+  ]
+}
 ```
 
 ### 跨子网部署
@@ -386,6 +494,25 @@ timestamp,op,count,avg_ms,p90_ms,p99_ms,min_ms,max_ms,qps
   "getBuffer_count": 0,
   "verify_fail": 0
 }
+```
+
+## 进程监控 (procmon.py)
+
+部署时默认启动 procmon.py 监控 kvclient_standalone_test 的 CPU 和内存使用。输出示例：
+
+```
+[14:30:01] PID=12345 CPU=12.3% MEM=45.2MB
+...
+=== Summary ===
+Samples: 30, Duration: 60s
+CPU  avg=10.2%  peak=15.8%
+MEM  avg=45.3MB peak=47.1MB
+```
+
+可通过 `enable_procmon: false` 关闭。单独使用：
+
+```bash
+python3 procmon.py -p kvclient_standalone_test -i 2
 ```
 
 ## 常见问题
