@@ -312,9 +312,15 @@ class Deployer:
                 env['LD_LIBRARY_PATH'] = f'{ld_path}:{env.get("LD_LIBRARY_PATH", "")}'
 
             try:
-                subprocess.run(
+                result = subprocess.run(
                     [self.binary_path, '--stop', tmp_config],
-                    env=env, check=False)
+                    env=env, check=False, capture_output=True, text=True)
+                if result.stdout:
+                    print(result.stdout.rstrip())
+                if result.returncode != 0:
+                    print(f'WARN: --stop exited with code {result.returncode}')
+                    if result.stderr:
+                        print(result.stderr.rstrip())
             except Exception as e:
                 print(f'WARN: --stop failed: {e}')
 
