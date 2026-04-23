@@ -11,6 +11,7 @@ ds_cc_test(
     srcs = ["sfs_client_test.cpp"],
     deps = [
         "//src/datasystem/common/l2cache/sfs_client",
+        "//src/datasystem/common/l2cache/obs_client",
         "//tests/ut:ut_common",
     ],
 )

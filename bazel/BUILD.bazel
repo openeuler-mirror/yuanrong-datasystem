@@ -177,7 +177,6 @@ py_wheel(
         "//:dockerentry_deployment_files",
         "//:dsbench_file",
         "//:helm_chart_files",
-        "//:libjemalloc_shared_file",
         "//:readme_file",
         "//:version_file",
         "//:worker_config_file",

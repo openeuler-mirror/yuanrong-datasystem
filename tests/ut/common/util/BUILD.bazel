@@ -145,6 +145,7 @@ ds_cc_test(
     name = "queue_test",
     srcs = ["queue_test.cpp"],
     deps = [
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:uuid_generator",
@@ -179,6 +180,7 @@ ds_cc_test(
     srcs = ["safe_object_test.cpp"],
     deps = [
         "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:safe_object",
         "//src/datasystem/common/object_cache:safe_table",

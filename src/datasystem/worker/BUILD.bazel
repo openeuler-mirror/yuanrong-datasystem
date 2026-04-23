@@ -361,9 +361,12 @@ ds_cc_library(
 ds_cc_library(
     name = "add_miss_libs_fixme",
     deps = [
+        "//src/datasystem/common/device/ascend:p2phccl_comm_wrapper",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/l2cache:persistence_api",
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/util:meta_route_tool",
+        "//src/datasystem/client/object_cache/device:client_device_object_manager",
         "//src/datasystem/master/object_cache:master_worker_oc_local_api",
         "//src/datasystem/master/stream_cache:master_worker_sc_api",
         "//src/datasystem/worker:worker_liveness_check",

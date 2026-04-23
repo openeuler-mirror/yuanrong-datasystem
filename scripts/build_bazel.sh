@@ -117,7 +117,6 @@ function build_datasystem_bazel() {
   local -a targets=(
     "//bazel:datasystem_sdk"                           # SDK tar (headers + cmake + stripped lib)
     "//src/datasystem/worker:datasystem_worker_shared"  # worker shared library
-    "//:libjemalloc_shared_file"                        # jemalloc
   )
   if is_on "${PACKAGE_PYTHON}"; then
     targets+=("//bazel:datasystem_wheel")
@@ -214,11 +213,6 @@ function _bazel_install_outputs() {
   # Worker shared library (rename to match CMake output name)
   if [[ -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" ]]; then
     cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" "${DS_DIR}/service/lib/libdatasystem_worker.so"
-  fi
-
-  # jemalloc
-  if [[ -f "${bazel_bin}/yr/datasystem/lib/libjemalloc.so.2" ]]; then
-    cp -f "${bazel_bin}/yr/datasystem/lib/libjemalloc.so.2" "${DS_DIR}/service/lib/"
   fi
 
   # --- 4. Config files ---

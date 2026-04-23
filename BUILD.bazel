@@ -47,17 +47,6 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-bool_flag(
-    name = "jemalloc_dynamic",
-    build_setting_default = False,
-)
-
-bool_setting(
-    name = "jemalloc_dynamic_internal",
-    build_setting_default = False,
-    visibility = ["//visibility:public"],
-)
-
 cc_shared_library(
     name = "datasystem",
     additional_linker_inputs = ["export_datasystem_symbols.lds"],
@@ -66,6 +55,7 @@ cc_shared_library(
         # these transitive deps must be declared as exported so Bazel
         # knows their symbols are available from the shared library.
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
@@ -183,16 +173,6 @@ copy_file(
     out = "yr/datasystem/service/DATASYSTEM_SYM/datasystem_worker.sym",
     visibility = [
         "//bazel:__pkg__",
-    ],
-)
-
-copy_file(
-    name = "libjemalloc_shared_file",
-    src = "@jemalloc_kvc//:libjemalloc.so.2",
-    out = "yr/datasystem/lib/libjemalloc.so.2",
-    visibility = [
-        "//bazel:__pkg__",
-        "//python:__subpackages__",
     ],
 )
 
