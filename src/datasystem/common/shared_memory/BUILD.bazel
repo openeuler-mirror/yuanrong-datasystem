@@ -3,20 +3,6 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-config_setting(
-    name = "jemalloc_static_config",
-    flag_values = {
-        "//:jemalloc_dynamic_internal": "False",
-    },
-)
-
-config_setting(
-    name = "jemalloc_dynamic_config",
-    flag_values = {
-        "//:jemalloc_dynamic_internal": "True",
-    },
-)
-
 ds_cc_library(
     name = "common_shm_unit_info",
     srcs = glob(["shm_unit_info.cpp"]),
@@ -57,9 +43,6 @@ ds_cc_library(
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/util/gflag:common_util_gflag_header",
         "@re2",
-    ] + select({
-        "//:with_tests": ["@jemalloc_kvc//:jemalloc_shared"],
-        ":jemalloc_dynamic_config": ["@jemalloc_kvc//:jemalloc_shared"],
-        "//conditions:default": ["@jemalloc_kvc//:jemalloc"],
-    }),
+        "@jemalloc_kvc//:jemalloc",
+    ],
 )
