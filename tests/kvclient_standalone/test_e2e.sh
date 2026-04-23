@@ -191,3 +191,143 @@ for m in A B; do
         log_fail "Machine $m: procmon still running"
     fi
 done
+
+# === TC4: Collect ===
+echo ""
+echo "=== TC4: Collect ==="
+rm -rf collected
+./deploy.py --collect "$DEPLOY_CFG" "$KVCLIENT_CFG"
+
+COLLECTED_DIRS=$(ls -d collected/*/ 2>/dev/null | wc -l)
+if (( COLLECTED_DIRS == 2 )); then
+    log_pass "2 subdirectories in collected/"
+else
+    log_fail "Expected 2 subdirectories, found $COLLECTED_DIRS"
+fi
+
+for dir in collected/*/; do
+    dirname=$(basename "$dir")
+
+    has_metrics=$(ls "$dir"metrics_*.csv 2>/dev/null | wc -l)
+    has_summary=$(ls "$dir"summary_*.txt 2>/dev/null | wc -l)
+    has_procmon=$(ls "$dir"procmon_*.log 2>/dev/null | wc -l)
+    has_stdout=$(ls "$dir"stdout_*.log 2>/dev/null | wc -l)
+
+    if (( has_metrics > 0 && has_summary > 0 && has_procmon > 0 && has_stdout > 0 )); then
+        log_pass "$dirname: all required files present"
+    else
+        (( has_metrics == 0 )) && log_fail "$dirname: missing metrics CSV"
+        (( has_summary == 0 )) && log_fail "$dirname: missing summary TXT"
+        (( has_procmon == 0 )) && log_fail "$dirname: missing procmon log"
+        (( has_stdout == 0 )) && log_fail "$dirname: missing stdout log"
+    fi
+
+    # Check CSV non-empty
+    for csv in "$dir"metrics_*.csv; do
+        rows=$(tail -n +2 "$csv" 2>/dev/null | wc -l)
+        if (( rows > 0 )); then
+            log_pass "$(basename "$csv"): $rows data rows"
+        else
+            log_fail "$(basename "$csv"): empty"
+        fi
+    done
+
+    # Check summary Total > 0
+    for sumf in "$dir"summary_*.txt; do
+        if grep -q "Total.*[1-9]" "$sumf" 2>/dev/null; then
+            log_pass "$(basename "$sumf"): Total > 0"
+        else
+            log_fail "$(basename "$sumf"): Total is 0"
+        fi
+    done
+done
+
+# === TC5: Stability (2-round deploy-stop cycle) ===
+echo ""
+echo "=== TC5: Stability (2-round cycle) ==="
+for round in 1 2; do
+    echo "--- Round $round ---"
+
+    # Deploy
+    ./deploy.py --deploy "$DEPLOY_CFG" "$KVCLIENT_CFG"
+    for m in A B; do
+        if check_process "$m" "kvclient_standalone_test"; then
+            log_pass "Round $round deploy: Machine $m kvclient alive"
+        else
+            log_fail "Round $round deploy: Machine $m kvclient NOT alive"
+        fi
+    done
+
+    # Run 30s with health check
+    echo "  Running 30s with health check..."
+    sleep 30
+
+    # Coredump check during run
+    for m in A B; do
+        CORES=$(run_on "$m" "dmesg | grep -ic 'coredump\|segfault'" 2>/dev/null || echo "0")
+        CORES=$(echo "$CORES" | tr -d '\r\n')
+        if (( CORES > 0 )); then
+            log_fail "Round $round Machine $m: $CORES coredump/segfault events in dmesg"
+        fi
+
+        # Process liveness during run
+        if check_process "$m" "kvclient_standalone_test" && check_process "$m" "datasystem_worker"; then
+            log_pass "Round $round Machine $m: all processes alive during run"
+        else
+            if ! check_process "$m" "kvclient_standalone_test"; then
+                log_fail "Round $round Machine $m: kvclient died during run"
+            fi
+            if ! check_process "$m" "datasystem_worker"; then
+                log_fail "Round $round Machine $m: datasystem_worker died during run"
+            fi
+        fi
+    done
+
+    # Stop
+    ./deploy.py --stop "$DEPLOY_CFG" "$KVCLIENT_CFG"
+    sleep 2
+    for m in A B; do
+        if ! check_process "$m" "kvclient_standalone_test"; then
+            log_pass "Round $round stop: Machine $m kvclient dead"
+        else
+            log_fail "Round $round stop: Machine $m kvclient still alive"
+        fi
+    done
+done
+
+# Final collect after stability test
+rm -rf collected
+./deploy.py --collect "$DEPLOY_CFG" "$KVCLIENT_CFG"
+if (( $(ls -d collected/*/ 2>/dev/null | wc -l) == 2 )); then
+    log_pass "Final collect: 2 directories"
+else
+    log_fail "Final collect: wrong number of directories"
+fi
+
+# Check second-round metrics present
+for dir in collected/*/; do
+    csv_files=$(ls "$dir"metrics_*.csv 2>/dev/null | wc -l)
+    if (( csv_files > 0 )); then
+        rows=$(tail -n +2 "$dir"metrics_*.csv 2>/dev/null | wc -l)
+        if (( rows > 0 )); then
+            log_pass "$(basename "$dir"): second-round metrics present ($rows rows)"
+        else
+            log_fail "$(basename "$dir"): second-round metrics empty"
+        fi
+    else
+        log_fail "$(basename "$dir"): no metrics CSV in second round"
+    fi
+done
+
+# === TC6: Stop on Empty Instances ===
+echo ""
+echo "=== TC6: Stop on Empty ==="
+START_TIME=$(date +%s)
+./deploy.py --stop "$DEPLOY_CFG" "$KVCLIENT_CFG" 2>&1 || true
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+if (( ELAPSED < 15 )); then
+    log_pass "Stop on empty completed in ${ELAPSED}s (< 15s)"
+else
+    log_fail "Stop on empty took ${ELAPSED}s (expected < 15s)"
+fi
