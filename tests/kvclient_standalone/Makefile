@@ -1,17 +1,22 @@
 # Makefile for kvclient_standalone_test
 #
-# copy-sdk: Copy Bazel-built SDK .so files to third_party/sdk_lib/ for deployment.
-#           Run `make copy-sdk` after `bash build.sh -b bazel` in the project root.
+# copy-sdk: Copy Bazel-built SDK to third_party/sdk/ for compilation & deployment.
+#           Point BAZEL_SDK_DIR to the Bazel output directory containing include/ and lib/.
+#
+# Usage:
+#   make copy-sdk BAZEL_SDK_DIR=/path/to/output/cpp
 
-SDK_LIB_SRC ?= $(PWD)/../../output/datasystem/sdk/cpp/lib
-SDK_LIB_DST := third_party/sdk_lib
+BAZEL_SDK_DIR ?= $(PWD)/../../output/cpp
+SDK_DST := third_party/sdk
 
 .PHONY: copy-sdk clean-sdk
 
 copy-sdk:
-	@mkdir -p $(SDK_LIB_DST)
-	@cp -u $(SDK_LIB_SRC)/*.so $(SDK_LIB_DST)/
-	@echo "Copied $$(ls $(SDK_LIB_DST)/*.so | wc -l) .so files to $(SDK_LIB_DST)/"
+	@mkdir -p $(SDK_DST)
+	@cp $(BAZEL_SDK_DIR)/lib/*.so $(SDK_DST)/
+	@chmod u+w $(SDK_DST)/*.so
+	@echo "Copied SDK libs to $(SDK_DST)/"
+	@echo "  $$(ls $(SDK_DST)/*.so | sed 's|.*/||')"
 
 clean-sdk:
-	rm -rf $(SDK_LIB_DST)
+	rm -rf $(SDK_DST)

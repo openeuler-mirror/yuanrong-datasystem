@@ -29,5 +29,4 @@ set_target_properties(kvclient_standalone_test PROPERTIES
 
 target_link_libraries(kvclient_standalone_test PRIVATE
     ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so
-    ${DATASYSTEM_SDK_DIR}/lib/libds-spdlog.so
     pthread)

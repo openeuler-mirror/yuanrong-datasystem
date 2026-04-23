@@ -2,7 +2,7 @@
 build/
 
 # SDK libs (copied via `make copy-sdk`)
-third_party/sdk_lib/
+third_party/sdk/
 
 # Local config files (use config.json.example as template)
 config/config.local.json
