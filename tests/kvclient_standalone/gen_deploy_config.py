@@ -53,6 +53,9 @@ def main():
     parser.add_argument('-e', '--etcd-address',
                         help='Override etcd_address in generated config.json '
                              '(e.g. "10.0.0.5:2379")')
+    parser.add_argument('--remote-sdk-dir',
+                        help='SDK lib path inside containers (skip copying SDK '
+                             'from master if set, e.g. "/usr/local/datasystem/lib")')
     args = parser.parse_args()
 
     pods = get_pods(args.namespace, args.prefix)
@@ -76,6 +79,9 @@ def main():
         'enable_procmon': True,
         'nodes': nodes,
     }
+
+    if args.remote_sdk_dir:
+        deploy['remote_sdk_dir'] = args.remote_sdk_dir
 
     os.makedirs(args.output_dir, exist_ok=True)
 
