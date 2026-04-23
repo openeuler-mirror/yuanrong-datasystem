@@ -18,12 +18,14 @@ class Deployer:
         with open(config_template_path) as f:
             self.config_template = json.load(f)
 
+        self.base_dir = os.path.dirname(os.path.abspath(deploy_path))
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
-        self.binary_path = self.deploy.get('binary_path', '')
+        self.binary_path = os.path.join(self.base_dir, 'output', 'kvclient_standalone_test')
+        self.sdk_lib_dir = os.path.join(self.base_dir, 'output', 'lib')
+        self.default_transport = self.deploy.get('transport', 'ssh')
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
-        self.sdk_lib_dir = self.deploy.get('sdk_lib_dir', '')
         self.enable_procmon = self.deploy.get('enable_procmon', True)
         self.listen_port = self.config_template.get('listen_port', 9000)
 
@@ -38,7 +40,7 @@ class Deployer:
     def _transport(self, node):
         if node.get('host') == 'localhost':
             return 'localhost'
-        return node.get('transport', 'ssh')
+        return node.get('transport', self.default_transport)
 
     def _exec_target(self, node):
         """Target for run_on / scp_to (IP for SSH, pod name for kubectl)."""
@@ -226,7 +228,7 @@ class Deployer:
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
             self.scp_to(node, self.binary_path, remote_binary)
 
-            if self.sdk_lib_dir and os.path.isdir(self.sdk_lib_dir):
+            if os.path.isdir(self.sdk_lib_dir):
                 print(f'  Deploying SDK libs to {target}...')
                 self.run_on(node, f'rm -rf {self.remote_work_dir}/sdk_lib')
                 self.scp_to(node, self.sdk_lib_dir, f'{self.remote_work_dir}/sdk_lib')
@@ -241,7 +243,7 @@ class Deployer:
                     os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
-            ld_path = f'{self.remote_work_dir}/sdk_lib' if self.sdk_lib_dir else ''
+            ld_path = f'{self.remote_work_dir}/sdk_lib' if os.path.isdir(self.sdk_lib_dir) else ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
                 f'cd {self.remote_work_dir} && '
@@ -289,11 +291,8 @@ class Deployer:
 
         try:
             ld_path = ''
-            if self.sdk_lib_dir:
-                sdk_dir = (os.path.abspath(self.sdk_lib_dir)
-                           if os.path.isdir(self.sdk_lib_dir)
-                           else self.sdk_lib_dir)
-                ld_path = sdk_dir
+            if os.path.isdir(self.sdk_lib_dir):
+                ld_path = os.path.abspath(self.sdk_lib_dir)
 
             print('Stopping all instances...')
             env = os.environ.copy()

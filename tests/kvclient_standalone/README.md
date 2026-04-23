@@ -317,12 +317,13 @@ Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `noti
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `remote_work_dir` | string | 远程工作目录 |
-| `binary_path` | string | 本地二进制路径 |
-| `sdk_lib_dir` | string | SDK 动态库目录，为空时不部署 SDK 库 |
+| `transport` | string | 全局传输方式：`"ssh"` 或 `"kubectl"`，默认 `"ssh"`。节点级别可覆盖 |
 | `enable_procmon` | bool | 是否部署 procmon.py 监控进程，默认 `true` |
-| `ssh_user` | string | 默认 SSH 用户 |
-| `ssh_options` | string | SSH 选项 |
+| `ssh_user` | string | 默认 SSH 用户，默认 `"root"` |
+| `ssh_options` | string | SSH 选项，默认 `"-o StrictHostKeyChecking=no"` |
 | `nodes` | array | 节点列表 |
+
+> `binary_path` 和 `sdk_lib_dir` 不再需要配置，deploy.py 自动从 `output/` 目录查找二进制和 SDK 库。
 
 每个 node 支持：
 - `host` — SSH 节点的主机名/IP (`localhost` 表示本机)
@@ -353,8 +354,7 @@ python3 deploy.py --clean config/deploy.json config/config.json.example
 ```json
 {
   "remote_work_dir": "/home/user/kvclient_test",
-  "binary_path": "build/kvclient_standalone_test",
-  "sdk_lib_dir": "third_party/sdk",
+  "transport": "ssh",
   "enable_procmon": true,
   "ssh_user": "root",
   "ssh_options": "-o StrictHostKeyChecking=no",
@@ -387,23 +387,20 @@ kubectl 节点使用以下字段（区别于 SSH 节点）：
 ```json
 {
   "remote_work_dir": "/home/user/kvclient_test",
-  "binary_path": "build/kvclient_standalone_test",
-  "sdk_lib_dir": "third_party/sdk",
+  "transport": "kubectl",
   "enable_procmon": true,
   "nodes": [
     {
       "pod_name": "ds-worker-0",
       "pod_ip": "10.244.1.5",
       "namespace": "datasystem",
-      "instance_id": 0,
-      "transport": "kubectl"
+      "instance_id": 0
     },
     {
       "pod_name": "ds-worker-1",
       "pod_ip": "10.244.2.3",
       "namespace": "datasystem",
-      "instance_id": 1,
-      "transport": "kubectl"
+      "instance_id": 1
     }
   ]
 }
@@ -413,10 +410,11 @@ kubectl 节点使用以下字段（区别于 SSH 节点）：
 
 #### 混合部署
 
-SSH 节点和 kubectl 节点可以在同一个 deploy.json 中混用：
+全局 `transport` 为默认值，个别节点可覆盖：
 
 ```json
 {
+  "transport": "ssh",
   "nodes": [
     { "host": "192.168.1.1", "instance_id": 0 },
     {
