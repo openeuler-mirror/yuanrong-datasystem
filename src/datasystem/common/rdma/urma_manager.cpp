@@ -161,6 +161,7 @@ Status UrmaManager::Stop()
         serverEventThread_->join();
         serverEventThread_.reset();
     }
+    aeHandler_.Stop();
     return Status::OK();
 }
 
@@ -222,6 +223,8 @@ Status UrmaManager::Init(const HostPort &hostport)
     RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
     serverEventThread_ = std::make_unique<std::thread>(&UrmaManager::ServerEventHandleThreadMain, this);
+    aeHandler_.Init(urmaResource_.get());
+    aeHandler_.Start(serverStop_);
 
     // For client mode, we need to initialize extra memory buffer pool.
     if (UrmaManager::clientMode_) {
@@ -716,9 +719,8 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
             connection != nullptr, K_RUNTIME_ERROR,
             FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
                          remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
-        mapAccessor->second =
-            std::make_shared<UrmaEvent>(requestId, connection, jfs, remoteAddress,
-                                        connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
+        mapAccessor->second = std::make_shared<UrmaEvent>(
+            requestId, jfs, remoteAddress, connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
     }
     return Status::OK();
 }
@@ -954,6 +956,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJ
     RETURN_IF_NOT_OK(GetOrCreateLocalJfr(remoteConnectionId, localJfrId));
 
     accessor->second = std::make_shared<UrmaConnection>(jfs, std::move(targetJfr), jfrInfo);
+    jfs->BindConnection(accessor->second);
     success = true;
     return Status::OK();
 }
@@ -1030,6 +1033,7 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
     RETURN_IF_NOT_OK(ImportTargetJfr(remoteInfo, targetJfr));
 
     accessor->second = std::make_shared<UrmaConnection>(jfs, std::move(targetJfr), remoteInfo);
+    jfs->BindConnection(accessor->second);
     auto connection = accessor->second;
 
     // Import remote segments

@@ -159,6 +159,15 @@ Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &device
     return Status::OK();
 }
 
+std::weak_ptr<UrmaConnection> UrmaEvent::GetConnection() const
+{
+    auto jfs = jfs_.lock();
+    if (jfs) {
+        return jfs->GetConnection();
+    }
+    return {};
+}
+
 Status UrmaJfc::Rearm() const
 {
     LOG(INFO) << "urma rearm jfc";
@@ -173,6 +182,9 @@ Status UrmaJfc::Rearm() const
 
 UrmaJfs::~UrmaJfs()
 {
+    if (resource_ != nullptr) {
+        resource_->UnregisterJfs(GetJfsId(), this);
+    }
     if (raw_ == nullptr) {
         return;
     }
@@ -190,29 +202,29 @@ UrmaJfs::~UrmaJfs()
     LOG(INFO) << oss.str();
 }
 
-Status UrmaJfs::Create(urma_context_t *context, urma_jfc_t *jfc, uint8_t priority, std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaJfs::Create(UrmaResource &resource, std::shared_ptr<UrmaJfs> &jfs)
 {
     urma_jfs_cfg_t jfsConfig{};
     jfsConfig.depth = JETTY_SIZE;
     jfsConfig.trans_mode = URMA_TM_RM;
-    jfsConfig.priority = priority;
+    jfsConfig.priority = resource.GetJfsPriority();
     const auto maxSge = 13;
     jfsConfig.max_sge = maxSge;
     jfsConfig.max_inline_data = 0;
     jfsConfig.rnr_retry = URMA_TYPICAL_RNR_RETRY;
     jfsConfig.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
-    jfsConfig.jfc = jfc;
+    jfsConfig.jfc = resource.GetJfc();
     jfsConfig.user_ctx = 0;
     jfsConfig.flag.value = 0;
 #ifdef URMA_OVER_UB
     jfsConfig.flag.bs.multi_path = 1;
 #endif
 
-    urma_jfs_t *raw = ds_urma_create_jfs(context, &jfsConfig);
+    urma_jfs_t *raw = ds_urma_create_jfs(resource.GetContext(), &jfsConfig);
     if (raw == nullptr) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfs, errno = %d", errno));
     }
-    jfs = std::make_shared<UrmaJfs>(raw);
+    jfs = std::make_shared<UrmaJfs>(raw, &resource);
     LOG(INFO) << "urma create jfs id " << jfs->GetJfsId() << " success. jfs count: " << counter_.load();
     return Status::OK();
 }
@@ -227,6 +239,18 @@ Status UrmaJfs::ModifyToError()
         return Status(K_URMA_ERROR, FormatString("Failed to set jfs error, ret = %d", ret));
     }
     return Status::OK();
+}
+
+void UrmaJfs::BindConnection(const std::shared_ptr<UrmaConnection> &connection)
+{
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    connection_ = connection;
+}
+
+std::weak_ptr<UrmaConnection> UrmaJfs::GetConnection() const
+{
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    return connection_;
 }
 
 UrmaJfr::~UrmaJfr()
@@ -248,7 +272,7 @@ UrmaJfr::~UrmaJfr()
     raw_ = nullptr;
 }
 
-Status UrmaJfr::Create(urma_context_t *context, urma_jfc_t *jfc, urma_token_t urmaToken, std::unique_ptr<UrmaJfr> &jfr)
+Status UrmaJfr::Create(const UrmaResource &resource, std::unique_ptr<UrmaJfr> &jfr)
 {
     urma_jfr_cfg_t jfrConfig{};
     jfrConfig.depth = JETTY_SIZE;
@@ -256,13 +280,13 @@ Status UrmaJfr::Create(urma_context_t *context, urma_jfc_t *jfc, urma_token_t ur
     jfrConfig.flag.bs.tag_matching = URMA_NO_TAG_MATCHING;
     jfrConfig.trans_mode = URMA_TM_RM;
     jfrConfig.min_rnr_timer = URMA_TYPICAL_MIN_RNR_TIMER;
-    jfrConfig.jfc = jfc;
-    jfrConfig.token_value = urmaToken;
+    jfrConfig.jfc = resource.GetJfc();
+    jfrConfig.token_value = resource.GetUrmaToken();
     jfrConfig.id = 0;
     jfrConfig.max_sge = 1;
     jfrConfig.user_ctx = (uint64_t)NULL;
 
-    urma_jfr_t *raw = ds_urma_create_jfr(context, &jfrConfig);
+    urma_jfr_t *raw = ds_urma_create_jfr(resource.GetContext(), &jfrConfig);
     if (raw == nullptr) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfr, errno = %d", errno));
     }
@@ -402,6 +426,7 @@ Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr
         }
         std::shared_ptr<UrmaJfs> newJfs;
         RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJfs(newJfs), "Failed to recreate JFS");
+        newJfs->BindConnection(shared_from_this());
         jfs_ = std::move(newJfs);
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_RECREATE_JFS] connection switched to newJfsId=" << jfs_->GetJfsId()
@@ -553,6 +578,10 @@ void UrmaResource::Clear()
 {
     OsXprtPipln::UnInitOsPiplnH2DEnv();
     {
+        std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
+        jfsRegistry_.clear();
+    }
+    {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
         pendingDeleteJfs_.clear();
     }
@@ -566,14 +595,16 @@ Status UrmaResource::CreateJfs(std::shared_ptr<UrmaJfs> &jfs)
 {
     CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFS");
     CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFS");
-    return UrmaJfs::Create(context_->Raw(), jfc_->Raw(), jfsPriority_, jfs);
+    RETURN_IF_NOT_OK(UrmaJfs::Create(*this, jfs));
+    RETURN_IF_NOT_OK(RegisterJfs(jfs));
+    return Status::OK();
 }
 
 Status UrmaResource::CreateJfr(std::unique_ptr<UrmaJfr> &jfr)
 {
     CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFR");
     CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFR");
-    return UrmaJfr::Create(context_->Raw(), jfc_->Raw(), urmaToken_, jfr);
+    return UrmaJfr::Create(*this, jfr);
 }
 
 Status UrmaResource::AsyncModifyJfsToError(std::shared_ptr<UrmaJfs> jfs)
@@ -627,6 +658,65 @@ void UrmaResource::AsyncDeleteJfs(uint32_t jfsId)
         LOG(INFO) << "Remove JFS with id " << jfsId << " from pendingDeleteJfs_ ";
         jfs.reset();
     });
+}
+
+Status UrmaResource::RegisterJfs(const std::shared_ptr<UrmaJfs> &jfs)
+{
+    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "Cannot register null JFS");
+    const auto jfsId = jfs->GetJfsId();
+    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
+    jfsRegistry_[jfsId] = jfs;
+    LOG(INFO) << "[UrmaResource] Registered JFS " << jfsId << " in registry";
+    return Status::OK();
+}
+
+void UrmaResource::UnregisterJfs(uint32_t jfsId, const UrmaJfs *expected)
+{
+    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
+    auto it = jfsRegistry_.find(jfsId);
+    if (it == jfsRegistry_.end()) {
+        return;
+    }
+    if (expected != nullptr) {
+        auto locked = it->second.lock();
+        if (locked && locked.get() != expected) {
+            return;  // Different JFS object registered under the same id; do not remove.
+        }
+    }
+    jfsRegistry_.erase(it);
+    LOG(INFO) << "[UrmaResource] Unregistered JFS " << jfsId << " from registry";
+}
+
+Status UrmaResource::GetJfsById(uint32_t jfsId, std::shared_ptr<UrmaJfs> &jfs)
+{
+    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
+    auto it = jfsRegistry_.find(jfsId);
+    if (it == jfsRegistry_.end()) {
+        RETURN_STATUS(K_NOT_FOUND, FormatString("JFS %u not found in registry", jfsId));
+    }
+    jfs = it->second.lock();
+    if (jfs == nullptr) {
+        jfsRegistry_.erase(it);
+        RETURN_STATUS(K_NOT_FOUND, FormatString("JFS %u expired in registry", jfsId));
+    }
+    return Status::OK();
+}
+
+Status UrmaResource::GetAnyValidJfs(std::shared_ptr<UrmaJfs> &jfs)
+{
+    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
+    for (auto it = jfsRegistry_.begin(); it != jfsRegistry_.end();) {
+        jfs = it->second.lock();
+        if (jfs == nullptr) {
+            it = jfsRegistry_.erase(it);
+            continue;
+        }
+        if (jfs->IsValid()) {
+            return Status::OK();
+        }
+        ++it;
+    }
+    RETURN_STATUS(K_NOT_FOUND, "No valid JFS found in registry");
 }
 
 }  // namespace datasystem

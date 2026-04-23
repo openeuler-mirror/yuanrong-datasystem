@@ -1,27 +1,29 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = [
-    "//src/datasystem:__subpackages__",
-    "//tests:__subpackages__",
-])
+package(
+    default_visibility=[
+        "//src/datasystem:__subpackages__",
+        "//tests:__subpackages__",
+    ]
+)
 
 # Header-only target: needed by common_shared_memory (breaks cycle)
 ds_cc_library(
-    name = "fast_transport_base_header",
-    hdrs = ["fast_transport_base.h"],
+    name="fast_transport_base_header",
+    hdrs=["fast_transport_base.h"],
 )
 
 # Keep urma_dlopen_util separate due to special copts/linkopts
 ds_cc_library(
-    name = "urma_dlopen_util",
-    srcs = ["urma_dlopen_util.cpp"],
-    hdrs = ["urma_dlopen_util.h"],
-    copts = ["-DUSE_URMA"],
-    includes = [
+    name="urma_dlopen_util",
+    srcs=["urma_dlopen_util.cpp"],
+    hdrs=["urma_dlopen_util.h"],
+    copts=["-DUSE_URMA"],
+    includes=[
         "/usr/include",
         "/usr/local/include",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/log:common_log",
     ],
 )
@@ -30,15 +32,15 @@ ds_cc_library(
 # URMA files (urma_*) require URMA SDK headers; UCP files (ucp_*) require UCP SDK headers.
 # Both are kept out of the glob and handled via select() conditional deps.
 ds_cc_library(
-    name = "common_rdma",
-    srcs = [
+    name="common_rdma",
+    srcs=[
         "fast_transport_base.cpp",
         "fast_transport_manager_wrapper.cpp",
         "rdma_util.cpp",
     ],
-    hdrs = glob(
+    hdrs=glob(
         ["*.h"],
-        exclude = [
+        exclude=[
             "fast_transport_base.h",
             "urma_dlopen_util.h",
             "urma_info.h",
@@ -52,7 +54,7 @@ ds_cc_library(
             "ucp_worker_pool.h",
         ],
     ),
-    deps = [
+    deps=[
         ":fast_transport_base_header",
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
@@ -75,27 +77,32 @@ ds_cc_library(
         "//src/datasystem/common/util/queue",
         "//src/datasystem/protos:meta_transport_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
-    ] + select({
-        "//:enable_urma": [":urma_dlopen_util", ":urma_manager"],
-        "//conditions:default": [],
-    }),
+    ]
+    + select(
+        {
+            "//:enable_urma": [":urma_dlopen_util", ":urma_manager"],
+            "//conditions:default": [],
+        }
+    ),
 )
 
 # URMA sources kept separate: require urma_api.h which is only available with URMA SDK
 ds_cc_library(
-    name = "urma_manager",
-    srcs = [
+    name="urma_manager",
+    srcs=[
+        "urma_async_event_handler.cpp",
         "urma_info.cpp",
         "urma_manager.cpp",
         "urma_resource.cpp",
     ],
-    hdrs = [
+    hdrs=[
+        "urma_async_event_handler.h",
         "urma_info.h",
         "urma_manager.h",
         "urma_resource.h",
         "rdma_util.h",
     ],
-    deps = [
+    deps=[
         ":fast_transport_base_header",
         ":urma_dlopen_util",
         "//src/datasystem/common/flags:ds_flags",
@@ -116,6 +123,6 @@ ds_cc_library(
     ],
 )
 
-alias(name = "rdma_util", actual = ":common_rdma")
-alias(name = "fast_transport_manager_wrapper", actual = ":common_rdma")
-alias(name = "fast_transport_base", actual = ":common_rdma")
+alias(name="rdma_util", actual=":common_rdma")
+alias(name="fast_transport_manager_wrapper", actual=":common_rdma")
+alias(name="fast_transport_base", actual=":common_rdma")

@@ -82,5 +82,7 @@ urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, 
                                       urma_import_seg_flag_t import_flag);
 urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg);
 urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg);
+urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event);
+void ds_urma_ack_async_event(urma_async_event_t *event);
 
 #endif  // DATASYSTEM_COMMON_RDMA_URMA_DLOPEN_UTIL_H

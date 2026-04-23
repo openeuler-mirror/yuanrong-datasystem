@@ -17,6 +17,7 @@ set(RDMA_DEPEND_LIBS
 if (BUILD_WITH_URMA)
     list(APPEND URMA_SRCS
         urma_manager.cpp
+        urma_async_event_handler.cpp
         urma_info.cpp
         urma_resource.cpp
         urma_dlopen_util.cpp
