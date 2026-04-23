@@ -30,3 +30,7 @@ set_target_properties(kvclient_standalone_test PROPERTIES
 target_link_libraries(kvclient_standalone_test PRIVATE
     ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so
     pthread)
+
+# Statically link libstdc++ and libgcc so the binary runs on systems with
+# older GCC (e.g. openEuler 22.04 with GCC 10 / GLIBCXX_3.4.29).
+target_link_options(kvclient_standalone_test PRIVATE -static-libstdc++ -static-libgcc)

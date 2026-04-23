@@ -6,6 +6,8 @@
 #include <datasystem/kv_client.h>
 #include <atomic>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <thread>
 
@@ -28,4 +30,5 @@ private:
     std::atomic<bool> running_{false};
     std::vector<std::thread> threads_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
+    std::unordered_map<uint64_t, std::string> pregenData_;
 };

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
@@ -133,7 +134,8 @@ class Deployer:
 
         os.makedirs(local_dir, exist_ok=True)
 
-        # Pack on remote, skip if no files
+        # Clean stale tar from previous runs, then pack
+        self.run_on(node, f'rm -f {tar_remote}', check=False)
         self.run_on(
             node,
             f'cd {self.remote_work_dir} && '
@@ -164,10 +166,15 @@ class Deployer:
                     [f'{user}@{target}:{tar_remote}', tar_local],
                     check=True)
 
+            # Verify local file was actually created
+            if not os.path.isfile(tar_local):
+                print(f'  {target} -> kubectl cp returned 0 but no local file')
+                return
+
             with tarfile.open(tar_local, 'r:gz') as tar:
                 tar.extractall(path=local_dir, filter='data')
         finally:
-            if os.path.exists(tar_local):
+            if transport != 'localhost' and os.path.exists(tar_local):
                 os.unlink(tar_local)
             self.run_on(node, f'rm -f {tar_remote}', check=False)
 
@@ -301,50 +308,60 @@ class Deployer:
         print(f'\nDeploy result: {ok}/{total} succeeded')
 
     def do_stop(self):
-        if not os.path.isfile(self.binary_path):
-            print(f'ERROR: binary not found: {self.binary_path}')
-            print('  Run "build.sh" first to compile and package.')
-            sys.exit(1)
+        if not self.nodes:
+            print('No nodes in deploy config')
+            return
 
-        config = dict(self.config_template)
-        config['peers'] = self.build_default_peers()
+        print(f'Stopping {len(self.nodes)} instances...')
 
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.json', prefix='config_full_',
-            delete=False
-        ) as tf:
-            json.dump(config, tf, indent=2)
-            tmp_config = tf.name
+        def stop_one(node):
+            transport = self._transport(node)
+            port = node.get('port', self.listen_port)
+            target = self._exec_target(node)
 
-        try:
-            ld_path = ''
-            if os.path.isdir(self.datasystem_sdk_dir):
-                ld_path = os.path.abspath(self.datasystem_sdk_dir)
+            if transport == 'kubectl':
+                # Hit /stop from inside the pod via kubectl exec
+                result = self.run_on(node,
+                    f'python3 -c "'
+                    f'from urllib.request import urlopen,Request;'
+                    f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
+                    f'urlopen(r,timeout=3);print(\'ok\')"',
+                    check=False)
+                if result.returncode == 0 and 'ok' in (result.stdout or ''):
+                    return (target, True)
+                err = (result.stderr or result.stdout or '').strip()
+                return (target, err or 'failed')
+            else:
+                host = self._comm_host(node)
+                url = f'http://{host}:{port}'
+                try:
+                    req = urllib.request.Request(
+                        url + '/stop', data=b'', method='POST')
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        return (url, resp.status == 200)
+                except Exception as e:
+                    return (url, str(e))
 
-            print('Stopping all instances...')
-            env = os.environ.copy()
-            if ld_path:
-                env['LD_LIBRARY_PATH'] = f'{ld_path}:{env.get("LD_LIBRARY_PATH", "")}'
+        ok = 0
+        with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+            futures = [pool.submit(stop_one, n) for n in self.nodes]
+            for future in as_completed(futures):
+                target, result = future.result()
+                if result is True:
+                    ok += 1
+                    print(f'  {target} -> OK')
+                else:
+                    print(f'  {target} -> ERROR ({result})')
 
-            try:
-                result = subprocess.run(
-                    [self.binary_path, '--stop', tmp_config],
-                    env=env, check=False, capture_output=True, text=True)
-                if result.stdout:
-                    print(result.stdout.rstrip())
-                if result.returncode != 0:
-                    print(f'WARN: --stop exited with code {result.returncode}')
-                    if result.stderr:
-                        print(result.stderr.rstrip())
-            except Exception as e:
-                print(f'WARN: --stop failed: {e}')
+        print(f'Stop result: {ok}/{len(self.nodes)} succeeded')
 
-            # Stop procmon on all nodes (always attempt, even if stop failed)
-            if self.enable_procmon:
-                for node in self.nodes:
-                    self.run_on(node, 'pkill -f procmon.py', check=False)
-        finally:
-            os.unlink(tmp_config)
+        # Stop procmon on all nodes in parallel
+        if self.enable_procmon:
+            with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+                for f in as_completed(
+                    [pool.submit(self.run_on, n, 'pkill -f procmon.py')
+                     for n in self.nodes]):
+                    pass
 
     def do_clean(self):
         results = []
@@ -414,7 +431,7 @@ def main():
               '[config_template.json]')
         print()
         print('  --deploy   Deploy binary + SDK libs + config to all nodes and start')
-        print('  --stop     Stop all instances via kvclient_standalone_test --stop')
+        print('  --stop     Stop all instances via HTTP /stop')
         print('  --collect  Collect output files from all nodes to collected/')
         print('  --clean    Kill processes and remove remote work dirs')
         sys.exit(1)

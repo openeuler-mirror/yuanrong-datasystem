@@ -24,6 +24,8 @@ package:
 	@mkdir -p $(OUTPUT)/lib $(OUTPUT)/config
 	@cp build/kvclient_standalone_test $(OUTPUT)/
 	@cp third_party/sdk/*.so* $(OUTPUT)/lib/
+	@# Remove Python binding — not needed by C++ binary (saves ~74MB)
+	@rm -f $(OUTPUT)/lib/libds_client_py.so*
 	@cp deploy.py procmon.py $(OUTPUT)/
 	@cp test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/

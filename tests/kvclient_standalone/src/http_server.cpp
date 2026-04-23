@@ -56,6 +56,12 @@ void HttpServer::Start() {
 void HttpServer::Stop() {
     if (server_) server_->stop();
     if (serverThread_.joinable()) serverThread_.join();
+
+    // Wait for in-flight request handlers to finish before joining notify
+    // threads. cpp-httplib's stop() returns before handlers complete, so
+    // a handler could still be inside HandleNotify holding notifyMutex_.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
     {
         std::lock_guard<std::mutex> lock(notifyMutex_);
         for (auto &t : notifyThreads_) {

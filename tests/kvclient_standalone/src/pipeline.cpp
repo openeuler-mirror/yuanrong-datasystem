@@ -3,6 +3,7 @@
 #include "data_pattern.h"
 #include "simple_log.h"
 #include <chrono>
+#include <cstring>
 
 using namespace datasystem;
 
@@ -39,11 +40,10 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
         return true; // op succeeded, but verify failed
     }
 
-    // Verify content
+    // Verify content via memcmp (avoids allocating a second string)
     std::string expected = GeneratePatternData(ctx.size, ctx.senderId);
     const char *bufData = static_cast<const char *>(optBuf->ImmutableData());
-    std::string actual(bufData, bufSize);
-    if (actual != expected) {
+    if (memcmp(bufData, expected.data(), bufSize) != 0) {
         SLOG_WARN("getBuffer content mismatch: key=" << ctx.key);
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
     }

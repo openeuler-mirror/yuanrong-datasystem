@@ -21,6 +21,11 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
         }
         pipelineOps_.emplace_back(name, fn);
     }
+
+    // Pre-generate pattern data for each unique size
+    for (auto size : cfg_.dataSizes) {
+        pregenData_[size] = GeneratePatternData(size, cfg_.instanceId);
+    }
 }
 
 KVWorker::~KVWorker() { Stop(); }
@@ -71,7 +76,7 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.key = key;
         ctx.size = size;
         ctx.senderId = cfg_.instanceId;
-        ctx.data = GeneratePatternData(size, cfg_.instanceId);
+        ctx.data = pregenData_[size];
         ctx.client = client_;
         ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
         ctx.param.ttlSecond = cfg_.ttlSeconds;
