@@ -50,6 +50,9 @@ def main():
                         help='Remote work directory')
     parser.add_argument('-o', '--output-dir', default='config',
                         help='Output directory (default: config)')
+    parser.add_argument('-e', '--etcd-address',
+                        help='Override etcd_address in generated config.json '
+                             '(e.g. "10.0.0.5:2379")')
     args = parser.parse_args()
 
     pods = get_pods(args.namespace, args.prefix)
@@ -88,6 +91,14 @@ def main():
     dst = os.path.join(args.output_dir, 'config.json')
     if os.path.exists(src):
         shutil.copy2(src, dst)
+        if args.etcd_address:
+            with open(dst) as f:
+                cfg = json.load(f)
+            cfg['etcd_address'] = args.etcd_address
+            with open(dst, 'w') as f:
+                json.dump(cfg, f, indent=2)
+                f.write('\n')
+            print(f'  etcd_address set to {args.etcd_address}')
         print(f'Copied {src} -> {dst}')
     else:
         print(f'WARNING: {src} not found, skipping config.json')
