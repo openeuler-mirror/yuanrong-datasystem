@@ -2,6 +2,7 @@
   "remote_work_dir": "/home/user/kvclient_test",
   "binary_path": "build/kvclient_standalone_test",
   "sdk_lib_dir": "third_party/sdk",
+  "enable_procmon": true,
   "ssh_user": "root",
   "ssh_options": "-o StrictHostKeyChecking=no",
   "nodes": [

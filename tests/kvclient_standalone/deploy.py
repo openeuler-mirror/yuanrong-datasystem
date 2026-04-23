@@ -24,6 +24,7 @@ class Deployer:
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
         self.sdk_lib_dir = self.deploy.get('sdk_lib_dir', '')
+        self.enable_procmon = self.deploy.get('enable_procmon', True)
         self.listen_port = self.config_template.get('listen_port', 9000)
 
     def _ssh_args(self):
@@ -107,6 +108,10 @@ class Deployer:
 
             self.run_on(host, user, f'chmod +x {self.remote_work_dir}/kvclient_standalone_test')
 
+            if self.enable_procmon:
+                procmon_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
+                self.scp_to(host, user, procmon_src, f'{self.remote_work_dir}/procmon.py')
+
             ld_path = f'{self.remote_work_dir}/sdk_lib' if self.sdk_lib_dir else ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
@@ -116,6 +121,14 @@ class Deployer:
                 f'> stdout_{instance_id}.log 2>&1 &'
             )
             self.run_on(host, user, start_cmd)
+
+            if self.enable_procmon:
+                procmon_cmd = (
+                    f'cd {self.remote_work_dir} && '
+                    f'nohup python3 procmon.py -p kvclient_standalone_test -i 2'
+                    f' > procmon_{instance_id}.log 2>&1 &'
+                )
+                self.run_on(host, user, procmon_cmd)
 
             print(f'  {host} -> OK')
             return True
@@ -160,6 +173,12 @@ class Deployer:
                 [self.binary_path, '--stop', tmp_config],
                 env=env, check=True
             )
+
+            # Stop procmon on all nodes
+            if self.enable_procmon:
+                for node in self.nodes:
+                    host, user = node['host'], self._user_for(node)
+                    self.run_on(host, user, 'pkill -f procmon.py', check=False)
         finally:
             os.unlink(tmp_config)
 
@@ -172,7 +191,7 @@ class Deployer:
             try:
                 self.run_on(
                     host, user,
-                    f'pkill -f kvclient_standalone_test; rm -rf {self.remote_work_dir}',
+                    f'pkill -f procmon.py; pkill -f kvclient_standalone_test; rm -rf {self.remote_work_dir}',
                     check=False
                 )
                 print(f'  {host} -> OK')
