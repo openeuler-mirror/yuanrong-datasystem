@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>
+#include <thread>
 #include <chrono>
 
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
@@ -1402,6 +1403,62 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
     ASSERT_EQ(value, getValue);
     DS_ASSERT_OK(client->Get("key2", getValue));
     ASSERT_EQ(value, getValue);
+}
+
+class UrmaAsyncEventTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_transport_fallback=false ";
+    }
+
+protected:
+    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
+                                         uint64_t timeoutMs = 5000)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        uint64_t executeCount = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+            if (executeCount >= expectedCount) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+        ASSERT_GE(executeCount, expectedCount) << name;
+    }
+};
+
+TEST_F(UrmaAsyncEventTest, RemoteWorkerGetJfsAsyncEvent)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int keyCount = 100;
+    const size_t dataSize = 1024 * 512UL;
+    std::string value(dataSize, 'a');
+    for (int i = 0; i < keyCount; i++) {
+        DS_ASSERT_OK(client1->Set("key-" + std::to_string(i), value));
+    }
+
+    std::string getValue;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
+    DS_ASSERT_OK(client2->Get("key-0", getValue));
+    ASSERT_EQ(value, getValue);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.HandleJfsErrAsyncEvent", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.InjectAsyncEvent",
+                                           "2*return(" + std::to_string(static_cast<int>(URMA_EVENT_JFS_ERR)) + ")"));
+    WaitForWorkerInjectExecuteCount(1, "UrmaManager.HandleJfsErrAsyncEvent", 1);
+
+    for (int i = 0; i < keyCount; i++) {
+        DS_ASSERT_OK(client2->Get("key-" + std::to_string(i), getValue));
+        ASSERT_EQ(value, getValue);
+    }
 }
 
 class UrmaNumaAffinityTest : public UrmaObjectClientTest {
