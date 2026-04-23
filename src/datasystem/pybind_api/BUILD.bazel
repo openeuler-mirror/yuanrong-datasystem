@@ -5,7 +5,6 @@ package(default_visibility = ["//visibility:public"])
 pybind_extension(
     name = "libds_client_py",
     additional_linker_inputs = ["export_symbols.lds"],
-    dynamic_deps = ["//:datasystem"],
     linkopts = [
         "-Wl,--version-script,$(location export_symbols.lds)",
         "-Wl,--disable-new-dtags",
