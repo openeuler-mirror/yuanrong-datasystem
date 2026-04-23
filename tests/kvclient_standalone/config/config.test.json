@@ -1,0 +1,13 @@
+{
+  "listen_port": 9000,
+  "etcd_address": "__MACHINE_A_IP__:2379",
+  "connect_timeout_ms": 5000,
+  "request_timeout_ms": 5000,
+  "data_sizes": ["1KB", "4KB"],
+  "ttl_seconds": 30,
+  "target_qps": 10,
+  "num_set_threads": 1,
+  "notify_count": 1,
+  "metrics_interval_ms": 3000,
+  "metrics_file": "metrics_{instance_id}.csv"
+}

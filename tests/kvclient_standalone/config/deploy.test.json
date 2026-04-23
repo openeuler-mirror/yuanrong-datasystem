@@ -1,0 +1,25 @@
+{
+  "remote_work_dir": "/tmp/kvclient_test",
+  "transport": "ssh",
+  "ssh_user": "root",
+  "ssh_options": "-o StrictHostKeyChecking=no",
+  "enable_procmon": true,
+  "nodes": [
+    {
+      "host": "__MACHINE_A_IP__",
+      "ssh_port": 22223,
+      "instance_id": 0,
+      "role": "writer",
+      "pipeline": ["setStringView"],
+      "notify_pipeline": ["getBuffer"]
+    },
+    {
+      "host": "__MACHINE_B_IP__",
+      "ssh_port": 22224,
+      "instance_id": 1,
+      "role": "reader",
+      "pipeline": [],
+      "notify_pipeline": ["getBuffer"]
+    }
+  ]
+}
