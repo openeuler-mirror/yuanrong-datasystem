@@ -50,6 +50,20 @@ Status ShmGuard::TryRLatch(bool retry)
     return Status::OK();
 }
 
+Status ShmGuard::TrackUrmaFallbackTcp(uint64_t size, const Status &transportStatus, const std::string &direction)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(impl_);
+    if (size == 0) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(impl_->fallbackTicket == nullptr, K_RUNTIME_ERROR,
+                             "URMA fallback TCP ticket already exists.");
+    auto ticket = std::make_unique<UrmaFallbackTcpLimiter::Ticket>();
+    RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquireProcessScope(size, transportStatus, direction, *ticket));
+    impl_->fallbackTicket = std::move(ticket);
+    return Status::OK();
+}
+
 #ifndef DISABLE_RPC
 Status ShmGuard::TransferTo(std::vector<RpcMessage> &messages, const uint64_t offset, const uint64_t size)
 {
@@ -84,7 +98,7 @@ void ShmGuard::Free(void *data, void *hint)
 }
 
 ShmGuard::Impl::Impl(std::shared_ptr<ShmUnit> shm)
-    : shmUnit(std::move(shm)), lock(nullptr), tid(std::this_thread::get_id())
+    : shmUnit(std::move(shm)), lock(nullptr), tid(std::this_thread::get_id()), fallbackTicket(nullptr)
 {
 }
 

@@ -438,7 +438,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                          FormatString("[ObjectKey %s] is invalid", objectKey));
     LOG_IF(WARNING, entry->GetCreateTime() != version) << FormatString(
         "[ObjectKey %s] Version: %ld, require version: %ld", objectKey, entry->GetCreateTime(), version);
-    bool isFastTransportEnabled = (IsUrmaEnabled() && req.has_urma_info()) || (IsUcpEnabled() && req.has_ucp_info());
+    const bool isUrmaFastTransport = IsUrmaEnabled() && req.has_urma_info();
+    bool isFastTransportEnabled = isUrmaFastTransport || (IsUcpEnabled() && req.has_ucp_info());
     if (isFastTransportEnabled && entry->GetDataSize() != expectedDataSize) {
         // Return error with changed size, so the request can be retried.
         rsp.mutable_error()->set_error_code(StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
@@ -476,6 +477,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         uint64_t localSegAddress;
         uint64_t localSegSize;
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
+        Status fastTransportStatus = Status::OK();
         auto markFastTransferResult = [&rsp, &objectKey](const Status &status, const char *transportName) {
             if (status.IsError()) {
                 CHECK_FAIL_RETURN_STATUS(FLAGS_enable_transport_fallback, status.GetCode(), status.GetMsg());
@@ -506,11 +508,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                     req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
                 auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset,
                                            size, entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
+                fastTransportStatus = rc;
                 RETURN_IF_NOT_OK(markFastTransferResult(rc, "UrmaWrite"));
             } else if (IsUcpEnabled()) {
                 // later add a check on data size and read size.
                 auto rc = UcpPutPayload(req.ucp_info(), localObjectAddress, offset, size, entry->GetMetadataSize(),
                                         blocking, eventKeys);
+                fastTransportStatus = rc;
                 RETURN_IF_NOT_OK(markFastTransferResult(rc, "UcpWrite"));
             }
         }
@@ -526,6 +530,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
         if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
+            if (fastTransportStatus.IsError() && isUrmaFastTransport) {
+                RETURN_IF_NOT_OK(shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), fastTransportStatus,
+                                                               "worker->worker"));
+            }
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }

@@ -36,6 +36,46 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint64_t MAX_PUB_SIZE = 256 * 1024 * 1024 * 1024uL;
 static constexpr uint64_t CHUNK_SIZE = 1024 * 1024;
 
+#ifdef USE_URMA
+namespace {
+Status SendBufferViaSingleUbWrite(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                  uint64_t totalSize, const std::shared_ptr<UrmaManager::BufferHandle> &bufHandle)
+{
+    std::vector<uint64_t> eventKeys;
+    void *poolBuf = bufHandle->GetPointer();
+    memcpy_s(poolBuf, bufHandle->GetSegmentSize(), data, totalSize);
+    const uint8_t srcChipId = NumaIdToChipId(bufHandle->GetNumaId());
+    const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
+                                  ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
+                                  : INVALID_CHIP_ID;
+    VLOG(1) << "call UrmaWritePayload, srcChipId=" << static_cast<int>(srcChipId)
+            << ", dstChipId=" << static_cast<int>(dstChipId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
+                         reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize, bufferInfo->metadataSize,
+                         srcChipId, dstChipId, true, eventKeys),
+        FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
+    bufferInfo->ubDataSentByMemoryCopy = true;
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    INJECT_POINT_NO_RETURN("client.set.urma_write_ok", [] {});
+    VLOG(DEBUG_LOG_LEVEL) << "[UB Put] UrmaWritePayload done (single buffer), dataSize = " << bufferInfo->dataSize;
+    return Status::OK();
+}
+
+Status PrepareUbHandle(uint64_t totalSize, std::shared_ptr<UrmaManager::BufferHandle> &bufHandle, uint64_t &realSize)
+{
+    uint64_t allocSize = std::min(totalSize, UrmaManager::Instance().GetUBMaxSetBufferSize());
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle, allocSize));
+    CHECK_FAIL_RETURN_STATUS(
+        bufHandle && bufHandle->GetPointer(), K_RUNTIME_ERROR, "Failed to get memory buffer handle");
+    realSize = bufHandle->GetSegmentSize();
+    CHECK_FAIL_RETURN_STATUS(totalSize >= realSize, K_RUNTIME_ERROR,
+                             FormatString("Got unexpected buffer size with total:%llu real:%llu", totalSize, realSize));
+    return Status::OK();
+}
+}  // namespace
+#endif
+
 Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isSeal,
                                               const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                               int existence, PublishReqPb &req)
@@ -249,46 +289,18 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
     (void)data;
     (void)length;
 #ifdef USE_URMA
-    const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
-    uint64_t allocSize = std::min(totalSize, UrmaManager::Instance().GetUBMaxSetBufferSize());
-    std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
-    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(bufHandle, allocSize));
-    if (!bufHandle || !bufHandle->GetPointer()) {
-        return Status(K_RUNTIME_ERROR, "Failed to get memory buffer handle");
-    }
-    // Check if data fits in a single buffer slot (fallback to old logic)
-    uint64_t realSize = bufHandle->GetSegmentSize();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        totalSize >= realSize, K_RUNTIME_ERROR,
-        FormatString("Got unexpected buffer size with total:%llu real:%llu", totalSize, realSize));
-
-    if (totalSize == realSize) {
-        std::vector<uint64_t> eventKeys;
-        void *poolBuf = bufHandle->GetPointer();
-        memcpy_s(poolBuf, realSize, data, totalSize);
-        const uint8_t srcChipId = NumaIdToChipId(bufHandle->GetNumaId());
-        const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
-                                      ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
-                                      : INVALID_CHIP_ID;
-        VLOG(1) << "call UrmaWritePayload, srcChipId=" << static_cast<int>(srcChipId)
-                << ", dstChipId=" << static_cast<int>(dstChipId);
-        Status writeStatus =
-            UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), bufHandle->GetSegmentAddress(), bufHandle->GetSegmentSize(),
-                             reinterpret_cast<uint64_t>(poolBuf), 0, bufferInfo->dataSize, bufferInfo->metadataSize,
-                             srcChipId, dstChipId, true, eventKeys);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(writeStatus,
-                                         FormatString("Failed to submit UrmaWritePayload, totalSize=%llu", totalSize));
-        bufferInfo->ubDataSentByMemoryCopy = true;
+    {
+        const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
+        std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
+        uint64_t realSize = 0;
+        RETURN_IF_NOT_OK(PrepareUbHandle(totalSize, bufHandle, realSize));
+        if (totalSize == realSize) {
+            return SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle);
+        }
+        RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize));
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
-        INJECT_POINT_NO_RETURN("client.set.urma_write_ok", [] {});
-        VLOG(DEBUG_LOG_LEVEL) << "[UB Put] UrmaWritePayload done (single buffer), dataSize = " << bufferInfo->dataSize;
         return Status::OK();
     }
-
-    // Use pipeline transfer for large data
-    RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize));
-    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
-    return Status::OK();
 #else
     return Status(K_INVALID, "Failed to send buffer via UB");
 #endif

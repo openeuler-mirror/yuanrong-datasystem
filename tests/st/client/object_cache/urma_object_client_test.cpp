@@ -18,6 +18,7 @@
  * Description: This is used to test the ObjectClient class when URMA is enabled.
  */
 #include <gtest/gtest.h>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -27,6 +28,7 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/kv_client.h"
 #include "oc_client_common.h"
@@ -1420,6 +1422,58 @@ TEST_F(UrmaCqeErrorTest, ClientToWorkerSetBaseCase)
     ASSERT_EQ(value, getValue);
 }
 
+TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(inject::Set("UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
+    Status status = client->Set("key-one-mb", value);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+}
+
+TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsWhenPendingWouldExceedTenMb)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    constexpr size_t dataSize = 950 * 1024UL;
+    constexpr int concurrentReqNum = 12;
+    std::vector<Status> statuses(concurrentReqNum, Status::OK());
+    std::vector<std::thread> threads;
+    std::promise<void> startSignal;
+    auto startFuture = startSignal.get_future().share();
+
+    DS_ASSERT_OK(inject::Set("UrmaManager.CheckCompletionRecordStatus", "100*call(0, 9)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.after_publish", "100*sleep(2000)"));
+
+    for (int i = 0; i < concurrentReqNum; ++i) {
+        threads.emplace_back([&, i]() {
+            startFuture.wait();
+            statuses[i] = client->Set("key-pending-limit-" + std::to_string(i), std::string(dataSize, 'a'));
+        });
+    }
+    startSignal.set_value();
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    size_t failureCount = 0;
+    for (const auto &status : statuses) {
+        if (status.IsError()) {
+            ++failureCount;
+            ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+            ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+        }
+    }
+    ASSERT_GE(failureCount, 1UL);
+}
+
 TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
 {
     std::shared_ptr<KVClient> client;
@@ -1435,6 +1489,23 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
     ASSERT_EQ(value, getValue);
     DS_ASSERT_OK(client->Get("key2", getValue));
     ASSERT_EQ(value, getValue);
+}
+
+TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client->Set("key-get-one-mb", value));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 9)"));
+
+    std::string getValue;
+    Status status = client->Get("key-get-one-mb", getValue);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
 }
 
 class UrmaAsyncEventTest : public UrmaObjectClientTest {
@@ -1603,6 +1674,27 @@ TEST_F(UrmaFallbackTest, WorkerWorkerSignleWriteFallback)
     DS_ASSERT_OK(client2->Get({ key2 }, getValues));
     ASSERT_EQ(getValues.size(), 1);
     ASSERT_EQ(value2, getValues[0]);
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerRejectsFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteError", "1*return()"));
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    std::string key = "worker-worker-one-mb";
+    std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client1->Set(key, value));
+
+    std::string getValue;
+    Status status = client2->Get(key, getValue);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
 }
 
 TEST_F(UrmaFallbackTest, WorkerWorkerBatchWriteFallback)

@@ -22,7 +22,9 @@
 #define DATASYSTEM_COMMON_OBJECT_CACHE_SHM_GUARD_H
 
 #include <memory>
+#include <string>
 
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
@@ -51,6 +53,15 @@ public:
     Status TransferTo(std::vector<RpcMessage> &messages, const uint64_t offset = 0, const uint64_t size = 0);
 
     /**
+     * @brief Track fallback-to-TCP backlog for URMA payloads until RpcMessage release.
+     * @param[in] size Payload size in bytes.
+     * @param[in] transportStatus The original URMA transport failure status.
+     * @param[in] direction Human-readable direction for logs and errors.
+     * @return Status of the call.
+     */
+    Status TrackUrmaFallbackTcp(uint64_t size, const Status &transportStatus, const std::string &direction);
+
+    /**
      * @brief Call after RpcMessage release.
      * @param[in] data The data pointer.
      * @param[in] hint The pointer of Impl instance.
@@ -67,6 +78,8 @@ private:
         std::shared_ptr<object_cache::ShmLock> lock;
         // The thread id that locks the share memory.
         std::thread::id tid;
+        // Hold backlog accounting until the payload leaves the RPC channel.
+        std::unique_ptr<UrmaFallbackTcpLimiter::Ticket> fallbackTicket;
     };
 
     std::shared_ptr<Impl> impl_;
