@@ -254,10 +254,12 @@ class Deployer:
         target = self._exec_target(node)
         instance_id = node['instance_id']
         transport = self._transport(node)
+        tag = f'  [{target}:{instance_id}]'
 
         print(f'Deploying to {target} (instance_id={instance_id}, transport={transport})...')
 
         config = self.generate_config(node)
+        role = config.get('role', 'writer')
 
         with tempfile.NamedTemporaryFile(
             mode='w', suffix='.json', prefix=f'config_{instance_id}_',
@@ -267,33 +269,40 @@ class Deployer:
             tmp_config = tf.name
 
         try:
+            # Step 1: Create remote directory
+            print(f'{tag} mkdir {self.remote_work_dir}')
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
-            # Upload binary with per-host lock to avoid concurrent SCP to same file
+            # Step 2: Upload binary
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
             with self._get_host_lock(node):
-                check = self.run_on(node, f'test -x {remote_binary}', check=False)
-                if check.returncode != 0:
-                    self.scp_to(node, self.binary_path, remote_binary)
+                print(f'{tag} uploading binary ({os.path.getsize(self.binary_path) // 1024}KB)')
+                self.scp_to(node, self.binary_path, remote_binary)
 
+            # Step 3: SDK
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             if remote_sdk:
-                print(f'  Using container SDK: {remote_sdk}')
+                print(f'{tag} using container SDK: {remote_sdk}')
             elif os.path.isdir(self.datasystem_sdk_dir):
-                print(f'  Deploying SDK libs to {target}...')
+                print(f'{tag} deploying SDK libs...')
                 self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
                 self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
 
+            # Step 4: Upload config
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
+            print(f'{tag} uploading config (role={role}, peers={len(config.get("peers", []))})')
             self.scp_to(node, tmp_config, remote_config)
 
+            # Step 5: chmod
             self.run_on(node, f'chmod +x {self.remote_work_dir}/kvclient_standalone_test')
 
+            # Step 6: Upload procmon
             if self.enable_procmon:
                 procmon_src = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), 'procmon.py')
                 self.scp_to(node, procmon_src, f'{self.remote_work_dir}/procmon.py')
 
+            # Step 7: Start process
             if remote_sdk:
                 ld_path = remote_sdk
             elif os.path.isdir(self.datasystem_sdk_dir):
@@ -307,8 +316,28 @@ class Deployer:
                 f"nohup ./kvclient_standalone_test config_{instance_id}.json "
                 f"> stdout_{instance_id}.log 2>&1 </dev/null &'"
                 f" </dev/null >/dev/null 2>&1 &")
+            print(f'{tag} starting kvclient (role={role})...')
             self.run_on(node, start_cmd)
 
+            # Step 8: Verify process started
+            time.sleep(1)
+            verify = self.run_on(
+                node, f'pgrep -f "kvclient_standalone_test config_{instance_id}"',
+                check=False)
+            if verify.returncode == 0 and verify.stdout.strip():
+                pid = verify.stdout.strip().split('\n')[0]
+                print(f'{tag} process started (pid={pid})')
+            else:
+                print(f'{tag} WARNING: process not found after start, checking log...')
+                log = self.run_on(
+                    node, f'cat {self.remote_work_dir}/stdout_{instance_id}.log 2>/dev/null',
+                    check=False)
+                if log.stdout.strip():
+                    print(f'{tag} stdout: {log.stdout.strip()[:500]}')
+                else:
+                    print(f'{tag} stdout empty — binary may have crashed before any output')
+
+            # Step 9: Start procmon
             if self.enable_procmon:
                 procmon_cmd = (
                     f"setsid sh -c 'cd {self.remote_work_dir} && "

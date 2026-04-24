@@ -314,7 +314,7 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `role` | `"writer"` | `writer` 或 `reader` |
 | `pipeline` | `["setStringView"]` | Writer 主循环操作序列 |
 | `notify_pipeline` | `["getBuffer"]` | 收到 /notify 后执行的操作序列 |
-| `target_qps` | 1600 | 目标总 QPS，`0` = 不限速全速运行 |
+| `target_qps` | 100 | 目标总 QPS，`0` = 不限速全速运行 |
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
 | `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
