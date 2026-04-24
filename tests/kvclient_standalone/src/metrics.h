@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 
 struct OpMetrics {
     std::string opName;
@@ -48,6 +49,7 @@ private:
 
     std::mutex opsMutex_;
     std::vector<std::unique_ptr<OpMetrics>> ops_;
+    std::unordered_map<std::string, OpMetrics*> opsMap_;
 
     std::atomic<uint64_t> verifyFailCount_{0};
     std::atomic<bool> running_{false};

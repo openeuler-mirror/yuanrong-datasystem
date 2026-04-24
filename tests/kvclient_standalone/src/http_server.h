@@ -3,13 +3,12 @@
 #include "config.h"
 #include "metrics.h"
 #include "pipeline.h"
+#include "thread_pool.h"
 #include "httplib.h"
 #include <datasystem/kv_client.h>
 #include <memory>
 #include <atomic>
 #include <thread>
-#include <vector>
-#include <mutex>
 
 class HttpServer {
 public:
@@ -29,7 +28,6 @@ private:
     std::atomic<bool> &running_;
     std::unique_ptr<httplib::Server> server_;
     std::thread serverThread_;
-    std::vector<std::thread> notifyThreads_;
-    std::mutex notifyMutex_;
+    ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> notifyOps_;
 };

@@ -11,8 +11,7 @@ using namespace datasystem;
 
 KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
                    MetricsCollector &metrics)
-    : cfg_(cfg), client_(client), metrics_(metrics) {
-    // Build pipeline ops from config
+    : cfg_(cfg), client_(client), metrics_(metrics), notifyPool_(4) {
     for (auto &name : cfg_.pipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {
@@ -22,7 +21,6 @@ KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
         pipelineOps_.emplace_back(name, fn);
     }
 
-    // Pre-generate pattern data for each unique size
     for (auto size : cfg_.dataSizes) {
         pregenData_[size] = GeneratePatternData(size, cfg_.instanceId);
     }
@@ -32,11 +30,12 @@ KVWorker::~KVWorker() { Stop(); }
 
 void KVWorker::Start() {
     running_ = true;
-    int qpsPerThread = cfg_.targetQps / cfg_.numSetThreads;
-    if (qpsPerThread <= 0) qpsPerThread = 1;
+    int qpsPerThread = (cfg_.targetQps > 0 && cfg_.numSetThreads > 0)
+                       ? cfg_.targetQps / cfg_.numSetThreads : 0;
+    if (qpsPerThread <= 0) qpsPerThread = 0;
 
-    SLOG_INFO("Starting " << cfg_.numSetThreads << " pipeline threads, "
-              << qpsPerThread << " QPS each (total target: " << cfg_.targetQps << ")");
+    SLOG_INFO("Starting " << cfg_.numSetThreads << " pipeline threads"
+              << (qpsPerThread > 0 ? "" : " (unlimited QPS)"));
 
     for (int i = 0; i < cfg_.numSetThreads; i++) {
         threads_.emplace_back(&KVWorker::PipelineLoop, this, i);
@@ -49,12 +48,14 @@ void KVWorker::Stop() {
         if (t.joinable()) t.join();
     }
     threads_.clear();
+    notifyPool_.Stop();
 }
 
 void KVWorker::PipelineLoop(int threadId) {
-    int qpsPerThread = cfg_.targetQps / cfg_.numSetThreads;
-    if (qpsPerThread <= 0) qpsPerThread = 1;
-    double intervalMs = 1000.0 / qpsPerThread;
+    int qpsPerThread = (cfg_.targetQps > 0 && cfg_.numSetThreads > 0)
+                       ? cfg_.targetQps / cfg_.numSetThreads : 0;
+    if (qpsPerThread <= 0) qpsPerThread = 0;
+    double intervalMs = qpsPerThread > 0 ? 1000.0 / qpsPerThread : 0;
 
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
     if (cfg_.dataSizes.empty()) {
@@ -63,7 +64,8 @@ void KVWorker::PipelineLoop(int threadId) {
     }
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
-    SLOG_INFO("Thread " << threadId << " started: " << qpsPerThread << " QPS");
+    SLOG_INFO("Thread " << threadId << " started"
+              << (qpsPerThread > 0 ? "" : " (unlimited)"));
 
     while (running_) {
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
@@ -115,7 +117,6 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
                      + std::to_string(cfg_.instanceId) + ",\"size\":"
                      + std::to_string(size) + "}";
 
-    std::vector<std::future<void>> futures;
     for (int i = 0; i < count; i++) {
         std::string hostPort = candidates[i];
         if (hostPort.substr(0, 7) == "http://") hostPort = hostPort.substr(7);
@@ -132,17 +133,13 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
             continue;
         }
 
-        futures.push_back(std::async(std::launch::async,
-            [host, port, body]() {
-                try {
-                    httplib::Client cli(host, port);
-                    cli.set_connection_timeout(2);
-                    cli.set_read_timeout(2);
-                    cli.Post("/notify", body, "application/json");
-                } catch (...) {}
-            }));
-    }
-    for (auto &f : futures) {
-        f.get();
+        notifyPool_.Submit([host, port, body]() {
+            try {
+                httplib::Client cli(host, port);
+                cli.set_connection_timeout(2);
+                cli.set_read_timeout(2);
+                cli.Post("/notify", body, "application/json");
+            } catch (...) {}
+        });
     }
 }

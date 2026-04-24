@@ -16,12 +16,12 @@ MetricsCollector::MetricsCollector(int instanceId, int intervalMs, const std::st
 
 OpMetrics& MetricsCollector::GetOrCreateOp(const std::string &op) {
     std::lock_guard<std::mutex> lock(opsMutex_);
-    for (auto &m : ops_) {
-        if (m->opName == op) return *m;
-    }
+    auto it = opsMap_.find(op);
+    if (it != opsMap_.end()) return *it->second;
     auto m = std::make_unique<OpMetrics>();
     m->opName = op;
     auto &ref = *m;
+    opsMap_[op] = &ref;
     ops_.push_back(std::move(m));
     return ref;
 }

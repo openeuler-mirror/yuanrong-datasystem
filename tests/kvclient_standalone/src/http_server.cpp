@@ -3,7 +3,7 @@
 #include "httplib.h"
 #include "simple_log.h"
 #include <nlohmann/json.hpp>
-#include <chrono>
+#include <algorithm>
 #include <thread>
 
 using json = nlohmann::json;
@@ -12,8 +12,8 @@ using namespace datasystem;
 HttpServer::HttpServer(const Config &cfg, std::shared_ptr<KVClient> client,
                        MetricsCollector &metrics, std::atomic<bool> &running)
     : cfg_(cfg), client_(client), metrics_(metrics), running_(running),
-      server_(std::make_unique<httplib::Server>()) {
-    // Build notify pipeline ops from config
+      server_(std::make_unique<httplib::Server>()),
+      notifyPool_(std::max(4, static_cast<int>(std::thread::hardware_concurrency()))) {
     for (auto &name : cfg_.notifyPipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {
@@ -56,19 +56,7 @@ void HttpServer::Start() {
 void HttpServer::Stop() {
     if (server_) server_->stop();
     if (serverThread_.joinable()) serverThread_.join();
-
-    // Wait for in-flight request handlers to finish before joining notify
-    // threads. cpp-httplib's stop() returns before handlers complete, so
-    // a handler could still be inside HandleNotify holding notifyMutex_.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-    {
-        std::lock_guard<std::mutex> lock(notifyMutex_);
-        for (auto &t : notifyThreads_) {
-            if (t.joinable()) t.join();
-        }
-        notifyThreads_.clear();
-    }
+    notifyPool_.Stop();
 }
 
 void HttpServer::HandleNotify(const std::string &body) {
@@ -78,30 +66,20 @@ void HttpServer::HandleNotify(const std::string &body) {
         int sender = j["sender"];
         uint64_t expectedSize = j["size"];
 
-        {
-            std::lock_guard<std::mutex> lock(notifyMutex_);
-            constexpr size_t kMaxNotifyThreads = 100;
-            if (notifyThreads_.size() >= kMaxNotifyThreads) {
-                for (auto &t : notifyThreads_) {
-                    if (t.joinable()) t.join();
-                }
-                notifyThreads_.clear();
-            }
-            notifyThreads_.emplace_back([this, key, sender, expectedSize]() {
-                PipelineContext ctx;
-                ctx.key = key;
-                ctx.size = expectedSize;
-                ctx.senderId = sender;
-                ctx.data = GeneratePatternData(expectedSize, sender);
-                ctx.client = client_;
-                ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
-                ctx.param.ttlSecond = cfg_.ttlSeconds;
-                ctx.verifyFailCount = &metrics_.VerifyFailCounter();
+        notifyPool_.Submit([this, key, sender, expectedSize]() {
+            PipelineContext ctx;
+            ctx.key = key;
+            ctx.size = expectedSize;
+            ctx.senderId = sender;
+            ctx.data = GeneratePatternData(expectedSize, sender);
+            ctx.client = client_;
+            ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
+            ctx.param.ttlSecond = cfg_.ttlSeconds;
+            ctx.verifyFailCount = &metrics_.VerifyFailCounter();
 
-                ExecutePipeline(notifyOps_, ctx, metrics_,
-                                metrics_.VerifyFailCounter());
-            });
-        }
+            ExecutePipeline(notifyOps_, ctx, metrics_,
+                            metrics_.VerifyFailCounter());
+        });
 
     } catch (const std::exception &e) {
         SLOG_WARN("Parse notify body failed: " << e.what());

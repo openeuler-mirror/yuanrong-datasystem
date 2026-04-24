@@ -20,7 +20,7 @@ struct Config {
     int32_t requestTimeoutMs = 20;
     std::vector<uint64_t> dataSizes;          // parsed bytes
     uint32_t ttlSeconds = 5;
-    int targetQps = 1600;
+    int targetQps = 1600; // 0 = unlimited
     int numSetThreads = 16;
     int notifyCount = 10;
     int metricsIntervalMs = 3000;

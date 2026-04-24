@@ -3,6 +3,7 @@
 #include "config.h"
 #include "metrics.h"
 #include "pipeline.h"
+#include "thread_pool.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
 #include <future>
@@ -30,6 +31,7 @@ private:
     MetricsCollector &metrics_;
     std::atomic<bool> running_{false};
     std::vector<std::thread> threads_;
+    ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
     std::unordered_map<uint64_t, std::string> pregenData_;
 };
