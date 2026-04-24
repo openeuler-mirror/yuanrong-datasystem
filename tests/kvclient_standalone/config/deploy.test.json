@@ -4,22 +4,28 @@
   "ssh_user": "root",
   "ssh_options": "-o StrictHostKeyChecking=no",
   "enable_procmon": true,
+  "remote_sdk_dir": "/root/tmp/yr/datasystem/lib",
   "nodes": [
     {
-      "host": "__MACHINE_A_IP__",
+      "host": "1.95.199.126",
       "ssh_port": 22223,
+      "comm_host": "__MACHINE_A_IP__",
       "instance_id": 0,
       "role": "writer",
       "pipeline": ["setStringView"],
-      "notify_pipeline": ["getBuffer"]
+      "notify_pipeline": ["getBuffer"],
+      "port": 9000
     },
     {
-      "host": "__MACHINE_B_IP__",
-      "ssh_port": 22224,
+      "host": "1.95.199.126",
+      "ssh_port": 22223,
+      "comm_host": "__MACHINE_A_IP__",
       "instance_id": 1,
       "role": "reader",
       "pipeline": [],
-      "notify_pipeline": ["getBuffer"]
+      "notify_pipeline": ["getBuffer"],
+      "listen_port": 9001,
+      "port": 9001
     }
   ]
 }

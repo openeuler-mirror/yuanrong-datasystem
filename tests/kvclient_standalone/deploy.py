@@ -70,6 +70,8 @@ class Deployer:
 
     def _comm_host(self, node):
         """Network-reachable host for kvclient inter-instance communication."""
+        if node.get('comm_host'):
+            return node['comm_host']
         if self._transport(node) == 'kubectl':
             return node.get('pod_ip', node.get('pod_name', ''))
         return node.get('host', 'localhost')
@@ -220,7 +222,7 @@ class Deployer:
                 for n in self.nodes if n['instance_id'] != my_id]
 
     def build_node_overrides(self, node):
-        override_keys = ('role', 'pipeline', 'notify_pipeline')
+        override_keys = ('role', 'pipeline', 'notify_pipeline', 'listen_port')
         return {k: v for k, v in node.items() if k in override_keys}
 
     def generate_config(self, node):
@@ -237,6 +239,19 @@ class Deployer:
         return config
 
     # --- Actions ---
+
+    def _scp_to_with_retry(self, node, src, dst, max_retries=3, delay=3):
+        for attempt in range(1, max_retries + 1):
+            try:
+                self.scp_to(node, src, dst)
+                return
+            except Exception as e:
+                if attempt < max_retries:
+                    print(f'  SCP attempt {attempt} failed, retrying in {delay}s: {e}')
+                    import time
+                    time.sleep(delay)
+                else:
+                    raise
 
     def deploy_node(self, node):
         target = self._exec_target(node)
@@ -258,7 +273,7 @@ class Deployer:
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
-            self.scp_to(node, self.binary_path, remote_binary)
+            self._scp_to_with_retry(node, self.binary_path, remote_binary)
 
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             if remote_sdk:
@@ -286,17 +301,19 @@ class Deployer:
                 ld_path = ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
-                f'cd {self.remote_work_dir} && '
-                f'{env_prefix}'
-                f'nohup ./kvclient_standalone_test config_{instance_id}.json '
-                f'> stdout_{instance_id}.log 2>&1 &')
+                f"setsid sh -c 'cd {self.remote_work_dir} && "
+                f"{env_prefix}"
+                f"nohup ./kvclient_standalone_test config_{instance_id}.json "
+                f"> stdout_{instance_id}.log 2>&1 </dev/null &'"
+                f" </dev/null >/dev/null 2>&1 &")
             self.run_on(node, start_cmd)
 
             if self.enable_procmon:
                 procmon_cmd = (
-                    f'cd {self.remote_work_dir} && '
-                    f'nohup python3 procmon.py -p kvclient_standalone_test -i 2'
-                    f' > procmon_{instance_id}.log 2>&1 &')
+                    f"setsid sh -c 'cd {self.remote_work_dir} && "
+                    f"nohup python3 procmon.py -p kvclient_standalone_test -i 2"
+                    f" > procmon_{instance_id}.log 2>&1 </dev/null &'"
+                    f" </dev/null >/dev/null 2>&1 &")
                 self.run_on(node, procmon_cmd)
 
             print(f'  {target} -> OK')
@@ -351,12 +368,26 @@ class Deployer:
                 host = self._comm_host(node)
                 url = f'http://{host}:{port}'
                 try:
-                    req = urllib.request.Request(
-                        url + '/stop', data=b'', method='POST')
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        return (url, resp.status == 200)
+                    result = self.run_on(node,
+                        f'python3 -c "'
+                        f'from urllib.request import urlopen,Request;'
+                        f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
+                        f'urlopen(r,timeout=5);print(\'ok\')"',
+                        check=False, timeout=10)
+                    if result.returncode == 0 and 'ok' in (result.stdout or ''):
+                        return (target, True)
+                    err = (result.stderr or result.stdout or '').strip()
+                    # Extract just the error type for concise output
+                    for line in err.splitlines():
+                        if 'Error:' in line or 'error:' in line:
+                            err = line.split('Error:')[-1].strip()
+                            err = f'Error: {err}' if err else 'connection failed'
+                            break
+                    else:
+                        err = 'connection failed'
+                    return (target, err or 'failed')
                 except Exception as e:
-                    return (url, str(e))
+                    return (target, str(e))
 
         ok = 0
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
@@ -389,8 +420,10 @@ class Deployer:
                 self.run_on(
                     node,
                     f'pkill -f procmon.py; pkill -f kvclient_standalone_test; '
-                    f'rm -rf {self.remote_work_dir}',
-                    check=False)
+                    f'sleep 1; pkill -9 -f procmon.py 2>/dev/null; '
+                    f'pkill -9 -f kvclient_standalone_test 2>/dev/null; '
+                    f'sleep 1; rm -rf {self.remote_work_dir}',
+                    check=False, timeout=30)
                 print(f'  {target} -> OK')
                 return True
             except Exception as e:

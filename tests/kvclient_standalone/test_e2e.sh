@@ -13,15 +13,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PASS=0
 FAIL=0
 
-log_pass() { echo "  PASS: $1"; ((PASS++)); }
-log_fail() { echo "  FAIL: $1"; ((FAIL++)); }
+log_pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+log_fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 run_on() {
-    # Usage: run_on A|B "command"
+    # Usage: run_on A|B "command" — both run on Machine A (single-machine mode)
     local m=$1; shift
     case $m in
         A) ssh $SSH_OPTS -p 22223 "${SSH_USER}@${SSH_HOST}" "$@" ;;
-        B) ssh $SSH_OPTS -p 22224 "${SSH_USER}@${SSH_HOST}" "$@" ;;
+        B) ssh $SSH_OPTS -p 22223 "${SSH_USER}@${SSH_HOST}" "$@" ;;
     esac
 }
 
@@ -33,19 +33,18 @@ check_process() {
 # === Setup ===
 echo "=== Setup ==="
 
-# 1. Discover IPs
-echo "Discovering machine IPs..."
-IP_A=$(run_on A "ip -4 addr show | grep -oP '(?<=inet )\\S+' | grep -v 127.0.0.1 | head -1" | tr -d '\r\n')
-IP_B=$(run_on B "ip -4 addr show | grep -oP '(?<=inet )\\S+' | grep -v 127.0.0.1 | head -1" | tr -d '\r\n')
-echo "  Machine A: $IP_A"
-echo "  Machine B: $IP_B"
+# 1. Discover IP
+echo "Discovering machine IP..."
+IP_A=$(run_on A "ip -4 addr show | grep -oP '(?<=inet )\\S+' | grep -v 127.0.0.1 | head -1" | tr -d '\r\n' | cut -d/ -f1)
+IP_B=$IP_A
+echo "  Machine A IP: $IP_A (single-machine mode: both instances on Machine A)"
 
-# 2. Fill config placeholders
+# 2. Fill config placeholders (comm_host in deploy, etcd_address in config)
 cd "$SCRIPT_DIR"
 cp "$DEPLOY_CFG" "${DEPLOY_CFG}.bak"
 cp "$KVCLIENT_CFG" "${KVCLIENT_CFG}.bak"
-sed -i "s/__MACHINE_A_IP__/$IP_A/g" "$DEPLOY_CFG" "$KVCLIENT_CFG"
-sed -i "s/__MACHINE_B_IP__/$IP_B/g" "$DEPLOY_CFG" "$KVCLIENT_CFG"
+sed -i "s|__MACHINE_A_IP__|$IP_A|g" "$DEPLOY_CFG" "$KVCLIENT_CFG"
+sed -i "s|__MACHINE_B_IP__|$IP_B|g" "$DEPLOY_CFG" "$KVCLIENT_CFG"
 echo "  Configs updated with actual IPs"
 
 # Restore configs on exit
@@ -232,14 +231,17 @@ for dir in collected/*/; do
         fi
     done
 
-    # Check summary Total > 0
-    for sumf in "$dir"summary_*.txt; do
-        if grep -q "Total.*[1-9]" "$sumf" 2>/dev/null; then
+    # Check summary Total > 0 (check writer summary_0.txt, which has pipeline data)
+    sumf="$dir/summary_0.txt"
+    if [[ -f "$sumf" ]]; then
+        if grep -q "Total: [1-9]" "$sumf" 2>/dev/null; then
             log_pass "$(basename "$sumf"): Total > 0"
         else
             log_fail "$(basename "$sumf"): Total is 0"
         fi
-    done
+    else
+        log_fail "$dirname: missing summary_0.txt"
+    fi
 done
 
 # === TC5: Stability (2-round deploy-stop cycle) ===
@@ -370,7 +372,7 @@ for m in A B; do
     fi
 
     # Core files on disk
-    CORE_FILES=$(run_on "$m" "ls ${REMOTE_DIR}/core.* 2>/dev/null; ls /var/lib/apport/coredump/ 2>/dev/null" || echo "")
+    CORE_FILES=$(run_on "$m" "ls ${REMOTE_DIR}/core.* 2>/dev/null || true; ls /var/lib/apport/coredump/ 2>/dev/null || true" 2>/dev/null || echo "")
     if [[ -n "$CORE_FILES" ]]; then
         echo "  core files on disk: FOUND"
         log_fail "$label: core files found on disk"
@@ -379,11 +381,13 @@ for m in A B; do
     fi
 
     # Error scan in stdout log
-    ERRORS=$(run_on "$m" "grep -ic 'error\|fail\|exception\|abort' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null" || echo "0")
+    ERRORS=$(run_on "$m" "grep -ic 'error\|fail\|exception\|abort' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null || echo 0" 2>/dev/null || echo "0")
     ERRORS=$(echo "$ERRORS" | tr -d '\r\n')
+    ERRORS=${ERRORS:-0}
     # Filter known benign patterns
-    BENIGN=$(run_on "$m" "grep -ic 'connection refused\|ZMQ.*retry\|Timeout waiting for notify' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null" || echo "0")
+    BENIGN=$(run_on "$m" "grep -ic 'connection refused\|ZMQ.*retry\|Timeout waiting for notify' ${REMOTE_DIR}/stdout_${local_iid}.log 2>/dev/null || echo 0" 2>/dev/null || echo "0")
     BENIGN=$(echo "$BENIGN" | tr -d '\r\n')
+    BENIGN=${BENIGN:-0}
     UNEXPECTED=$((ERRORS - BENIGN))
     if (( UNEXPECTED > 0 )); then
         echo "  errors in stdout_${local_iid}.log: $UNEXPECTED unexpected ($ERRORS total, $BENIGN benign)"
@@ -392,21 +396,21 @@ for m in A B; do
         echo "  errors in stdout_${local_iid}.log: 0 unexpected ($BENIGN benign)"
     fi
 
-    # Summary check (if collected)
-    for sumf in collected/*_${local_iid}/summary_*.txt; do
+    # Summary check (only check the summary matching this instance_id)
+    for sumf in collected/*_${local_iid}/summary_${local_iid}.txt; do
         if [[ -f "$sumf" ]]; then
-            SET_LINE=$(grep "setStringView" "$sumf" 2>/dev/null || echo "")
-            GET_LINE=$(grep "getBuffer" "$sumf" 2>/dev/null || echo "")
+            SET_LINE=$(grep -A1 "setStringView" "$sumf" 2>/dev/null | grep "Total:" || echo "")
+            GET_LINE=$(grep -A1 "getBuffer" "$sumf" 2>/dev/null | grep "Total:" || echo "")
             VF_LINE=$(grep "verify_fail" "$sumf" 2>/dev/null || echo "")
 
             if [[ -n "$SET_LINE" ]]; then
-                SUCCESS=$(echo "$SET_LINE" | grep -oP 'success.*?(\d+)' | grep -oP '\d+' | head -1)
-                FAIL_CNT=$(echo "$SET_LINE" | grep -oP 'fail.*?(\d+)' | grep -oP '\d+' | head -1)
+                SUCCESS=$(echo "$SET_LINE" | grep -oP 'Success: \K\d+' || echo "0")
+                FAIL_CNT=$(echo "$SET_LINE" | grep -oP 'Fail: \K\d+' || echo "0")
                 echo "  summary: setStringView success=$SUCCESS fail=${FAIL_CNT:-0}"
             fi
             if [[ -n "$GET_LINE" ]]; then
-                SUCCESS=$(echo "$GET_LINE" | grep -oP 'success.*?(\d+)' | grep -oP '\d+' | head -1)
-                FAIL_CNT=$(echo "$GET_LINE" | grep -oP 'fail.*?(\d+)' | grep -oP '\d+' | head -1)
+                SUCCESS=$(echo "$GET_LINE" | grep -oP 'Success: \K\d+' || echo "0")
+                FAIL_CNT=$(echo "$GET_LINE" | grep -oP 'Fail: \K\d+' || echo "0")
                 echo "  summary: getBuffer success=$SUCCESS fail=${FAIL_CNT:-0}"
             fi
             if [[ -n "$VF_LINE" ]]; then
