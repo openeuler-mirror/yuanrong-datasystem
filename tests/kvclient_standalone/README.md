@@ -318,6 +318,7 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `target_qps` | 100 | 目标总 QPS，`0` = 不限速全速运行 |
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
+| `notify_delay_ms` | 10 | 写入后延迟通知时间(ms)，`0` = 不延迟 |
 | `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
 | `ttl_seconds` | 5 | 写入数据 TTL |
 | `connect_timeout_ms` | 1000 | 连接超时(ms) |

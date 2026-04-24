@@ -45,6 +45,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("target_qps")) cfg.targetQps = j["target_qps"];
         if (j.contains("num_set_threads")) cfg.numSetThreads = j["num_set_threads"];
         if (j.contains("notify_count")) cfg.notifyCount = j["notify_count"];
+        if (j.contains("notify_delay_ms")) cfg.notifyDelayMs = j["notify_delay_ms"];
         if (j.contains("metrics_interval_ms")) cfg.metricsIntervalMs = j["metrics_interval_ms"];
         if (j.contains("metrics_file")) cfg.metricsFile = j["metrics_file"];
 
