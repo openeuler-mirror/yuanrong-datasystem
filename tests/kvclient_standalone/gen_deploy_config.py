@@ -32,7 +32,8 @@ def get_pods(namespace, prefix):
         pod_ip = item.get('status', {}).get('podIP', '')
         if not pod_ip:
             continue
-        pods.append({'name': name, 'ip': pod_ip})
+        node_name = item.get('spec', {}).get('nodeName', '')
+        pods.append({'name': name, 'ip': pod_ip, 'node': node_name})
 
     pods.sort(key=lambda p: p['name'])
     return pods
@@ -74,9 +75,29 @@ def main():
               file=sys.stderr)
         sys.exit(1)
 
+    # Distribute writers evenly across nodes (round-robin per node)
+    # Build node -> [pod_index] mapping
+    node_pods = {}
+    for i, pod in enumerate(pods):
+        node_pods.setdefault(pod['node'], []).append(i)
+
+    writer_indices = set()
+    # Sort nodes for deterministic assignment
+    sorted_nodes = sorted(node_pods.keys())
+    # Round-robin: pick one pod from each node in turn
+    pod_queues = {n: list(node_pods[n]) for n in sorted_nodes}
+    assigned = 0
+    while assigned < args.writer_count:
+        for node in sorted_nodes:
+            if assigned >= args.writer_count:
+                break
+            if pod_queues[node]:
+                writer_indices.add(pod_queues[node].pop(0))
+                assigned += 1
+
     nodes = []
     for i, pod in enumerate(pods):
-        is_writer = i < args.writer_count
+        is_writer = i in writer_indices
         node = {
             'pod_name': pod['name'],
             'pod_ip': pod['ip'],
