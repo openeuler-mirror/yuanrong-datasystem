@@ -452,16 +452,27 @@ class Deployer:
             target = self._exec_target(node)
             print(f'Cleaning {target}...')
             try:
-                # Kill processes multiple ways for container compatibility
-                self.run_on(
-                    node,
-                    f'pkill -f procmon.py 2>/dev/null; '
-                    f'pkill -f kvclient_standalone_test 2>/dev/null; '
-                    f'sleep 1; '
-                    f'pkill -9 -f procmon.py 2>/dev/null; '
-                    f'pkill -9 -f kvclient_standalone_test 2>/dev/null; '
-                    f'sleep 1; rm -rf {self.remote_work_dir}',
-                    check=False, timeout=30)
+                # Step 1: Kill processes (use pgrep+kill to avoid pkill -f matching own shell)
+                self.run_on(node,
+                    "for p in $(pgrep -f kvclient_standalone_test 2>/dev/null); do "
+                    "kill $p 2>/dev/null; done; "
+                    "for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                    "kill $p 2>/dev/null; done",
+                    check=False, timeout=15)
+                time.sleep(1)
+
+                # Step 2: Force kill remaining
+                self.run_on(node,
+                    "for p in $(pgrep -f kvclient_standalone_test 2>/dev/null); do "
+                    "kill -9 $p 2>/dev/null; done; "
+                    "for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                    "kill -9 $p 2>/dev/null; done",
+                    check=False, timeout=15)
+                time.sleep(1)
+
+                # Step 3: Remove directory
+                self.run_on(node, f'rm -rf {self.remote_work_dir}',
+                           check=False, timeout=15)
 
                 # Verify cleanup
                 verify = self.run_on(
