@@ -313,11 +313,10 @@ class Deployer:
                 ld_path = ''
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
             start_cmd = (
-                f"setsid sh -c 'cd {self.remote_work_dir} && "
+                f"cd {self.remote_work_dir} && "
                 f"{env_prefix}"
                 f"nohup ./kvclient_standalone_test config_{instance_id}.json "
-                f"> stdout_{instance_id}.log 2>&1 </dev/null &'"
-                f" </dev/null >/dev/null 2>&1 &")
+                f"> stdout_{instance_id}.log 2>&1 </dev/null &")
             print(f'{tag} starting kvclient (role={role})...')
             self.run_on(node, start_cmd)
 
@@ -342,9 +341,9 @@ class Deployer:
             # Step 9: Start procmon
             if self.enable_procmon:
                 procmon_cmd = (
-                    f"setsid sh -c 'cd {self.remote_work_dir} && "
+                    f"cd {self.remote_work_dir} && "
                     f"nohup python3 procmon.py -p kvclient_standalone_test -i 2"
-                    f" > procmon_{instance_id}.log 2>&1 </dev/null &'"
+                    f" > procmon_{instance_id}.log 2>&1 </dev/null &")
                     f" </dev/null >/dev/null 2>&1 &")
                 self.run_on(node, procmon_cmd)
 
