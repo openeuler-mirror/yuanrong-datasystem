@@ -26,7 +26,7 @@ package:
 	@cp third_party/sdk/*.so* $(OUTPUT)/lib/
 	@# Remove Python binding — not needed by C++ binary (saves ~74MB)
 	@rm -f $(OUTPUT)/lib/libds_client_py.so*
-	@cp deploy.py procmon.py $(OUTPUT)/
+	@cp deploy.py gen_deploy_config.py procmon.py $(OUTPUT)/
 	@cp test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/

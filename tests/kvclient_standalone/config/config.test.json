@@ -1,6 +1,6 @@
 {
   "listen_port": 9000,
-  "etcd_address": "__MACHINE_A_IP__:2379",
+  "etcd_address": "192.168.0.223:2379",
   "connect_timeout_ms": 5000,
   "request_timeout_ms": 5000,
   "data_sizes": ["1KB", "4KB"],

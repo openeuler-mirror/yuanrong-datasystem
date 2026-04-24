@@ -26,15 +26,17 @@ OpMetrics& MetricsCollector::GetOrCreateOp(const std::string &op) {
     return ref;
 }
 
-void MetricsCollector::Record(const std::string &op, double latencyMs, bool success) {
+void MetricsCollector::Record(const std::string &op, double latencyMs, bool success, uint64_t bytes) {
     auto &m = GetOrCreateOp(op);
     m.totalCount++;
     if (success) m.successCount++;
     else m.failCount++;
+    m.totalBytes += bytes;
 
     {
         std::lock_guard<std::mutex> lock(m.windowMutex);
         m.windowLatencies.push_back(latencyMs);
+        m.windowBytes += bytes;
     }
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
@@ -63,7 +65,7 @@ void MetricsCollector::Start() {
 
     std::ofstream f(metricsFile_, std::ios::app);
     if (f.is_open()) {
-        f << "timestamp,op,count,avg_ms,p90_ms,p99_ms,min_ms,max_ms,qps\n";
+        f << "timestamp,op,count,avg_ms,p90_ms,p99_ms,min_ms,max_ms,qps,throughput_MB_s\n";
     }
 
     flushThread_ = std::thread([this]() {
@@ -104,9 +106,12 @@ void MetricsCollector::FlushWindow() {
 
     for (auto &m : ops_) {
         std::vector<double> latencies;
+        uint64_t bytes = 0;
         {
             std::lock_guard<std::mutex> lock(m->windowMutex);
             latencies.swap(m->windowLatencies);
+            bytes = m->windowBytes;
+            m->windowBytes = 0;
         }
         if (latencies.empty()) continue;
 
@@ -119,11 +124,13 @@ void MetricsCollector::FlushWindow() {
         double minV = latencies.front();
         double maxV = latencies.back();
         double qps = latencies.size() / intervalSec;
+        double throughputMB = bytes / (1024.0 * 1024.0) / intervalSec;
 
         f << ts.str() << "," << m->opName << "," << latencies.size()
           << std::fixed << std::setprecision(3)
           << "," << avg << "," << p90 << "," << p99
-          << "," << minV << "," << maxV << "," << qps << "\n";
+          << "," << minV << "," << maxV << "," << qps
+          << "," << throughputMB << "\n";
     }
     f.flush();
 }
@@ -164,11 +171,14 @@ void MetricsCollector::WriteSummary() {
             double minV = latencies.front();
             double maxV = latencies.back();
             double qps = uptime > 0 ? (double)latencies.size() / uptime : 0;
+            uint64_t bytes = m->totalBytes.load();
+            double throughputMB = uptime > 0 ? bytes / (1024.0 * 1024.0) / uptime : 0;
 
             f << std::fixed << std::setprecision(3);
             f << "Avg: " << avg << "ms, P90: " << p90 << "ms, P99: " << p99
               << "ms, Min: " << minV << "ms, Max: " << maxV << "ms\n";
             f << "QPS: " << qps << "\n";
+            f << std::setprecision(2) << "Throughput: " << throughputMB << " MB/s\n";
         }
         f << "\n";
     }

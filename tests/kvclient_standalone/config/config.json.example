@@ -2,7 +2,7 @@
   "listen_port": 9000,
   "etcd_address": "127.0.0.1:2379",
   "cluster_name": "",
-  "host_id_env_name": "",
+  "host_id_env_name": "JD_HOST_IP",
   "connect_timeout_ms": 1000,
   "request_timeout_ms": 20,
   "data_sizes": ["8MB", "512KB"],

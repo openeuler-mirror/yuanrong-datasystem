@@ -9,7 +9,7 @@
     {
       "host": "1.95.199.126",
       "ssh_port": 22223,
-      "comm_host": "__MACHINE_A_IP__",
+      "comm_host": "192.168.0.223",
       "instance_id": 0,
       "role": "writer",
       "pipeline": ["setStringView"],
@@ -19,7 +19,7 @@
     {
       "host": "1.95.199.126",
       "ssh_port": 22223,
-      "comm_host": "__MACHINE_A_IP__",
+      "comm_host": "192.168.0.223",
       "instance_id": 1,
       "role": "reader",
       "pipeline": [],

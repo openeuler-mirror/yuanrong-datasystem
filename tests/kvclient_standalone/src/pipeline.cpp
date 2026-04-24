@@ -135,7 +135,7 @@ bool ExecutePipeline(
     for (auto &[name, fn] : ops) {
         double latencyMs = 0;
         bool ok = fn(ctx, latencyMs);
-        metrics.Record(name, latencyMs, ok);
+        metrics.Record(name, latencyMs, ok, ctx.size);
         if (!ok) {
             SLOG_WARN("Pipeline op failed: " << name
                       << " key=" << ctx.key

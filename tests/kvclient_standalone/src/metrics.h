@@ -15,9 +15,11 @@ struct OpMetrics {
     std::atomic<uint64_t> totalCount{0};
     std::atomic<uint64_t> successCount{0};
     std::atomic<uint64_t> failCount{0};
+    std::atomic<uint64_t> totalBytes{0};
 
     std::mutex windowMutex;
     std::vector<double> windowLatencies;
+    uint64_t windowBytes = 0;
 
     std::mutex globalMutex;
     std::vector<double> globalLatencies;
@@ -27,7 +29,7 @@ class MetricsCollector {
 public:
     MetricsCollector(int instanceId, int intervalMs, const std::string &metricsFile);
 
-    void Record(const std::string &op, double latencyMs, bool success);
+    void Record(const std::string &op, double latencyMs, bool success, uint64_t bytes = 0);
     void RecordVerifyFail();
 
     std::atomic<uint64_t> &VerifyFailCounter() { return verifyFailCount_; }

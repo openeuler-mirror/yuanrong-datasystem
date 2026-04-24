@@ -1,552 +1,376 @@
 # kvclient_standalone_test
 
-独立的 datasystem KVClient 集成测试工具，支持可配置的操作 Pipeline、Writer/Reader 角色分离、多节点部署。
+独立的 datasystem KVClient 集成测试工具，支持 Writer/Reader 角色分离、可配置 Pipeline、多节点部署、K8s 自动发现。
 
-## 目录结构
+## 快速开始
 
-```
-kvclient_standalone/
-├── src/                    # 源代码
-│   ├── main.cpp            # 入口
-│   ├── config.h/cpp        # 配置解析
-│   ├── pipeline.h/cpp      # Pipeline 执行引擎 + 6 个原子操作
-│   ├── kv_worker.h/cpp     # Writer 主循环
-│   ├── http_server.h/cpp   # HTTP 服务 (/notify, /stats, /stop)
-│   ├── httplib.h            # cpp-httplib 单文件 HTTP 库
-│   ├── metrics.h/cpp       # 延迟统计 + CSV 输出
-│   ├── stop.h/cpp          # --stop 模式
-│   ├── simple_log.h        # 日志宏 (避免与 SDK spdlog 冲突)
-│   └── data_pattern.h      # 测试数据生成
-├── config/                 # 配置文件
-│   ├── config.json.example # 配置模板
-│   └── deploy.json.example # 部署模板
-├── third_party/            # 第三方依赖
-│   ├── spdlog-include/     # ds_spdlog 头文件
-│   ├── json-include/       # nlohmann_json 头文件
-│   └── sdk/               # SDK 动态库 libdatasystem.so (make copy-sdk, gitignore)
-├── deploy.py               # 多节点部署脚本（支持 SSH / kubectl）
-├── procmon.py              # 进程 CPU/内存监控工具
-├── test_deploy.sh          # 跨子网部署测试脚本
-├── Makefile                # copy-sdk / package / clean
-├── CMakeLists.txt
-└── build/                  # 构建输出 (gitignore)
-```
-
-## 从零开始
-
-### 1. 环境准备
-
-需要以下组件：
-
-| 组件 | 说明 |
-|------|------|
-| CMake 3.14+ | 构建工具 |
-| C++17 编译器 | GCC 9+ 或 Clang 10+ |
-| datasystem SDK | Bazel 构建产出 `libdatasystem.so` (~48MB) |
-| etcd | 元数据服务 |
-| datasystem worker | 通过 `dscli start -w` 启动 |
-
-**安装 datasystem SDK：**
-
-在项目根目录执行构建（使用 Bazel）：
-
-```bash
-cd /path/to/yuanrong-datasystem
-bash build.sh -b bazel
-```
-
-构建产物在 `output/cpp/` 目录下：
-- `lib/libdatasystem.so` — SDK 动态库（~48MB，已包含 spdlog）
-- `include/` — SDK 头文件
-
-**安装 dscli：**
-
-```bash
-pip install output/openyuanrong_datasystem-*.whl
-```
-
-**安装 etcd：**
-
-```bash
-# 下载 etcd (示例版本，按需调整)
-curl -L https://github.com/etcd-io/etcd/releases/download/v3.5.15/etcd-v3.5.15-linux-amd64.tar.gz | tar xz
-export PATH=$PWD/etcd-v3.5.15-linux-amd64:$PATH
-```
-
-### 2. 编译
+### 1. 编译
 
 ```bash
 cd tests/kvclient_standalone
 
+# 构建 SDK（项目根目录）
+cd /path/to/yuanrong-datasystem && bash build.sh -b bazel
+
+# 编译
 mkdir -p build && cd build
-
-# DATASYSTEM_SDK_DIR 指向 Bazel SDK 产出路径（output/cpp/ 包含 include/ 和 lib/）
 cmake -DDATASYSTEM_SDK_DIR=/path/to/yuanrong-datasystem/output/cpp ..
-
 make -j$(nproc)
-cd ..
+
+# 拷贝 SDK 到部署目录
+cd .. && make copy-sdk
 ```
 
-编译成功后生成 `build/kvclient_standalone_test` 二进制。
-
-### 2.1 拷贝 SDK 动态库（部署用）
-
-部署到远程节点前，需要将 SDK 动态库拷贝到 `third_party/sdk/`：
+### 2. 启动依赖
 
 ```bash
-make copy-sdk
-```
-
-这会将 Bazel 构建的 `libdatasystem.so`（~48MB）拷贝到 `third_party/sdk/`，deploy.py 部署时会将它发送到远端节点。
-
-> 如果 SDK 产物在其他路径：`make copy-sdk BAZEL_SDK_DIR=/path/to/output/cpp`
-
-### 2.2 打包部署产物
-
-```bash
-# 打包二进制 + SDK 库 + 脚本 + 配置到 output/
-make package
-```
-
-`output/` 目录结构：
-
-```
-output/
-├── kvclient_standalone_test  # 二进制
-├── lib/
-│   └── libdatasystem.so      # SDK 动态库
-├── deploy.py                 # 部署脚本
-├── procmon.py                # 进程监控脚本
-├── test_deploy.sh            # 跨子网测试脚本
-└── config/
-    ├── config.json.example   # 配置模板
-    └── deploy.json.example   # 部署模板
-```
-
-### 3. 启动依赖服务
-
-**启动 etcd：**
-
-```bash
+# etcd
 etcd &
-# 验证
-etcdctl endpoint health
-```
 
-**启动 worker：**
-
-```bash
-# worker 必须从短路径目录启动（UDS路径不能超过108字符）
+# worker（必须从短路径启动）
 mkdir -p /tmp/ds_worker && cd /tmp/ds_worker
-
 dscli start -w --worker_address 127.0.0.1:31501 --etcd_address 127.0.0.1:2379
-
-# 验证
-etcdctl get --prefix "/datasystem/cluster"
 ```
 
-### 4. 单节点测试
-
-#### 4.1 创建配置文件
-
-复制模板并修改：
+### 3. 单节点运行
 
 ```bash
-cp config/config.json.example config/my_config.json
+export LD_LIBRARY_PATH=/path/to/sdk/lib:$LD_LIBRARY_PATH
+./build/kvclient_standalone_test config/my_config.json
+
+# 查看统计
+curl http://127.0.0.1:9000/stats | python3 -m json.tool
+
+# 停止
+curl -X POST http://127.0.0.1:9000/stop
 ```
 
-编辑 `config/my_config.json`：
+## 多节点部署
+
+### deploy.json
 
 ```json
 {
-  "instance_id": 0,
-  "listen_port": 9000,
+  "remote_work_dir": "/tmp/kvclient_test",
+  "duration": "10m",
+  "transport": "ssh",
+  "ssh_user": "root",
+  "ssh_options": "-o StrictHostKeyChecking=no",
+  "remote_sdk_dir": "/usr/local/datasystem/lib",
+  "nodes": [
+    {
+      "host": "10.0.0.1", "ssh_port": 22,
+      "comm_host": "10.0.0.1",
+      "instance_id": 0, "role": "writer",
+      "pipeline": ["setStringView"],
+      "notify_pipeline": ["getBuffer"],
+      "port": 9000
+    },
+    {
+      "host": "10.0.0.2", "ssh_port": 22,
+      "comm_host": "10.0.0.2",
+      "instance_id": 1, "role": "reader",
+      "pipeline": [],
+      "notify_pipeline": ["getBuffer"],
+      "listen_port": 9001, "port": 9001
+    }
+  ]
+}
+```
+
+### 命令
+
+```bash
+# 部署 + 启动（若设了 duration，到时自动 stop + collect）
+python3 deploy.py --deploy deploy.json [config_template.json]
+
+# 停止
+python3 deploy.py --stop deploy.json
+
+# 收集结果到 collected/
+python3 deploy.py --collect deploy.json
+
+# 清理（杀进程 + 删除远程目录）
+python3 deploy.py --clean deploy.json
+```
+
+### duration 定时停止
+
+在 deploy.json 中加 `"duration": "10m"` 即可无人值守运行。支持格式：`30s`、`5m`、`2h`、纯数字（秒）。不设或 `"0"` 则不自动停止。
+
+等待期间 `Ctrl+C` 可提前停止并触发 stop + collect。
+
+### Kubernetes 部署
+
+用 `gen_deploy_config.py` 自动从 k8s Pod 生成 deploy.json，自动分配 writer/reader 角色：
+
+```bash
+# 1 writer + 10 readers
+python3 gen_deploy_config.py -p ds-worker -n datasystem -w 1
+# 1 writer + 10 readers
+python3 gen_deploy_config.py -p mypod -n myns -w 1
+
+# 生成 config/deploy.json + config/config.json
+python3 deploy.py --deploy config/deploy.json config/config.json
+```
+
+`gen_deploy_config.py` 参数：
+
+| 参数 | 说明 |
+|------|------|
+| `-p` / `--prefix` | Pod 名称前缀（必填） |
+| `-n` / `--namespace` | k8s 命名空间（默认 default） |
+| `-w` / `--writer-count` | Writer 数量（默认 1），前 N 个 Pod 为 writer，其余为 reader |
+| `-e` / `--etcd-address` | 覆盖 config 中的 etcd_address |
+| `--remote-sdk-dir` | 容器内 SDK 路径（跳过从本机拷贝） |
+
+## 典型场景
+
+### 场景 1：单机双实例（1 writer + 1 reader）
+
+同一台机器跑 writer 和 reader，适合功能验证和 E2E 测试。
+
+**config.json：**
+
+```json
+{
   "etcd_address": "127.0.0.1:2379",
-  "cluster_name": "",
   "connect_timeout_ms": 5000,
   "request_timeout_ms": 5000,
   "data_sizes": ["1KB", "4KB"],
   "ttl_seconds": 30,
   "target_qps": 10,
   "num_set_threads": 1,
-  "notify_count": 0,
-  "metrics_interval_ms": 3000,
-  "metrics_file": "metrics_0.csv",
-  "role": "writer",
-  "pipeline": ["setStringView"],
-  "notify_pipeline": ["getBuffer"]
+  "notify_count": 1,
+  "metrics_interval_ms": 3000
 }
 ```
 
-> **注意**：`etcd_address` 不要加 `http://` 前缀，用 `127.0.0.1:2379`。本地测试 `cluster_name` 设为空字符串 `""`。单节点运行时需要手动指定 `instance_id`；通过 deploy.py 多节点部署时，`instance_id`、`nodes`、`peers` 会由 deploy.py 自动注入。
-
-#### 4.2 运行
-
-```bash
-export LD_LIBRARY_PATH=/path/to/sdk/lib:$LD_LIBRARY_PATH
-
-./build/kvclient_standalone_test config/my_config.json
-```
-
-#### 4.3 查看结果
-
-```bash
-# 实时查看统计
-curl http://127.0.0.1:9000/stats | python3 -m json.tool
-
-# 优雅停止（会写 summary 文件）
-curl -X POST http://127.0.0.1:9000/stop
-
-# 查看汇总报告
-cat summary_0.txt
-```
-
-汇总报告示例：
-
-```
-=== KVClient Standalone Test Summary ===
-Instance ID: 0
-Uptime: 30 seconds
-
---- setStringView ---
-Total: 150, Success: 150, Fail: 0
-Avg: 1.8ms, P90: 2.2ms, P99: 4.5ms, Min: 0.9ms, Max: 4.6ms
-QPS: 5.0
-```
-
-## Pipeline 操作
-
-支持 6 种可组合的原子操作：
-
-| 操作名 | SDK 调用 | 说明 |
-|--------|----------|------|
-| `setStringView` | `client->Set(key, StringView(data), param)` | 写入字符串数据 |
-| `getBuffer` | `client->Get(key, Optional<Buffer>&)` | 读取并验证数据 |
-| `exist` | `client->Exist({key}, exists)` | 检查 key 是否存在 |
-| `createBuffer` | `client->Create(key, size, param, buffer)` | 创建共享内存 Buffer |
-| `memoryCopy` | `buffer->MemoryCopy(data, size)` | 向 Buffer 写入数据 |
-| `setBuffer` | `client->Set(buffer)` | 提交 Buffer 到 datasystem |
-
-### Pipeline 示例
-
-**基本 Set/Get：**
+**deploy.json：**
 
 ```json
 {
-  "role": "writer",
-  "pipeline": ["setStringView"],
-  "notify_pipeline": ["getBuffer"]
-}
-```
-
-**Buffer 写入流程：**
-
-```json
-{
-  "role": "writer",
-  "pipeline": ["createBuffer", "memoryCopy", "setBuffer"],
-  "notify_pipeline": ["getBuffer", "exist"]
-}
-```
-
-**全量测试：**
-
-```json
-{
-  "role": "writer",
-  "pipeline": ["setStringView", "getBuffer", "exist", "createBuffer", "memoryCopy", "setBuffer"],
-  "notify_pipeline": ["getBuffer", "exist"]
-}
-```
-
-**只读实例：**
-
-```json
-{
-  "role": "reader",
-  "pipeline": [],
-  "notify_pipeline": ["getBuffer", "exist"]
-}
-```
-
-## Writer/Reader 角色模式
-
-| 角色 | 行为 |
-|------|------|
-| `writer` | 运行 `pipeline` 主循环 + 成功后通知 peers |
-| `reader` | 不启动主循环，只等 `/notify` 触发执行 `notify_pipeline` |
-
-Writer 每次成功执行 pipeline 后，从 `peers` 列表中随机选择 `notify_count` 个节点发送 HTTP POST `/notify`。Reader 收到通知后执行 `notify_pipeline` 中的操作序列。
-
-## 配置说明
-
-### config.json 字段
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `instance_id` | int | 0 | 实例唯一标识（单机运行时手动指定，deploy.py 部署时自动注入） |
-| `listen_port` | int | 9000 | HTTP 服务端口 |
-| `etcd_address` | string | (必填) | etcd 地址，格式 `ip:port`，不加 `http://` |
-| `cluster_name` | string | `""` | 集群名，本地测试留空 |
-| `host_id_env_name` | string | `""` | ServiceDiscovery 的 hostId 环境变量名 |
-| `connect_timeout_ms` | int | 1000 | 连接超时(ms) |
-| `request_timeout_ms` | int | 20 | 请求超时(ms) |
-| `data_sizes` | string[] | `["8MB"]` | 测试数据大小列表，支持 KB/MB/GB 后缀（config.json.example 中为 `["8MB","512KB"]`） |
-| `ttl_seconds` | int | 5 | 写入数据的 TTL(秒) |
-| `target_qps` | int | 1600 | 目标总 QPS |
-| `num_set_threads` | int | 16 | Writer 线程数 |
-| `notify_count` | int | 10 | 每次写入后通知几个 peer |
-| `metrics_interval_ms` | int | 3000 | Metrics 采集间隔(ms) |
-| `metrics_file` | string | `metrics_{instance_id}.csv` | Metrics 输出文件 |
-| `role` | string | `"writer"` | 角色：`writer` 或 `reader` |
-| `pipeline` | string[] | `["setStringView"]` | Writer 主循环的操作序列 |
-| `notify_pipeline` | string[] | `["getBuffer"]` | `/notify` 触发的操作序列 |
-| `peers` | string[] | `[]` | 对等节点 URL 列表（手动配置，优先级高于 nodes） |
-| `nodes` | object[] | `[]` | 节点列表，自动生成 peers（排除自身 instance_id） |
-
-> **deploy.py 部署时自动注入的字段**：`instance_id`、`nodes`、`peers` 由 deploy.py 从 deploy.json 生成并注入到每个实例的配置中。config.json.example 中不包含这些字段。
-
-> **peers 与 nodes**：若 `peers` 非空则直接使用；否则从 `nodes` 自动生成。多实例部署推荐用 `nodes`，所有实例共享同一份配置。
-
-`nodes` 每项格式：`{"host": "ip", "port": 9000, "instance_id": 0}`
-
-## 多节点部署
-
-### deploy.json 字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `remote_work_dir` | string | 远程工作目录 |
-| `transport` | string | 全局传输方式：`"ssh"` 或 `"kubectl"`，默认 `"ssh"`。节点级别可覆盖 |
-| `enable_procmon` | bool | 是否部署 procmon.py 监控进程，默认 `true` |
-| `ssh_user` | string | 默认 SSH 用户，默认 `"root"` |
-| `ssh_options` | string | SSH 选项，默认 `"-o StrictHostKeyChecking=no"` |
-| `nodes` | array | 节点列表 |
-
-> `binary_path` 和 `datasystem_sdk_dir` 不再需要配置，deploy.py 自动从 `output/` 目录查找二进制和 SDK 库。
-
-每个 node 支持：
-- `host` — SSH 节点的主机名/IP (`localhost` 表示本机)
-- `instance_id` — 实例 ID
-- `ssh_user` — 覆盖默认 SSH 用户
-- `peers` — 手动指定 peers URL 列表（覆盖自动生成的 peers）
-- `role` / `pipeline` / `notify_pipeline` — 覆盖 config 模板中的值
-- kubectl 节点额外支持：`pod_name`、`pod_ip`、`namespace`、`transport`（详见下方 Kubernetes 部署章节）
-
-### 部署命令
-
-```bash
-# 部署到所有节点并启动
-python3 deploy.py --deploy config/deploy.json config/config.json.example
-
-# 停止所有实例
-python3 deploy.py --stop config/deploy.json config/config.json.example
-
-# 收集所有节点的输出文件到 collected/
-python3 deploy.py --collect config/deploy.json config/config.json.example
-
-# 清理：杀进程 + 删除远程目录
-python3 deploy.py --clean config/deploy.json config/config.json.example
-```
-
-### SSH 部署示例
-
-```json
-{
-  "remote_work_dir": "/home/user/kvclient_test",
+  "remote_work_dir": "/tmp/kvclient_test",
   "transport": "ssh",
-  "enable_procmon": true,
   "ssh_user": "root",
-  "ssh_options": "-o StrictHostKeyChecking=no",
-  "nodes": [
-    { "host": "192.168.1.1", "instance_id": 0 },
-    { "host": "192.168.1.2", "instance_id": 1, "ssh_user": "ubuntu" }
-  ]
-}
-```
-
-### Kubernetes (kubectl) 部署
-
-deploy.py 支持 kubectl 传输方式，适用于无法配置 SSH 的 k8s 容器环境。使用 `kubectl exec` 执行命令、`kubectl cp` 拷贝文件。
-
-#### kubectl 节点配置
-
-kubectl 节点使用以下字段（区别于 SSH 节点）：
-
-| 字段 | 说明 |
-|------|------|
-| `pod_name` | kubectl 操作的目标 Pod 名称（必填） |
-| `pod_ip` | kvclient 实例间通信地址，Pod IP 或 DNS（可选，默认用 pod_name） |
-| `namespace` | kubectl 命名空间（可选，默认 `"default"`） |
-| `transport` | 设为 `"kubectl"` |
-
-> `pod_name` 用于 kubectl exec/cp 命令；`pod_ip` 用于 kvclient 实例之间的 P2P HTTP 通信（生成 config 中的 peers）。如果 Pod 名称在集群内网络可达（如通过 headless service DNS），则可省略 `pod_ip`。
-
-#### kubectl 部署示例
-
-```json
-{
-  "remote_work_dir": "/home/user/kvclient_test",
-  "transport": "kubectl",
-  "enable_procmon": true,
+  "remote_sdk_dir": "/usr/local/datasystem/lib",
   "nodes": [
     {
-      "pod_name": "ds-worker-0",
-      "pod_ip": "10.244.1.5",
-      "namespace": "datasystem",
-      "instance_id": 0
+      "host": "10.0.0.1", "ssh_port": 22,
+      "comm_host": "10.0.0.1",
+      "instance_id": 0, "role": "writer",
+      "pipeline": ["setStringView"],
+      "notify_pipeline": ["getBuffer"],
+      "port": 9000
     },
     {
-      "pod_name": "ds-worker-1",
-      "pod_ip": "10.244.2.3",
-      "namespace": "datasystem",
-      "instance_id": 1
+      "host": "10.0.0.1", "ssh_port": 22,
+      "comm_host": "10.0.0.1",
+      "instance_id": 1, "role": "reader",
+      "pipeline": [],
+      "notify_pipeline": ["getBuffer"],
+      "listen_port": 9001, "port": 9001
     }
   ]
 }
 ```
 
-> **前提条件**：执行 deploy.py 的主机需要能通过 kubectl 访问目标集群（已配置 kubeconfig），且 Pod 内需要 tar 命令（用于目录拷贝和文件收集）。
+### 场景 2：1 writer + N readers（压测模式）
 
-#### 混合部署
+Writer 不限速全速写入，通知所有 reader 读取验证。
 
-全局 `transport` 为默认值，个别节点可覆盖：
+**config.json：**
 
 ```json
 {
-  "transport": "ssh",
-  "nodes": [
-    { "host": "192.168.1.1", "instance_id": 0 },
-    {
-      "pod_name": "ds-worker-0",
-      "pod_ip": "10.244.1.5",
-      "namespace": "datasystem",
-      "instance_id": 1,
-      "transport": "kubectl"
-    }
-  ]
+  "etcd_address": "10.0.0.1:2379",
+  "data_sizes": ["1KB", "4KB"],
+  "ttl_seconds": 30,
+  "target_qps": 0,
+  "num_set_threads": 5,
+  "notify_count": 100,
+  "connect_timeout_ms": 5000,
+  "request_timeout_ms": 5000,
+  "metrics_interval_ms": 3000
 }
 ```
 
-### 跨子网部署
+> `target_qps: 0` 不限速，`notify_count: 100` 确保通知到所有 reader。
 
-当测试机器在不同子网时，需要 SSH 隧道桥接三个端口：
+**deploy.json（Kubernetes，1 writer + 10 readers）：**
 
 ```bash
-# 1. etcd 隧道 (reverse): 让远程访问本地 etcd
+python3 gen_deploy_config.py -p ds-worker -n datasystem -w 1
+```
+
+自动生成 11 个节点：第一个为 writer，后 10 个为 reader。每个 node 带 `role`/`pipeline`/`notify_pipeline`。
+
+然后加 duration 无人值守：
+
+```json
+{
+  "duration": "30m"
+}
+```
+
+```bash
+python3 deploy.py --deploy config/deploy.json config/config.json
+# 自动跑 30 分钟后 stop + collect
+```
+
+### 场景 3：多 writer 并发写入
+
+多 writer 分片写入，每个 writer 通知所有 reader。
+
+```json
+{
+  "target_qps": 0,
+  "num_set_threads": 10,
+  "notify_count": 100,
+  "data_sizes": ["1KB"]
+}
+```
+
+```bash
+# 3 writers + 5 readers
+python3 gen_deploy_config.py -p ds-worker -n datasystem -w 3
+```
+
+### 场景 4：长时间稳定性测试
+
+低 QPS 长时间运行，验证内存泄漏和稳定性。
+
+**config.json：**
+
+```json
+{
+  "target_qps": 100,
+  "num_set_threads": 2,
+  "data_sizes": ["1KB", "4KB", "1MB"],
+  "ttl_seconds": 60,
+  "metrics_interval_ms": 10000
+}
+```
+
+**deploy.json：**
+
+```json
+{
+  "duration": "24h"
+}
+```
+
+```bash
+python3 deploy.py --deploy deploy.json config.json
+# 跑 24 小时后自动停止收集
+```
+
+### 场景 5：跨子网部署
+
+通过 SSH 隧道桥接，适合本机与远程不同子网的场景。
+
+```bash
+# 1. etcd 隧道（让远端访问本地 etcd）
 ssh -fNR 22379:localhost:2379 remote_host
 
-# 2. Worker 隧道 (reverse): 让远程 KVClient 连接本地 worker
+# 2. Worker 隧道（让远端 KVClient 连本地 worker）
 ssh -fNR 31501:localhost:31501 remote_host
 
-# 3. HTTP 隧道 (forward): 让本地访问远程的 /notify 端口
+# 3. HTTP 隧道（让本地访问远端 /notify 端口）
 ssh -fNL 19000:localhost:9000 remote_host
 ```
 
-`test_deploy.sh` 封装了完整的跨子网测试流程：
+deploy.json 中用 `comm_host` 指向隧道地址：
+
+```json
+{
+  "nodes": [
+    {
+      "host": "remote_host", "ssh_port": 22,
+      "comm_host": "127.0.0.1",
+      "instance_id": 0, "port": 9000
+    }
+  ]
+}
+```
+
+或直接使用 `test_deploy.sh` 自动配置隧道：
 
 ```bash
-# 默认使用 openclaw 作为远程节点
 bash test_deploy.sh
-
-# 或指定其他远程节点
 REMOTE_HOST=myserver bash test_deploy.sh
 ```
+
+## 配置说明
+
+### config.json
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `etcd_address` | (必填) | etcd 地址，`ip:port`，不加 `http://` |
+| `cluster_name` | `""` | 集群名，本地测试留空 |
+| `host_id_env_name` | `"JD_HOST_IP"` | ServiceDiscovery 的 hostId 环境变量名 |
+| `listen_port` | 9000 | HTTP 服务端口 |
+| `role` | `"writer"` | `writer` 或 `reader` |
+| `pipeline` | `["setStringView"]` | Writer 主循环操作序列 |
+| `notify_pipeline` | `["getBuffer"]` | 收到 /notify 后执行的操作序列 |
+| `target_qps` | 1600 | 目标总 QPS，`0` = 不限速全速运行 |
+| `num_set_threads` | 16 | Writer 线程数 |
+| `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
+| `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
+| `ttl_seconds` | 5 | 写入数据 TTL |
+| `connect_timeout_ms` | 1000 | 连接超时(ms) |
+| `request_timeout_ms` | 20 | 请求超时(ms) |
+| `metrics_interval_ms` | 3000 | Metrics 采集间隔(ms) |
+| `metrics_file` | `metrics_{instance_id}.csv` | Metrics 输出文件名 |
+
+> `instance_id`、`nodes`、`peers` 由 deploy.py 自动注入，无需手动配置。
+
+### deploy.json node 字段
+
+| 字段 | 说明 |
+|------|------|
+| `host` | SSH 主机（`localhost` = 本机） |
+| `ssh_port` | SSH 端口 |
+| `comm_host` | 实例间通信 IP（默认同 host） |
+| `instance_id` | 实例 ID |
+| `role` | `writer` 或 `reader` |
+| `pipeline` / `notify_pipeline` | 覆盖 config 模板 |
+| `port` | kvclient 通信端口 |
+| `listen_port` | HTTP 监听端口（默认同 port） |
+
+Kubernetes 节点额外支持：`pod_name`、`pod_ip`、`namespace`、`transport: "kubectl"`。
+
+## Pipeline 操作
+
+| 操作名 | 说明 |
+|--------|------|
+| `setStringView` | 写入字符串数据 |
+| `getBuffer` | 读取并验证数据 |
+| `exist` | 检查 key 是否存在 |
+| `createBuffer` | 创建共享内存 Buffer |
+| `memoryCopy` | 向 Buffer 写入数据 |
+| `setBuffer` | 提交 Buffer |
 
 ## HTTP API
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/notify` | POST | 接收写入通知，执行 notify_pipeline |
-| `/stats` | GET | 获取 JSON 格式实时统计 |
-| `/stop` | POST | 优雅停止实例 |
+| `/notify` | POST | 接收通知，执行 notify_pipeline |
+| `/stats` | GET | 实时统计 JSON |
+| `/stop` | POST | 优雅停止 |
 
-`/notify` 请求体：
+## Metrics
 
-```json
-{
-  "key": "kv_test_0_0_1682224800000000",
-  "sender": 0,
-  "size": 1024
-}
-```
-
-## Metrics 输出
-
-### CSV 格式 (`metrics_{id}.csv`)
-
-```csv
-timestamp,op,count,avg_ms,p90_ms,p99_ms,min_ms,max_ms,qps
-2026-04-23 10:00:03.123,setStringView,30,12.3,18.5,22.1,8.1,25.3,10.0
-2026-04-23 10:00:03.123,getBuffer,30,8.7,12.1,15.6,3.2,18.9,10.0
-```
-
-### Summary 文件 (`summary_{id}.txt`)
-
-在实例停止时自动生成，包含完整运行期间的汇总统计。
-
-### /stats JSON
-
-```json
-{
-  "instance_id": 0,
-  "uptime_seconds": 30,
-  "setStringView_count": 150,
-  "setStringView_success": 150,
-  "setStringView_fail": 0,
-  "getBuffer_count": 0,
-  "verify_fail": 0
-}
-```
-
-## 进程监控 (procmon.py)
-
-部署时默认启动 procmon.py 监控 kvclient_standalone_test 的 CPU 和内存使用。输出示例：
-
-```
-[14:30:01] PID=12345 CPU=12.3% MEM=45.2MB
-...
-=== Summary ===
-Samples: 30, Duration: 60s
-CPU  avg=10.2%  peak=15.8%
-MEM  avg=45.3MB peak=47.1MB
-```
-
-可通过 `enable_procmon: false` 关闭。单独使用：
-
-```bash
-python3 procmon.py -p kvclient_standalone_test -i 2
-```
+- `metrics_{id}.csv` — 每 `metrics_interval_ms` 秒采集一次，含 count/avg/p90/p99/qps/throughput_MB_s
+- `summary_{id}.txt` — 停止时生成，含完整运行期间的汇总（含 Throughput MB/s）
 
 ## 常见问题
 
-**Q: "Invalid etcd address" 错误**
+**"Invalid etcd address"** — `etcd_address` 不加 `http://`，用 `ip:port`。
 
-`etcd_address` 不要加 `http://` 前缀，用 `127.0.0.1:2379`。
+**"No available worker"** — 确认 worker 已启动（`etcdctl get --prefix "/datasystem/cluster"`），本地测试 `cluster_name` 设 `""`。
 
-**Q: "No available worker" 错误**
+**"domain socket len > 108"** — worker 从短路径启动：`mkdir -p /tmp/ds_worker && cd /tmp/ds_worker`。
 
-1. 确认 worker 已启动：`etcdctl get --prefix "/datasystem/cluster"`
-2. 本地测试 `cluster_name` 必须设为空字符串 `""`
-3. 多节点部署时需要 worker 端口的 SSH 隧道
-
-**Q: Worker 启动失败 "domain socket len > 108"**
-
-从短路径目录启动 worker：
-
-```bash
-mkdir -p /tmp/ds_worker && cd /tmp/ds_worker
-dscli start -w --worker_address 127.0.0.1:31501 --etcd_address 127.0.0.1:2379
-```
-
-**Q: 编译报 "datasystem/kv_client.h: No such file"**
-
-检查 `DATASYSTEM_SDK_DIR` 路径是否正确指向 SDK 根目录（包含 `include/` 和 `lib/` 子目录）。
-
-**Q: 运行报 "libdatasystem.so: cannot open shared object file"**
-
-设置 `LD_LIBRARY_PATH`：
-
-```bash
-export LD_LIBRARY_PATH=/path/to/sdk/lib:$LD_LIBRARY_PATH
-```
+**"libdatasystem.so: cannot open"** — 设置 `LD_LIBRARY_PATH` 指向 SDK lib 目录。

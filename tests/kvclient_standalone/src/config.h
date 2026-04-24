@@ -15,7 +15,7 @@ struct Config {
     int listenPort = 9000;
     std::string etcdAddress;
     std::string clusterName = "";
-    std::string hostIdEnvName = "";
+    std::string hostIdEnvName = "JD_HOST_IP";
     int32_t connectTimeoutMs = 1000;
     int32_t requestTimeoutMs = 20;
     std::vector<uint64_t> dataSizes;          // parsed bytes
