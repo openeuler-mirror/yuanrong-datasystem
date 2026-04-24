@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -29,6 +30,7 @@ class Deployer:
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
         self.enable_procmon = self.deploy.get('enable_procmon', True)
         self.listen_port = self.config_template.get('listen_port', 9000)
+        self._host_locks = {}
 
     # --- Transport helpers ---
 
@@ -210,15 +212,13 @@ class Deployer:
         return result
 
     def build_default_peers(self):
-        port = self.listen_port
-        return [f'http://{self._comm_host(n)}:{port}' for n in self.nodes]
+        return [f'http://{self._comm_host(n)}:{n.get("port", self.listen_port)}' for n in self.nodes]
 
     def build_peers(self, node):
         if 'peers' in node:
             return node['peers']
-        port = self.listen_port
         my_id = node['instance_id']
-        return [f'http://{self._comm_host(n)}:{port}'
+        return [f'http://{self._comm_host(n)}:{n.get("port", self.listen_port)}'
                 for n in self.nodes if n['instance_id'] != my_id]
 
     def build_node_overrides(self, node):
@@ -240,18 +240,14 @@ class Deployer:
 
     # --- Actions ---
 
-    def _scp_to_with_retry(self, node, src, dst, max_retries=3, delay=3):
-        for attempt in range(1, max_retries + 1):
-            try:
-                self.scp_to(node, src, dst)
-                return
-            except Exception as e:
-                if attempt < max_retries:
-                    print(f'  SCP attempt {attempt} failed, retrying in {delay}s: {e}')
-                    import time
-                    time.sleep(delay)
-                else:
-                    raise
+    def _host_key(self, node):
+        return (node.get('host', 'localhost'), node.get('ssh_port'))
+
+    def _get_host_lock(self, node):
+        key = self._host_key(node)
+        if key not in self._host_locks:
+            self._host_locks[key] = threading.Lock()
+        return self._host_locks[key]
 
     def deploy_node(self, node):
         target = self._exec_target(node)
@@ -272,8 +268,12 @@ class Deployer:
         try:
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
+            # Upload binary with per-host lock to avoid concurrent SCP to same file
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
-            self._scp_to_with_retry(node, self.binary_path, remote_binary)
+            with self._get_host_lock(node):
+                check = self.run_on(node, f'test -x {remote_binary}', check=False)
+                if check.returncode != 0:
+                    self.scp_to(node, self.binary_path, remote_binary)
 
             remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             if remote_sdk:
