@@ -15,7 +15,6 @@
  */
 #include "datasystem/utils/service_discovery.h"
 
-#include <arpa/inet.h>
 #include <cstdlib>
 
 #include "datasystem/common/constants.h"
@@ -23,39 +22,19 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/protos/hash_ring.pb.h"
 
 namespace datasystem {
 namespace {
-std::string SelectWorkerAddr(const std::unordered_map<std::string, std::string> &workerAddrs, RandomData *randomData)
+std::string PickRandomAddr(const std::vector<std::string> &workers, RandomData *randomData)
 {
-    size_t rdIndex = randomData->GetRandomIndex(workerAddrs.size());
-    size_t index = 0;
-    for (const auto &worker : workerAddrs) {
-        if (index++ == rdIndex) {
-            return worker.first;
-        }
+    if (workers.empty()) {
+        return "";
     }
-    return "";
-}
-
-std::unordered_map<std::string, std::string> FilterSameHostWorkers(
-    const std::unordered_map<std::string, std::string> &workerInfo, const std::string &hostId)
-{
-    std::unordered_map<std::string, std::string> sameHostWorkers;
-    if (hostId.empty()) {
-        return sameHostWorkers;
-    }
-    for (const auto &worker : workerInfo) {
-        if (worker.second == hostId) {
-            sameHostWorkers.emplace(worker);
-        }
-    }
-    return sameHostWorkers;
+    return workers[randomData->GetRandomIndex(workers.size())];
 }
 
 Status ParseWorkerAddr(const std::string &pickedAddr, std::string &workerIp, int &workerPort)
@@ -111,26 +90,34 @@ Status ServiceDiscovery::Init()
     return Status::OK();
 }
 
-Status ServiceDiscovery::ObtainWorkers()
+Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other)
 {
+    if (etcdStore_ == nullptr) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
+    }
+
     int64_t nodeRevision;
     std::vector<std::pair<std::string, std::string>> outKeyValues;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(ETCD_CLUSTER_TABLE, outKeyValues, nodeRevision),
                                      "Failed to fetch cluster info from etcd, ensure etcd service is healthy.");
-    {
-        std::lock_guard<std::shared_timed_mutex> lock(workerHostPortMutext_);
-        activeWorkerInfo_.clear();
-        for (const auto &kv : outKeyValues) {
-            KeepAliveValue value;
-            auto rc = KeepAliveValue::FromString(kv.second, value);
-            if (rc.IsError()) {
-                LOG(WARNING) << "Failed to parse keep alive value for worker " << kv.first << ": " << rc.ToString();
-                continue;
-            }
-            if (value.state == "ready") {
-                VLOG(1) << "Worker " << kv.first << " is ready with hostId: " << value.hostId;
-                activeWorkerInfo_[kv.first] = value.hostId;
-            }
+
+    sameHost.clear();
+    other.clear();
+    for (const auto &kv : outKeyValues) {
+        KeepAliveValue value;
+        auto rc = KeepAliveValue::FromString(kv.second, value);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Failed to parse keep alive value for worker " << kv.first << ": " << rc.ToString();
+            continue;
+        }
+        if (value.state != "ready") {
+            continue;
+        }
+        VLOG(1) << "Worker " << kv.first << " is ready with hostId: " << value.hostId;
+        if (!hostId_.empty() && value.hostId == hostId_) {
+            sameHost.emplace_back(kv.first);
+        } else {
+            other.emplace_back(kv.first);
         }
     }
     return Status::OK();
@@ -138,66 +125,63 @@ Status ServiceDiscovery::ObtainWorkers()
 
 Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode)
 {
-    if (etcdStore_ == nullptr) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
-    }
+    std::vector<std::string> sameHost;
+    std::vector<std::string> other;
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
 
-    RETURN_IF_NOT_OK(this->ObtainWorkers());
     std::string pickedAddr;
-    {
-        std::shared_lock<std::shared_timed_mutex> lock(workerHostPortMutext_);
-        if (activeWorkerInfo_.empty()) {
-            return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
-        }
-
-        if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
-            pickedAddr = SelectWorkerAddr(activeWorkerInfo_, randomData_.get());
+    bool pickedSameNode = false;
+    if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
+        CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+        CHECK_FAIL_RETURN_STATUS(!sameHost.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
+        pickedAddr = PickRandomAddr(sameHost, randomData_.get());
+        pickedSameNode = true;
+    } else if (affinityPolicy_ == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !sameHost.empty()) {
+        pickedAddr = PickRandomAddr(sameHost, randomData_.get());
+        pickedSameNode = true;
+    } else {
+        // RANDOM, or PREFERRED_SAME_NODE with no same-host worker: pick uniformly across both partitions.
+        size_t total = sameHost.size() + other.size();
+        CHECK_FAIL_RETURN_STATUS(total > 0, K_RUNTIME_ERROR, "No available worker is detected.");
+        size_t idx = randomData_->GetRandomIndex(total);
+        if (idx < sameHost.size()) {
+            pickedAddr = sameHost[idx];
+            pickedSameNode = true;
         } else {
-            auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
-            if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
-                CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID,
-                                         "Failed to obtain sdk host_id from hostIdEnvName.");
-                CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
-                                         "No available same-node worker is detected.");
-                pickedAddr = SelectWorkerAddr(sameHostWorkers, randomData_.get());
-            } else {
-                pickedAddr = sameHostWorkers.empty() ? SelectWorkerAddr(activeWorkerInfo_, randomData_.get())
-                                                     : SelectWorkerAddr(sameHostWorkers, randomData_.get());
-            }
-        }
-
-        if (isSameNode != nullptr) {
-            auto it = activeWorkerInfo_.find(pickedAddr);
-            *isSameNode = !hostId_.empty() && it != activeWorkerInfo_.end() && it->second == hostId_;
+            pickedAddr = other[idx - sameHost.size()];
         }
     }
 
-    // parse worker ip and port from string.
-    RETURN_IF_NOT_OK(ParseWorkerAddr(pickedAddr, workerIp, workerPort));
-
-    return Status::OK();
+    if (isSameNode != nullptr) {
+        *isSameNode = pickedSameNode;
+    }
+    return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
 }
 
 Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &workerPort)
 {
-    if (etcdStore_ == nullptr) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Init(), "Failed to connect to etcd.");
-    }
-
     CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
-    RETURN_IF_NOT_OK(this->ObtainWorkers());
-    std::string pickedAddr;
-    {
-        std::shared_lock<std::shared_timed_mutex> lock(workerHostPortMutext_);
-        if (activeWorkerInfo_.empty()) {
-            return Status(K_RUNTIME_ERROR, "No available worker available is detected.");
-        }
-
-        auto sameHostWorkers = FilterSameHostWorkers(activeWorkerInfo_, hostId_);
-        CHECK_FAIL_RETURN_STATUS(!sameHostWorkers.empty(), K_RUNTIME_ERROR,
-                                 "No available same-node worker is detected.");
-        pickedAddr = SelectWorkerAddr(sameHostWorkers, randomData_.get());
-    }
+    std::vector<std::string> sameHost;
+    std::vector<std::string> other;
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
+    std::string pickedAddr = PickRandomAddr(sameHost, randomData_.get());
+    CHECK_FAIL_RETURN_STATUS(!pickedAddr.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
     return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
+}
+
+Status ServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs)
+{
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs));
+    if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
+        // No host-affinity preference; expose every worker via `otherAddrs`.
+        otherAddrs.insert(otherAddrs.end(), std::make_move_iterator(sameHostAddrs.begin()),
+                          std::make_move_iterator(sameHostAddrs.end()));
+        sameHostAddrs.clear();
+    } else if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
+        CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+        otherAddrs.clear();
+    }
+    // PREFERRED_SAME_NODE: keep the snapshot partitioned so callers can prefer same-node entries.
+    return Status::OK();
 }
 }  // namespace datasystem

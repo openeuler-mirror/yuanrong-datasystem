@@ -1051,6 +1051,7 @@ private:
     /**
      * @brief Switch available worker when current worker lost.
      * @param[in] node Worker node index.
+     * @param[in] reason Switch trigger reason.
      * @return True if switch success.
      */
     bool SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason);
@@ -1058,13 +1059,23 @@ private:
     /**
      * @brief Switch to standby worker impl.
      * @param[in] currentApi Current client worker api.
+     * @param[in] current current worker index.
      * @param[in] next Next standby worker index.
+     * @param[in] switchGeneration Switch generation number.
+     * @param[in] reason Switch trigger reason.
      * @return True if switch success.
      */
     bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current,
                                    WorkerNode next, uint64_t switchGeneration, client::SwitchTriggerReason reason);
 
-    std::vector<HostPort> GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi) const;
+    /**
+     * @brief Get standby worker candidates for a switch attempt, partitioned by host affinity.
+     * @param[in] currentApi Current client worker api.
+     * @param[out] sameHost Candidates on the same host as the client.
+     * @param[out] others Remaining candidates.
+     */
+    void GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi,
+                                    std::vector<HostPort> &sameHost, std::vector<HostPort> &others) const;
 
     bool CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
                              const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
@@ -1073,6 +1084,21 @@ private:
     StandbySwitchAttemptResult TrySwitchToStandbyWorker(const std::shared_ptr<IClientWorkerApi> &currentApi,
                                                         WorkerNode current, WorkerNode next, uint64_t switchGeneration,
                                                         const HostPort &standbyWorker);
+
+    /**
+     * @brief Iterate a candidate list, attempting a switch to each address until one succeeds.
+     * @param[in] currentApi Current client worker api.
+     * @param[in] current current worker index.
+     * @param[in] next Next standby worker index.
+     * @param[in] switchGeneration Switch generation number.
+     * @param[in] candidates Candidate addresses to try in order.
+     * @param[in] isSameHost If true, candidates replace LOCAL_WORKER; otherwise go into a standby slot.
+     * @return SWITCHED on success, ABORT if the switch was aborted, CONTINUE if all candidates failed.
+     */
+    StandbySwitchAttemptResult TrySwitchToCandidateList(const std::shared_ptr<IClientWorkerApi> &currentApi,
+                                                        WorkerNode current, WorkerNode next,
+                                                        uint64_t switchGeneration,
+                                                        const std::vector<HostPort> &candidates, bool isSameHost);
 
     void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
 
@@ -1084,17 +1110,14 @@ private:
     bool TrySwitchBackToLocalWorker();
 
     /**
-     * @brief Rediscover local worker via ServiceDiscovery when IP changes (e.g., pod restart, rolling upgrade).
-     * @return True if local worker was successfully rediscovered and reconnected.
+     * @brief Switch the LOCAL_WORKER slot to a same-host worker at localAddress.
+     * @param[in] current current worker index.
+     * @param[in] switchGeneration Switch generation number.
+     * @param[in] localAddress Address of the same-host worker to switch to.
+     * @return SWITCHED on success, CONTINUE if prepare failed, ABORT if the switch was aborted.
      */
-    bool RediscoverLocalWorker();
-
-    /**
-     * @brief Reconnect the local worker at a new address. Cleans up old state and re-establishes SHM.
-     * @param[in] newAddress The new worker address.
-     * @return True if reconnection succeeded.
-     */
-    bool ReconnectLocalWorkerAt(const HostPort &newAddress);
+    StandbySwitchAttemptResult TrySwitchToLocalSameHost(WorkerNode current, uint64_t switchGeneration,
+                                                        const HostPort &localAddress);
 
     /**
      * @brief Check node is ready to exit or not.
@@ -1278,7 +1301,7 @@ private:
 
     Status NoSwitchableWorkerStatus() const;
 
-    bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress);
+    bool GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress, HeartbeatType &heartbeatType);
 
     Status PreparePreferredLocalWorker(const HostPort &localAddress, HeartbeatType heartbeatType,
                                        std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
@@ -1388,7 +1411,7 @@ private:
     std::unique_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
-    std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
+    mutable std::mutex switchNodeMutex_;  // Protecting the process of switching workers.
     WorkerSwitchState workerSwitchState_{ WorkerSwitchState::AVAILABLE };
     bool switchInProgress_{ false };
     uint64_t switchGeneration_{ 0 };

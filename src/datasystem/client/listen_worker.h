@@ -165,13 +165,9 @@ public:
     void SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &)> callback);
 
     /**
-     * @brief Set the rediscover local worker handle for IP change scenarios.
-     * @param[in] callback Returns true if local worker was successfully rediscovered and reconnected.
-     */
-    void SetRediscoverHandle(std::function<bool()> callback);
-
-    /**
-     * @brief Set the preferred local worker recovery handle.
+     * @brief Set the local worker recovery handle. Used from non-local listeners to
+     *        re-acquire a same-node worker (including after the original local worker
+     *        came back at a different address).
      * @param[in] callback Returns true if the client switched back to a same-node worker.
      */
     void SetRecoverLocalWorkerHandle(std::function<bool()> callback);
@@ -233,11 +229,6 @@ private:
      * @brief Try switch back to local worker.
      */
     void TrySwitchBackToLocalWorker();
-
-    /**
-     * @brief Try rediscover local worker via ServiceDiscovery when heartbeat fails and already switched.
-     */
-    void TryRediscoverLocalWorker();
 
     /**
      * @brief Try recover to a same-node worker while the remote fallback is healthy.
@@ -322,7 +313,6 @@ private:
 
     std::atomic<bool> isWorkerVoluntaryScaleDown_{ false };
     FdReleaseHelper fdReleaseHelper_;
-    std::function<bool()> rediscoverHandle_;
     std::function<bool()> recoverLocalWorkerHandle_;
     std::atomic<int64_t> lastLocalRecoveryAttemptMs_{ 0 };
     std::function<void()> workerTimeoutHandle_;
