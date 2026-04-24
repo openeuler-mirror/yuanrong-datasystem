@@ -91,13 +91,17 @@ class Deployer:
                                   capture_output=True, text=True, timeout=timeout)
         elif transport == 'kubectl':
             ns = self._namespace(node)
+            kubectl_cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', cmd]
+            print(f'  $ {" ".join(kubectl_cmd)}')
             return subprocess.run(
-                ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', cmd],
+                kubectl_cmd,
                 check=check, capture_output=True, text=True, timeout=timeout)
         else:
             user = self._user_for(node)
+            ssh_cmd = self._build_ssh_cmd(node) + [f'{user}@{target}', cmd]
+            print(f'  $ {" ".join(ssh_cmd)}')
             return subprocess.run(
-                self._build_ssh_cmd(node) + [f'{user}@{target}', cmd],
+                ssh_cmd,
                 check=check, capture_output=True, text=True, timeout=timeout)
 
     def scp_to(self, node, src, dst):
