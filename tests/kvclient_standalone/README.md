@@ -122,6 +122,7 @@ python3 deploy.py --deploy config/deploy.json config/config.json
 | `-n` / `--namespace` | k8s 命名空间（默认 default） |
 | `-w` / `--writer-count` | Writer 数量（默认 1），前 N 个 Pod 为 writer，其余为 reader |
 | `-e` / `--etcd-address` | 覆盖 config 中的 etcd_address |
+| `-c` / `--cluster-name` | 设置 config 中的 cluster_name |
 | `--remote-sdk-dir` | 容器内 SDK 路径（跳过从本机拷贝） |
 
 ## 典型场景

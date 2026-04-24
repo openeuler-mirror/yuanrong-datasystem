@@ -53,6 +53,8 @@ def main():
     parser.add_argument('-e', '--etcd-address',
                         help='Override etcd_address in generated config.json '
                              '(e.g. "10.0.0.5:2379")')
+    parser.add_argument('-c', '--cluster-name',
+                        help='Set cluster_name in generated config.json')
     parser.add_argument('--remote-sdk-dir',
                         help='SDK lib path inside containers (skip copying SDK '
                              'from master if set, e.g. "/usr/local/datasystem/lib")')
@@ -110,14 +112,20 @@ def main():
     dst = os.path.join(args.output_dir, 'config.json')
     if os.path.exists(src):
         shutil.copy2(src, dst)
+        overrides = {}
         if args.etcd_address:
+            overrides['etcd_address'] = args.etcd_address
+        if args.cluster_name:
+            overrides['cluster_name'] = args.cluster_name
+        if overrides:
             with open(dst) as f:
                 cfg = json.load(f)
-            cfg['etcd_address'] = args.etcd_address
+            cfg.update(overrides)
             with open(dst, 'w') as f:
                 json.dump(cfg, f, indent=2)
                 f.write('\n')
-            print(f'  etcd_address set to {args.etcd_address}')
+            for k, v in overrides.items():
+                print(f'  {k} set to {v}')
         print(f'Copied {src} -> {dst}')
     else:
         print(f'WARNING: {src} not found, skipping config.json')

@@ -45,6 +45,12 @@ void HttpServer::Start() {
         running_ = false;
     });
 
+    server_->Post("/summary", [this](const httplib::Request &, httplib::Response &res) {
+        metrics_.WriteSummary();
+        res.status = 200;
+        res.set_content("ok", "text/plain");
+    });
+
     serverThread_ = std::thread([this]() {
         SLOG_INFO("HTTP server listening on port " << cfg_.listenPort);
         if (!server_->listen("0.0.0.0", cfg_.listenPort)) {

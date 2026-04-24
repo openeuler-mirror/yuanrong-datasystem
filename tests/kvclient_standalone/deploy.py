@@ -150,58 +150,66 @@ class Deployer:
                 check=True, timeout=120)
 
     def collect_files(self, node, local_dir):
-        """Collect output files from node via tar."""
-        iid = node['instance_id']
-        tar_remote = f'/tmp/collect_{iid}.tar.gz'
-        tar_local = f'/tmp/collect_{iid}.tar.gz'
+        """Collect output files from node."""
         transport = self._transport(node)
         target = self._exec_target(node)
 
         os.makedirs(local_dir, exist_ok=True)
 
-        # Clean stale tar from previous runs, then pack
-        self.run_on(node, f'rm -f {tar_remote}', check=False)
-        self.run_on(
-            node,
-            f'cd {self.remote_work_dir} && '
-            f'{{ ls *.csv *.txt *.log 2>/dev/null && '
-            f'tar czf {tar_remote} *.csv *.txt *.log; }} || true',
+        # List collectible files on remote
+        ls = self.run_on(node,
+            f'ls {self.remote_work_dir}/*.csv '
+            f'{self.remote_work_dir}/*.txt '
+            f'{self.remote_work_dir}/*.log 2>/dev/null',
             check=False)
-
-        # Check if tar was created on remote
-        check = self.run_on(
-            node, f'test -f {tar_remote}', check=False)
-        if check.returncode != 0:
+        files = [f.strip() for f in (ls.stdout or '').splitlines() if f.strip()]
+        if not files:
             print(f'  {target} -> no output files')
             return
 
-        # Pull to local
-        try:
-            if transport == 'localhost':
-                tar_local = tar_remote
-            elif transport == 'kubectl':
-                ns = self._namespace(node)
-                subprocess.run(
-                    ['kubectl', 'cp', f'{ns}/{target}:{tar_remote}', tar_local],
-                    check=True, timeout=120)
-            else:
-                user = self._user_for(node)
-                subprocess.run(
-                    self._build_scp_cmd(node) +
-                    [f'{user}@{target}:{tar_remote}', tar_local],
-                    check=True, timeout=120)
+        print(f'  {target} -> {len(files)} files')
 
-            # Verify local file was actually created
-            if not os.path.isfile(tar_local):
-                print(f'  {target} -> kubectl cp returned 0 but no local file')
-                return
-
-            with tarfile.open(tar_local, 'r:gz') as tar:
-                tar.extractall(path=local_dir, filter='data')
-        finally:
-            if transport != 'localhost' and os.path.exists(tar_local):
-                os.unlink(tar_local)
+        if transport == 'kubectl':
+            # kubectl cp requires tar inside container; use cat instead
+            ns = self._namespace(node)
+            for remote_path in files:
+                fname = os.path.basename(remote_path)
+                local_path = os.path.join(local_dir, fname)
+                cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'cat', remote_path]
+                try:
+                    with open(local_path, 'wb') as f:
+                        subprocess.run(cmd, stdout=f, check=True, timeout=30)
+                except Exception as e:
+                    print(f'    {fname} -> FAILED: {e}')
+        elif transport == 'localhost':
+            for remote_path in files:
+                fname = os.path.basename(remote_path)
+                local_path = os.path.join(local_dir, fname)
+                shutil.copy2(remote_path, local_path)
+        else:
+            # SSH: tar + scp
+            iid = node['instance_id']
+            tar_remote = f'/tmp/collect_{iid}.tar.gz'
+            tar_local = f'/tmp/collect_{iid}.tar.gz'
             self.run_on(node, f'rm -f {tar_remote}', check=False)
+            self.run_on(node,
+                f'cd {self.remote_work_dir} && '
+                f'tar czf {tar_remote} *.csv *.txt *.log 2>/dev/null',
+                check=False)
+            check = self.run_on(node, f'test -f {tar_remote}', check=False)
+            if check.returncode == 0:
+                try:
+                    user = self._user_for(node)
+                    subprocess.run(
+                        self._build_scp_cmd(node) +
+                        [f'{user}@{target}:{tar_remote}', tar_local],
+                        check=True, timeout=120)
+                    with tarfile.open(tar_local, 'r:gz') as tar:
+                        tar.extractall(path=local_dir, filter='data')
+                finally:
+                    if os.path.exists(tar_local):
+                        os.unlink(tar_local)
+                    self.run_on(node, f'rm -f {tar_remote}', check=False)
 
     # --- Config generation ---
 
@@ -377,48 +385,36 @@ class Deployer:
 
         print(f'Stopping {len(self.nodes)} instances...')
 
-        def stop_one(node):
-            transport = self._transport(node)
+        def http_stop(node):
+            """Try HTTP POST /stop via curl, wget, then python3."""
             port = node.get('port', self.listen_port)
+            url = f'http://localhost:{port}/stop'
+            # Try curl first (most common in containers)
+            r = self.run_on(node, f'curl -sf -X POST {url} --max-time 3', check=False, timeout=5)
+            if r.returncode == 0:
+                return True
+            # Try wget
+            r = self.run_on(node, f'wget -qO- --post-data="" --timeout=3 {url}', check=False, timeout=5)
+            if r.returncode == 0:
+                return True
+            # Try python3
+            r = self.run_on(node,
+                f'python3 -c "'
+                f'from urllib.request import urlopen,Request;'
+                f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
+                f'urlopen(r,timeout=3);print(\'ok\')"',
+                check=False, timeout=5)
+            if r.returncode == 0 and 'ok' in (r.stdout or ''):
+                return True
+            return False
+
+        def stop_one(node):
             target = self._exec_target(node)
+            if http_stop(node):
+                return (target, True)
+            return (target, False)
 
-            if transport == 'kubectl':
-                # Hit /stop from inside the pod via kubectl exec
-                result = self.run_on(node,
-                    f'python3 -c "'
-                    f'from urllib.request import urlopen,Request;'
-                    f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
-                    f'urlopen(r,timeout=3);print(\'ok\')"',
-                    check=False)
-                if result.returncode == 0 and 'ok' in (result.stdout or ''):
-                    return (target, True)
-                err = (result.stderr or result.stdout or '').strip()
-                return (target, err or 'failed')
-            else:
-                host = self._comm_host(node)
-                url = f'http://{host}:{port}'
-                try:
-                    result = self.run_on(node,
-                        f'python3 -c "'
-                        f'from urllib.request import urlopen,Request;'
-                        f'r=Request(\'http://localhost:{port}/stop\',data=b\'\',method=\'POST\');'
-                        f'urlopen(r,timeout=5);print(\'ok\')"',
-                        check=False, timeout=10)
-                    if result.returncode == 0 and 'ok' in (result.stdout or ''):
-                        return (target, True)
-                    err = (result.stderr or result.stdout or '').strip()
-                    # Extract just the error type for concise output
-                    for line in err.splitlines():
-                        if 'Error:' in line or 'error:' in line:
-                            err = line.split('Error:')[-1].strip()
-                            err = f'Error: {err}' if err else 'connection failed'
-                            break
-                    else:
-                        err = 'connection failed'
-                    return (target, err or 'failed')
-                except Exception as e:
-                    return (target, str(e))
-
+        # Phase 1: graceful HTTP stop
         ok = 0
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
             futures = [pool.submit(stop_one, n) for n in self.nodes]
@@ -428,22 +424,52 @@ class Deployer:
                     ok += 1
                     print(f'  {target} -> OK (graceful)')
                 else:
-                    print(f'  {target} -> HTTP stop failed ({result}), force killing...')
+                    print(f'  {target} -> HTTP stop failed')
 
-        # Force kill any remaining kvclient + procmon processes
-        print('Force killing remaining processes...')
+        # Phase 2: wait for graceful shutdown (summary file generation, etc.)
+        print('Waiting 5s for graceful shutdown...')
+        time.sleep(5)
+
+        # Phase 3: SIGTERM remaining processes
+        def kill_remaining(node, sig=''):
+            return self.run_on(
+                node,
+                f"for p in $(pgrep -f kvclient_standalone_test 2>/dev/null); do "
+                f"kill {sig} $p 2>/dev/null; done; "
+                f"for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                f"kill {sig} $p 2>/dev/null; done",
+                check=False, timeout=10)
+
+        def check_alive(node):
+            r = self.run_on(node,
+                'pgrep -f kvclient_standalone_test 2>/dev/null',
+                check=False)
+            return r.returncode == 0
+
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
-            kill_futures = [pool.submit(
-                lambda n: self.run_on(
-                    n,
-                    f'pkill -f kvclient_standalone_test 2>/dev/null; '
-                    f'pkill -f procmon.py 2>/dev/null',
-                    check=False, timeout=10),
-                n) for n in self.nodes]
+            kill_futures = [pool.submit(kill_remaining, n) for n in self.nodes]
             for f in as_completed(kill_futures):
                 pass
 
-        print(f'Stop result: {ok}/{len(self.nodes)} graceful, rest force killed')
+        time.sleep(2)
+
+        # Phase 4: SIGKILL only nodes still alive
+        alive = []
+        with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+            check_futures = {pool.submit(check_alive, n): n for n in self.nodes}
+            for f in as_completed(check_futures):
+                if f.result():
+                    alive.append(check_futures[f])
+
+        if alive:
+            print(f'Force killing {len(alive)} remaining processes...')
+            with ThreadPoolExecutor(max_workers=len(alive)) as pool:
+                kill9_futures = [pool.submit(kill_remaining, n, '-9') for n in alive]
+                for f in as_completed(kill9_futures):
+                    pass
+
+        print(f'Stop result: {ok}/{len(self.nodes)} graceful, '
+              f'{len(alive)} force killed')
 
     def do_clean(self):
         results = []
@@ -499,6 +525,21 @@ class Deployer:
         collect_dir = 'collected'
         results = []
 
+        # Phase 1: trigger summary generation on running instances
+        print('Triggering summary generation...')
+        def trigger_summary(node):
+            port = node.get('port', self.listen_port)
+            url = f'http://localhost:{port}/summary'
+            self.run_on(node, f'curl -sf -X POST {url} --max-time 3', check=False, timeout=5)
+
+        with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+            futures = [pool.submit(trigger_summary, n) for n in self.nodes]
+            for f in as_completed(futures):
+                pass
+
+        time.sleep(1)
+
+        # Phase 2: collect files
         def collect_node(node):
             instance_id = node['instance_id']
             target = self._exec_target(node)

@@ -38,11 +38,11 @@ public:
     void Stop();
 
     std::string GetStatsJson();
+    void WriteSummary();
 
 private:
     OpMetrics& GetOrCreateOp(const std::string &op);
     void FlushWindow();
-    void WriteSummary();
 
     int instanceId_;
     int intervalMs_;
