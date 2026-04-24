@@ -246,9 +246,7 @@ class Deployer:
 
     def _get_host_lock(self, node):
         key = self._host_key(node)
-        if key not in self._host_locks:
-            self._host_locks[key] = threading.Lock()
-        return self._host_locks[key]
+        return self._host_locks.setdefault(key, threading.Lock())
 
     def deploy_node(self, node):
         target = self._exec_target(node)
@@ -322,7 +320,7 @@ class Deployer:
             # Step 8: Verify process started
             time.sleep(1)
             verify = self.run_on(
-                node, f'pgrep -f "kvclient_standalone_test config_{instance_id}"',
+                node, f'pgrep -f "kvclient_standalone_test config_{instance_id}\\.json"',
                 check=False)
             if verify.returncode == 0 and verify.stdout.strip():
                 pid = verify.stdout.strip().split('\n')[0]
