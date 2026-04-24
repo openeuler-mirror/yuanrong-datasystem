@@ -156,7 +156,11 @@ void MigrateDataHandler::CollectObjectForMigration(const std::string &objectKey,
     }
 
     ObjectKV objectKV(objectKey, *entry);
-    AddObjectDataLocked(objectKV);
+    rc = AddObjectDataLocked(objectKV);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[Migrate Data] Skip adding object %s into migrate batch, error: %s", objectKey,
+                                     rc.ToString());
+    }
     entry->RUnlock();
 }
 
@@ -230,8 +234,13 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
 {
     const auto &objectKey = objectKV.GetObjKey();
     const auto &entry = objectKV.GetObjEntry();
-    std::unique_ptr<BaseDataUnit> data_;
-    if (entry->IsSpilled() && entry->GetShmUnit() == nullptr) {
+    if (entry->stateInfo.IsCacheInvalid() || entry->IsInvalid()) {
+        (void)skipIds_.emplace(objectKey);
+        return Status::OK();
+    }
+
+    auto shmUnit = entry->GetShmUnit();
+    if (entry->IsSpilled() && shmUnit == nullptr) {
         std::vector<RpcMessage> data;
         Status rc = WorkerOcSpill::Instance()->Get(objectKey, data, entry->GetDataSize());
         if (rc.IsOk()) {
@@ -242,7 +251,12 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
             return rc;
         }
     } else {
-        datas_.emplace_back(std::make_unique<ShmData>(objectKey, entry->GetCreateTime(), entry->GetShmUnit(),
+        if (shmUnit == nullptr) {
+            (void)failedIds_.emplace(objectKey);
+            RETURN_STATUS_LOG_ERROR(K_NOT_FOUND,
+                                    FormatString("[Migrate Data] Object %s has no shm unit when migrating", objectKey));
+        }
+        datas_.emplace_back(std::make_unique<ShmData>(objectKey, entry->GetCreateTime(), std::move(shmUnit),
                                                       entry->GetDataSize(), entry->GetMetadataSize(),
                                                       entry->modeInfo.GetCacheType()));
     }

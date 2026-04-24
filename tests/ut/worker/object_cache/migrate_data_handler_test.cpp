@@ -476,6 +476,101 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSpilledObjects)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
+TEST_F(MigrateDataHandlerTest, TestSkipCacheInvalidOrLifeInvalidObjectsBeforeSend)
+{
+    LOG(INFO) << "Test sender skips cache-invalid or invalid-life objects before send.";
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(1)
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+
+    constexpr uint64_t size = 100;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("sender_state_skip_", size, 2, objectKeys);
+
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[0], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->stateInfo.SetCacheInvalid(true);
+        entry->WUnlock();
+    }
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[1], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->SetLifeState(ObjectLifeState::OBJECT_INVALID);
+        entry->WUnlock();
+    }
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_TRUE(result.successIds.empty());
+    ASSERT_EQ(result.skipIds.size(), 2);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerTest, TestFailWhenNonSpilledObjectLosesShmBeforeSend)
+{
+    LOG(INFO) << "Test sender marks non-spilled object failed if shm is lost before send.";
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+
+    constexpr uint64_t size = 100;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("sender_state_fail_", size, 2, objectKeys);
+
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[1], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->SetShmUnit(nullptr);
+        entry->WUnlock();
+    }
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.successIds.size(), 1);
+    ASSERT_TRUE(result.skipIds.empty());
+    ASSERT_EQ(result.failedIds.size(), 1);
+    ASSERT_TRUE(result.failedIds.count(objectKeys[1]) > 0);
+}
+
+TEST_F(MigrateDataHandlerTest, TestFailWhenSpilledObjectHasNoShmAndNoSpillPayload)
+{
+    LOG(INFO) << "Test sender marks spilled object failed if both shm and spill payload are missing.";
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(1)
+        .WillRepeatedly(Invoke(this, &MigrateDataHandlerTest::MockMigrateSmallData1));
+
+    constexpr uint64_t size = 1024ul * 1024ul;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("sender_spill_missing_", size, 1, objectKeys);
+    SpillObject(objectKeys);
+    DS_ASSERT_OK(WorkerOcSpill::Instance()->Delete(objectKeys[0]));
+
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[0], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->SetShmUnit(nullptr);
+        entry->WUnlock();
+    }
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_TRUE(result.successIds.empty());
+    ASSERT_TRUE(result.skipIds.empty());
+    ASSERT_EQ(result.failedIds.size(), 1);
+    ASSERT_TRUE(result.failedIds.count(objectKeys[0]) > 0);
+}
+
 TEST_F(MigrateDataHandlerTest, TestMigrateBigObjectsWithLimitedRate)
 {
     LOG(INFO) << "Test migrate objects with limited rate.";
