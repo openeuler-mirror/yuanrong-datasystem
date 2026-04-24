@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -473,13 +474,53 @@ class Deployer:
         total = len(results)
         print(f'\nCollect result: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
 
+    def do_run(self, duration):
+        """Wait duration then auto stop + collect."""
+        def fmt_duration(secs):
+            if secs >= 3600:
+                return f'{secs // 3600}h {secs % 3600 // 60}m {secs % 60}s'
+            if secs >= 60:
+                return f'{secs // 60}m {secs % 60}s'
+            return f'{secs}s'
+
+        print(f'\nRunning for {fmt_duration(duration)}, auto stop + collect after...')
+        start = time.time()
+        try:
+            remaining = duration
+            while remaining > 0:
+                time.sleep(min(remaining, 60))
+                elapsed = int(time.time() - start)
+                remaining = duration - elapsed
+                if remaining > 0:
+                    print(f'  [{elapsed}/{duration}s elapsed, {remaining}s remaining]')
+        except KeyboardInterrupt:
+            elapsed = int(time.time() - start)
+            print(f'\n  Interrupted after {elapsed}s, stopping early...')
+
+        elapsed = int(time.time() - start)
+        print(f'\n--- Run finished ({elapsed}s elapsed) ---')
+        self.do_stop()
+        self.do_collect()
+
+
+def parse_duration(s):
+    """Parse '30s', '5m', '2h', or bare number -> seconds."""
+    s = str(s).strip()
+    if s.endswith('h'):
+        return int(s[:-1]) * 3600
+    if s.endswith('m'):
+        return int(s[:-1]) * 60
+    if s.endswith('s'):
+        return int(s[:-1])
+    return int(s)
+
 
 def main():
     if len(sys.argv) < 3:
         print('Usage: deploy.py --deploy|--stop|--collect|--clean <deploy.json> '
               '[config_template.json]')
         print()
-        print('  --deploy   Deploy binary + SDK libs + config to all nodes and start')
+        print('  --deploy   Deploy + start. If duration set in deploy.json, auto stop+collect')
         print('  --stop     Stop all instances via HTTP /stop')
         print('  --collect  Collect output files from all nodes to collected/')
         print('  --clean    Kill processes and remove remote work dirs')
@@ -498,6 +539,9 @@ def main():
 
     if action == '--deploy':
         deployer.do_deploy()
+        duration = parse_duration(deployer.deploy.get('duration', '0'))
+        if duration > 0:
+            deployer.do_run(duration)
     elif action == '--stop':
         deployer.do_stop()
     elif action == '--collect':

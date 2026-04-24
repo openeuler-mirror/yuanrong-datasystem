@@ -11,7 +11,7 @@ using namespace datasystem;
 
 KVWorker::KVWorker(const Config &cfg, std::shared_ptr<KVClient> client,
                    MetricsCollector &metrics)
-    : cfg_(cfg), client_(client), metrics_(metrics), notifyPool_(4) {
+    : cfg_(cfg), client_(client), metrics_(metrics), notifyPool_(100) {
     for (auto &name : cfg_.pipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {

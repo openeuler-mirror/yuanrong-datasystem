@@ -56,6 +56,9 @@ def main():
     parser.add_argument('--remote-sdk-dir',
                         help='SDK lib path inside containers (skip copying SDK '
                              'from master if set, e.g. "/usr/local/datasystem/lib")')
+    parser.add_argument('-w', '--writer-count', type=int, default=1,
+                        help='Number of writer instances (default: 1). '
+                             'First N pods become writers, rest become readers.')
     args = parser.parse_args()
 
     pods = get_pods(args.namespace, args.prefix)
@@ -64,14 +67,24 @@ def main():
               f'in namespace "{args.namespace}"')
         sys.exit(1)
 
+    if args.writer_count < 0 or args.writer_count > len(pods):
+        print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}',
+              file=sys.stderr)
+        sys.exit(1)
+
     nodes = []
     for i, pod in enumerate(pods):
-        nodes.append({
+        is_writer = i < args.writer_count
+        node = {
             'pod_name': pod['name'],
             'pod_ip': pod['ip'],
             'namespace': args.namespace,
             'instance_id': i,
-        })
+            'role': 'writer' if is_writer else 'reader',
+            'pipeline': ['setStringView'] if is_writer else [],
+            'notify_pipeline': ['getBuffer'],
+        }
+        nodes.append(node)
 
     deploy = {
         'remote_work_dir': args.remote_work_dir,
@@ -110,7 +123,8 @@ def main():
         print(f'WARNING: {src} not found, skipping config.json')
 
     for node in nodes:
-        print(f'  {node["pod_name"]} -> {node["pod_ip"]} (instance_id={node["instance_id"]})')
+        print(f'  {node["pod_name"]} -> {node["pod_ip"]} '
+              f'(instance_id={node["instance_id"]}, role={node["role"]})')
 
 
 if __name__ == '__main__':
