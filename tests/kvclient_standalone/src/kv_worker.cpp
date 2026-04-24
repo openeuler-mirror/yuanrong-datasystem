@@ -115,6 +115,7 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
                      + std::to_string(cfg_.instanceId) + ",\"size\":"
                      + std::to_string(size) + "}";
 
+    std::vector<std::future<void>> futures;
     for (int i = 0; i < count; i++) {
         std::string hostPort = candidates[i];
         if (hostPort.substr(0, 7) == "http://") hostPort = hostPort.substr(7);
@@ -131,11 +132,17 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
             continue;
         }
 
-        try {
-            httplib::Client cli(host, port);
-            cli.set_connection_timeout(2);
-            cli.set_read_timeout(2);
-            cli.Post("/notify", body, "application/json");
-        } catch (...) {}
+        futures.push_back(std::async(std::launch::async,
+            [host, port, body]() {
+                try {
+                    httplib::Client cli(host, port);
+                    cli.set_connection_timeout(2);
+                    cli.set_read_timeout(2);
+                    cli.Post("/notify", body, "application/json");
+                } catch (...) {}
+            }));
+    }
+    for (auto &f : futures) {
+        f.get();
     }
 }

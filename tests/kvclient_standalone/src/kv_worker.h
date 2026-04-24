@@ -5,6 +5,7 @@
 #include "pipeline.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
+#include <future>
 #include <memory>
 #include <string>
 #include <unordered_map>
