@@ -31,16 +31,15 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     }, latencyMs);
     if (!ok || !optBuf) return false;
 
-    // Verify size
+    // Verify size and content after measurement
     int64_t bufSize = optBuf->GetSize();
     if (static_cast<uint64_t>(bufSize) != ctx.size) {
         SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
                   << " expected=" << ctx.size << " got=" << bufSize);
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
-        return true; // op succeeded, but verify failed
+        return true;
     }
 
-    // Verify content via memcmp (avoids allocating a second string)
     std::string expected = GeneratePatternData(ctx.size, ctx.senderId);
     const char *bufData = static_cast<const char *>(optBuf->ImmutableData());
     if (memcmp(bufData, expected.data(), bufSize) != 0) {
