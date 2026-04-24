@@ -1139,7 +1139,8 @@ Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
     std::shared_ptr<ClientInfo> clientInfo;
     clientInfo = ClientManager::Instance().GetClientInfo(clientId);
     if (clientInfo == nullptr) {
-        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "invalid client id");
+        LOG(INFO) << FormatString("client id: %s not exist", clientId);
+        return Status::OK();
     }
     // Release the queue lock form client.
     uint32_t lockId;
@@ -1465,7 +1466,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     bool exist;
     auto clientId = ClientKey::Intern(req.client_id());
     std::string authTenantId = worker::ClientManager::Instance().GetAuthTenantIdByClientId(clientId, exist);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(exist, K_INVALID, FormatString("Client %s not found", req.client_id()));
+    CHECK_FAIL_RETURN_STATUS(exist, K_INVALID, FormatString("Client %s not found", req.client_id()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     ReadLock noRecon;
