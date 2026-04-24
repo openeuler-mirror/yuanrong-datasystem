@@ -110,7 +110,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
             LOG(WARNING) << "Failed to parse keep alive value for worker " << kv.first << ": " << rc.ToString();
             continue;
         }
-        if (value.state != "ready") {
+        if (value.state != ETCD_NODE_READY) {
             continue;
         }
         VLOG(1) << "Worker " << kv.first << " is ready with hostId: " << value.hostId;

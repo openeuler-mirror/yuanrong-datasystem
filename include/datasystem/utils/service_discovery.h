@@ -116,6 +116,18 @@ public:
         return affinityPolicy_;
     }
 
+    /**
+     * @brief Whether host locality is actually active: the configured policy exercises
+     *        host affinity (PREFERRED_SAME_NODE or REQUIRED_SAME_NODE) AND hostId has
+     *        been resolved. Under RANDOM, or when hostId is missing, this is false and
+     *        same-node operations cannot be used.
+     * @return True when the client can meaningfully select same-node workers.
+     */
+    bool HasHostAffinity() const
+    {
+        return affinityPolicy_ != ServiceAffinityPolicy::RANDOM && !hostId_.empty();
+    }
+
 private:
     /**
      * @brief Fetch ready worker addresses from etcd and partition by host affinity. When hostId_
