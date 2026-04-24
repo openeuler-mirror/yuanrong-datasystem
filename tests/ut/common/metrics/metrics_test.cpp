@@ -128,8 +128,8 @@ TEST_F(MetricsTest, scoped_timer_test)
     metrics::GetHistogram(HISTOGRAM_ID).Observe(1);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find("\"name\":\"test_histogram\""), std::string::npos);
-    InitMetrics();
     { metrics::ScopedTimer timer(HISTOGRAM_ID); }
+    summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find("\"count\":1"), std::string::npos);
 }
 
