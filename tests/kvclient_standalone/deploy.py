@@ -426,19 +426,24 @@ class Deployer:
                 target, result = future.result()
                 if result is True:
                     ok += 1
-                    print(f'  {target} -> OK')
+                    print(f'  {target} -> OK (graceful)')
                 else:
-                    print(f'  {target} -> ERROR ({result})')
+                    print(f'  {target} -> HTTP stop failed ({result}), force killing...')
 
-        print(f'Stop result: {ok}/{len(self.nodes)} succeeded')
+        # Force kill any remaining kvclient + procmon processes
+        print('Force killing remaining processes...')
+        with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
+            kill_futures = [pool.submit(
+                lambda n: self.run_on(
+                    n,
+                    f'pkill -f kvclient_standalone_test 2>/dev/null; '
+                    f'pkill -f procmon.py 2>/dev/null',
+                    check=False, timeout=10),
+                n) for n in self.nodes]
+            for f in as_completed(kill_futures):
+                pass
 
-        # Stop procmon on all nodes in parallel
-        if self.enable_procmon:
-            with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
-                for f in as_completed(
-                    [pool.submit(self.run_on, n, 'pkill -f procmon.py')
-                     for n in self.nodes]):
-                    pass
+        print(f'Stop result: {ok}/{len(self.nodes)} graceful, rest force killed')
 
     def do_clean(self):
         results = []
@@ -447,14 +452,25 @@ class Deployer:
             target = self._exec_target(node)
             print(f'Cleaning {target}...')
             try:
+                # Kill processes multiple ways for container compatibility
                 self.run_on(
                     node,
-                    f'pkill -f procmon.py; pkill -f kvclient_standalone_test; '
-                    f'sleep 1; pkill -9 -f procmon.py 2>/dev/null; '
+                    f'pkill -f procmon.py 2>/dev/null; '
+                    f'pkill -f kvclient_standalone_test 2>/dev/null; '
+                    f'sleep 1; '
+                    f'pkill -9 -f procmon.py 2>/dev/null; '
                     f'pkill -9 -f kvclient_standalone_test 2>/dev/null; '
                     f'sleep 1; rm -rf {self.remote_work_dir}',
                     check=False, timeout=30)
-                print(f'  {target} -> OK')
+
+                # Verify cleanup
+                verify = self.run_on(
+                    node, f'ls {self.remote_work_dir} 2>/dev/null',
+                    check=False)
+                if verify.returncode == 0:
+                    print(f'  {target} -> WARNING: dir still exists after clean')
+                else:
+                    print(f'  {target} -> OK')
                 return True
             except Exception as e:
                 print(f'  {target} -> FAILED ({e})')
