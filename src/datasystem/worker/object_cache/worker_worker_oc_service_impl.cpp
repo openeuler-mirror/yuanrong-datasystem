@@ -19,6 +19,8 @@
  */
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <thread>
 #include <type_traits>
@@ -39,6 +41,7 @@
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -68,9 +71,49 @@ inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &re
 }
 namespace object_cache {
 namespace {
+constexpr int64_t MIN_TCP_PAYLOAD_SEND_MS = 2;
+constexpr long double TWENTY_GE_BYTES_PER_SECOND = 20.0L * 1000.0L * 1000.0L * 1000.0L / 8.0L;
+
 void MovePayload(std::vector<RpcMessage> &src, std::vector<RpcMessage> &dst)
 {
     dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
+}
+
+int64_t EstimateSendMsBy20GE(uint64_t dataSize)
+{
+    if (dataSize == 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(
+        std::ceil(static_cast<long double>(dataSize) * SECS_TO_MS / TWENTY_GE_BYTES_PER_SECOND));
+}
+
+Status CheckTcpPayloadRiskAllowed(const std::string &objectKey, uint64_t dataSize)
+{
+    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    INJECT_POINT("worker.GetObjectRemoteImpl.TcpPayloadRemainingTimeMs", [&remainingTimeMs](int64_t injectedMs) {
+        remainingTimeMs = injectedMs;
+        return Status::OK();
+    });
+
+    const int64_t requiredMs = std::max(MIN_TCP_PAYLOAD_SEND_MS, EstimateSendMsBy20GE(dataSize));
+    if (remainingTimeMs <= requiredMs) {
+        RETURN_STATUS_LOG_ERROR(
+            K_RPC_DEADLINE_EXCEEDED,
+            FormatString("Reject remote get TCP payload, reason=near_deadline, objectKey=%s, dataSize=%zu, "
+                         "remainingTimeMs=%ld, requiredMs=%ld",
+                         objectKey, static_cast<size_t>(dataSize), remainingTimeMs, requiredMs));
+    }
+
+    int64_t circuitRemainingMs = 0;
+    if (ShmGuard::IsSlowFreeCircuitOpen(circuitRemainingMs)) {
+        RETURN_STATUS_LOG_ERROR(
+            K_RPC_UNAVAILABLE,
+            FormatString("Reject remote get TCP payload, reason=shm_guard_slow_free_circuit_open, objectKey=%s, "
+                         "dataSize=%zu, rejectLeftMs=%ld",
+                         objectKey, static_cast<size_t>(dataSize), circuitRemainingMs));
+    }
+    return Status::OK();
 }
 }  // namespace
 
@@ -525,7 +568,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         }
 
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
-        if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
+        const bool needTcpPayload =
+            ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty()));
+        const bool isFastTransportFallbackToTcp = needTcpPayload && isFastTransportEnabled;
+        if (needTcpPayload) {
+            if (isFastTransportFallbackToTcp) {
+                RETURN_IF_NOT_OK(CheckTcpPayloadRiskAllowed(objectKey, objKv.GetReadSize()));
+                shmGuard.EnableSlowFreeObserve();
+            }
             RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
         }
     }
