@@ -344,7 +344,6 @@ class Deployer:
                     f"cd {self.remote_work_dir} && "
                     f"nohup python3 procmon.py -p kvclient_standalone_test -i 2"
                     f" > procmon_{instance_id}.log 2>&1 </dev/null &")
-                    f" </dev/null >/dev/null 2>&1 &")
                 self.run_on(node, procmon_cmd)
 
             print(f'  {target} -> OK')
