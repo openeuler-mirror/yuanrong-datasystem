@@ -21,8 +21,6 @@
 #ifndef DATASYSTEM_COMMON_OBJECT_CACHE_SHM_GUARD_H
 #define DATASYSTEM_COMMON_OBJECT_CACHE_SHM_GUARD_H
 
-#include <atomic>
-#include <cstdint>
 #include <memory>
 
 #include "datasystem/common/object_cache/lock.h"
@@ -34,7 +32,6 @@ namespace datasystem {
 class ShmGuard {
 public:
     ShmGuard(std::shared_ptr<ShmUnit> shmUnit, size_t dataSize, size_t metaSize);
-    void EnableSlowFreeObserve();
 
     /**
      * @brief Try to acquire read lock.
@@ -60,30 +57,16 @@ public:
      */
     static void Free(void *data, void *hint);
 
-    /**
-     * @brief Check whether zero-copy TCP payload should be rejected because recent ShmGuard release is slow.
-     * @param[out] remainingMs The remaining reject duration in milliseconds.
-     * @return true if the circuit breaker is open.
-     */
-    static bool IsSlowFreeCircuitOpen(int64_t &remainingMs);
-
 private:
     struct Impl {
         explicit Impl(std::shared_ptr<ShmUnit> shm);
         ~Impl();
-        bool IsLastFrameOnRelease();
-        // Keep the shared-memory allocation alive while any payload frame is still in flight.
+        // Protect share memory not be free.
         std::shared_ptr<ShmUnit> shmUnit;
-        // Protect the shared-memory payload from concurrent modification while it is exposed to RPC.
+        // Protect share memory not be modified
         std::shared_ptr<object_cache::ShmLock> lock;
-        // Thread id that acquired the read lock.
+        // The thread id that locks the share memory.
         std::thread::id tid;
-        // Start timestamp in ms for the current zero-copy transfer.
-        std::atomic<int64_t> transferStartTimeMs{ 0 };
-        // Number of payload frames that still need to release this impl.
-        std::atomic<uint32_t> remainingFrames{ 0 };
-        // Whether this transfer should contribute to slow-free circuit statistics.
-        std::atomic<bool> trackSlowFree{ false };
     };
 
     std::shared_ptr<Impl> impl_;
