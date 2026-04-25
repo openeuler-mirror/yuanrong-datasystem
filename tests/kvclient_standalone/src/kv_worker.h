@@ -21,6 +21,8 @@ public:
     void Start();
     void Stop();
 
+    size_t NotifyQueueSize() { return notifyPool_.QueueSize(); }
+
 private:
     void PipelineLoop(int threadId);
     void NotifyPeers(const std::string &key, uint64_t size);

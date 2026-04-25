@@ -25,6 +25,11 @@ public:
         cv_.notify_one();
     }
 
+    size_t QueueSize() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return tasks_.size();
+    }
+
     void Stop() {
         {
             std::lock_guard<std::mutex> lock(mutex_);

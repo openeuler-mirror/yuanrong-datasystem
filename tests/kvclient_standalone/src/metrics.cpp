@@ -214,3 +214,11 @@ std::string MetricsCollector::GetStatsJson() {
     j["verify_fail"] = verifyFailCount_.load();
     return j.dump(2);
 }
+
+std::vector<MetricsCollector::OpSnapshot> MetricsCollector::SnapshotCounts() {
+    std::vector<OpSnapshot> result;
+    for (auto &m : ops_) {
+        result.push_back({m->opName, m->totalCount.load()});
+    }
+    return result;
+}

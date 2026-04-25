@@ -72,8 +72,40 @@ static int RunMode(const Config &cfg) {
         std::cerr << "Reader mode: waiting for notifications..." << std::endl;
     }
 
+    std::vector<uint64_t> prevCounts;
+
     while (gRunning) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        auto snap = metrics.SnapshotCounts();
+        if (prevCounts.size() != snap.size()) {
+            prevCounts.resize(snap.size(), 0);
+        }
+
+        // Build rate string: delta / 3s
+        std::string rates;
+        for (size_t i = 0; i < snap.size(); i++) {
+            uint64_t delta = snap[i].count - prevCounts[i];
+            double rate = delta / 3.0;
+            if (!rates.empty()) rates += ", ";
+            rates += snap[i].name + "=" + std::to_string(static_cast<int>(rate)) + "/s";
+            prevCounts[i] = snap[i].count;
+        }
+
+        // Queue depths
+        size_t notifyOutQ = 0, notifyInQ = 0;
+        if (worker) notifyOutQ = worker->NotifyQueueSize();
+        notifyInQ = httpServer.NotifyQueueSize();
+
+        if (notifyOutQ > 1000) {
+            SLOG_WARN("notify out queue backlog: " << notifyOutQ);
+        }
+        if (notifyInQ > 1000) {
+            SLOG_WARN("notify in queue backlog: " << notifyInQ);
+        }
+
+        SLOG_INFO("[" << rates << "] "
+                  << "[out_q=" << notifyOutQ << ", in_q=" << notifyInQ << "]");
     }
 
     std::cerr << "Shutting down..." << std::endl;

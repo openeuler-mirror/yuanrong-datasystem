@@ -42,6 +42,9 @@ public:
     std::string GetStatsJson();
     void WriteSummary();
 
+    struct OpSnapshot { std::string name; uint64_t count; };
+    std::vector<OpSnapshot> SnapshotCounts();
+
 private:
     OpMetrics& GetOrCreateOp(const std::string &op);
     void FlushWindow();

@@ -19,6 +19,8 @@ public:
     void Start();
     void Stop();
 
+    size_t NotifyQueueSize() { return notifyPool_.QueueSize(); }
+
 private:
     void HandleNotify(const std::string &body);
 
