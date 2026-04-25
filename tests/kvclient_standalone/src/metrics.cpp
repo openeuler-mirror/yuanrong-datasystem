@@ -15,6 +15,11 @@ MetricsCollector::MetricsCollector(int instanceId, int intervalMs, const std::st
     : instanceId_(instanceId), intervalMs_(intervalMs), metricsFile_(metricsFile) {}
 
 OpMetrics& MetricsCollector::GetOrCreateOp(const std::string &op) {
+    // Fast path: after Start(), all ops are pre-created, no lock needed
+    if (started_) {
+        auto it = opsMap_.find(op);
+        if (it != opsMap_.end()) return *it->second;
+    }
     std::lock_guard<std::mutex> lock(opsMutex_);
     auto it = opsMap_.find(op);
     if (it != opsMap_.end()) return *it->second;
@@ -75,6 +80,8 @@ void MetricsCollector::Start() {
             if (running_) FlushWindow();
         }
     });
+
+    started_ = true;
 }
 
 void MetricsCollector::Stop() {
@@ -181,7 +188,7 @@ void MetricsCollector::WriteSummary() {
             double p99 = Percentile(latencies, 99.0);
             double minV = latencies.front();
             double maxV = latencies.back();
-            double qps = uptime > 0 ? (double)latencies.size() / uptime : 0;
+            double qps = uptime > 0 ? (double)m->totalCount.load() / uptime : 0;
             uint64_t bytes = m->totalBytes.load();
             double throughputMB = uptime > 0 ? bytes / (1024.0 * 1024.0) / uptime : 0;
 

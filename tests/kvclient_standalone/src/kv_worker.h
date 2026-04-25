@@ -35,4 +35,5 @@ private:
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> pipelineOps_;
     std::unordered_map<uint64_t, std::string> pregenData_;
+    int qpsPerThread_ = 0;
 };

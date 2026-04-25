@@ -31,12 +31,12 @@ KVWorker::~KVWorker() { Stop(); }
 
 void KVWorker::Start() {
     running_ = true;
-    int qpsPerThread = (cfg_.targetQps > 0 && cfg_.numSetThreads > 0)
-                       ? cfg_.targetQps / cfg_.numSetThreads : 0;
-    if (qpsPerThread <= 0) qpsPerThread = 0;
+    qpsPerThread_ = (cfg_.targetQps > 0 && cfg_.numSetThreads > 0)
+                    ? cfg_.targetQps / cfg_.numSetThreads : 0;
+    if (qpsPerThread_ <= 0) qpsPerThread_ = 0;
 
     SLOG_INFO("Starting " << cfg_.numSetThreads << " pipeline threads"
-              << (qpsPerThread > 0 ? "" : " (unlimited QPS)"));
+              << (qpsPerThread_ > 0 ? "" : " (unlimited QPS)"));
 
     for (int i = 0; i < cfg_.numSetThreads; i++) {
         threads_.emplace_back(&KVWorker::PipelineLoop, this, i);
@@ -53,10 +53,7 @@ void KVWorker::Stop() {
 }
 
 void KVWorker::PipelineLoop(int threadId) {
-    int qpsPerThread = (cfg_.targetQps > 0 && cfg_.numSetThreads > 0)
-                       ? cfg_.targetQps / cfg_.numSetThreads : 0;
-    if (qpsPerThread <= 0) qpsPerThread = 0;
-    double intervalMs = qpsPerThread > 0 ? 1000.0 / qpsPerThread : 0;
+    double intervalMs = qpsPerThread_ > 0 ? 1000.0 / qpsPerThread_ : 0;
 
     std::mt19937 rng(threadId + cfg_.instanceId * 1000);
     if (cfg_.dataSizes.empty()) {
@@ -66,7 +63,7 @@ void KVWorker::PipelineLoop(int threadId) {
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
 
     SLOG_INFO("Thread " << threadId << " started"
-              << (qpsPerThread > 0 ? "" : " (unlimited)"));
+              << (qpsPerThread_ > 0 ? "" : " (unlimited)"));
 
     while (running_) {
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
