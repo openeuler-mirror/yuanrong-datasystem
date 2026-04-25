@@ -20,6 +20,7 @@
 #define DATASYSTEM_COMMON_RDMA_URMA_DLOPEN_UTIL_H
 
 #include <ub/umdk/urma/urma_api.h>
+#include <ub/umdk/urma/urma_perf.h>
 #ifdef URMA_OVER_UB
 #include <ub/umdk/urma/urma_ubagg.h>
 #endif
@@ -84,5 +85,8 @@ urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg);
 urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg);
 urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event);
 void ds_urma_ack_async_event(urma_async_event_t *event);
+urma_status_t ds_urma_start_perf(void);
+urma_status_t ds_urma_stop_perf(void);
+urma_status_t ds_urma_get_perf_info(char *perf_buf, uint32_t *length);
 
 #endif  // DATASYSTEM_COMMON_RDMA_URMA_DLOPEN_UTIL_H

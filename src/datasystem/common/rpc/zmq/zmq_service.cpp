@@ -41,7 +41,7 @@ DS_DECLARE_string(unix_domain_socket_dir);
 namespace datasystem {
 namespace {
 // Extract tick timestamp from meta by tick name
-inline uint64_t FindTickTs(const MetaPb& meta, const char* tickName)
+inline uint64_t FindTickTs(const MetaPb &meta, const char *tickName)
 {
     for (int i = 0; i < meta.ticks_size(); i++) {
         if (meta.ticks(i).tick_name() == tickName) {
@@ -52,7 +52,7 @@ inline uint64_t FindTickTs(const MetaPb& meta, const char* tickName)
 }
 
 // Record server-side latency metrics and append SERVER_EXEC_NS tick
-inline void RecordServerLatencyMetrics(MetaPb& meta)
+inline void RecordServerLatencyMetrics(MetaPb &meta)
 {
     int64_t serverRecvTs = FindTickTs(meta, TICK_SERVER_RECV);
     int64_t serverDequeuTs = FindTickTs(meta, TICK_SERVER_DEQUEUE);
@@ -61,22 +61,19 @@ inline void RecordServerLatencyMetrics(MetaPb& meta)
 
     // SERVER_QUEUE_WAIT = SERVER_DEQUEUE - SERVER_RECV
     if (serverDequeuTs > serverRecvTs) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_QUEUE_WAIT_LATENCY))
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_QUEUE_WAIT_LATENCY))
             .Observe(serverDequeuTs - serverRecvTs);
     }
 
     // SERVER_EXEC = SERVER_EXEC_END - SERVER_DEQUEUE
     if (serverExecEndTs > serverDequeuTs) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY))
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY))
             .Observe(serverExecEndTs - serverDequeuTs);
     }
 
     // SERVER_REPLY = SERVER_SEND - SERVER_EXEC_END
     if (serverSendTs > serverExecEndTs) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_REPLY_LATENCY))
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_REPLY_LATENCY))
             .Observe(serverSendTs - serverExecEndTs);
     }
 
@@ -1392,7 +1389,8 @@ Status ZmqService::ServiceRequest(MetaPb &&meta, ZmqMsgFrames &&msgs)
     RETURN_IF_NOT_OK(rqQueue_->Put({ std::move(meta), std::move(msgs) }));
     auto timeSpent = timer.ElapsedMilliSecond();
     const int LOG_WARNING_FREQUENCY = 100;
-    LOG_IF_EVERY_N(WARNING, timeSpent > RPC_POLL_TIME, LOG_WARNING_FREQUENCY)
+    const int LOG_WARNING_THRESHOLD = 5;
+    LOG_IF_EVERY_N(WARNING, timeSpent > LOG_WARNING_THRESHOLD, LOG_WARNING_FREQUENCY)
         << FormatString("Service %s is congested. Proxy main thread congested for [%.3lf]ms. HWM setting is %d.",
                         ServiceName(), timeSpent, cfg_.hwm_);
     uint64_t eventFd = 1;

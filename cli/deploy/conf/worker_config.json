@@ -527,6 +527,10 @@
         "value": "false",
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
     },
+    "enable_urma_perf": {
+        "value": "false",
+        "description": "Enable periodic performance logging for URMA operations. This option takes effect only when enable_urma is true."
+    },
     "enable_ub_numa_affinity": {
         "value": "false",
         "description": "Enable UB numa affinity optimization when URMA and whole-arena registration are both enabled."
