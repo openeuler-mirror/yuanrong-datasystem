@@ -319,6 +319,7 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
 | `notify_delay_ms` | 10 | 写入后延迟通知时间(ms)，`0` = 不延迟 |
+| `cpu_affinity` | `""` | CPU 绑核，如 `"0-7"` 或 `"0,2,4,6"`，空 = 自动检测容器可用 CPU |
 | `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
 | `ttl_seconds` | 5 | 写入数据 TTL |
 | `connect_timeout_ms` | 1000 | 连接超时(ms) |
@@ -361,6 +362,7 @@ Kubernetes 节点额外支持：`pod_name`、`pod_ip`、`namespace`、`transport
 | `/notify` | POST | 接收通知，执行 notify_pipeline |
 | `/stats` | GET | 实时统计 JSON |
 | `/stop` | POST | 优雅停止 |
+| `/summary` | POST | 触发生成 summary 文件（不停止进程） |
 
 ## Metrics
 
