@@ -4,6 +4,7 @@
 #include "kv_worker.h"
 #include "http_server.h"
 #include "pipeline.h"
+#include "simple_log.h"
 
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
