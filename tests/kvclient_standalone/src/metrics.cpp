@@ -40,12 +40,11 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
     }
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
-        if (m.globalRing.empty()) {
-            m.globalRing.resize(100000);  // 100K entries ~800KB
-        }
-        m.globalRing[m.globalHead] = latencyMs;
-        m.globalHead = (m.globalHead + 1) % m.globalRing.size();
-        if (m.globalCount < m.globalRing.size()) m.globalCount++;
+        size_t cap = m.globalRing.size();
+        if (cap == 0) cap = 1;  // safety
+        m.globalRing[m.globalHead % cap] = latencyMs;
+        m.globalHead = (m.globalHead + 1) % cap;
+        if (m.globalCount < cap) m.globalCount++;
     }
 }
 
@@ -54,9 +53,10 @@ void MetricsCollector::RecordVerifyFail() {
 }
 
 void MetricsCollector::Start() {
-    // Pre-create all pipeline op types to avoid race in GetOrCreateOp
+    // Pre-create all pipeline op types and pre-allocate ring buffers
     for (auto *name : GetAllOpNames()) {
-        GetOrCreateOp(name);
+        auto &m = GetOrCreateOp(name);
+        m.globalRing.resize(100000);
     }
 
     startTime_ = std::chrono::steady_clock::now();
