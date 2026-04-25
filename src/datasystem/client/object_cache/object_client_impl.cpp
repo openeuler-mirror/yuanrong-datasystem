@@ -410,8 +410,7 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
             [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
     } else {
         listenWorker_[node]->AddCallBackFunc(this, [this, node]() { ProcessStandbyWorkerLost(node); });
-        if (serviceDiscovery_ != nullptr
-            && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+        if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
             listenWorker_[node]->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
         }
     }
@@ -452,7 +451,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         bool isSameNode = false;
         RETURN_IF_NOT_OK(serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode));
         HostPort selectedAddress(workerIp, workerPort);
-        if (serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !isSameNode) {
+        if (!isSameNode && serviceDiscovery_->HasHostAffinity()) {
             std::string hostPortStr = selectedAddress.ToString();
             CHECK_FAIL_RETURN_STATUS(
                 Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
@@ -749,7 +748,11 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToCandid
             continue;
         }
         LOG(INFO) << FormatString("[Switch] Switch worker to %s", addr.ToString());
-        if (addr == ipAddress_) {
+        // The TrySwitchBackToLocalWorker short-circuit only works on the standby path: with service
+        // discovery CommitStandbySwitch stops the old LOCAL_WORKER listener, so its CheckWorkerAvailable
+        // will report unavailable. Same-host candidates must go through TrySwitchToLocalSameHost below,
+        // which builds a fresh listener.
+        if (!isSameHost && addr == ipAddress_) {
             if (TrySwitchBackToLocalWorker()) {
                 return StandbySwitchAttemptResult::SWITCHED;
             }
@@ -818,9 +821,10 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
     workerApi_[next] = candidateWorkerApi;
     listenWorker_[next] = candidateListenWorker;
     currentNode_ = next;
-    // With service discovery, the LOCAL_WORKER listener is no longer the recovery driver
-    // (TryRecoverLocalWorker on the standby is); stop it to avoid heartbeating a dead address.
-    if (serviceDiscovery_ != nullptr && listenWorker_[LOCAL_WORKER] != nullptr) {
+    // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
+    // otherwise it is still the only recovery path.
+    if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()
+        && listenWorker_[LOCAL_WORKER] != nullptr) {
         listenWorker_[LOCAL_WORKER]->StopListenWorker(false);
     }
     MarkWorkerAvailableLocked();
@@ -849,8 +853,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         return SwitchWorkerNode(static_cast<WorkerNode>(index), reason);
     });
     candidateListenWorker->SetIsLocalWorker(false);
-    if (serviceDiscovery_ != nullptr
-        && serviceDiscovery_->GetAffinityPolicy() == ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+    if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
         candidateListenWorker->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
     }
     candidateListenWorker->AddCallBackFunc(this, [this, next]() { ProcessStandbyWorkerLost(next); });
@@ -892,15 +895,19 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalS
             .IsError()) {
         return StandbySwitchAttemptResult::CONTINUE;
     }
+    // Declared outside the lock so the old listener's destructor (which joins its heartbeat
+    // thread) runs after switchNodeMutex_ is released; otherwise it can deadlock against
+    // ProcessWorkerLost waiting on the same mutex.
+    std::shared_ptr<client::ListenWorker> oldLocalListener;
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
             || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
-            localListenWorker->StopListenWorker(true);
             return StandbySwitchAttemptResult::ABORT;
         }
         ipAddress_ = localAddress;
         workerApi_[LOCAL_WORKER] = localWorkerApi;
+        oldLocalListener = std::move(listenWorker_[LOCAL_WORKER]);
         listenWorker_[LOCAL_WORKER] = localListenWorker;
         mmapManager_ = std::move(localMmapManager);
         clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
@@ -982,8 +989,7 @@ bool ObjectClientImpl::TrySwitchBackToLocalWorker()
 bool ObjectClientImpl::GetPreferredLocalWorkerToRecover(WorkerNode &oldNode, HostPort &localAddress,
                                                         HeartbeatType &heartbeatType)
 {
-    if (serviceDiscovery_ == nullptr
-        || serviceDiscovery_->GetAffinityPolicy() != ServiceAffinityPolicy::PREFERRED_SAME_NODE) {
+    if (serviceDiscovery_ == nullptr || !serviceDiscovery_->HasHostAffinity()) {
         return false;
     }
 
@@ -1060,23 +1066,27 @@ bool ObjectClientImpl::CommitPreferredLocalWorker(WorkerNode oldNode, const Host
                                                   std::unique_ptr<client::MmapManager> localMmapManager,
                                                   const std::shared_ptr<client::ListenWorker> &localListenWorker)
 {
-    std::lock_guard<std::mutex> lock(switchNodeMutex_);
-    if (currentNode_ == LOCAL_WORKER || currentNode_ != oldNode
-        || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
-        localListenWorker->StopListenWorker(true);
-        return false;
+    // See TrySwitchToLocalSameHost for why the old listener must destruct outside the lock.
+    std::shared_ptr<client::ListenWorker> oldLocalListener;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER || currentNode_ != oldNode
+            || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            return false;
+        }
+        ipAddress_ = localAddress;
+        workerApi_[LOCAL_WORKER] = localWorkerApi;
+        oldLocalListener = std::move(listenWorker_[LOCAL_WORKER]);
+        listenWorker_[LOCAL_WORKER] = localListenWorker;
+        mmapManager_ = std::move(localMmapManager);
+        clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
+        memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
+        currentNode_ = LOCAL_WORKER;
+        if (listenWorker_[oldNode] != nullptr) {
+            listenWorker_[oldNode]->SetSwitched();
+        }
+        MarkWorkerAvailableLocked();
     }
-    ipAddress_ = localAddress;
-    workerApi_[LOCAL_WORKER] = localWorkerApi;
-    listenWorker_[LOCAL_WORKER] = localListenWorker;
-    mmapManager_ = std::move(localMmapManager);
-    clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
-    memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
-    currentNode_ = LOCAL_WORKER;
-    if (listenWorker_[oldNode] != nullptr) {
-        listenWorker_[oldNode]->SetSwitched();
-    }
-    MarkWorkerAvailableLocked();
     return true;
 }
 
