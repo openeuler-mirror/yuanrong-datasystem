@@ -13,7 +13,7 @@ HttpServer::HttpServer(const Config &cfg, std::shared_ptr<KVClient> client,
                        MetricsCollector &metrics, std::atomic<bool> &running)
     : cfg_(cfg), client_(client), metrics_(metrics), running_(running),
       server_(std::make_unique<httplib::Server>()),
-      notifyPool_(std::max(4, static_cast<int>(std::thread::hardware_concurrency()))) {
+      notifyPool_(100) {
     for (auto &name : cfg_.notifyPipeline) {
         auto fn = GetOpFunc(name);
         if (!fn) {
