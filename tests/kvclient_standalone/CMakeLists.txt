@@ -8,6 +8,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(DATASYSTEM_SDK_DIR "" CACHE PATH "Path to datasystem SDK installation")
 
+# Read version from VERSION file
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" BUILD_VERSION LIMIT_COUNT 1)
+add_definitions(-DBUILD_VERSION="${BUILD_VERSION}")
+
 add_executable(kvclient_standalone_test
     src/main.cpp src/config.cpp src/kv_worker.cpp src/http_server.cpp src/metrics.cpp src/stop.cpp src/pipeline.cpp)
 

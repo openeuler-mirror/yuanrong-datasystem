@@ -26,6 +26,8 @@ class Deployer:
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
         self.binary_path = os.path.join(self.base_dir, 'kvclient_standalone_test')
         self.datasystem_sdk_dir = os.path.join(self.base_dir, 'lib')
+        version_file = os.path.join(self.base_dir, 'VERSION')
+        self.version = open(version_file).read().strip() if os.path.isfile(version_file) else '?'
         self.default_transport = self.deploy.get('transport', 'ssh')
         self.default_ssh_user = self.deploy.get('ssh_user', 'root')
         self.ssh_options = self.deploy.get('ssh_options', '-o StrictHostKeyChecking=no')
@@ -368,6 +370,8 @@ class Deployer:
             print(f'ERROR: binary not found: {self.binary_path}')
             print('  Run "build.sh" first to compile and package.')
             sys.exit(1)
+
+        print(f'Version: {self.version}')
 
         results = []
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:

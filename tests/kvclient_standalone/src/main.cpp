@@ -26,6 +26,7 @@ static void SignalHandler(int sig) {
 }
 
 static int RunMode(const Config &cfg) {
+    std::cerr << "kvclient_standalone_test v" BUILD_VERSION << std::endl;
     std::cerr << "Initializing ServiceDiscovery..." << std::endl;
 
     ServiceDiscoveryOptions sdOpts;
