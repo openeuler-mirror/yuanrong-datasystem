@@ -40,13 +40,12 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
     }
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
-        m.globalLatencies.push_back(latencyMs);
-        // Cap at 1M entries (~8MB) to prevent unbounded growth
-        if (m.globalLatencies.size() > 1000000) {
-            // Keep last 500K entries (most recent), which represents recent behavior
-            m.globalLatencies.erase(m.globalLatencies.begin(),
-                                     m.globalLatencies.begin() + (m.globalLatencies.size() - 500000));
+        if (m.globalRing.empty()) {
+            m.globalRing.resize(100000);  // 100K entries ~800KB
         }
+        m.globalRing[m.globalHead] = latencyMs;
+        m.globalHead = (m.globalHead + 1) % m.globalRing.size();
+        if (m.globalCount < m.globalRing.size()) m.globalCount++;
     }
 }
 
@@ -154,7 +153,16 @@ void MetricsCollector::WriteSummary() {
         std::vector<double> latencies;
         {
             std::lock_guard<std::mutex> lock(m->globalMutex);
-            latencies = m->globalLatencies;
+            if (m->globalCount < m->globalRing.size()) {
+                latencies.assign(m->globalRing.begin(),
+                                m->globalRing.begin() + m->globalCount);
+            } else {
+                latencies.assign(m->globalRing.begin() + m->globalHead,
+                                m->globalRing.end());
+                latencies.insert(latencies.end(),
+                                m->globalRing.begin(),
+                                m->globalRing.begin() + m->globalHead);
+            }
         }
 
         f << "--- " << m->opName << " ---\n";

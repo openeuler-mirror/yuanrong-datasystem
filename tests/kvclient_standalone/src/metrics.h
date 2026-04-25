@@ -22,7 +22,9 @@ struct OpMetrics {
     uint64_t windowBytes = 0;
 
     std::mutex globalMutex;
-    std::vector<double> globalLatencies;
+    std::vector<double> globalRing;  // fixed-size ring buffer
+    size_t globalHead = 0;
+    size_t globalCount = 0;
 };
 
 class MetricsCollector {

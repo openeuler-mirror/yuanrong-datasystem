@@ -6,6 +6,7 @@
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <numeric>
 
 using namespace datasystem;
 
@@ -111,18 +112,24 @@ void KVWorker::PipelineLoop(int threadId) {
 void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
     if (cfg_.peers.empty() || cfg_.notifyCount <= 0) return;
 
-    std::vector<std::string> candidates = cfg_.peers;
-    std::mt19937 rng(std::random_device{}());
-    std::shuffle(candidates.begin(), candidates.end(), rng);
+    int total = static_cast<int>(cfg_.peers.size());
+    int count = std::min(cfg_.notifyCount, total);
 
-    int count = std::min(cfg_.notifyCount, static_cast<int>(candidates.size()));
+    // Fisher-Yates partial shuffle: pick `count` random indices without copying peers
+    std::vector<int> indices(total);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::mt19937 rng(std::random_device{}());
+    for (int i = 0; i < count; i++) {
+        std::uniform_int_distribution<int> dist(i, total - 1);
+        std::swap(indices[i], indices[dist(rng)]);
+    }
 
     std::string body = "{\"key\":\"" + key + "\",\"sender\":"
                      + std::to_string(cfg_.instanceId) + ",\"size\":"
                      + std::to_string(size) + "}";
 
     for (int i = 0; i < count; i++) {
-        std::string hostPort = candidates[i];
+        std::string hostPort = cfg_.peers[indices[i]];
         if (hostPort.substr(0, 7) == "http://") hostPort = hostPort.substr(7);
 
         auto colonPos = hostPort.find(':');
@@ -139,10 +146,16 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
 
         notifyPool_.Submit([host, port, body]() {
             try {
-                httplib::Client cli(host, port);
-                cli.set_connection_timeout(2);
-                cli.set_read_timeout(2);
-                cli.Post("/notify", body, "application/json");
+                thread_local std::unordered_map<std::string,
+                    std::unique_ptr<httplib::Client>> clientCache;
+                std::string ckey = host + ":" + std::to_string(port);
+                auto &ref = clientCache[ckey];
+                if (!ref) {
+                    ref = std::make_unique<httplib::Client>(host, port);
+                    ref->set_connection_timeout(2);
+                    ref->set_read_timeout(2);
+                }
+                ref->Post("/notify", body, "application/json");
             } catch (...) {}
         });
     }

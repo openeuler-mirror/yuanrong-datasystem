@@ -21,6 +21,9 @@ HttpServer::HttpServer(const Config &cfg, std::shared_ptr<KVClient> client,
             continue;
         }
         notifyOps_.emplace_back(name, fn);
+        if (name == kOpSetStringView || name == kOpMemoryCopy) {
+            notifyNeedsData_ = true;
+        }
     }
 }
 
@@ -77,7 +80,9 @@ void HttpServer::HandleNotify(const std::string &body) {
             ctx.key = key;
             ctx.size = expectedSize;
             ctx.senderId = sender;
-            ctx.data = GeneratePatternData(expectedSize, sender);
+            if (notifyNeedsData_) {
+                ctx.data = GeneratePatternData(expectedSize, sender);
+            }
             ctx.client = client_;
             ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
             ctx.param.ttlSecond = cfg_.ttlSeconds;

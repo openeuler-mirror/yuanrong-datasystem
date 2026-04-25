@@ -40,9 +40,8 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
         return true;
     }
 
-    std::string expected = GeneratePatternData(ctx.size, ctx.senderId);
     const char *bufData = static_cast<const char *>(optBuf->ImmutableData());
-    if (memcmp(bufData, expected.data(), bufSize) != 0) {
+    if (!VerifyPatternData(bufData, bufSize, ctx.senderId)) {
         SLOG_WARN("getBuffer content mismatch: key=" << ctx.key);
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
     }

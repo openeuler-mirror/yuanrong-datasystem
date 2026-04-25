@@ -30,4 +30,5 @@ private:
     std::thread serverThread_;
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> notifyOps_;
+    bool notifyNeedsData_ = false;
 };
