@@ -1099,6 +1099,50 @@ TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode1, LEVEL2_TestVoluntaryS
     sleep(10);  // sleep 10s to wait for scale down done.
 }
 
+TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode1, LEVEL2_TestVoluntaryNoCandidateClientsFailFast)
+{
+    auto waitSwitchEnd = [](uint64_t expectedCount) {
+        Timer timer;
+        do {
+            if (datasystem::inject::GetExecuteCount("client.switch_worker_end") >= expectedCount) {
+                datasystem::inject::Clear("client.switch_worker_end");
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } while (timer.ElapsedSecond() < 15);
+        return false;
+    };
+    auto assertSetFailed = [](const std::shared_ptr<KVClient> &client, const std::string &keyPrefix) {
+        SetParam param;
+        auto key = keyPrefix + "_" + std::to_string(GetSteadyClockTimeStampMs());
+        auto status = client->Set(key, "xxx", param);
+        ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_UNAVAILABLE) << status.ToString();
+        ASSERT_NE(status.GetMsg().find("no switchable worker available"), std::string::npos) << status.ToString();
+    };
+
+    InitTestKVClient(0, client0_, 2000, true);  // client0 connects to worker 0 as local worker.
+    InitTestKVClient(1, client1_, 2000, true);  // client1 will migrate from worker 1 to worker 0.
+    HostPort worker0Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0Addr));
+
+    datasystem::inject::Clear("client.switch_worker_end");
+    datasystem::inject::Set("client.switch_worker_end", "call()");
+    datasystem::inject::Set("client.standby_worker", "1*call(" + worker0Addr.ToString() + ")");
+    VoluntaryScaleDownInject(1, false);
+    ASSERT_TRUE(waitSwitchEnd(1));
+
+    auto migratedKey = "migrated_client_" + std::to_string(GetSteadyClockTimeStampMs());
+    DS_ASSERT_OK(client1_->Set(migratedKey, "xxx"));
+
+    datasystem::inject::Clear("client.switch_worker_end");
+    datasystem::inject::Set("client.switch_worker_end", "call()");
+    VoluntaryScaleDownInject(0, false);
+    ASSERT_TRUE(waitSwitchEnd(2));
+
+    assertSetFailed(client0_, "local_client_fail_fast");
+    assertSetFailed(client1_, "migrated_client_fail_fast");
+}
+
 TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryDownWorker1WriteThroughL2CacheNoCopy)
 {
     int objectCnt = 5;
@@ -1286,25 +1330,6 @@ public:
 private:
     const uint32_t workerNum_ = 1;
 };
-
-TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode3, LEVEL1_TestVoluntarySwitchOtherWorker)
-{
-    InitTestKVClient(0, client0_, 2000, true);  // Init client0 to worker 0 with 2000ms timeout
-    datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
-    std::thread t1([this]() {
-        uint32_t count = 2000;
-        for (size_t i = 0; i < count; ++i) {
-            auto key = client0_->Set("xxx");
-            ASSERT_FALSE(key.empty());
-            std::string getVal;
-            DS_ASSERT_OK(client0_->Get(key, getVal));
-        }
-    });
-
-    VoluntaryScaleDownInject(0, false);
-    sleep(12);  // Wait 12 seconds for voluntary scale down finished
-    t1.join();
-}
 
 TEST_F(KVClientVoluntaryScaleDownTestWithEnableCrossNode3, TestHealthCheck)
 {
