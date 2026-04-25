@@ -75,20 +75,24 @@ static int RunMode(const Config &cfg) {
     }
 
     std::vector<uint64_t> prevCounts;
+    auto prevTime = std::chrono::steady_clock::now();
 
     while (gRunning) {
         std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        auto now = std::chrono::steady_clock::now();
+        double elapsedSec = std::chrono::duration<double>(now - prevTime).count();
+        prevTime = now;
 
         auto snap = metrics.SnapshotCounts();
         if (prevCounts.size() != snap.size()) {
             prevCounts.resize(snap.size(), 0);
         }
 
-        // Build rate string: delta / 3s
         std::string rates;
         for (size_t i = 0; i < snap.size(); i++) {
             uint64_t delta = snap[i].count - prevCounts[i];
-            double rate = delta / 3.0;
+            double rate = elapsedSec > 0 ? delta / elapsedSec : 0;
             if (!rates.empty()) rates += ", ";
             rates += snap[i].name + "=" + std::to_string(static_cast<int>(rate)) + "/s";
             prevCounts[i] = snap[i].count;

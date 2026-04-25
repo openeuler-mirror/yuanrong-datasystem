@@ -40,9 +40,9 @@ void MetricsCollector::Record(const std::string &op, double latencyMs, bool succ
     }
     {
         std::lock_guard<std::mutex> lock(m.globalMutex);
+        if (m.globalRing.empty()) return;  // not yet initialized
         size_t cap = m.globalRing.size();
-        if (cap == 0) cap = 1;  // safety
-        m.globalRing[m.globalHead % cap] = latencyMs;
+        m.globalRing[m.globalHead] = latencyMs;
         m.globalHead = (m.globalHead + 1) % cap;
         if (m.globalCount < cap) m.globalCount++;
     }
@@ -54,6 +54,8 @@ void MetricsCollector::RecordVerifyFail() {
 
 void MetricsCollector::Start() {
     // Pre-create all pipeline op types and pre-allocate ring buffers
+    // Reserve to prevent reallocation (which would invalidate opsMap_ pointers)
+    ops_.reserve(GetAllOpNames().size());
     for (auto *name : GetAllOpNames()) {
         auto &m = GetOrCreateOp(name);
         m.globalRing.resize(100000);
@@ -92,8 +94,9 @@ static double Percentile(std::vector<double> &sorted, double p) {
 void MetricsCollector::FlushWindow() {
     auto now = std::chrono::system_clock::now();
     auto nowT = std::chrono::system_clock::to_time_t(now);
+    std::tm tmBuf;
     std::stringstream ts;
-    ts << std::put_time(std::localtime(&nowT), "%Y-%m-%d %H:%M:%S");
+    ts << std::put_time(std::localtime_r(&nowT, &tmBuf), "%Y-%m-%d %H:%M:%S");
 
     std::ofstream f(metricsFile_, std::ios::app);
     if (!f.is_open()) {
