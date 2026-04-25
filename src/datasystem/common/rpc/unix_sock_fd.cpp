@@ -19,6 +19,7 @@
  */
 #include "datasystem/common/rpc/unix_sock_fd.h"
 
+#include <algorithm>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -36,6 +37,16 @@
 #include "datasystem/protos/utils.pb.h"
 
 constexpr int RECV_RETRY_COUNT = 10;
+constexpr int64_t MIN_RECV_WAIT_TIMEOUT_MS = 1;
+constexpr int64_t RECV_WAIT_TIMEOUT_DIVISOR = 3;
+
+int64_t GetAdaptiveRecvWaitTimeoutMs(int64_t timeRemainingMs)
+{
+    if (timeRemainingMs < RECV_WAIT_TIMEOUT_DIVISOR) {
+        return std::max(MIN_RECV_WAIT_TIMEOUT_MS, timeRemainingMs - 1);
+    }
+    return std::max(MIN_RECV_WAIT_TIMEOUT_MS, timeRemainingMs / RECV_WAIT_TIMEOUT_DIVISOR);
+}
 
 // in case of compilation on systems without IPPROTO_SCMTCP
 #ifndef IPPROTO_SCMTCP
@@ -587,6 +598,10 @@ Status UnixSockFd::RecvWithTimeout(void *data, size_t size) const
 
     // Create a timer with the given amount of time remaining
     Timer timer(startingTimeoutMs);
+    timeRemainingMs = startingTimeoutMs;
+
+    // Re-check the deadline before the remaining budget is fully consumed, while avoiding too many recv() retries.
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, GetAdaptiveRecvWaitTimeoutMs(timeRemainingMs)));
 
     while (sizeRemain > 0) {
         ssize_t bytesReceived;
@@ -596,7 +611,9 @@ Status UnixSockFd::RecvWithTimeout(void *data, size_t size) const
 
         timeRemainingMs = timer.GetRemainingTimeMs();
         // Regardless of success or fail of the call. If we ran out of time then return to the caller with error.
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(timeRemainingMs > 0, K_RPC_DEADLINE_EXCEEDED, "Socket recv timeout");
+        if (timeRemainingMs <= 0) {
+            RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Socket recv timeout");
+        }
 
         if (bytesReceived == -1) {
             Status rc = ErrnoToStatus(err, fd_);
@@ -613,11 +630,12 @@ Status UnixSockFd::RecvWithTimeout(void *data, size_t size) const
             sizeRemain -= bytesReceived;
         }
 
-        // Assign the timeout for the next receive call so that it has less time allowed than before, then reloop.
-        RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, timeRemainingMs));
+        // Re-check the deadline before the remaining budget is fully consumed, while avoiding too many recv() retries.
+        RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, GetAdaptiveRecvWaitTimeoutMs(timeRemainingMs)));
     }
     point.Record();
-    // The recv timeout was set already naturally after the last recv. Update the send timeout to be the same.
+    // Restore the remaining timeout budget for the caller's next send/recv step.
+    RETURN_IF_NOT_OK(SetTimeout(TimeoutType::RecvTimeout, timeRemainingMs));
     RETURN_IF_NOT_OK(SetTimeout(TimeoutType::SendTimeout, timeRemainingMs));
     return Status::OK();
 }
