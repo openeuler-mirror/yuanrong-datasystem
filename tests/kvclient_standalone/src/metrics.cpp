@@ -96,7 +96,7 @@ void MetricsCollector::FlushWindow() {
     auto nowT = std::chrono::system_clock::to_time_t(now);
     std::tm tmBuf;
     std::stringstream ts;
-    ts << std::put_time(std::localtime_r(&nowT, &tmBuf), "%Y-%m-%d %H:%M:%S");
+    ts << std::put_time(localtime_r(&nowT, &tmBuf), "%Y-%m-%d %H:%M:%S");
 
     std::ofstream f(metricsFile_, std::ios::app);
     if (!f.is_open()) {
