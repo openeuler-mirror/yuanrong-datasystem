@@ -93,6 +93,7 @@ struct GetParam {
     bool isRH2DSupported = false;
     uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.
     bool ubMetaResolved = false;  // True means UB meta lookup was already attempted for this request.
+    int64_t ubGetObjMetaElapsedMs = 0;  // Time spent by UB Get pre-fetching object metadata before Get.
 };
 
 struct H2DParam {
