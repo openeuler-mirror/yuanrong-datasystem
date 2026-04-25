@@ -1051,9 +1051,10 @@ private:
     /**
      * @brief Switch available worker when current worker lost.
      * @param[in] node Worker node index.
+     * @param[in] reason Switch trigger reason.
      * @return True if switch success.
      */
-    bool SwitchWorkerNode(WorkerNode node);
+    bool SwitchWorkerNode(WorkerNode node, client::SwitchTriggerReason reason);
 
     /**
      * @brief Switch to standby worker impl.
@@ -1061,10 +1062,11 @@ private:
      * @param[in] current current worker index.
      * @param[in] next Next standby worker index.
      * @param[in] switchGeneration Switch generation number.
+     * @param[in] reason Switch trigger reason.
      * @return True if switch success.
      */
     bool SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current,
-                                   WorkerNode next, uint64_t switchGeneration);
+                                   WorkerNode next, uint64_t switchGeneration, client::SwitchTriggerReason reason);
 
     /**
      * @brief Get standby worker candidates for a switch attempt, partitioned by host affinity.
@@ -1099,6 +1101,8 @@ private:
                                                         const std::vector<HostPort> &candidates, bool isSameHost);
 
     void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
+
+    void RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration);
 
     /**
      * @brief Try switch back to local worker.
