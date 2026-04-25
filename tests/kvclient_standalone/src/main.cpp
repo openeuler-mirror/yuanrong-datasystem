@@ -5,6 +5,7 @@
 #include "http_server.h"
 #include "pipeline.h"
 #include "simple_log.h"
+#include "cpu_affinity.h"
 
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
@@ -28,6 +29,20 @@ static void SignalHandler(int sig) {
 
 static int RunMode(const Config &cfg) {
     std::cerr << "kvclient_standalone_test v" BUILD_VERSION << std::endl;
+
+    // Apply CPU affinity before creating any threads
+    auto cpus = cfg.cpuAffinity.empty() ? GetAvailableCpus() : ParseCpuList(cfg.cpuAffinity);
+    if (!cpus.empty()) {
+        ApplyProcessAffinity(cpus);
+    }
+    std::string cpuList;
+    for (size_t i = 0; i < cpus.size() && i < 32; i++) {
+        if (i > 0) cpuList += ",";
+        cpuList += std::to_string(cpus[i]);
+    }
+    if (cpus.size() > 32) cpuList += ",...";
+    std::cerr << "CPU affinity: " << cpus.size() << " CPUs [" << cpuList << "]" << std::endl;
+
     std::cerr << "Initializing ServiceDiscovery..." << std::endl;
 
     ServiceDiscoveryOptions sdOpts;

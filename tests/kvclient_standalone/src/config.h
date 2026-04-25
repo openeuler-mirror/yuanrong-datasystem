@@ -32,6 +32,7 @@ struct Config {
     std::string role = "writer";
     std::vector<std::string> pipeline = {"setStringView"};
     std::vector<std::string> notifyPipeline = {"getBuffer"};
+    std::string cpuAffinity;  // optional, e.g. "0-7" or "0,2,4,6", empty = auto-detect
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024
