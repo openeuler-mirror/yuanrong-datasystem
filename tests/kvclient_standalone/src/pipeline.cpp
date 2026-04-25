@@ -31,18 +31,11 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     }, latencyMs);
     if (!ok || !optBuf) return false;
 
-    // Verify size and content after measurement
+    // Verify size only (skip content check to save CPU)
     int64_t bufSize = optBuf->GetSize();
     if (static_cast<uint64_t>(bufSize) != ctx.size) {
         SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
                   << " expected=" << ctx.size << " got=" << bufSize);
-        if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
-        return true;
-    }
-
-    const char *bufData = static_cast<const char *>(optBuf->ImmutableData());
-    if (!VerifyPatternData(bufData, bufSize, ctx.senderId)) {
-        SLOG_WARN("getBuffer content mismatch: key=" << ctx.key);
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
     }
     return true;

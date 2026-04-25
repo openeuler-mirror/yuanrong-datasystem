@@ -53,19 +53,26 @@ def format_mb(bytes_val):
 
 def main():
     parser = argparse.ArgumentParser(description="Monitor process CPU and memory usage")
-    parser.add_argument("-p", "--process", required=True, help="Process name to monitor")
+    parser.add_argument("-p", "--process", help="Process name to find and monitor")
+    parser.add_argument("--pid", type=int, help="Monitor specific PID directly")
     parser.add_argument("-i", "--interval", type=float, default=2, help="Sample interval in seconds (default: 2)")
     parser.add_argument("-d", "--duration", type=float, default=0, help="Monitor duration in seconds, 0=until exit/Ctrl+C (default: 0)")
     args = parser.parse_args()
 
+    if not args.process and not args.pid:
+        parser.error("Either --process or --pid is required")
+
     clock_ticks = os.sysconf("SC_CLK_TCK")
 
-    pid = find_pid(args.process)
-    if pid is None:
-        print(f"Process '{args.process}' not found", file=sys.stderr)
-        sys.exit(1)
+    if args.pid:
+        pid = args.pid
+    else:
+        pid = find_pid(args.process)
+        if pid is None:
+            print(f"Process '{args.process}' not found", file=sys.stderr)
+            sys.exit(1)
 
-    print(f"Monitoring PID={pid} ({args.process}), interval={args.interval}s"
+    print(f"Monitoring PID={pid}, interval={args.interval}s"
           + (f", duration={args.duration}s" if args.duration > 0 else ""))
 
     samples_cpu = []

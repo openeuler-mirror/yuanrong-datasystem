@@ -330,6 +330,7 @@ class Deployer:
 
             # Step 8: Verify process started
             time.sleep(1)
+            pid = None
             verify = self.run_on(
                 node, f'pgrep -f "kvclient_standalone_test config_{instance_id}\\.json"',
                 check=False)
@@ -347,12 +348,12 @@ class Deployer:
                     print(f'{tag} stdout empty — binary may have crashed before any output')
 
             # Step 9: Start procmon
-            if self.enable_procmon:
+            if self.enable_procmon and pid:
                 procmon_cmd = (
                     f"cd {self.remote_work_dir} && "
-                    f"nohup python3 procmon.py -p kvclient_standalone_test -i 2"
+                    f"nohup python3 procmon.py --pid {pid} -i 2"
                     f" > procmon_{instance_id}.log 2>&1 </dev/null &")
-                self.run_on(node, procmon_cmd)
+                self.run_on(node, procmon_cmd, check=False)
 
             print(f'  {target} -> OK')
             return True
