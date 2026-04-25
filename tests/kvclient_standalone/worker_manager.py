@@ -94,12 +94,14 @@ def check_worker(pod, namespace, process_name='datasystem_worker'):
     return (pod, 'alive' if count > 0 else 'dead', count)
 
 
-def stop_worker(pod, namespace, remote_config):
-    """Stop worker in a single pod."""
+def stop_worker(pod, namespace, process_name='datasystem_worker'):
+    """Force kill worker process in a single pod."""
     pod_name = pod['name']
     try:
-        kubectl_exec(pod_name, namespace, f'dscli stop -f {remote_config}', check=False)
-        print(f'  {pod_name} -> stopped')
+        # Find and kill worker process
+        kubectl_exec(pod_name, namespace,
+            f'pgrep -x {process_name} | xargs -r kill -9', check=False)
+        print(f'  {pod_name} -> killed')
         return True
     except subprocess.TimeoutExpired:
         print(f'  {pod_name} -> FAILED: timeout')
@@ -181,7 +183,7 @@ def main():
         print(f'\nStarting workers...')
     else:
         def do_op(pod):
-            return stop_worker(pod, args.namespace, args.remote_config)
+            return stop_worker(pod, args.namespace, args.process)
 
         print(f'\nStopping workers...')
 
