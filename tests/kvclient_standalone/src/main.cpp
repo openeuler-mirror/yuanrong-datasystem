@@ -31,9 +31,15 @@ static int RunMode(const Config &cfg) {
     std::cerr << "kvclient_standalone_test v" BUILD_VERSION << std::endl;
 
     // Apply CPU affinity before creating any threads
-    auto cpus = cfg.cpuAffinity.empty() ? GetAvailableCpus() : ParseCpuList(cfg.cpuAffinity);
-    if (!cpus.empty()) {
-        ApplyProcessAffinity(cpus);
+    std::vector<int> cpus;
+    if (!cfg.cpuAffinity.empty()) {
+        cpus = ParseCpuList(cfg.cpuAffinity);
+    }
+    if (cpus.empty()) {
+        cpus = GetAvailableCpus();
+    }
+    if (!cpus.empty() && !ApplyProcessAffinity(cpus)) {
+        std::cerr << "WARNING: failed to set CPU affinity" << std::endl;
     }
     std::string cpuList;
     for (size_t i = 0; i < cpus.size() && i < 32; i++) {

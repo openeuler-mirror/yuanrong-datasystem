@@ -10,14 +10,20 @@ static std::vector<int> ParseCpuList(const std::string &s) {
     std::istringstream ss(s);
     std::string token;
     while (std::getline(ss, token, ',')) {
-        auto dash = token.find('-');
-        if (dash != std::string::npos) {
-            int lo = std::stoi(token.substr(0, dash));
-            int hi = std::stoi(token.substr(dash + 1));
-            for (int i = lo; i <= hi; i++) result.push_back(i);
-        } else if (!token.empty()) {
-            result.push_back(std::stoi(token));
-        }
+        try {
+            auto dash = token.find('-');
+            if (dash != std::string::npos) {
+                int lo = std::stoi(token.substr(0, dash));
+                int hi = std::stoi(token.substr(dash + 1));
+                if (lo > hi) std::swap(lo, hi);
+                for (int i = lo; i <= hi && i < CPU_SETSIZE; i++) {
+                    if (i >= 0) result.push_back(i);
+                }
+            } else if (!token.empty()) {
+                int cpu = std::stoi(token);
+                if (cpu >= 0 && cpu < CPU_SETSIZE) result.push_back(cpu);
+            }
+        } catch (...) {}
     }
     return result;
 }
@@ -41,6 +47,8 @@ static std::vector<int> GetAvailableCpus() {
 static bool ApplyProcessAffinity(const std::vector<int> &cpus) {
     cpu_set_t mask;
     CPU_ZERO(&mask);
-    for (int cpu : cpus) CPU_SET(cpu, &mask);
+    for (int cpu : cpus) {
+        if (cpu >= 0 && cpu < CPU_SETSIZE) CPU_SET(cpu, &mask);
+    }
     return sched_setaffinity(0, sizeof(mask), &mask) == 0;
 }
