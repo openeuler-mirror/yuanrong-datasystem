@@ -149,7 +149,7 @@ std::vector<std::string> BuildSummary(int intervalMs)
             last.u64Value = value;
         } else if (slot.type == MetricType::GAUGE) {
             auto value = slot.i64Value.load(std::memory_order_relaxed);
-            if (value > 0) {
+            if (value != 0 || last.i64Value != 0) {
                 needAdd = true;
                 item << "{\"name\":\"" << slot.name << "\",\"total\":"
                      << value << ",\"delta\":" << (value - last.i64Value) << '}';
@@ -163,7 +163,7 @@ std::vector<std::string> BuildSummary(int intervalMs)
             auto dCount = count - last.u64Value;
             auto dSum = sum - last.sum;
             auto dMax = slot.periodMax.exchange(0, std::memory_order_relaxed);
-            if (sum > 0) {
+            if (count > 0) {
                 needAdd = true;
                 item << "{\"name\":\"" << slot.name << "\",\"total\":"
                      << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
