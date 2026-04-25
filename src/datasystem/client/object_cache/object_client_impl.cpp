@@ -70,6 +70,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/strings_util.h"
@@ -2370,7 +2371,9 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()) {
         std::vector<ObjMetaInfo> objMetas;
         std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
+        Timer metaTimer;
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
+        getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
         getParam.ubMetaResolved = true;
         if (metaRc.IsError()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
@@ -2490,7 +2493,8 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
                               .queryL2Cache = getParam.queryL2Cache,
                               .isRH2DSupported = getParam.isRH2DSupported,
                               .ubTotalSize = batch.totalSize,
-                              .ubMetaResolved = true };
+                              .ubMetaResolved = true,
+                              .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs };
 
         GetRspPb rsp;
         std::vector<RpcMessage> payloads;

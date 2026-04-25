@@ -309,10 +309,13 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
+    int64_t requestTimeoutMs = std::max<int64_t>(0, requestTimeoutMs_ - getParam.ubGetObjMetaElapsedMs);
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
+    req.set_request_timeout(std::max<int64_t>(subTimeoutMs, requestTimeoutMs));
     int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
-    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
+    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &requestTimeoutMs, &rpcTimeout](int timeout) {
+        requestTimeoutMs = timeout;
         rpcTimeout = timeout;
         requestTimeoutMs_ = timeout;
         return Status::OK();
@@ -326,7 +329,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     Status getStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
     Status status = RetryOnError(
-        std::max<int32_t>(requestTimeoutMs_, subTimeoutMs),
+        std::max<int32_t>(requestTimeoutMs, subTimeoutMs),
         [this, &req, &rsp, &payloads, &getStatus](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
