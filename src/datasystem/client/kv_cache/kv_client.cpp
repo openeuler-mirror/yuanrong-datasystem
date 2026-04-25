@@ -47,6 +47,7 @@ KVClient::KVClient(const ConnectOptions &connectOptions)
 
 KVClient::~KVClient()
 {
+    metrics::PrintSummary();
     if (impl_) {
         impl_.reset();
     }
