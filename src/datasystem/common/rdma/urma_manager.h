@@ -555,6 +555,7 @@ private:
      * @return Status of the call.
      */
     Status Stop();
+    Status PerfThreadMain();
 
     /**
      * @brief Checks if waiting requests are completed and notifys them
@@ -610,6 +611,7 @@ private:
 
     // Polling thread
     std::unique_ptr<std::thread> serverEventThread_{ nullptr };
+    std::unique_ptr<std::thread> perfThread_{ nullptr };
     UrmaAsyncEventHandler aeHandler_;
     std::unique_ptr<UrmaResource> urmaResource_;
     std::atomic<uint64_t> requestId_{ 0 };
