@@ -36,7 +36,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 10, "client_get_tcp_read_total_bytes", MetricType::COUNTER, "bytes" },
     { 11, "worker_rpc_create_meta_latency", MetricType::HISTOGRAM, "us" },
     { 12, "worker_rpc_query_meta_latency", MetricType::HISTOGRAM, "us" },
-    { 13, "worker_rpc_get_remote_object_latency", MetricType::HISTOGRAM, "us" },
+    { 13, "worker_rpc_remote_get_outbound_latency", MetricType::HISTOGRAM, "us" },
     { 14, "worker_process_create_latency", MetricType::HISTOGRAM, "us" },
     { 15, "worker_process_publish_latency", MetricType::HISTOGRAM, "us" },
     { 16, "worker_process_get_latency", MetricType::HISTOGRAM, "us" },
@@ -63,7 +63,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     // RPC Queue Flow Latency
     { 37, "zmq_client_queuing_latency", MetricType::HISTOGRAM, "ns" },
     { 38, "zmq_client_stub_send_latency", MetricType::HISTOGRAM, "ns" },
-    { 39, "zmq_server_queue_wait_latency", MetricType::HISTOGRAM, "ns" }, { 40, "zmq_server_exec_latency", MetricType::HISTOGRAM, "ns" },
+    { 39, "zmq_server_queue_wait_latency", MetricType::HISTOGRAM, "ns" },
+    { 40, "zmq_server_exec_latency", MetricType::HISTOGRAM, "ns" },
     { 41, "zmq_server_reply_latency", MetricType::HISTOGRAM, "ns" },
     { 42, "zmq_rpc_e2e_latency", MetricType::HISTOGRAM, "ns" },
     { 43, "zmq_rpc_network_latency", MetricType::HISTOGRAM, "ns" },
@@ -88,6 +89,11 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 60, "client_async_release_queue_size", MetricType::GAUGE, "count" },
     { 61, "client_dec_ref_skipped_total", MetricType::COUNTER, "count" },
     { 62, "urma_import_jfr", MetricType::HISTOGRAM, "us" },
+    { 63, "worker_rpc_remote_get_inbound_latency", MetricType::HISTOGRAM, "us" },
+    { 64, "worker_get_threadpool_queue_latency", MetricType::HISTOGRAM, "us" },
+    { 65, "worker_get_threadpool_exec_latency", MetricType::HISTOGRAM, "us" },
+    { 66, "worker_get_meta_addr_hashring_latency", MetricType::HISTOGRAM, "us" },
+    { 67, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])
               == static_cast<size_t>(KvMetricId::KV_METRIC_END));

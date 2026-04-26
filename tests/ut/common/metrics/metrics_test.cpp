@@ -517,8 +517,10 @@ TEST_F(MetricsTest, worker_query_meta_metrics_latency_test)
 TEST_F(MetricsTest, worker_remote_get_metrics_latency_test)
 {
     InitKvMetricsForTest();
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY)).Observe(10);
-    EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_rpc_get_remote_object_latency\""), std::string::npos);
+    metrics::GetHistogram(
+        static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY)).Observe(10);
+    EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_rpc_remote_get_outbound_latency\""),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, transport_bytes_test)
@@ -673,10 +675,12 @@ TEST_F(MetricsTest, kv_metrics_query_meta_test)
 TEST_F(MetricsTest, kv_metrics_remote_get_test)
 {
     InitKvMetricsForTest();
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY)).Observe(10);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(HistogramMetricJson("worker_rpc_get_remote_object_latency", 1, 10, 10,
-                                                                     1, 10, 10)),
-              std::string::npos);
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY))
+        .Observe(10);
+    EXPECT_NE(
+        metrics::DumpSummaryForTest().find(
+            HistogramMetricJson("worker_rpc_remote_get_outbound_latency", 1, 10, 10, 1, 10, 10)),
+        std::string::npos);
 }
 
 TEST_F(MetricsTest, kv_metrics_urma_path_test)
