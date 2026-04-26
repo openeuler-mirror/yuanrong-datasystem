@@ -29,7 +29,7 @@
 namespace datasystem {
 class AggregatedPersistenceApi : public PersistenceApi {
 public:
-    explicit AggregatedPersistenceApi(std::unique_ptr<StorageClient> storageClient);
+    explicit AggregatedPersistenceApi(std::shared_ptr<StorageClient> storageClient);
     ~AggregatedPersistenceApi() override;
 
     Status Init() override;
@@ -49,7 +49,7 @@ public:
     std::string GetL2CacheRequestSuccessRate() const override;
 
 private:
-    std::unique_ptr<StorageClient> storageClient_;
+    std::shared_ptr<StorageClient> storageClient_;
 };
 }  // namespace datasystem
 

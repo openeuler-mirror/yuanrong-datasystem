@@ -36,7 +36,7 @@ namespace datasystem {
 std::unique_ptr<PersistenceApi> PersistenceApi::Create()
 {
     if (FLAGS_l2_cache_type == "distributed_disk") {
-        return std::make_unique<AggregatedPersistenceApi>(std::make_unique<SlotClient>(FLAGS_distributed_disk_path));
+        return std::make_unique<AggregatedPersistenceApi>(SlotClient::GetProcessSingleton(FLAGS_distributed_disk_path));
     }
     return std::make_unique<ObjectPersistenceApi>();
 }
