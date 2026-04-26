@@ -529,7 +529,12 @@ Status KVClient::HealthCheck()
 Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
-    return impl_->Exist(keys, exists, true, false);
+    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+    Status rc = impl_->Exist(keys, exists, true, false);
+    RequestParam reqParam;
+    reqParam.objectKey = objectKeysToString(keys);
+    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    return rc;
 }
 
 Status KVClient::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys)

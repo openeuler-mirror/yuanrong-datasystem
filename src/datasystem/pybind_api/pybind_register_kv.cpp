@@ -517,7 +517,11 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
                  TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                  std::vector<bool> exists;
+                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
                  Status rc = client.Exist(keys, exists, true, false);
+                 RequestParam reqParam;
+                 reqParam.objectKey = objectKeysToString(keys);
+                 accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
                  return std::make_pair(rc, std::move(exists));
              })
         .def("expire", [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t ttlSecond) {
