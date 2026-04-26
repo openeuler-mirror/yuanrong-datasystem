@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <unistd.h>
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -292,6 +293,60 @@ TEST_F(OCClientGetTest, GetRemoteSingleClientToSingleWorkerConcurringlyTest)
         t.join();
     }
     LOG(INFO) << "end client test.";
+}
+
+TEST_F(OCClientGetTest, DISABLED_ReproduceClientGetFiveMsTimeoutTailLatency)
+{
+    constexpr int32_t connectTimeoutMs = 1000;
+    constexpr int32_t requestTimeoutMs = 5;
+    constexpr int threadNum = 64;
+    constexpr int loopNum = 2000;
+    constexpr int64_t tailLatencyThresholdMs = 20;
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Get.delay",
+                                           FormatString("%d*sleep(100)", threadNum * loopNum)));
+
+    std::vector<std::shared_ptr<ObjectClient>> clients(threadNum);
+    for (auto &client : clients) {
+        InitTestClient(0, client, connectTimeoutMs, requestTimeoutMs);
+    }
+
+    std::atomic<int64_t> maxCostMs{ 0 };
+    std::atomic<int64_t> tailLatencyCount{ 0 };
+    std::atomic<int64_t> rpcUnavailableCount{ 0 };
+    std::vector<std::thread> threads;
+    threads.reserve(threadNum);
+    for (int i = 0; i < threadNum; ++i) {
+        threads.emplace_back([&, i] {
+            for (int j = 0; j < loopNum; ++j) {
+                std::vector<Optional<Buffer>> buffers;
+                Timer timer;
+                auto rc = clients[i]->Get({ "tail_latency_reproduce_" + std::to_string(i) + "_" + std::to_string(j) },
+                                          0, buffers);
+                auto costMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
+                int64_t oldMax = maxCostMs.load(std::memory_order_relaxed);
+                while (costMs > oldMax
+                       && !maxCostMs.compare_exchange_weak(oldMax, costMs, std::memory_order_relaxed)) {
+                }
+                if (costMs > tailLatencyThresholdMs) {
+                    tailLatencyCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
+                    rpcUnavailableCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    LOG(INFO) << FormatString("Client Get 5ms timeout reproduce done, maxCostMs=%ld, tailLatencyCount=%ld/%d, "
+                              "rpcUnavailableCount=%ld/%d. Check ds_client_access log for DS_KV_CLIENT_GET or "
+                              "DS_OBJECT_CLIENT_GET records whose latency is greater than 20000 us.",
+                              maxCostMs.load(), tailLatencyCount.load(), threadNum * loopNum,
+                              rpcUnavailableCount.load(), threadNum * loopNum);
+    ASSERT_GT(rpcUnavailableCount.load(), 0);
 }
 
 TEST_F(OCClientGetTest, GetRemoteMultipleClientsToSingleWorkerTest)
