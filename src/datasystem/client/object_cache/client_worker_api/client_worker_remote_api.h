@@ -20,9 +20,10 @@
 #ifndef DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_WORKER_REMOTE_API_H
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_WORKER_REMOTE_API_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <unordered_map>
+#include <mutex>
 #include <unordered_set>
 
 #include "datasystem/client/embedded_client_worker_api.h"
@@ -205,6 +206,7 @@ private:
     std::unordered_map<int, uint8_t *> waitRespMap_;
     std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
     std::unique_ptr<WorkerOCService::Stub> stub_;
+    std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{ 0 };
 };
 }  // namespace object_cache
 }  // namespace datasystem

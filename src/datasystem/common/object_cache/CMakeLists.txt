@@ -2,6 +2,7 @@ set(COMMON_BUFFER_SRCS
         buffer.cpp
         lock.cpp
         shm_guard.cpp
+        urma_fallback_tcp_limiter.cpp
         device_buffer.cpp
         buffer_composer.cpp)
 

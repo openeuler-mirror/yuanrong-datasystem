@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -35,11 +36,59 @@ using datasystem::client::ClientWorkerRemoteCommonApi;
 namespace datasystem {
 namespace object_cache {
 static constexpr uint32_t BIT_NUM_OF_INT = 32;
+static constexpr char URMA_TRANSPORT_FAILED_MSG[] = "URMA transport failed";
+static constexpr char CLIENT_TO_WORKER_FALLBACK[] = "client->worker";
 const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
                                                        StatusCode::K_RPC_DEADLINE_EXCEEDED,
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
+
+namespace {
+bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
+{
+    return bufferInfo->ubUrmaDataInfo != nullptr && !bufferInfo->ubDataSentByMemoryCopy;
+}
+
+Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                            std::vector<MemView> &payloads, UrmaFallbackTcpLimiter::Ticket &ticket)
+{
+    if (IsUrmaFallbackPayload(bufferInfo)) {
+        RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(
+            pendingBytes, bufferInfo->dataSize,
+            Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG), CLIENT_TO_WORKER_FALLBACK, ticket));
+    }
+    payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
+    return Status::OK();
+}
+
+void FillMultiPublishObjectInfo(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                const std::vector<uint64_t> *blobSizes, MultiPublishReqPb &req)
+{
+    MultiPublishReqPb::ObjectInfoPb objectInfoPb;
+    if (blobSizes != nullptr && !blobSizes->empty()) {
+        objectInfoPb.mutable_blob_sizes()->Add(blobSizes->begin(), blobSizes->end());
+    }
+    objectInfoPb.set_object_key(bufferInfo->objectKey);
+    objectInfoPb.set_data_size(bufferInfo->dataSize);
+    objectInfoPb.set_shm_id(bufferInfo->shmId);
+    req.mutable_object_info()->Add(std::move(objectInfoPb));
+}
+
+void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
+                         const std::string &clientId, MultiPublishReqPb &req)
+{
+    req.set_client_id(clientId);
+    req.set_ttl_second(param.ttlSecond);
+    req.set_write_mode(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetWriteMode()));
+    req.set_consistency_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetConsistencyType()));
+    req.set_cache_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetCacheType()));
+    req.set_istx(param.isTx);
+    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
+    req.set_is_replica(param.isReplica);
+    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
+}
+}  // namespace
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
@@ -379,13 +428,11 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
-
     std::vector<MemView> payloads;
-    // Send payload if data is not already sent via shm or UB.
+    UrmaFallbackTcpLimiter::Ticket fallbackTicket;
     if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
-        payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
+        RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo, payloads, fallbackTicket));
     }
-
     PublishRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
     bool isRetry = false;
@@ -425,32 +472,25 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
     PerfPoint point(PerfKey::CLIENT_MULTI_PUBLISH_CONSTRUCT);
     MultiPublishReqPb req;
-    req.set_client_id(clientId_);
-    req.set_ttl_second(param.ttlSecond);
-    req.set_write_mode(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetWriteMode()));
-    req.set_consistency_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetConsistencyType()));
-    req.set_cache_type(static_cast<uint32_t>(bufferInfo[0]->objectMode.GetCacheType()));
-    req.set_istx(param.isTx);
-    req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
-    req.set_is_replica(param.isReplica);
-    req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
+    InitMultiPublishReq(bufferInfo, param, clientId_, req);
     std::vector<MemView> payloads;
+    std::vector<UrmaFallbackTcpLimiter::Ticket> fallbackTickets;
     uint64_t payloadBytes = 0;
+    fallbackTickets.reserve(bufferInfo.size());
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
-        if (bufferInfo[i]->shmId.Empty() || (bufferInfo[i]->ubUrmaDataInfo && !bufferInfo[i]->ubDataSentByMemoryCopy)) {
-            payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
+        if (bufferInfo[i]->shmId.Empty() || IsUrmaFallbackPayload(bufferInfo[i])) {
+            if (IsUrmaFallbackPayload(bufferInfo[i])) {
+                fallbackTickets.emplace_back();
+                RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo[i], payloads,
+                                                      fallbackTickets.back()));
+            } else {
+                payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
+            }
             payloadBytes += bufferInfo[i]->dataSize;
         }
-        MultiPublishReqPb::ObjectInfoPb objectInfoPb;
-        auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
-        if (blobSizes.size() != 0) {
-            mutableBlobSizes->Add(blobSizes[i].begin(), blobSizes[i].end());
-        }
-        objectInfoPb.set_object_key(bufferInfo[i]->objectKey);
-        objectInfoPb.set_data_size(bufferInfo[i]->dataSize);
-        objectInfoPb.set_shm_id(bufferInfo[i]->shmId);
-        req.mutable_object_info()->Add(std::move(objectInfoPb));
+        const auto *currentBlobSizes = blobSizes.empty() ? nullptr : &blobSizes[i];
+        FillMultiPublishObjectInfo(bufferInfo[i], currentBlobSizes, req);
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);

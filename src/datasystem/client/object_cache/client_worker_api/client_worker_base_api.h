@@ -21,6 +21,7 @@
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_CLIENT_WORKER_BASE_API_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 
