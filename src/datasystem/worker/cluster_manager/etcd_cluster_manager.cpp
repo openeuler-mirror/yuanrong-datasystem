@@ -29,6 +29,8 @@
 #include <unordered_set>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -1425,6 +1427,11 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
     metaAddrInfo.SetDbName(dbName);
     if (isFromOtherAz) {
         metaAddrInfo.MarkMetaIsFromOtherAz();
+    }
+    if (!IsCentralized()) {
+        const uint64_t us = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+        metrics::GetHistogram(
+            static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY)).Observe(us);
     }
     workerOperationTimeCost.Append("GetMetaAddress", timer.ElapsedMilliSecond());
     return Status::OK();

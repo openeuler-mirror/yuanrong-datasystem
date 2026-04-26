@@ -101,7 +101,7 @@ Status WorkerWorkerOCServiceImpl::Init()
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     GetObjectRemoteReqPb req;
     GetObjectRemoteRspPb rsp;
@@ -137,7 +137,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                   std::vector<RpcMessage> &payload)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", req.object_key(),
                               req.request_id(), req.read_offset(), req.read_size());
@@ -615,7 +615,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>>
         serverApi)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     BatchGetObjectRemoteReqPb req;
     BatchGetObjectRemoteRspPb rsp;

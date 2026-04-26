@@ -37,7 +37,8 @@ enum class KvMetricId : uint16_t {
     CLIENT_GET_TCP_READ_TOTAL_BYTES,
     WORKER_RPC_CREATE_META_LATENCY,
     WORKER_RPC_QUERY_META_LATENCY,
-    WORKER_RPC_GET_REMOTE_OBJECT_LATENCY,
+    /** Worker (caller) -> remote worker GetObject* */
+    WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY,
     WORKER_PROCESS_CREATE_LATENCY,
     WORKER_PROCESS_PUBLISH_LATENCY,
     WORKER_PROCESS_GET_LATENCY,
@@ -90,6 +91,16 @@ enum class KvMetricId : uint16_t {
     CLIENT_DEC_REF_SKIPPED_TOTAL,
     // URMA
     URMA_IMPORT_JFR,
+    /** Other worker's pull: GetObject* service path */
+    WORKER_RPC_REMOTE_GET_INBOUND_LATENCY,
+    /** MsgQ: submit -> thread start */
+    WORKER_GET_THREADPOOL_QUEUE_LATENCY,
+    /** Thread pool: ProcessGetObjectRequest */
+    WORKER_GET_THREADPOOL_EXEC_LATENCY,
+    /** Non-central: hash/resolve master address */
+    WORKER_GET_META_ADDR_HASHRING_LATENCY,
+    /** After QueryMetadataFromMaster OK: local follow-up */
+    WORKER_GET_POST_QUERY_META_PHASE_LATENCY,
     KV_METRIC_END
 };
 
