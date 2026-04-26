@@ -234,6 +234,14 @@ protected:
     Status CompleteLocalTask(const std::string &incidentKey, const RecoveryTaskPb &task);
 
     /**
+     * @brief Mark a local task FAILED with owner verification after execution returns an error.
+     * @param[in] incidentKey The ETCD key suffix of the incident.
+     * @param[in] task The task identity captured from the snapshot.
+     * @return Status of the call.
+     */
+    Status FailLocalTask(const std::string &incidentKey, const RecoveryTaskPb &task);
+
+    /**
      * @brief Return a stable active-worker list after filtering out known failed workers.
      * @return Stable active workers.
      */
@@ -389,6 +397,43 @@ private:
      * @return True if enabled.
      */
     bool IsFeatureEnabled() const;
+
+    /**
+     * @brief Build the slot preload callback used during recovery execution.
+     *
+     * The callback validates memory, rebuilds object metadata from preload records, writes local entries through
+     * MetaDataRecoveryManager, and appends recovered metadata for a later master push.
+     *
+     * @param[in,out] recoveredMetas Output list; successful preloads append one ObjectMetaPb per object.
+     * @return Callback suitable for PersistenceApi::PreloadSlot.
+     */
+    SlotPreloadCallback BuildRecoveryPreloadCallback(std::vector<ObjectMetaPb> &recoveredMetas);
+
+    /**
+     * @brief Preload every slot listed in the recovery task from the given source worker.
+     *
+     * Slot order is shuffled to spread load. Transient I/O errors are retried with a bounded timeout in the worker.
+     *
+     * @param[in] sourceWorker Worker address to read slot data from.
+     * @param[in] task Recovery task whose slots are preloaded.
+     * @param[in] callback Preload callback invoked for each loaded object.
+     * @param[out] failedSlotIds Slot ids whose preload ultimately failed after retries.
+     * @return First non-OK preload status if any slot failed, otherwise OK (remaining slots are still attempted).
+     */
+    Status PreloadRecoveryTaskSlots(const std::string &sourceWorker, const RecoveryTaskPb &task,
+                                    const SlotPreloadCallback &callback, std::vector<uint32_t> &failedSlotIds);
+
+    /**
+     * @brief Push recovered metadata to master after preloads complete.
+     *
+     * On partial or retryable master failures, enqueues deferred metadata retry when eligible; otherwise fails fast
+     * with the recovery status.
+     *
+     * @param[in] task Recovery task context (incident key and identity fields).
+     * @param[in] recoveredMetas Metadata collected during preload; passed to RecoverMetadata / deferred retry.
+     * @return Status of the call.
+     */
+    Status FinalizeRecoveryMetadataPush(const RecoveryTaskPb &task, std::vector<ObjectMetaPb> &recoveredMetas);
 
     HostPort localAddress_;
     EtcdClusterManager *etcdCM_;

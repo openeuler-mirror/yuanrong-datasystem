@@ -670,9 +670,13 @@ Status SlotRecoveryManager::ScheduleLocalTasks(const std::string &incidentKey, c
             if (executeRc.IsError()) {
                 LOG(WARNING) << FormatString(
                     "action=execute_local_task incident_key=%s failed_worker=%s owner_worker=%s "
-                    "task_status=%s reason=execute_error_continue_completion err=%s",
+                    "task_status=%s reason=execute_error_mark_failed err=%s",
                     incidentKey, task.failed_worker(), task.owner_worker(), TaskStatusName(task.task_status()),
                     executeRc.ToString());
+                LOG_IF_ERROR(FailLocalTask(incidentKey, task),
+                             FormatString("Async failure finalization failed for recovery task of %s.",
+                                          task.failed_worker()));
+                return;
             }
             LOG_IF_ERROR(CompleteLocalTask(incidentKey, task),
                          FormatString("Async completion failed for recovery task of %s.", task.failed_worker()));
@@ -760,6 +764,56 @@ Status SlotRecoveryManager::CompleteLocalTask(const std::string &incidentKey, co
                 return deleteRc;
             }
             LOG(INFO) << FormatString("action=delete_incident_after_completion incident_key=%s reason=terminal",
+                                      incidentKey);
+        }
+    }
+    return rc;
+}
+
+Status SlotRecoveryManager::FailLocalTask(const std::string &incidentKey, const RecoveryTaskPb &task)
+{
+    bool shouldDelete = false;
+    bool taskFailed = false;
+    const std::string localWorker = localAddress_.ToString();
+    auto rc = store_->CASIncident(incidentKey, [&task, &shouldDelete, &taskFailed, &localWorker, &incidentKey](
+                                                   SlotRecoveryInfoPb &info, bool &exists, bool &writeBack) {
+        if (!exists) {
+            writeBack = false;
+            return Status::OK();
+        }
+        writeBack = false;
+        for (auto &current : *info.mutable_recovery_tasks()) {
+            if (!IsSameTaskIdentity(current, task)) {
+                continue;
+            }
+            if (current.owner_worker() != localWorker || SlotRecoveryIncidentState::IsTaskTerminal(current)) {
+                continue;
+            }
+            if (current.task_status() != RecoveryTaskPb_TaskStatus_PENDING
+                && current.task_status() != RecoveryTaskPb_TaskStatus_IN_PROGRESS) {
+                continue;
+            }
+            current.set_task_status(RecoveryTaskPb_TaskStatus_FAILED);
+            SlotRecoveryIncidentState::RefreshCounters(info);
+            shouldDelete = SlotRecoveryIncidentState::IsFullyTerminal(info);
+            taskFailed = true;
+            writeBack = true;
+            return Status::OK();
+        }
+        return Status::OK();
+    });
+    if (rc.IsOk()) {
+        LOG(INFO) << FormatString(
+            "action=fail_local_task incident_key=%s failed_worker=%s owner_worker=%s "
+            "cas_result=%s delete_incident=%d slots_summary={%s}",
+            incidentKey, task.failed_worker(), localWorker, taskFailed ? "updated" : "unchanged", shouldDelete,
+            SlotsSummary(task.slots()));
+        if (shouldDelete) {
+            auto deleteRc = store_->DeleteIncident(incidentKey);
+            if (deleteRc.IsError() && deleteRc.GetCode() != K_NOT_FOUND) {
+                return deleteRc;
+            }
+            LOG(INFO) << FormatString("action=delete_incident_after_failure incident_key=%s reason=terminal",
                                       incidentKey);
         }
     }
@@ -1068,18 +1122,9 @@ Status SlotRecoveryManager::ScheduleLocalRestartTasks(const std::string &localWo
     return ScheduleLocalTasks(localWorker, info);
 }
 
-Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
+SlotPreloadCallback SlotRecoveryManager::BuildRecoveryPreloadCallback(std::vector<ObjectMetaPb> &recoveredMetas)
 {
-    LOG(INFO) << FormatString("action=execute_recovery_task local_worker=%s task={%s}", localAddress_.ToString(),
-                              TaskSummary(task));
-    INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(persistenceApi_ != nullptr, K_RUNTIME_ERROR, "PersistenceApi is null");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR,
-                                         "MetaDataRecoveryManager is null");
-    std::vector<ObjectMetaPb> recoveredMetas;
-    const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
-    SlotPreloadCallback callback = [this, &recoveredMetas](const SlotPreloadMeta &meta,
-                                                           const std::shared_ptr<std::stringstream> &content) {
+    return [this, &recoveredMetas](const SlotPreloadMeta &meta, const std::shared_ptr<std::stringstream> &content) {
         RETURN_IF_NOT_OK(CheckPreloadMemoryAvailable(meta));
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(content != nullptr, K_NOT_FOUND,
                                              FormatString("[ObjectKey %s] Preload content is empty.", meta.objectKey));
@@ -1093,9 +1138,21 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
         recoveredMetas.emplace_back(std::move(recoveredMeta));
         return Status::OK();
     };
+}
+
+Status SlotRecoveryManager::PreloadRecoveryTaskSlots(const std::string &sourceWorker, const RecoveryTaskPb &task,
+                                                     const SlotPreloadCallback &callback,
+                                                     std::vector<uint32_t> &failedSlotIds)
+{
+    failedSlotIds.clear();
     std::vector<uint32_t> shuffledSlots(task.slots().begin(), task.slots().end());
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
     std::shuffle(shuffledSlots.begin(), shuffledSlots.end(), gen);
+    // Don't short-circuit on a single slot's preload failure: some slots may have already been
+    // preloaded successfully and their `recoveredMetas` MUST still be pushed to master, otherwise
+    // master keeps a half-empty meta entry (locations={}, primary_address="") after passive
+    // worker eviction and `Get` returns `addr=""` -> "no object copy exists" (issue #447).
+    Status preloadAggregateRc = Status::OK();
     for (const auto slotId : shuffledSlots) {
         auto rc = RetryOnError(
             SLOT_PRELOAD_RETRY_TIMEOUT_MS,
@@ -1107,8 +1164,21 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
                 return persistenceApi_->PreloadSlot(sourceWorker, slotId, callback);
             },
             []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN, StatusCode::K_IO_ERROR });
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Preload slot %u from %s failed", slotId, sourceWorker));
+        if (!rc.IsOk()) {
+            LOG(ERROR) << FormatString(
+                "Preload slot %u from %s failed. Detail: %s", slotId, sourceWorker, rc.ToString());
+            failedSlotIds.emplace_back(slotId);
+            if (preloadAggregateRc.IsOk()) {
+                preloadAggregateRc = rc;
+            }
+        }
     }
+    return preloadAggregateRc;
+}
+
+Status SlotRecoveryManager::FinalizeRecoveryMetadataPush(const RecoveryTaskPb &task,
+                                                         std::vector<ObjectMetaPb> &recoveredMetas)
+{
     INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecoverMeta");
     std::vector<std::string> failedIds;
     auto recoverRc = metadataRecoveryManager_->RecoverMetadata(recoveredMetas, failedIds);
@@ -1120,6 +1190,30 @@ Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
                          VectorToString(failedIds)));
     }
     return Status::OK();
+}
+
+Status SlotRecoveryManager::ExecuteRecoveryTask(const RecoveryTaskPb &task)
+{
+    LOG(INFO) << FormatString("action=execute_recovery_task local_worker=%s task={%s}", localAddress_.ToString(),
+                              TaskSummary(task));
+    INJECT_POINT_NO_RETURN("SlotRecoveryManager.ExecuteRecoveryTask.BeforeRecover");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(persistenceApi_ != nullptr, K_RUNTIME_ERROR, "PersistenceApi is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR,
+                                         "MetaDataRecoveryManager is null");
+    std::vector<ObjectMetaPb> recoveredMetas;
+    const auto sourceWorker = task.source_worker().empty() ? task.failed_worker() : task.source_worker();
+    auto callback = BuildRecoveryPreloadCallback(recoveredMetas);
+    std::vector<uint32_t> failedSlotIds;
+    Status preloadAggregateRc = PreloadRecoveryTaskSlots(sourceWorker, task, callback, failedSlotIds);
+    RETURN_IF_NOT_OK(FinalizeRecoveryMetadataPush(task, recoveredMetas));
+    if (!preloadAggregateRc.IsOk()) {
+        LOG(WARNING) << FormatString(
+            "action=execute_recovery_task_partial_preload_failure local_worker=%s task={%s} "
+            "failedSlots=%s firstError=%s pushedMetaCount=%zu",
+            localAddress_.ToString(), TaskSummary(task), VectorToString(failedSlotIds), preloadAggregateRc.ToString(),
+            recoveredMetas.size());
+    }
+    return preloadAggregateRc;
 }
 
 bool SlotRecoveryManager::ShouldDeferMetaRetry(const Status &recoverRc, const std::vector<std::string> &failedIds) const
