@@ -98,11 +98,12 @@ void KVWorker::PipelineLoop(int threadId) {
 
         double sleepMs = intervalMs - elapsedMs;
         if (sleepMs > 0) {
-            // Jittered sleep: random [0, 2*sleepMs], same average as fixed sleep
-            std::uniform_real_distribution<double> dist(0, 2.0 * sleepMs);
-            double jittered = dist(rng);
+            if (cfg_.enableJitter) {
+                std::uniform_real_distribution<double> dist(0, 2.0 * sleepMs);
+                sleepMs = dist(rng);
+            }
             std::this_thread::sleep_for(
-                std::chrono::microseconds(static_cast<int64_t>(jittered * 1000)));
+                std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000)));
         }
     }
 
