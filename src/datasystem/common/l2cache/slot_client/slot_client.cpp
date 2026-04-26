@@ -97,15 +97,22 @@ bool ParseSlotIdFromPath(const std::string &path, uint32_t &slotId)
     return true;
 }
 
-std::string BuildSlotClientSingletonKey(const std::string &sfsPath)
+std::string BuildSlotClientSingletonKey(const std::string &sfsPath, const std::string &clusterName,
+                                        const std::string &workerNamespace)
 {
-    return BuildSlotStoreRoot(sfsPath, FLAGS_cluster_name);
+    return BuildSlotStoreRootForWorker(sfsPath, clusterName, workerNamespace);
 }
 }  // namespace
 
 std::shared_ptr<SlotClient> SlotClient::GetProcessSingleton(const std::string &sfsPath)
 {
-    const auto singletonKey = BuildSlotClientSingletonKey(sfsPath);
+    return GetProcessSingleton(sfsPath, FLAGS_cluster_name, GetSlotWorkerNamespace());
+}
+
+std::shared_ptr<SlotClient> SlotClient::GetProcessSingleton(const std::string &sfsPath, const std::string &clusterName,
+                                                            const std::string &workerNamespace)
+{
+    const auto singletonKey = BuildSlotClientSingletonKey(sfsPath, clusterName, workerNamespace);
     std::lock_guard<std::mutex> lock(GetSlotClientSingletonMu());
     auto &instances = GetSlotClientSingletons();
     auto it = instances.find(singletonKey);
@@ -148,7 +155,7 @@ Status SlotClient::Init()
     });
     const auto expectedMaxDataFileBytes =
         static_cast<uint64_t>(FLAGS_distributed_disk_max_data_file_size_mb) * 1024ul * 1024ul;
-    if (initialized_) {
+    if (initialized_.load(std::memory_order_acquire)) {
         CHECK_FAIL_RETURN_STATUS(rootPath_ == expectedRootPath, StatusCode::K_RUNTIME_ERROR,
                                  FormatString("SlotClient rootPath mismatch, existing=%s expected=%s", rootPath_,
                                               expectedRootPath));
@@ -167,7 +174,7 @@ Status SlotClient::Init()
             << ", slotNum=" << slotNum_ << ", maxDataFileBytes=" << maxDataFileBytes_;
     RETURN_IF_NOT_OK(CreateDir(rootPath_, true));
     StartBackgroundCompactThread();
-    initialized_ = true;
+    initialized_.store(true, std::memory_order_release);
     VLOG(1) << "Initialized slot client successfully, rootPath=" << rootPath_;
     return Status::OK();
 }
@@ -254,6 +261,7 @@ Status SlotClient::CleanupLocalSlots()
         auto it = instances.find(singletonKey_);
         if (it != instances.end()) {
             auto existing = it->second.lock();
+            // Don't remove if a new singleton has already replaced us.
             if (existing == nullptr || existing.get() == this) {
                 instances.erase(it);
             }
@@ -261,7 +269,7 @@ Status SlotClient::CleanupLocalSlots()
     }
     {
         std::unique_lock<std::shared_mutex> lock(mu_);
-        slots_.clear();
+        slots_.clear(); // Clear the slots to release the memory.
     }
     RETURN_OK_IF_TRUE(rootPath_.empty() || !FileExist(rootPath_));
     LOG(INFO) << "Cleaning local slot root path: " << rootPath_;
@@ -276,7 +284,8 @@ std::string SlotClient::GetRequestSuccessRate() const
 
 Status SlotClient::EnsureActive() const
 {
-    CHECK_FAIL_RETURN_STATUS(initialized_, StatusCode::K_RUNTIME_ERROR, "SlotClient is not initialized");
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), StatusCode::K_RUNTIME_ERROR,
+                             "SlotClient is not initialized");
     CHECK_FAIL_RETURN_STATUS(!cleanupRequested_.load(), StatusCode::K_RUNTIME_ERROR,
                              "SlotClient is cleaning up local slots");
     return Status::OK();
