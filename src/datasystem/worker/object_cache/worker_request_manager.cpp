@@ -483,16 +483,20 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
             FormatString("Try read latch failed while getting object %s from shmUnit.", objectKeyUri));
     }
 
+    Status ubRc = Status::OK();
     if (useUbGet) {
-        RETURN_OK_IF_TRUE(UbWriteHelper(objectKeyUri, metaSize, readSize, readOffset, params->shmUnit, objectInfo,
-                                        objectIndex, ubWriteOffset, resp)
-                              .IsOk());
+        ubRc = UbWriteHelper(objectKeyUri, metaSize, readSize, readOffset, params->shmUnit, objectInfo, objectIndex,
+                             ubWriteOffset, resp);
+        RETURN_OK_IF_TRUE(ubRc.IsOk());
     }
 
     auto curIndex = outPayloads.size();
     LOG(INFO) << FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
                               readOffset, readSize);
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
+    if (ubRc.IsError()) {
+        RETURN_IF_NOT_OK(shmGuard.TrackUrmaFallbackTcp(readSize, ubRc, "worker->client"));
+    }
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
     METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, readSize);
     METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);

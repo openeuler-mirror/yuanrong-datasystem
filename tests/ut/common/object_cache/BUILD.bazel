@@ -40,3 +40,13 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "urma_fallback_tcp_limiter_test",
+    srcs = ["urma_fallback_tcp_limiter_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//tests/ut:ut_common",
+    ],
+)
