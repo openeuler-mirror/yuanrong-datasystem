@@ -709,6 +709,8 @@ Status UrmaManager::CheckAndNotify()
     }
 
     // Iterate through the finishedRequests_ set and notify request threads
+    Timer timer;
+    auto count = finishedRequests_.size();
     for (auto it = finishedRequests_.begin(); it != finishedRequests_.end();) {
         auto requestId = *it;
         std::shared_ptr<UrmaEvent> event;
@@ -732,6 +734,10 @@ Status UrmaManager::CheckAndNotify()
             failedRequests_.erase(requestId);
             it = finishedRequests_.erase(it);
         }
+    }
+    if (timer.ElapsedMilliSecond() > 1) {
+        LOG(INFO) << "[UrmaEventHandler]: Poll jfc notify elapsed = " << timer.ElapsedMilliSecond() << "ms,"
+                  << ", cpuid: " << sched_getcpu() << ", count: " << count;
     }
 
     return Status::OK();
@@ -761,6 +767,8 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
     if (!jfs->IsValid()) {
         RETURN_STATUS(K_URMA_ERROR, "Urma jfs is invalid");
     }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_INFLIGHT_WR_COUNT))
+        .Observe(static_cast<int64_t>(tbbEventMap_.size()));
     TbbEventMap::accessor mapAccessor;
     auto res = tbbEventMap_.insert(mapAccessor, requestId);
     if (!res) {
