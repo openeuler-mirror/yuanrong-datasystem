@@ -319,6 +319,7 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
 | `notify_delay_ms` | 10 | 写入后延迟通知时间(ms)，`0` = 不延迟 |
+| `jitter_ms` | 0 | 每次请求前随机抖动(ms)，`0` = 不抖动，避免多实例同时请求 |
 | `cpu_affinity` | `""` | CPU 绑核，如 `"0-7"` 或 `"0,2,4,6"`，空 = 自动检测容器可用 CPU |
 | `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
 | `ttl_seconds` | 5 | 写入数据 TTL |
