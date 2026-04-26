@@ -89,14 +89,14 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 60, "client_async_release_queue_size", MetricType::GAUGE, "count" },
     { 61, "client_dec_ref_skipped_total", MetricType::COUNTER, "count" },
     { 62, "urma_import_jfr", MetricType::HISTOGRAM, "us" },
-    { 63, "worker_rpc_remote_get_inbound_latency", MetricType::HISTOGRAM, "us" },
-    { 64, "worker_get_threadpool_queue_latency", MetricType::HISTOGRAM, "us" },
-    { 65, "worker_get_threadpool_exec_latency", MetricType::HISTOGRAM, "us" },
-    { 66, "worker_get_meta_addr_hashring_latency", MetricType::HISTOGRAM, "us" },
-    { 67, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
+    { 63, "urma_inflight_wr_count", MetricType::HISTOGRAM, "count" },
+    { 64, "worker_rpc_remote_get_inbound_latency", MetricType::HISTOGRAM, "us" },
+    { 65, "worker_get_threadpool_queue_latency", MetricType::HISTOGRAM, "us" },
+    { 66, "worker_get_threadpool_exec_latency", MetricType::HISTOGRAM, "us" },
+    { 67, "worker_get_meta_addr_hashring_latency", MetricType::HISTOGRAM, "us" },
+    { 68, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
 };
-static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])
-              == static_cast<size_t>(KvMetricId::KV_METRIC_END));
+static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
 std::mutex g_initMutex;
 bool g_inited = false;
