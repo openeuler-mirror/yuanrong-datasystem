@@ -46,10 +46,19 @@ class Slot;
 class SlotClient : public StorageClient {
 public:
     /**
+     * @brief Get the process-level shared slot client for the given distributed-disk root.
+     * @param[in] sfsPath The root path of the shared filesystem.
+     * @return Shared slot client instance for the root path.
+     */
+    static std::shared_ptr<SlotClient> GetProcessSingleton(const std::string &sfsPath);
+    static std::shared_ptr<SlotClient> GetProcessSingleton(const std::string &sfsPath, const std::string &clusterName,
+                                                           const std::string &workerNamespace);
+
+    /**
      * @brief Construct a slot client on top of the given shared filesystem root.
      * @param[in] sfsPath The root path of the shared filesystem.
      */
-    explicit SlotClient(const std::string &sfsPath);
+    explicit SlotClient(const std::string &sfsPath, std::string singletonKey = "");
     ~SlotClient();
 
     /**
@@ -164,6 +173,7 @@ private:
     std::string GetSlotPathForWorker(const std::string &workerAddress, uint32_t slotId) const;
 
     const std::string sfsPath_;
+    const std::string singletonKey_;
     std::string rootPath_;
     uint32_t slotNum_{ 128 };
     uint64_t maxDataFileBytes_{ 1024ul * 1024ul * 1024ul };
@@ -176,6 +186,8 @@ private:
     uint64_t compactWakeupSeq_{ 0 };
     std::thread compactThread_;
     std::atomic<bool> cleanupRequested_{ false };
+    mutable std::mutex initMu_;
+    std::atomic<bool> initialized_{ false };
 };
 }  // namespace datasystem
 

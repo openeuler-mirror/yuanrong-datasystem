@@ -709,6 +709,7 @@ TEST_F(SlotRecoveryTest, MultiFailureIsolation)
 
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 5003), store);
     manager.SetActiveWorkers({ localWorker });
+    manager.SetExecutionHook([](const RecoveryTaskPb &) { return Status::OK(); });
 
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleFailedWorkers({ HostPort("127.0.0.1", 5001), HostPort("127.0.0.1", 5002) }));
@@ -816,6 +817,7 @@ TEST_F(SlotRecoveryTest, CreatesLocalIncidentOnRestart)
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7001), store);
     manager.SetActiveWorkers({ "127.0.0.1:7001" });
+    manager.SetExecutionHook([](const RecoveryTaskPb &) { return Status::OK(); });
     DS_ASSERT_OK(manager.InitForTest());
 
     // With no local incident persisted, restart should synthesize and complete the canonical one.

@@ -26,17 +26,20 @@
 #include "datasystem/common/l2cache/l2cache_client.h"
 #include "datasystem/common/l2cache/object_persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_client.h"
+#include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/util/raii.h"
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
 DS_DECLARE_string(distributed_disk_path);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 std::unique_ptr<PersistenceApi> PersistenceApi::Create()
 {
     if (FLAGS_l2_cache_type == "distributed_disk") {
-        return std::make_unique<AggregatedPersistenceApi>(std::make_unique<SlotClient>(FLAGS_distributed_disk_path));
+        return std::make_unique<AggregatedPersistenceApi>(
+            SlotClient::GetProcessSingleton(FLAGS_distributed_disk_path, FLAGS_cluster_name, GetSlotWorkerNamespace()));
     }
     return std::make_unique<ObjectPersistenceApi>();
 }
