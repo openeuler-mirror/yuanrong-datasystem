@@ -1303,7 +1303,7 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
         }
     }
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
-
+    LOG(INFO) << "ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd 1" << ' ' ;
     if (objKeysUndecidedMaster.empty() && objectKeysNotExistNeedQueryInEtcd.empty() && objectKeysPuzzled.empty()
         && objectKeysMayInOtherAz.empty()) {
         return;
@@ -1507,7 +1507,9 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // 5. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
     bool multiReplicaEnabled = etcdCM_->MultiReplicaEnabled();
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata && !multiReplicaEnabled;
-    if (metaStoredInEtcd && queryEtcdMeta) {
+    // If l2cache is disabled, there is no need to query meta in etcd.
+    bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
+    if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {
         ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(objKeysUndecidedMaster, std::move(objectKeysNotExist),
                                                        objectKeysPuzzled, objectKeysMayInOtherAz, queryMetas,
                                                        absentObjectKeys);
