@@ -61,18 +61,11 @@ void KVWorker::PipelineLoop(int threadId) {
         return;
     }
     auto sizeDist = std::uniform_int_distribution<size_t>(0, cfg_.dataSizes.size() - 1);
-    auto jitterDist = cfg_.jitterMs > 0
-        ? std::make_unique<std::uniform_int_distribution<int>>(0, cfg_.jitterMs) : nullptr;
 
     SLOG_INFO("Thread " << threadId << " started"
               << (qpsPerThread_ > 0 ? "" : " (unlimited)"));
 
     while (running_) {
-        if (jitterDist) {
-            int jms = (*jitterDist)(rng);
-            if (jms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(jms));
-        }
-
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
         auto now = std::chrono::steady_clock::now().time_since_epoch().count();
         std::string key = "kv_test_" + std::to_string(cfg_.instanceId)
@@ -105,8 +98,11 @@ void KVWorker::PipelineLoop(int threadId) {
 
         double sleepMs = intervalMs - elapsedMs;
         if (sleepMs > 0) {
+            // Jittered sleep: random [0, 2*sleepMs], same average as fixed sleep
+            std::uniform_real_distribution<double> dist(0, 2.0 * sleepMs);
+            double jittered = dist(rng);
             std::this_thread::sleep_for(
-                std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000)));
+                std::chrono::microseconds(static_cast<int64_t>(jittered * 1000)));
         }
     }
 

@@ -24,7 +24,6 @@ struct Config {
     int numSetThreads = 16;
     int notifyCount = 10;
     int notifyDelayMs = 10;   // delay between set and notify (ms), 0 = no delay
-    int jitterMs = 0;         // random jitter before each request (ms), 0 = no jitter
     int metricsIntervalMs = 3000;
     std::string metricsFile = "metrics_{instance_id}.csv";
     std::vector<NodeInfo> nodes;

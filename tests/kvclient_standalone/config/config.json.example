@@ -11,7 +11,6 @@
   "num_set_threads": 16,
   "notify_count": 10,
   "notify_delay_ms": 10,
-  "jitter_ms": 0,
   "cpu_affinity": "",
   "metrics_interval_ms": 3000,
   "metrics_file": "metrics_{instance_id}.csv",
