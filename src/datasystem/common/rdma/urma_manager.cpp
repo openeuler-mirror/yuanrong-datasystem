@@ -823,32 +823,9 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     RETURN_OK_IF_TRUE(!event->IsFailed());
 
     const auto statusCode = event->GetStatusCode();
-    const auto policy = GetUrmaErrorHandlePolicy(statusCode);
-    const auto opName = UrmaEvent::OperationTypeName(event->GetOperationType());
-    const auto &remoteAddr = event->GetRemoteAddress();
-    const auto &remoteInstanceId = event->GetRemoteInstanceId();
     const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
     auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
                                statusCode);
-    if (policy == UrmaErrorHandlePolicy::RECREATE_JFS) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS] requestId=" << requestId << ", op=" << opName << ", remoteAddress=" << remoteAddr
-            << ", remoteInstanceId=" << remoteInstanceId << ", cqeStatus=" << statusCode;
-        auto connection = event->GetConnection().lock();
-        auto oldJfs = event->GetJfs().lock();
-        if (connection != nullptr) {
-            const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-            LOG_IF_ERROR(connection->ReCreateJfs(*urmaResource_, oldJfs),
-                         FormatString("[URMA_RECREATE_JFS_FAILED] requestId=%s, op=%s, remoteAddress=%s, "
-                                      "remoteInstanceId=%s",
-                                      requestIdStr.c_str(), opName, remoteAddr.c_str(), remoteInstanceId.c_str()));
-        } else {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_RECREATE_JFS_SKIP] Event connection expired, requestId=" << requestId << ", op=" << opName
-                << ", remoteAddress=" << remoteAddr << ", remoteInstanceId=" << remoteInstanceId;
-        }
-    }
-
     return Status(K_URMA_ERROR, errMsg);
 }
 
@@ -875,6 +852,37 @@ Status UrmaManager::GetJfsFromConnection(const std::shared_ptr<UrmaConnection> &
     });
     VLOG(1) << "connection using jfs id " << jfs->GetJfsId();
     return Status::OK();
+}
+
+Status UrmaManager::TryRecoverFailedJfsFromCompletion(uint64_t requestId, int statusCode, uint32_t jfsId)
+{
+    const auto policy = GetUrmaErrorHandlePolicy(statusCode);
+    if (policy != UrmaErrorHandlePolicy::RECREATE_JFS) {
+        return Status::OK();
+    }
+
+    std::shared_ptr<UrmaJfs> failedJfs;
+    auto lookupRc = urmaResource_->GetJfsById(jfsId, failedJfs);
+    if (lookupRc.IsError() || failedJfs == nullptr) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId
+            << " is not found, requestId=" << requestId << ", cqeStatus=" << statusCode
+            << ", rc=" << lookupRc.ToString();
+        return Status::OK();
+    }
+
+    auto connection = failedJfs->GetConnection().lock();
+    if (connection == nullptr) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId
+            << " has no bound connection, requestId=" << requestId << ", cqeStatus=" << statusCode;
+        return Status::OK();
+    }
+
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_RECREATE_JFS] Trigger from completion, requestId=" << requestId << ", jfsId=" << jfsId
+        << ", cqeStatus=" << statusCode;
+    return connection->ReCreateJfs(*urmaResource_, failedJfs);
 }
 
 Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int count,
@@ -908,6 +916,9 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG(ERROR) << FormatString("Failed to poll jfc requestId: %s CR.status: %d", requestIdStr.c_str(),
                                        crStatus);
+            LOG_IF_ERROR(TryRecoverFailedJfsFromCompletion(userCtx, crStatus, jfsId),
+                         FormatString("[URMA_RECREATE_JFS_FAILED] requestId=%s, jfsId=%u, cqeStatus=%d",
+                                      requestIdStr.c_str(), jfsId, crStatus));
             failedCompletedReqs[completeRecords[i].user_ctx] = crStatus;
         }
     }

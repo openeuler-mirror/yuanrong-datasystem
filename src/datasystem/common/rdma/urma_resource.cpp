@@ -396,7 +396,8 @@ Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr
             << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
         return Status::OK();
     }
-    // failedJfs must come from the UrmaEvent that reported the failure.
+    // failedJfs must be the exact JFS that reported the failure, either from
+    // the completion record, async event, or request event.
     // connection->jfs_ may already have been swapped to a newly recreated JFS
     // by another thread. If we read jfs_ here and call MarkInvalid() on it,
     // we may incorrectly invalidate the new healthy JFS instead of the failed one.
