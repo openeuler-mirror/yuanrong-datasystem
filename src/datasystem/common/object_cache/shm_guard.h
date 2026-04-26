@@ -21,10 +21,10 @@
 #ifndef DATASYSTEM_COMMON_OBJECT_CACHE_SHM_GUARD_H
 #define DATASYSTEM_COMMON_OBJECT_CACHE_SHM_GUARD_H
 
-#include <atomic>
-#include <cstdint>
 #include <memory>
+#include <string>
 
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
@@ -34,7 +34,6 @@ namespace datasystem {
 class ShmGuard {
 public:
     ShmGuard(std::shared_ptr<ShmUnit> shmUnit, size_t dataSize, size_t metaSize);
-    void EnableSlowFreeObserve();
 
     /**
      * @brief Try to acquire read lock.
@@ -54,36 +53,33 @@ public:
     Status TransferTo(std::vector<RpcMessage> &messages, const uint64_t offset = 0, const uint64_t size = 0);
 
     /**
+     * @brief Track fallback-to-TCP backlog for URMA payloads until RpcMessage release.
+     * @param[in] size Payload size in bytes.
+     * @param[in] transportStatus The original URMA transport failure status.
+     * @param[in] direction Human-readable direction for logs and errors.
+     * @return Status of the call.
+     */
+    Status TrackUrmaFallbackTcp(uint64_t size, const Status &transportStatus, const std::string &direction);
+
+    /**
      * @brief Call after RpcMessage release.
      * @param[in] data The data pointer.
      * @param[in] hint The pointer of Impl instance.
      */
     static void Free(void *data, void *hint);
 
-    /**
-     * @brief Check whether zero-copy TCP payload should be rejected because recent ShmGuard release is slow.
-     * @param[out] remainingMs The remaining reject duration in milliseconds.
-     * @return true if the circuit breaker is open.
-     */
-    static bool IsSlowFreeCircuitOpen(int64_t &remainingMs);
-
 private:
     struct Impl {
         explicit Impl(std::shared_ptr<ShmUnit> shm);
         ~Impl();
-        bool IsLastFrameOnRelease();
-        // Keep the shared-memory allocation alive while any payload frame is still in flight.
+        // Protect share memory not be free.
         std::shared_ptr<ShmUnit> shmUnit;
-        // Protect the shared-memory payload from concurrent modification while it is exposed to RPC.
+        // Protect share memory not be modified
         std::shared_ptr<object_cache::ShmLock> lock;
-        // Thread id that acquired the read lock.
+        // The thread id that locks the share memory.
         std::thread::id tid;
-        // Start timestamp in ms for the current zero-copy transfer.
-        std::atomic<int64_t> transferStartTimeMs{ 0 };
-        // Number of payload frames that still need to release this impl.
-        std::atomic<uint32_t> remainingFrames{ 0 };
-        // Whether this transfer should contribute to slow-free circuit statistics.
-        std::atomic<bool> trackSlowFree{ false };
+        // Hold backlog accounting until the payload leaves the RPC channel.
+        std::unique_ptr<UrmaFallbackTcpLimiter::Ticket> fallbackTicket;
     };
 
     std::shared_ptr<Impl> impl_;
