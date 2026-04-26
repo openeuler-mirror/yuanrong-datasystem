@@ -41,7 +41,7 @@ SlotRecoveryOrchestrator::SlotRecoveryOrchestrator(const std::string &rootPath) 
 
 Status SlotRecoveryOrchestrator::Init()
 {
-    slotClient_ = std::make_unique<SlotClient>(rootPath_);
+    slotClient_ = SlotClient::GetProcessSingleton(rootPath_);
     return slotClient_->Init();
 }
 

@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <array>
 
 #include <gtest/gtest.h>
 
@@ -79,6 +80,14 @@ std::string MakeTempDir()
     auto *dir = mkdtemp(buffer.data());
     EXPECT_NE(dir, nullptr);
     return dir == nullptr ? "" : std::string(dir);
+}
+
+std::string GetCurrentWorkingDir()
+{
+    std::array<char, 4096> buffer{};
+    auto *cwd = getcwd(buffer.data(), buffer.size());
+    EXPECT_NE(cwd, nullptr);
+    return cwd == nullptr ? "" : std::string(cwd);
 }
 
 std::string GetSlotRootPath(const std::string &baseDir, const std::string &workerAddress = {})
@@ -685,6 +694,88 @@ TEST_F(SlotStoreTest, DistributedDiskUsesDistributedDiskPathInsteadOfSfsPath)
 
     ASSERT_TRUE(RemoveAll(distributedDiskPath.substr(0, distributedDiskPath.find("/distributed_disk"))).IsOk());
     ASSERT_TRUE(RemoveAll(legacySfsPath.substr(0, legacySfsPath.find("/legacy_sfs"))).IsOk());
+}
+
+TEST_F(SlotStoreTest, SlotClientProcessSingletonReusesSameInstanceForSameRoot)
+{
+    auto clientA = SlotClient::GetProcessSingleton(baseDir_);
+    auto clientB = SlotClient::GetProcessSingleton(baseDir_);
+
+    ASSERT_NE(clientA, nullptr);
+    ASSERT_NE(clientB, nullptr);
+    EXPECT_EQ(clientA.get(), clientB.get());
+
+    ASSERT_TRUE(clientA->Init().IsOk());
+    ASSERT_TRUE(clientB->Init().IsOk());
+    ASSERT_TRUE(clientA->CleanupLocalSlots().IsOk());
+}
+
+TEST_F(SlotStoreTest, SlotClientProcessSingletonDiffersForDifferentSlotRoots)
+{
+    const auto oldClusterName = FLAGS_cluster_name;
+    const auto oldNamespace = GetSlotWorkerNamespace();
+
+    FLAGS_cluster_name = "cluster_a";
+    SetSlotWorkerNamespace("worker_a");
+    auto clientA = SlotClient::GetProcessSingleton(baseDir_);
+
+    FLAGS_cluster_name = "cluster_b";
+    SetSlotWorkerNamespace("worker_b");
+    auto clientB = SlotClient::GetProcessSingleton(baseDir_);
+
+    ASSERT_NE(clientA, nullptr);
+    ASSERT_NE(clientB, nullptr);
+    EXPECT_NE(clientA.get(), clientB.get());
+
+    FLAGS_cluster_name = oldClusterName;
+    SetSlotWorkerNamespace(oldNamespace);
+}
+
+TEST_F(SlotStoreTest, SlotClientProcessSingletonReturnsFreshInstanceAfterCleanup)
+{
+    auto oldClient = SlotClient::GetProcessSingleton(baseDir_);
+    ASSERT_NE(oldClient, nullptr);
+    ASSERT_TRUE(oldClient->Init().IsOk());
+    ASSERT_TRUE(oldClient->CleanupLocalSlots().IsOk());
+
+    auto newClient = SlotClient::GetProcessSingleton(baseDir_);
+    ASSERT_NE(newClient, nullptr);
+    EXPECT_NE(oldClient.get(), newClient.get());
+    ASSERT_TRUE(newClient->Init().IsOk());
+    ASSERT_TRUE(newClient->Save("cleanup_recreate_key", 1, 0, MakeBody("payload")).IsOk());
+    ASSERT_TRUE(newClient->CleanupLocalSlots().IsOk());
+}
+
+TEST_F(SlotStoreTest, SlotClientInitSlotNumInjectReturnStillInitializesClient)
+{
+    auto client = SlotClient::GetProcessSingleton(baseDir_);
+    ASSERT_NE(client, nullptr);
+
+    ASSERT_TRUE(inject::Set("SlotClient.Init.SetSlotNum", "return(1)").IsOk());
+    ASSERT_TRUE(client->Init().IsOk());
+
+    auto saveRc = client->Save("inject_slot_num_key", 1, 0, MakeBody("payload"));
+    ASSERT_TRUE(saveRc.IsOk()) << saveRc.ToString();
+    ASSERT_TRUE(FileExist(JoinPath(BuildSlotStoreRoot(baseDir_, FLAGS_cluster_name), "slot_0000")));
+
+    ASSERT_TRUE(inject::Clear("SlotClient.Init.SetSlotNum").IsOk());
+    ASSERT_TRUE(client->CleanupLocalSlots().IsOk());
+}
+
+TEST_F(SlotStoreTest, SlotClientSaveBeforeInitMustFail)
+{
+    const auto oldCwd = GetCurrentWorkingDir();
+    const auto tempCwd = MakeTempDir() + "/cwd";
+    ASSERT_TRUE(CreateDir(tempCwd, true).IsOk());
+    ASSERT_TRUE(chdir(tempCwd.c_str()) == 0);
+
+    SlotClient client(baseDir_);
+    auto saveRc = client.Save("save_before_init", 1, 0, MakeBody("payload"));
+
+    ASSERT_TRUE(chdir(oldCwd.c_str()) == 0);
+    ASSERT_EQ(saveRc.GetCode(), StatusCode::K_RUNTIME_ERROR) << saveRc.ToString();
+    ASSERT_FALSE(FileExist(JoinPath(tempCwd, "slot_0000")));
+    ASSERT_TRUE(RemoveAll(tempCwd.substr(0, tempCwd.find("/cwd"))).IsOk());
 }
 
 TEST_F(SlotStoreTest, DistributedDiskRejectsEmptyRootPath)

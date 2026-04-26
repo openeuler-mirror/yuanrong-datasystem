@@ -60,7 +60,7 @@ private:
     std::string BaseName(const std::string &path) const;
 
     std::string rootPath_;
-    std::unique_ptr<SlotClient> slotClient_;
+    std::shared_ptr<SlotClient> slotClient_;
 };
 }  // namespace object_cache
 }  // namespace datasystem
