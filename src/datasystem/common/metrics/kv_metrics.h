@@ -81,6 +81,7 @@ enum class KvMetricId : uint16_t {
     CLIENT_DEC_REF_SKIPPED_TOTAL,
     // URMA
     URMA_IMPORT_JFR,
+    URMA_INFLIGHT_WR_COUNT,
     KV_METRIC_END
 };
 

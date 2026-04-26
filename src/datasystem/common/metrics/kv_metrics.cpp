@@ -81,9 +81,9 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 53, "client_async_release_queue_size", MetricType::GAUGE, "count" },
     { 54, "client_dec_ref_skipped_total", MetricType::COUNTER, "count" },
     { 55, "urma_import_jfr", MetricType::HISTOGRAM, "us" },
+    { 56, "urma_inflight_wr_count", MetricType::HISTOGRAM, "count" },
 };
-static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0])
-              == static_cast<size_t>(KvMetricId::KV_METRIC_END));
+static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
 std::mutex g_initMutex;
 bool g_inited = false;
