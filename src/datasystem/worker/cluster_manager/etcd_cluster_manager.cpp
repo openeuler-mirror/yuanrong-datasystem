@@ -1659,6 +1659,12 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
     int hashWorkerNum = 0;
     auto rc = GetHashRingWorkerNum(hashWorkerNum);
     int tableSize = GetNodeTableSize();
+    bool isRestart = false;
+    RETURN_IF_NOT_OK(IsRestart(isRestart));
+    INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", [&hashWorkerNum](int injectWorkerNum) {
+        hashWorkerNum = injectWorkerNum;
+        return Status::OK();
+    });
     static const int RESERVED_TIME_SEC = 3;
     static const int TO_SECOND = 1000;
     static const int WAITING_TIME_FOR_EACH_NODE_MS = 300;
@@ -1701,8 +1707,9 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
                              - duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC + injectSec + 1)).count();
                          return Status::OK();
                      });
-        if (GetSteadyClockTimeStampUs() - lastProgressTimeUs
+        if (isRestart && GetSteadyClockTimeStampUs() - lastProgressTimeUs
             >= duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC)).count()) {
+            INJECT_POINT_NO_RETURN("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak");
             LOG(INFO) << "No progress in node table for " << NO_PROGRESS_TIMEOUT_SEC
                       << "s, terminating wait early. Current: " << tableSize
                       << ", expected: " << hashWorkerNum;
