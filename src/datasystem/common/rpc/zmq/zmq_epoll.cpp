@@ -21,13 +21,12 @@
 #include "datasystem/common/rpc/zmq/zmq_epoll.h"
 
 #include <utility>
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-std::unique_ptr<ZmqPollEntry> ZmqCreatePollEntry(int fd,
-                                                 std::vector<std::weak_ptr<BaseHint>> hint,
-                                                 ZmqCallBackFunc inFunc,
-                                                 ZmqCallBackFunc outFunc)
+std::unique_ptr<ZmqPollEntry> ZmqCreatePollEntry(int fd, std::vector<std::weak_ptr<BaseHint>> hint,
+                                                 ZmqCallBackFunc inFunc, ZmqCallBackFunc outFunc)
 {
     auto pe = std::make_unique<ZmqPollEntry>();
     pe->fd_ = fd;
@@ -48,6 +47,10 @@ Status ZmqEpoll::Init(const std::string &startupMsg)
     auto traceId = Trace::Instance().GetTraceID();
     identStr_ = startupMsg.empty() ? "ZmqEpoll" : startupMsg;
     thrd_ = std::make_unique<Thread>([this, traceId]() {
+        if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
+            LOG(WARNING) << "Failed to set nice for ZmqEpoll thread, nice=" << FLAGS_io_thread_nice
+                         << ", errno=" << errno;
+        }
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         VLOG(RPC_KEY_LOG_LEVEL) << FormatString("%s starts", identStr_);
         Status rc;

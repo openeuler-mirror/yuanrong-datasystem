@@ -570,9 +570,8 @@ Status ZmqSockConnHelper::GetEndPoint(const ReconnectInfo &cInfo, std::string &p
     ZmqMetaMsgFrames reply;
     Status rc = mQue.ReceiveMsg(reply, timeout);
     if (rc.GetCode() == K_TRY_AGAIN) {
-        rc = Status(StatusCode::K_RPC_UNAVAILABLE,
-                    FormatString("[RPC_RECV_TIMEOUT] Remote host %s is not available",
-                                 info->channel_->GetZmqEndPoint()));
+        rc = Status(StatusCode::K_RPC_UNAVAILABLE, FormatString("[RPC_RECV_TIMEOUT] Remote host %s is not available",
+                                                                info->channel_->GetZmqEndPoint()));
     }
     RETURN_IF_NOT_OK(rc);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
@@ -1508,9 +1507,9 @@ Status SockConnEntry::WaitForConnected(int64_t timeout)
     if (!connInProgress_) {
         return connectRc_;
     }
-    RETURN_STATUS(K_RPC_UNAVAILABLE,
-                  FormatString("[REMOTE_SERVICE_WAIT_TIMEOUT] Remote service is not available within allowable %d ms",
-                               timeout));
+    RETURN_STATUS(
+        K_RPC_UNAVAILABLE,
+        FormatString("[REMOTE_SERVICE_WAIT_TIMEOUT] Remote service is not available within allowable %d ms", timeout));
 }
 
 void SockConnEntry::GetNextFd(bool forceV2mtp, std::shared_ptr<SockConnEntry::FdConn> &fdConn)
