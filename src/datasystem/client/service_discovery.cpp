@@ -103,6 +103,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
 
     sameHost.clear();
     other.clear();
+    std::unordered_map<std::string, uint32_t> workersStateCount;
     for (const auto &kv : outKeyValues) {
         KeepAliveValue value;
         auto rc = KeepAliveValue::FromString(kv.second, value);
@@ -110,6 +111,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
             LOG(WARNING) << "Failed to parse keep alive value for worker " << kv.first << ": " << rc.ToString();
             continue;
         }
+        workersStateCount[value.state]++;
         if (value.state != ETCD_NODE_READY) {
             continue;
         }
@@ -120,6 +122,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
             other.emplace_back(kv.first);
         }
     }
+    LOG(INFO) << "The workers state count is " << MapToString(workersStateCount);
     return Status::OK();
 }
 
