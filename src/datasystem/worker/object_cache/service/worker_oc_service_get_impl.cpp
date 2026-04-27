@@ -1343,7 +1343,6 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
         }
     }
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
-    LOG(INFO) << "ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd 1" << ' ' ;
     if (objKeysUndecidedMaster.empty() && objectKeysNotExistNeedQueryInEtcd.empty() && objectKeysPuzzled.empty()
         && objectKeysMayInOtherAz.empty()) {
         return;
