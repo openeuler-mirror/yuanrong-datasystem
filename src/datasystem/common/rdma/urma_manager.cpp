@@ -1024,6 +1024,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
 
 Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJfrId)
 {
+    LOG(INFO) << "Begin to import remote jfr.";
     PerfPoint point(PerfKey::URMA_SETUP_CONNECTION);
     const std::string remoteConnectionId =
         jfrInfo.clientId.empty() ? jfrInfo.localAddress.ToString() : jfrInfo.clientId;
@@ -1043,6 +1044,7 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJ
     bool success = false;
     Raii raii([&success, &accessor, this]() {
         if (!success) {
+            LOG(INFO) << "Fail to import remote jfr.";
             urmaConnectionMap_.erase(accessor);
         }
     });
@@ -1083,6 +1085,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
         if (rc.IsError()) {
             // clear import jfr and seg to reconnect next time
             urmaConnectionMap_.erase(accessor);
+            LOG(ERROR) << "Failed to import remote segment.";
             return rc;
         }
     }
@@ -1091,6 +1094,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
 
 Status UrmaManager::ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJfr> &targetJfr)
 {
+    LOG(INFO) << "Begin to import target jft.";
     urma_rjfr_t remoteJfr{};
     RETURN_IF_NOT_OK(BuildRemoteJfr(remoteInfo, remoteJfr));
     Timer timer;
@@ -1130,6 +1134,7 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
     bool success = false;
     Raii raii([&success, &accessor, this]() {
         if (!success) {
+            LOG(INFO) << "Erase outbound connection.";
             urmaConnectionMap_.erase(accessor);
         }
     });
