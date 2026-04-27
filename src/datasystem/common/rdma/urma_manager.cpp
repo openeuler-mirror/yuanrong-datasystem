@@ -51,7 +51,7 @@
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
-DS_DEFINE_bool(enable_urma_perf, false, "Enable performance logging for URMA operations");
+DS_DECLARE_bool(enable_urma_perf);
 
 namespace datasystem {
 namespace {
@@ -998,7 +998,9 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
             Timer sleepTimer;
-            const struct timespec ts{ 0, 1000 };
+            const struct timespec ts {
+                0, 1000
+            };
             if (!tbbEventMap_.empty()) {
                 METRIC_TIMER(metrics::KvMetricId::URMA_NANOSLEEP_LATENCY);
                 nanosleep(&ts, nullptr);
