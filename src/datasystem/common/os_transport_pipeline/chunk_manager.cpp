@@ -230,10 +230,10 @@ Status ChunkManager::StartSender(PiplnSndArgs &args)
     }
 
     urma_jetty_info jettyInfo;
-    jettyInfo.jfs = args.jfs;
+    jettyInfo.jfs = nullptr;
     jettyInfo.tjetty = args.tjetty;
     jettyInfo.jetty_mode = JETTY_MODE_SIMPLEX;
-    jettyInfo.jetty = nullptr;
+    jettyInfo.jetty = args.jetty;
 
     ost_buffer_info_t src;
     src.addr = args.localAddr;

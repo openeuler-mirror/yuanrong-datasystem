@@ -45,7 +45,7 @@ std::string UrmaJfrInfo::ToString() const
     } else {
         oss << eid;
     }
-    oss << " uasid " << uasid << ", jfr_id " << jfrId;
+    oss << " uasid " << uasid << ", jetty_id " << jfrId;
     return oss.str();
 }
 

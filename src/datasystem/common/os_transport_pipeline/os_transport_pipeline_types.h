@@ -86,7 +86,7 @@ struct ChunkTag {
 #ifdef BUILD_PIPLN_H2D
 #include <ub/umdk/urma/urma_api.h>
 struct PiplnSndArgs {
-    urma_jfs_t *jfs;
+    urma_jetty_t *jetty;
     urma_target_jetty_t *tjetty;
     uint64_t localAddr;
     uint64_t remoteAddr;
@@ -98,7 +98,7 @@ struct PiplnSndArgs {
 };
 #else
 struct PiplnSndArgs {
-    void *jfs;
+    void *jetty;
     void *tjetty;
     uint64_t localAddr;
     uint64_t remoteAddr;

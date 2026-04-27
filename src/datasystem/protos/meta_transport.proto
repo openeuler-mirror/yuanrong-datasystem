@@ -60,6 +60,7 @@ message UcpRemoteInfoPb {
 message UrmaHandshakeReqPb {
     bytes eid = 1;
     uint32 uasid = 2;
+    // Legacy field name kept for wire compatibility; URMA Jetty transport carries jetty_id here.
     repeated uint32 jfr_ids = 3;
     HostPortPb address = 4;
     string urma_instance_id = 5;

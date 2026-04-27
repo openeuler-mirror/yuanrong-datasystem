@@ -57,16 +57,17 @@ namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
+constexpr const char *RECV_JETTY_KEY_PREFIX = "recv:";
 
 enum class UrmaErrorHandlePolicy {
     DEFAULT,  // just report error
-    RECREATE_JFS,
+    RECREATE_JETTY,
 };
 
 UrmaErrorHandlePolicy GetUrmaErrorHandlePolicy(int statusCode)
 {
     static std::unordered_map<int, UrmaErrorHandlePolicy> urmaErrorHandlePolicyTable = {
-        { 9, UrmaErrorHandlePolicy::RECREATE_JFS },
+        { 9, UrmaErrorHandlePolicy::RECREATE_JETTY },
     };
 
     const auto iter = urmaErrorHandlePolicyTable.find(statusCode);
@@ -75,16 +76,26 @@ UrmaErrorHandlePolicy GetUrmaErrorHandlePolicy(int statusCode)
     }
     return iter->second;
 }
-Status BuildRemoteJfr(const UrmaJfrInfo &info, urma_rjfr_t &remoteJfr)
+Status BuildRemoteJetty(const UrmaJfrInfo &info, urma_rjetty_t &remoteJetty)
 {
     urma_eid_t eid{};
     RETURN_IF_NOT_OK(UrmaManager::StrToEid(info.eid, eid));
-    remoteJfr.jfr_id.eid = eid;
-    remoteJfr.jfr_id.uasid = info.uasid;
-    remoteJfr.trans_mode = URMA_TM_RM;
-    remoteJfr.tp_type = URMA_CTP;
-    remoteJfr.jfr_id.id = info.jfrId;
+    remoteJetty.jetty_id.eid = eid;
+    remoteJetty.jetty_id.uasid = info.uasid;
+    remoteJetty.jetty_id.id = info.jfrId;
+    remoteJetty.trans_mode = URMA_TM_RM;
+    remoteJetty.type = URMA_JETTY;
+    remoteJetty.tp_type = URMA_CTP;
+    remoteJetty.flag.value = 0;
     return Status::OK();
+}
+
+std::string BuildLocalJettyKey(const std::string &connectionKey, JettyType jettyType)
+{
+    if (jettyType == JettyType::SEND) {
+        return connectionKey;
+    }
+    return std::string(RECV_JETTY_KEY_PREFIX) + connectionKey;
 }
 }  // namespace
 
@@ -138,7 +149,7 @@ UrmaManager::~UrmaManager()
     OsXprtPipln::UnInitOsPiplnH2DEnv();
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
     urmaConnectionMap_.clear();
-    localJfrMap_.clear();
+    localJettyMap_.clear();
     {
         std::lock_guard<std::mutex> lock(clientIdMutex_);
         clientIdMapping_.clear();
@@ -525,25 +536,31 @@ uint64_t UrmaManager::GetUasid()
     return urmaResource_->GetContext()->uasid;
 };
 
-Status UrmaManager::GetOrCreateLocalJfr(const std::string &key, uint32_t &jfrId)
+Status UrmaManager::GetOrCreateLocalJetty(const std::string &key, uint32_t &jettyId, JettyType jettyType)
 {
-    TbbJfrMap::accessor accessor;
-    auto inserted = localJfrMap_.insert(accessor, key);
-    if (!inserted && accessor->second != nullptr) {
-        // Reuse existing JFR for this target node (e.g. reconnection)
-        jfrId = accessor->second->Raw()->jfr_id.id;
-        LOG(INFO) << "Reusing local JFR id " << jfrId << " for " << key;
+    const std::string jettyCacheKey = BuildLocalJettyKey(key, jettyType);
+    TbbJettyMap::accessor accessor;
+    auto inserted = localJettyMap_.insert(accessor, jettyCacheKey);
+    if (!inserted && accessor->second != nullptr && accessor->second->IsValid()) {
+        // Reuse existing Jetty for this target node (e.g. reconnection)
+        jettyId = accessor->second->GetJettyId();
+        LOG(INFO) << "Reusing local Jetty id " << jettyId << " for " << jettyCacheKey;
         return Status::OK();
     }
-    std::unique_ptr<UrmaJfr> jfr;
-    auto rc = urmaResource_->CreateJfr(jfr);
+    if (!inserted && accessor->second != nullptr) {
+        LOG(WARNING) << "Discard invalid local Jetty id " << accessor->second->GetJettyId() << " for " << jettyCacheKey;
+        accessor->second.reset();
+    }
+    std::shared_ptr<UrmaJetty> jetty;
+    auto rc = urmaResource_->CreateJetty(jetty, jettyType);
     if (rc.IsError()) {
-        localJfrMap_.erase(accessor);
+        localJettyMap_.erase(accessor);
         return rc;
     }
-    jfrId = jfr->Raw()->jfr_id.id;
-    accessor->second = std::move(jfr);
-    LOG(INFO) << "Created local JFR id " << jfrId << " for " << key;
+    jettyId = jetty->GetJettyId();
+    accessor->second = std::move(jetty);
+    LOG(INFO) << "Created local Jetty id " << jettyId << " for " << jettyCacheKey
+              << ", jettyType=" << (jettyType == JettyType::SEND ? "SEND" : "RECV");
     return Status::OK();
 }
 
@@ -557,17 +574,21 @@ Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const st
     HostPort remoteSenderAddr;
     remoteSenderAddr.ParseString(address);
     std::string remoteConnectionId = remoteSenderAddr.ToString();
-    uint32_t jfrId;
+    const std::string recvJettyKey = BuildLocalJettyKey(remoteConnectionId, JettyType::RECV);
+    uint32_t jettyId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        GetOrCreateLocalJfr(remoteConnectionId, jfrId),
-        FormatString("[GetTargetSeg] GetOrCreateLocalJfr for %s failed", remoteConnectionId));
-    TbbJfrMap::accessor jfrAccessor;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localJfrMap_.find(jfrAccessor, remoteConnectionId), K_RUNTIME_ERROR,
-                                         FormatString("[GetTargetSeg] find jfr for %s failed", remoteConnectionId));
+        GetOrCreateLocalJetty(remoteConnectionId, jettyId, JettyType::RECV),
+        FormatString("[GetTargetSeg] GetOrCreateLocalJetty for %s failed", remoteConnectionId));
+    TbbJettyMap::accessor jettyAccessor;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localJettyMap_.find(jettyAccessor, recvJettyKey), K_RUNTIME_ERROR,
+                                         FormatString("[GetTargetSeg] find jetty for %s failed", remoteConnectionId));
 
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jfrAccessor->second != nullptr, K_RUNTIME_ERROR,
-                                         FormatString("[GetTargetSeg] Local JFR is null for %s", remoteConnectionId));
-    *targetJfr = jfrAccessor->second->Raw();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jettyAccessor->second != nullptr, K_RUNTIME_ERROR,
+                                         FormatString("[GetTargetSeg] Local Jetty is null for %s", remoteConnectionId));
+    *targetJfr = jettyAccessor->second->SharedJfrRaw();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(*targetJfr != nullptr, K_RUNTIME_ERROR,
+                                         FormatString("[GetTargetSeg] Local Jetty shared JFR is null for %s",
+                                                      remoteConnectionId));
     return Status::OK();
 }
 
@@ -766,11 +787,11 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &eve
 }
 
 Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                                const std::shared_ptr<UrmaJfs> &jfs, const std::string &remoteAddress,
+                                const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress,
                                 UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter)
 {
-    if (!jfs->IsValid()) {
-        RETURN_STATUS(K_URMA_ERROR, "Urma jfs is invalid");
+    if (!jetty->IsValid()) {
+        RETURN_STATUS(K_URMA_ERROR, "Urma jetty is invalid");
     }
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_INFLIGHT_WR_COUNT))
         .Observe(static_cast<int64_t>(tbbEventMap_.size()));
@@ -788,7 +809,7 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
             FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
                          remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
         mapAccessor->second = std::make_shared<UrmaEvent>(
-            requestId, jfs, remoteAddress, connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
+            requestId, jetty, remoteAddress, connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
     }
     return Status::OK();
 }
@@ -839,62 +860,64 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
     auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
                                statusCode);
+
     return Status(K_URMA_ERROR, errMsg);
 }
 
-Status UrmaManager::GetJfsFromConnection(const std::shared_ptr<UrmaConnection> &connection,
-                                         std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaManager::GetJettyFromConnection(const std::shared_ptr<UrmaConnection> &connection,
+                                           std::shared_ptr<UrmaJetty> &jetty)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
 
-    jfs = connection->GetJfs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jfs != nullptr && jfs->IsValid(), K_RUNTIME_ERROR,
-                                         "Connection JFS is unavailable or invalid");
-    INJECT_POINT("UrmaManager.VerifyExclusiveJfs", [this, &connection, &jfs]() {
+    jetty = connection->GetJetty();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jetty != nullptr && jetty->IsValid(), K_RUNTIME_ERROR,
+                                         "Connection Jetty is unavailable or invalid");
+    INJECT_POINT("UrmaManager.VerifyExclusiveJetty", [this, &connection, &jetty]() {
         for (auto iter = urmaConnectionMap_.begin(); iter != urmaConnectionMap_.end(); ++iter) {
             const auto &otherConnection = iter->second;
             if (otherConnection == nullptr || otherConnection.get() == connection.get()) {
                 continue;
             }
-            auto otherJfs = otherConnection->GetJfs();
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(otherJfs == nullptr || otherJfs.get() != jfs.get(), K_RUNTIME_ERROR,
-                                                 FormatString("JFS id %u is unexpectedly shared with connection %s",
-                                                              jfs->GetJfsId(), iter->first.c_str()));
+            auto otherJetty = otherConnection->GetJetty();
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(otherJetty == nullptr || otherJetty.get() != jetty.get(),
+                                                 K_RUNTIME_ERROR,
+                                                 FormatString("Jetty id %u is unexpectedly shared with connection %s",
+                                                              jetty->GetJettyId(), iter->first.c_str()));
         }
         return Status::OK();
     });
-    VLOG(1) << "connection using jfs id " << jfs->GetJfsId();
+    VLOG(1) << "connection using jetty id " << jetty->GetJettyId();
     return Status::OK();
 }
 
-Status UrmaManager::TryRecoverFailedJfsFromCompletion(uint64_t requestId, int statusCode, uint32_t jfsId)
+Status UrmaManager::TryRecoverFailedJettyFromCompletion(uint64_t requestId, int statusCode, uint32_t jettyId)
 {
     const auto policy = GetUrmaErrorHandlePolicy(statusCode);
-    if (policy != UrmaErrorHandlePolicy::RECREATE_JFS) {
+    if (policy != UrmaErrorHandlePolicy::RECREATE_JETTY) {
         return Status::OK();
     }
 
-    std::shared_ptr<UrmaJfs> failedJfs;
-    auto lookupRc = urmaResource_->GetJfsById(jfsId, failedJfs);
-    if (lookupRc.IsError() || failedJfs == nullptr) {
+    std::shared_ptr<UrmaJetty> failedJetty;
+    auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
+    if (lookupRc.IsError() || failedJetty == nullptr) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId << " is not found, requestId=" << requestId
+            << "[URMA_RECREATE_JETTY_SKIP] Completion Jetty " << jettyId << " is not found, requestId=" << requestId
             << ", cqeStatus=" << statusCode << ", rc=" << lookupRc.ToString();
         return Status::OK();
     }
 
-    auto connection = failedJfs->GetConnection().lock();
+    auto connection = failedJetty->GetConnection().lock();
     if (connection == nullptr) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId
+            << "[URMA_RECREATE_JETTY_SKIP] Completion Jetty " << jettyId
             << " has no bound connection, requestId=" << requestId << ", cqeStatus=" << statusCode;
         return Status::OK();
     }
 
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-        << "[URMA_RECREATE_JFS] Trigger from completion, requestId=" << requestId << ", jfsId=" << jfsId
+        << "[URMA_RECREATE_JETTY] Trigger from completion, requestId=" << requestId << ", jettyId=" << jettyId
         << ", cqeStatus=" << statusCode;
-    return connection->ReCreateJfs(*urmaResource_, failedJfs);
+    return connection->ReCreateJetty(*urmaResource_, failedJetty);
 }
 
 Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int count,
@@ -915,11 +938,11 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
 #endif
         auto crStatus = completeRecords[i].status;
         auto userCtx = completeRecords[i].user_ctx;
-        auto jfsId = completeRecords[i].local_id;
+        auto jettyId = completeRecords[i].local_id;
         if (crStatus == URMA_CR_WR_FLUSH_ERR_DONE) {
             LOG(INFO) << "[UrmaEventHandler] Write flush error done for request id: " << userCtx
-                      << ", jfs id: " << jfsId;
-            urmaResource_->AsyncDeleteJfs(jfsId);
+                      << ", jetty id: " << jettyId;
+            urmaResource_->AsyncDeleteJetty(jettyId);
         } else if (crStatus == URMA_CR_SUCCESS) {
             VLOG(1) << "[UrmaEventHandler] Got event with request id: " << userCtx << ", count:" << count
                     << ", cpuid: " << sched_getcpu();
@@ -928,9 +951,9 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
             LOG(ERROR) << FormatString("Failed to poll jfc requestId: %s CR.status: %d", requestIdStr.c_str(),
                                        crStatus);
-            LOG_IF_ERROR(TryRecoverFailedJfsFromCompletion(userCtx, crStatus, jfsId),
-                         FormatString("[URMA_RECREATE_JFS_FAILED] requestId=%s, jfsId=%u, cqeStatus=%d",
-                                      requestIdStr.c_str(), jfsId, crStatus));
+            LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
+                         FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
+                                      requestIdStr.c_str(), jettyId, crStatus));
             failedCompletedReqs[completeRecords[i].user_ctx] = crStatus;
         }
     }
@@ -1022,7 +1045,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
     RETURN_STATUS(K_TRY_AGAIN, FormatString("No Event present in JFC"));
 }
 
-Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJfrId)
+Status UrmaManager::ImportRemoteJetty(const UrmaJfrInfo &jfrInfo, uint32_t &localJettyId)
 {
     LOG(INFO) << "Begin to import remote jfr.";
     PerfPoint point(PerfKey::URMA_SETUP_CONNECTION);
@@ -1034,11 +1057,10 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJ
     auto res = urmaConnectionMap_.insert(accessor, remoteConnectionId);
     if (!res && accessor->second != nullptr) {
         if (accessor->second->GetUrmaJfrInfo().ToString() == jfrInfo.ToString()) {
-            // Identical connection already exists, return existing local JFR ID
-            RETURN_IF_NOT_OK(GetOrCreateLocalJfr(remoteConnectionId, localJfrId));
+            // Identical connection already exists, return existing local Jetty ID
+            RETURN_IF_NOT_OK(GetOrCreateLocalJetty(remoteConnectionId, localJettyId, JettyType::RECV));
             return Status::OK();
         }
-        // Remote side restarted — rebuild the connection but keep the local JFR
         accessor->second->Clear();
     }
     bool success = false;
@@ -1049,17 +1071,17 @@ Status UrmaManager::ImportRemoteJfr(const UrmaJfrInfo &jfrInfo, uint32_t &localJ
         }
     });
 
-    // Create per-connection JFS and import the remote JFR as target JFR
-    std::shared_ptr<UrmaJfs> jfs;
-    RETURN_IF_NOT_OK(urmaResource_->CreateJfs(jfs));
-    std::unique_ptr<UrmaTargetJfr> targetJfr;
-    RETURN_IF_NOT_OK(ImportTargetJfr(jfrInfo, targetJfr));
+    // Create per-connection JETTY and import the remote JETTY as target JETTY
+    std::shared_ptr<UrmaJetty> jetty;
+    RETURN_IF_NOT_OK(urmaResource_->CreateJetty(jetty));
+    std::unique_ptr<UrmaTargetJetty> targetJetty;
+    RETURN_IF_NOT_OK(ImportTargetJetty(jfrInfo, targetJetty, jetty->Raw()));
 
-    // Get or create a local JFR for this connection (reused across reconnections)
-    RETURN_IF_NOT_OK(GetOrCreateLocalJfr(remoteConnectionId, localJfrId));
+    // Get or create a local JETTY for this connection (reused across reconnections)
+    RETURN_IF_NOT_OK(GetOrCreateLocalJetty(remoteConnectionId, localJettyId, JettyType::RECV));
 
-    accessor->second = std::make_shared<UrmaConnection>(jfs, std::move(targetJfr), jfrInfo);
-    jfs->BindConnection(accessor->second);
+    accessor->second = std::make_shared<UrmaConnection>(jetty, std::move(targetJetty), jfrInfo);
+    jetty->BindConnection(accessor->second);
     success = true;
     return Status::OK();
 }
@@ -1092,21 +1114,26 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
     return Status::OK();
 }
 
-Status UrmaManager::ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJfr> &targetJfr)
+Status UrmaManager::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJetty> &targetJetty,
+    urma_jetty_t *localJetty)
 {
     LOG(INFO) << "Begin to import target jft.";
-    urma_rjfr_t remoteJfr{};
-    RETURN_IF_NOT_OK(BuildRemoteJfr(remoteInfo, remoteJfr));
+    bondp_rjetty_t bondpRemoteJetty{};
+    urma_rjetty_t remoteJetty{};
+    RETURN_IF_NOT_OK(BuildRemoteJetty(remoteInfo, remoteJetty));
+    bondpRemoteJetty.base = remoteJetty;
+    bondpRemoteJetty.jetty = localJetty;
+    bondpRemoteJetty.base.flag.bs.has_drv_ext = 1;
     Timer timer;
     METRIC_TIMER(metrics::KvMetricId::URMA_IMPORT_JFR);
     RETURN_IF_NOT_OK_APPEND_MSG(
-        UrmaTargetJfr::Import(urmaResource_->GetContext(), &remoteJfr, urmaResource_->GetUrmaToken(), targetJfr),
-        FormatString("Failed to import target jfr, %s", remoteInfo.ToString()));
+        UrmaTargetJetty::Import(urmaResource_->GetContext(), &(bondpRemoteJetty.base), urmaResource_->GetUrmaToken(),
+            targetJetty),
+        FormatString("Failed to import target jetty, %s", remoteInfo.ToString()));
     if (timer.ElapsedMilliSecond() > 1) {
-        LOG(INFO) << "[UrmaImportJfr] Import target jfr elapsed = " << timer.ElapsedMilliSecond() << "ms"
+        LOG(INFO) << "[UrmaImportJetty] Import target jetty elapsed = " << timer.ElapsedMilliSecond() << "ms"
                   << ", cpuid: " << sched_getcpu();
     }
-
     return Status::OK();
 }
 
@@ -1118,7 +1145,7 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
     const auto &handShake = rsp.hand_shake();
     UrmaJfrInfo remoteInfo;
     RETURN_IF_NOT_OK(remoteInfo.FromProto(handShake));
-    LOG(INFO) << "Start import remote jfr, remote urma info: " << remoteInfo.ToString()
+    LOG(INFO) << "Start import remote jetty, remote urma info: " << remoteInfo.ToString()
               << ", local address:" << localUrmaInfo_.localAddress;
 
     const HostPort requestAddress(handShake.address().host(), handShake.address().port());
@@ -1139,14 +1166,14 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
         }
     });
 
-    // Create per-connection JFS and import remote JFR as target JFR
-    std::shared_ptr<UrmaJfs> jfs;
-    RETURN_IF_NOT_OK(urmaResource_->CreateJfs(jfs));
-    std::unique_ptr<UrmaTargetJfr> targetJfr;
-    RETURN_IF_NOT_OK(ImportTargetJfr(remoteInfo, targetJfr));
+    // Create per-connection JETTY and import remote JETTY as target JETTY
+    std::shared_ptr<UrmaJetty> jetty;
+    RETURN_IF_NOT_OK(urmaResource_->CreateJetty(jetty));
+    std::unique_ptr<UrmaTargetJetty> targetJetty;
+    RETURN_IF_NOT_OK(ImportTargetJetty(remoteInfo, targetJetty, jetty->Raw()));
 
-    accessor->second = std::make_shared<UrmaConnection>(jfs, std::move(targetJfr), remoteInfo);
-    jfs->BindConnection(accessor->second);
+    accessor->second = std::make_shared<UrmaConnection>(jetty, std::move(targetJetty), remoteInfo);
+    jetty->BindConnection(accessor->second);
     auto connection = accessor->second;
 
     // Import remote segments
@@ -1168,6 +1195,52 @@ uint64_t UrmaManager::GenerateReqId()
     return requestId_.fetch_add(1);
 }
 
+static urma_status_t PostJettyRw(urma_jetty_t *jetty, urma_opcode_t opcode, urma_target_jetty_t *targetJetty,
+                                 urma_target_seg_t *remoteSeg, urma_target_seg_t *localSeg, uint64_t remoteAddress,
+                                 uint64_t localAddress, uint64_t length, urma_jfs_wr_flag_t flag, uint64_t userCtx,
+                                 bool useNumaAffinity, uint32_t src_chip_id, uint32_t dst_chip_id)
+{
+    urma_sge_t localSge{ .addr = localAddress, .len = static_cast<uint32_t>(length), .tseg = localSeg,
+                         .user_tseg = nullptr };
+    urma_sge_t remoteSge{ .addr = remoteAddress, .len = static_cast<uint32_t>(length), .tseg = remoteSeg,
+                          .user_tseg = nullptr };
+
+    urma_sg_t src{};
+    urma_sg_t dst{};
+    if (opcode == URMA_OPC_READ) {
+        src = { .sge = &remoteSge, .num_sge = 1 };
+        dst = { .sge = &localSge, .num_sge = 1 };
+    } else {
+        src = { .sge = &localSge, .num_sge = 1 };
+        dst = { .sge = &remoteSge, .num_sge = 1 };
+    }
+
+    urma_jfs_wr_t *badWr = nullptr;
+    if (useNumaAffinity) {
+        bondp_jfs_wr_t bondp_wr{};
+        urma_jfs_wr_t *base = &bondp_wr.base;
+        base->opcode = opcode;
+        base->flag = flag;
+        base->tjetty = targetJetty;
+        base->user_ctx = userCtx;
+        base->rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
+        base->next = nullptr;
+        bondp_wr.src_chip_id = src_chip_id;
+        bondp_wr.dst_chip_id = dst_chip_id;
+        
+        return ds_urma_post_jetty_send_wr(jetty, base, &badWr);
+    } else {
+        urma_jfs_wr_t wr{};
+        wr.opcode = opcode;
+        wr.flag = flag;
+        wr.tjetty = targetJetty;
+        wr.user_ctx = userCtx;
+        wr.rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
+        wr.next = nullptr;
+        return ds_urma_post_jetty_send_wr(jetty, &wr, &badWr);
+    }
+}
+
 Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys)
 {
     urma_jfs_wr_flag_t flag{};
@@ -1186,7 +1259,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
         INJECT_POINT("UrmaManager.UrmaWriteError",
                      []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
-        RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jfs, args.remoteAddress,
+        RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jetty, args.remoteAddress,
                                      UrmaEvent::OperationType::WRITE, args.waiter));
         urma_status_t ret;
         Timer t;
@@ -1194,19 +1267,13 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         if (useNumaAffinity) {
             VLOG(1) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
                     << ", dst=" << static_cast<uint32_t>(args.dstChipId);
-            INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
-#ifdef BONDP_USER_CTL_BONDING
-            ret = ds_urma_write_affinity(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
-                                         localAddress, writeSize, flag, key, args.srcChipId, args.dstChipId);
-#else
-            LOG(WARNING) << "enable Numa Affinity, but BONDP_USER_CTL_BONDING is not defined, using default urma write";
-            ret = ds_urma_write(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
-                                localAddress, writeSize, flag, key);
-#endif
+            ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
+                remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
         } else {
-            ret = ds_urma_write(args.jfs->Raw(), args.targetJfr, args.remoteSeg, args.localSeg, remoteAddress,
-                                localAddress, writeSize, flag, key);
+            ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
+                remoteAddress, localAddress, writeSize, flag, key, false, args.srcChipId, args.dstChipId);
         }
+
         if (ret != URMA_SUCCESS) {
             DeleteEvent(key);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
@@ -1259,18 +1326,18 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     RETURN_IF_NOT_OK(GetOrRegisterSegment(localSegAddress, localSegSize, localSegAccessor));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR, "Local segment is null");
 
-    // Get jfs and tjfr
-    std::shared_ptr<UrmaJfs> jfs;
-    RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
-    auto *tjfr = connection->GetTargetJfr();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(tjfr != nullptr, K_RUNTIME_ERROR, "Write got empty remote jfr.");
+    // Get local and remote jettys.
+    std::shared_ptr<UrmaJetty> jetty;
+    RETURN_IF_NOT_OK(GetJettyFromConnection(connection, jetty));
+    auto *targetJetty = connection->GetTargetJetty();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR, "Write got empty remote jetty.");
 
     point.RecordAndReset(PerfKey::URMA_WRITE_LOOP);
 
     if (OsXprtPipln::IsPiplnH2DRequest(urmaInfo)) {
         OsXprtPipln::PiplnSndArgs args;
-        args.jfs = jfs->Raw();
-        args.tjetty = tjfr;
+        args.jetty = jetty->Raw();
+        args.tjetty = targetJetty;
         args.localAddr = localObjectAddress + readOffset + metaDataSize;
         args.localSeg = localSegAccessor->second->Raw();
         args.remoteAddr = segVa + urmaInfo.seg_data_offset() + readOffset;
@@ -1285,10 +1352,10 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
 
     UrmaWriteArgs writeLoopArgs;
     writeLoopArgs.connection = connection;
-    writeLoopArgs.jfs = jfs;
+    writeLoopArgs.jetty = jetty;
     writeLoopArgs.waiter = waiter;
     writeLoopArgs.remoteAddress = remoteAddress;
-    writeLoopArgs.targetJfr = tjfr;
+    writeLoopArgs.targetJetty = targetJetty;
     writeLoopArgs.remoteSeg = remoteSegAccessor->second->Raw();
     writeLoopArgs.localSeg = localSegAccessor->second->Raw();
     writeLoopArgs.remoteDataAddress = segVa + urmaInfo.seg_data_offset() + readOffset;
@@ -1338,10 +1405,10 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     urma_jfs_wr_flag_t flag{};
     flag.bs.complete_enable = 1;
 
-    std::shared_ptr<UrmaJfs> jfs;
-    RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
-    auto *importJfr = connection->GetTargetJfr();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(importJfr != nullptr, K_RUNTIME_ERROR, "Read got empty remote jfr.");
+    std::shared_ptr<UrmaJetty> jetty;
+    RETURN_IF_NOT_OK(GetJettyFromConnection(connection, jetty));
+    auto *targetJetty = connection->GetTargetJetty();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR, "Read got empty remote jetty.");
 
     uint64_t readOffset = 0;
     uint64_t remainSize = dataSize;
@@ -1350,11 +1417,12 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = requestId_.fetch_add(1);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::READ));
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, UrmaEvent::OperationType::READ));
         urma_status_t ret =
-            ds_urma_read(jfs->Raw(), importJfr, localSegAccessor->second->Raw(), remoteSegAccessor->second->Raw(),
-                         localObjectAddress + metaDataSize + readOffset,
-                         segVa + urmaInfo.seg_data_offset() + readOffset, readSize, flag, key);
+            PostJettyRw(jetty->Raw(), URMA_OPC_READ, targetJetty, remoteSegAccessor->second->Raw(),
+                        localSegAccessor->second->Raw(), segVa + urmaInfo.seg_data_offset() + readOffset,
+                        localObjectAddress + metaDataSize + readOffset, readSize, flag, key, false, INVALID_CHIP_ID,
+                        INVALID_CHIP_ID);
         if (ret != URMA_SUCCESS) {
             DeleteEvent(key);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
@@ -1396,8 +1464,8 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     flag.bs.complete_enable = 1;
     flag.bs.inline_flag = 0;
     auto totalWriteSize = 0U;
-    std::shared_ptr<UrmaJfs> jfs;
-    RETURN_IF_NOT_OK(GetJfsFromConnection(connection, jfs));
+    std::shared_ptr<UrmaJetty> jetty;
+    RETURN_IF_NOT_OK(GetJettyFromConnection(connection, jetty));
     INJECT_POINT("UrmaManager.GatherWriteError", []() { return Status(K_RUNTIME_ERROR, "Injcect urma wait error"); });
     for (auto dstSgeIdx = 0U, srcSgeIdx = 0U; dstSgeIdx < dstSgeNum; dstSgeIdx++) {
         auto singleDstWriteSize = 0;
@@ -1427,17 +1495,17 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         urma_sg_t dstSg = { .sge = &dstSgeList[dstSgeIdx], .num_sge = 1 };
         urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
         const uint64_t key = requestId_.fetch_add(1);
-        auto *importJfr = connection->GetTargetJfr();
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(importJfr != nullptr, K_RUNTIME_ERROR,
-                                             "Gather write got empty remote jfr.");
+        auto *targetJetty = connection->GetTargetJetty();
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
+                                             "Gather write got empty remote jetty.");
         auto &wr = wrList[dstSgeIdx];
         wr.opcode = URMA_OPC_WRITE;
         wr.flag = flag;
-        wr.tjetty = importJfr;
+        wr.tjetty = targetJetty;
         wr.user_ctx = key;
         wr.rw = rw;
         wr.next = NULL;
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jfs, remoteAddress, UrmaEvent::OperationType::WRITE));
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, UrmaEvent::OperationType::WRITE));
         eventKeys.emplace_back(key);
         if (dstSgeIdx > 0) {
             wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];
@@ -1445,7 +1513,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     }
     urma_jfs_wr_t *bad_wr = NULL;
     Timer timer;
-    auto ret = ds_urma_post_jfs_wr(jfs->Raw(), &wrList[0], &bad_wr);
+    auto ret = ds_urma_post_jetty_send_wr(jetty->Raw(), &wrList[0], &bad_wr);
     workerOperationTimeCost.Append("Urma gather write.", timer.ElapsedMilliSecond());
     if (ret != URMA_SUCCESS) {
         for (auto key : eventKeys) {
@@ -1473,11 +1541,12 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey, bool
         removed = true;
     }
 
+    std::string recvKey = BuildLocalJettyKey(connectionKey, JettyType::RECV);
     if (removeLocalJfr) {
-        TbbJfrMap::accessor jfrAccessor;
-        if (localJfrMap_.find(jfrAccessor, connectionKey)) {
-            LOG(INFO) << "Remove local JFR for " << connectionKey;
-            localJfrMap_.erase(jfrAccessor);
+        TbbJettyMap::accessor jettyAccessor;
+        if (localJettyMap_.find(jettyAccessor, recvKey)) {
+            LOG(INFO) << "Remove local Jetty for " << recvKey;
+            localJettyMap_.erase(jettyAccessor);
             removed = true;
         }
     }
@@ -1538,17 +1607,17 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
 {
     UrmaJfrInfo urmaInfo;
     RETURN_IF_NOT_OK(urmaInfo.FromProto(req));
-    LOG(INFO) << "Start import remote jfr, remote urma info: " << urmaInfo.ToString()
+    LOG(INFO) << "Start import remote jetty, remote urma info: " << urmaInfo.ToString()
               << ", local address:" << localUrmaInfo_.localAddress;
-    // Only import remote jfr or segment for the remote node or client.
+    // Only import remote jetty or segment for the remote node or client.
     if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty() || clientMode_) {
-        uint32_t localJfrId = 0;
-        RETURN_IF_NOT_OK(ImportRemoteJfr(urmaInfo, localJfrId));
+        uint32_t localJettyId = 0;
+        RETURN_IF_NOT_OK(ImportRemoteJetty(urmaInfo, localJettyId));
         RETURN_IF_NOT_OK(ImportRemoteInfo(req));
 
-        // Always populate response with local JFR ID for the reverse connection
+        // Always populate response with local Jetty ID for the reverse connection
         auto localInfo = localUrmaInfo_;
-        localInfo.jfrId = localJfrId;
+        localInfo.jfrId = localJettyId;
         localInfo.ToProto(*rsp.mutable_hand_shake());
         RETURN_IF_NOT_OK(GetSegmentInfo(rsp));
     }
