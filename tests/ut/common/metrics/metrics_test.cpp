@@ -280,8 +280,8 @@ TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
     EXPECT_EQ(output.find("\"trace_id\":"), std::string::npos);
 }
 
-// Exercises LogSummary → LOG(INFO): stderr carries the same single-line metrics_summary JSON as
-// DumpSummaryForTest(), including histogram total/delta p50, p90, and p99 (PR / doc sample).
+// LogSummary prints one INFO line per part; DumpSummaryForTest() is the first part only.
+// Same histogram JSON fields including total/delta p50, p90, and p99.
 TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
 {
     InitMetrics();
@@ -317,6 +317,34 @@ TEST_F(MetricsTest, print_summary_splits_large_payload_test)
     EXPECT_GT(std::count(output.begin(), output.end(), '\n'), 1);
     EXPECT_NE(output.find("\"part_index\":1"), std::string::npos);
     EXPECT_NE(output.find("\"part_index\":2"), std::string::npos);
+}
+
+TEST_F(MetricsTest, dump_summaries_contains_all_parts_when_split)
+{
+    metrics::ResetForTest();
+    std::vector<std::string> names;
+    std::vector<metrics::MetricDesc> descs;
+    for (uint16_t i = 0; i < 80; ++i) {
+        names.emplace_back("metric_" + std::to_string(i) + "_" + std::string(320, 'x'));
+        descs.push_back({ i, names.back().c_str(), metrics::MetricType::COUNTER, "count" });
+    }
+    DS_ASSERT_OK(metrics::Init(descs.data(), descs.size()));
+    for (uint16_t i = 0; i < 80; ++i) {
+        METRIC_ADD(i, 6);
+    }
+    const auto parts = metrics::DumpSummariesForTest();
+    ASSERT_GT(parts.size(), 1u);
+    for (uint16_t i = 0; i < 80; ++i) {
+        const std::string needle = "\"name\":\"" + names[i] + '\"';
+        bool found = false;
+        for (const auto &p : parts) {
+            if (p.find(needle) != std::string::npos) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << i;
+    }
 }
 
 TEST_F(MetricsTest, writer_header_once_test)

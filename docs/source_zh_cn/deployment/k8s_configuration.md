@@ -447,7 +447,6 @@ global:
 | global.performance.enableUrma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | global.performance.urmaMode | string | `UB` | 是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行 |
 | global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| global.performance.urmaEnablePerf | bool | `false` | 是否开启 URMA 性能日志采样。仅在 `global.performance.enableUrma=true` 时生效，开启后 worker 会周期性采集并输出 URMA 性能信息 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |

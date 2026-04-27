@@ -363,6 +363,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
 {
     auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId_);
     bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
+    bool ubFastTransportEnabled = IsUrmaEnabled() && !shmEnabled && HasRemoteFastTransportClient(clientId_);
     bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
     uint64_t ubWriteOffset = 0;
 
@@ -386,8 +387,8 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         }
         const auto &params = iter->second.params;
         totalSize += params->dataSize;
-        rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, useUbGet, ubWriteOffset, resp,
-                                 payloads);
+        rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, useUbGet, ubFastTransportEnabled,
+                                 ubWriteOffset, resp, payloads);
         if (shmEnabled
             && !(IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
                  && !params->remoteH2DHostInfo->empty())) {
@@ -453,8 +454,8 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
 }
 
 Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t objectIndex,
-                                       bool shmEnabled, bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
-                                       std::vector<RpcMessage> &outPayloads)
+                                       bool shmEnabled, bool useUbGet, bool ubFastTransportEnabled,
+                                       uint64_t &ubWriteOffset, GetRspPb &resp, std::vector<RpcMessage> &outPayloads)
 {
     const auto &params = objectInfo.params;
     if (shmEnabled
@@ -489,8 +490,10 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
     LOG(INFO) << FormatString("CopyShmUnitToPayloads, objectKey: %s, read offset: %ld, read size: %ld", objectKeyUri,
                               readOffset, readSize);
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
-    if (ubRc.IsError()) {
-        auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, ubRc, "worker->client");
+    if (ubRc.IsError() || ubFastTransportEnabled) {
+        const Status &transportStatus =
+            ubRc.IsError() ? ubRc : Status(K_URMA_ERROR, "UB get request fell back to TCP payload before worker UB");
+        auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, transportStatus, "worker->client");
         if (rc.IsError()) {
             LOG(WARNING) << "Worker-to-client TCP fallback payload rejected for object " << objectKeyUri
                          << ": " << rc.ToString();

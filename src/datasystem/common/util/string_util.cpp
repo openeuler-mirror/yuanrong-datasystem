@@ -27,6 +27,31 @@
 #include "re2/re2.h"
 
 namespace datasystem {
+namespace {
+constexpr char SRC_LOG_PREFIX[] = ", src=";
+constexpr char DST_LOG_PREFIX[] = ", dst=";
+constexpr size_t SRC_LOG_PREFIX_SIZE = sizeof(SRC_LOG_PREFIX) - 1;
+constexpr size_t DST_LOG_PREFIX_SIZE = sizeof(DST_LOG_PREFIX) - 1;
+
+void AppendSrcDstFields(std::string &result, const std::string &srcAddr, const std::string &dstAddr)
+{
+    if (!srcAddr.empty()) {
+        result.append(SRC_LOG_PREFIX, SRC_LOG_PREFIX_SIZE);
+        result.append(srcAddr);
+    }
+    if (!dstAddr.empty()) {
+        result.append(DST_LOG_PREFIX, DST_LOG_PREFIX_SIZE);
+        result.append(dstAddr);
+    }
+}
+
+size_t CalcSrcDstLogSize(const std::string &srcAddr, const std::string &dstAddr)
+{
+    return (srcAddr.empty() ? 0 : SRC_LOG_PREFIX_SIZE + srcAddr.size())
+        + (dstAddr.empty() ? 0 : DST_LOG_PREFIX_SIZE + dstAddr.size());
+}
+}  // namespace
+
 std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern)
 {
     if (typeStr.empty()) {
@@ -65,6 +90,23 @@ bool IsValidNumber(const std::string &str)
         return true;
     }
     return false;
+}
+
+std::string AppendSrcDstForLog(const std::string &srcAddr, const std::string &dstAddr)
+{
+    std::string result;
+    result.reserve(CalcSrcDstLogSize(srcAddr, dstAddr));
+    AppendSrcDstFields(result, srcAddr, dstAddr);
+    return result;
+}
+
+std::string AppendSrcDstForLog(const std::string &prefix, const std::string &srcAddr, const std::string &dstAddr)
+{
+    std::string result;
+    result.reserve(prefix.size() + CalcSrcDstLogSize(srcAddr, dstAddr));
+    result.append(prefix);
+    AppendSrcDstFields(result, srcAddr, dstAddr);
+    return result;
 }
 }  // namespace datasystem
 #endif

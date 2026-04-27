@@ -28,6 +28,7 @@
 
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/rpc/zmq/zmq_network_errno.h"
 #include "datasystem/protos/meta_zmq.pb.h"
@@ -49,11 +50,28 @@ using json = nlohmann::json;
 
 json DumpSummaryJson()
 {
-    auto summary = metrics::DumpSummaryForTest();
-    if (summary.empty()) {
+    auto parts = metrics::DumpSummariesForTest();
+    if (parts.empty()) {
         return json();
     }
-    return json::parse(summary);
+    json merged;
+    const size_t n = parts.size();
+    for (size_t i = 0; i < n; ++i) {
+        LOG(INFO) << parts[i];
+        json j = json::parse(parts[i]);
+        if (i == 0) {
+            merged = std::move(j);
+            continue;
+        }
+        if (j.contains("metrics") && j["metrics"].is_array()) {
+            for (const auto &m : j["metrics"]) {
+                merged["metrics"].push_back(m);
+            }
+        }
+    }
+    merged["part_index"] = 1;
+    merged["part_count"] = 1;
+    return merged;
 }
 
 const json *FindMetric(const json &summary, const std::string &name)

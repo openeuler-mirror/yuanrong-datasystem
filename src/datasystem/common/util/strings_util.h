@@ -207,6 +207,23 @@ inline size_t StringToUniquePtrChar(const char *src, std::unique_ptr<char[]> &de
 std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern);
 
 /**
+ * @brief Append src/dst address fields for RPC-related logs.
+ * @param[in] srcAddr Source address string.
+ * @param[in] dstAddr Destination address string.
+ * @return The formatted suffix string: ", src=<src>, dst=<dst>".
+ */
+std::string AppendSrcDstForLog(const std::string &srcAddr, const std::string &dstAddr);
+
+/**
+ * @brief Append src/dst fields with a lightweight prefix for log messages.
+ * @param[in] prefix Existing log prefix or message.
+ * @param[in] srcAddr Source address string.
+ * @param[in] dstAddr Destination address string.
+ * @return prefix + ", src=<src>, dst=<dst>".
+ */
+std::string AppendSrcDstForLog(const std::string &prefix, const std::string &srcAddr, const std::string &dstAddr);
+
+/**
  * @brief Clear the string information in the memory.
  * @param[in/out] str The str needs to clear.
  */

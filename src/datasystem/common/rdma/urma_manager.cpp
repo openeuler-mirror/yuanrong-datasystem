@@ -51,7 +51,6 @@
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
-DS_DECLARE_bool(enable_urma_perf);
 
 namespace datasystem {
 namespace {
@@ -110,7 +109,7 @@ std::string BuildLocalJettyKey(const std::string &connectionKey, JettyType jetty
 }  // namespace
 
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
-constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 128UL * 1024UL * 1024UL;
+constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 256UL * 1024UL * 1024UL;
 constexpr uint64_t MAX_TRANSPORT_MEM_SIZE = 2UL * 1024UL * 1024UL * 1024UL;
 
 bool UrmaManager::clientMode_ = false;
@@ -264,9 +263,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         RETURN_IF_NOT_OK(InitMemoryBufferPool());
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
     }
-    if (FLAGS_enable_urma_perf) {
-        perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
-    }
+    perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
     needRollback = false;
     return Status::OK();
 }
@@ -343,6 +340,7 @@ Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle,
     if (size == 0) {
         return Status(K_INVALID, "UB Get buffer size is 0");
     }
+    INJECT_POINT("UrmaManager.GetMemoryBufferHandle");
     std::shared_ptr<ShmUnit> unit = std::make_shared<ShmUnit>();
     RETURN_IF_NOT_OK(
         unit->AllocateMemory(DEFAULT_TENANTID, size, false, ServiceType::OBJECT, AllocateType::UB_TRANSPORT));
@@ -1295,9 +1293,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         urma_status_t ret;
         Timer t;
         METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
+        auto jettyId = args.jetty->GetJettyId();
         if (useNumaAffinity) {
-            LOG(INFO) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
-                      << ", dst=" << static_cast<uint32_t>(args.dstChipId);
+            LOG(INFO) << "URMA write numa affinity src:" << static_cast<uint32_t>(args.srcChipId)
+                      << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId;
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
                               remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
@@ -1315,8 +1314,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
         auto elapsedUs = t.ElapsedMicroSecond();
         auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
-        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu()
-                        << ", elapsed:" << elapsedUs << " us, request id:" << key;
+        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << elapsedUs
+                        << " us, request id:" << key << ", jetty id:" << jettyId;
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;
@@ -1719,6 +1718,12 @@ Status UrmaManager::RemoveRemoteClient(ClientKey clientEntityId)
     }
     LOG(INFO) << "Remove URMA resources for client " << clientEntityId << ", connection key " << remoteConnectionId;
     return RemoveRemoteResources(remoteConnectionId, true);
+}
+
+bool UrmaManager::HasRemoteClient(ClientKey clientEntityId)
+{
+    std::lock_guard<std::mutex> lock(clientIdMutex_);
+    return clientIdMapping_.find(clientEntityId) != clientIdMapping_.end();
 }
 
 const std::string &UrmaManager::GetClientId()

@@ -30,6 +30,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/strings_util.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
@@ -189,8 +190,9 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
-    LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), objectKey);
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
+        hostPort_.ToString());
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
     CreateReqPb req;
@@ -390,8 +392,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when get date.");
-            LOG(INFO) << "Start to send rpc to get object, worker address: " << hostPort_.ToString()
-                    << ", rpc timeout: " << realRpcTimeout;
+            LOG(INFO) << AppendSrcDstForLog(
+                FormatString("Start to send rpc to get object, rpc timeout: %d", realRpcTimeout), "",
+                hostPort_.ToString());
             getStatus = stub_->Get(opts, req, rsp, payloads);
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
