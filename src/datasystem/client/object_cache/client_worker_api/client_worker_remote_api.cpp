@@ -152,6 +152,7 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     req.add_extend()->PackFrom(extendPb);
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
+    RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
     if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
         // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
         stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
