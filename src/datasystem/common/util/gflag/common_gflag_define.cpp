@@ -87,6 +87,8 @@ DS_DEFINE_bool(spill_to_remote_worker, false,
                "It indicates that when node resources are insufficient, "
                "it supports spilling memory to the memory of other nodes.");
 DS_DEFINE_uint32(node_timeout_s, 60, "maximum time interval before a node is considered lost");
+DS_DEFINE_int32(io_thread_nice, -15,
+                "Nice value applied to selected IO threads with setpriority. Valid range is [-20, 19].");
 DS_DEFINE_int32(zmq_client_io_context, 5,
                 "Optimize the performance of the client stub. Default value 5. "
                 "The higher the throughput, the higher the value, but should be in range [1, 32]");
