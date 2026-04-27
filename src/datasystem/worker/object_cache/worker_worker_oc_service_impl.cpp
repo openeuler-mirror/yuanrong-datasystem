@@ -156,15 +156,16 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
 
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> eventKeys;
-    auto status =
-        GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr, rsp.mutable_root_info());
+    auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
+    Status fallbackStatus;
+    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
+                                         rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
     // payload means need to FallbackTcp/NormalTcp transport
     if ((status.IsError() && subPayload.empty()) || (status.IsError() && !FLAGS_enable_transport_fallback)) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
         subRsp.mutable_error()->set_error_msg(status.GetMsg());
     }
 
-    auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
     if (isGatherWrite) {
         // pre save subPayload to fallbackPayloads, for fallback when GatherWrite failed
         batchPtr->fallbackPayloads.insert(batchPtr->fallbackPayloads.end(), std::make_move_iterator(subPayload.begin()),
@@ -177,6 +178,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     requestIds = std::move(eventKeys);
 
     parallelRes[paraIndex].kps.emplace_back(subIndex, std::make_pair(std::move(requestIds), std::move(subPayload)));
+    parallelRes[paraIndex].fallbackStatuses.emplace_back(fallbackStatus);
     subIndex++;
     return Status::OK();
 }
@@ -288,14 +290,15 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
                                                          std::shared_ptr<AggregateMemory> batchPtr,
-                                                         RemoteH2DRootInfoPb *batchRootInfo)
+                                                         RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus)
 {
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
+                                        fallbackStatus);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -389,7 +392,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
                                                       std::vector<uint64_t> &eventKeys,
                                                       std::shared_ptr<AggregateMemory> batchPtr,
-                                                      RemoteH2DRootInfoPb *batchRootInfo)
+                                                      RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus)
 {
     (void)eventKeys;
     (void)blocking;
@@ -530,11 +533,27 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
 
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
         if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
-            if (fastTransportStatus.IsError() && isUrmaFastTransport) {
-                RETURN_IF_NOT_OK(shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), fastTransportStatus,
-                                                               "worker->worker"));
+            bool canPrepareFallbackPayload = true;
+            if (FLAGS_enable_transport_fallback
+                && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr)) && isUrmaFastTransport) {
+                auto trackStatus = fastTransportStatus.IsOk()
+                                       ? Status(StatusCode::K_URMA_ERROR, "URMA wait fallback payload precheck")
+                                       : fastTransportStatus;
+                auto rc = shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), trackStatus, "worker->worker");
+                if (rc.IsError()) {
+                    if (fastTransportStatus.IsOk() && !blocking) {
+                        if (fallbackStatus != nullptr) {
+                            *fallbackStatus = rc;
+                        }
+                        canPrepareFallbackPayload = false;
+                    } else {
+                        RETURN_IF_NOT_OK(rc);
+                    }
+                }
             }
-            RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
+            if (canPrepareFallbackPayload) {
+                RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
+            }
         }
     }
 
@@ -692,7 +711,9 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
             rsp.add_responses()->Swap(&resp);
         }
 
-        for (auto &kp : loc.kps) {
+        for (size_t kpIndex = 0; kpIndex < loc.kps.size(); ++kpIndex) {
+            auto &kp = loc.kps[kpIndex];
+            Status fallbackStatus = kpIndex < loc.fallbackStatuses.size() ? loc.fallbackStatuses[kpIndex] : Status();
             const bool isSingleBatchKp = (loc.kps.size() == 1 && loc.respPbs.size() > 1);
             const uint64_t coveredRespNum = isSingleBatchKp ? static_cast<uint64_t>(loc.respPbs.size()) : 1;
             const bool singleFallback = kp.second.first.empty() && !kp.second.second.empty();
@@ -704,28 +725,44 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
 
             const bool batchFallback = kp.second.first.empty() && kp.second.second.empty();
             if (batchFallback) {
+                if (fallbackStatus.IsError()) {
+                    // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                    rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
+                    rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
+                    index += coveredRespNum;
+                    continue;
+                }
                 MovePayload(loc.fallbackPayloads, payload);
                 index += coveredRespNum;
                 continue;
             }
 
-            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(loc, kp, rsp, payload, index, coveredRespNum));
+            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(loc, kp, rsp, payload, index, coveredRespNum,
+                                                          fallbackStatus));
         }
 
         loc.kps.clear();
         loc.fallbackPayloads.clear();
+        loc.fallbackStatuses.clear();
     }
     return Status::OK();
 }
 
 Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
     ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
-    BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum)
+    BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum,
+    const Status &fallbackStatus)
 {
     auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
-    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum](Status &status) {
+    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus](Status &status) {
         const bool waitFailed = status.IsError();
         if (waitFailed) {
+            if (fallbackStatus.IsError()) {
+                // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
+                rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
+                return fallbackStatus;
+            }
             const bool batchWaitFailed = kp.second.second.empty();
             if (batchWaitFailed) {
                 MovePayload(loc.fallbackPayloads, payload);
