@@ -21,12 +21,16 @@
 #ifndef DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 #define DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
 #include <ub/umdk/urma/urma_api.h>
+#include <ub/umdk/urma/urma_ubagg.h>
 
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
@@ -42,8 +46,12 @@
 
 namespace datasystem {
 class UrmaConnection;
-class UrmaJfs;
+class UrmaJetty;
 class UrmaResource;
+enum class JettyType : uint8_t {
+    SEND = 0,
+    RECV = 1,
+};
 class UrmaEvent : public Event {
 public:
     enum class OperationType : uint8_t { UNKNOWN = 0, READ = 1, WRITE = 2 };
@@ -51,17 +59,17 @@ public:
     /**
      * @brief Construct an Urma event for an in-flight request.
      * @param[in] requestId Unique request id.
-     * @param[in] jfs JFS snapshot at request-submit time. The owning connection is
-     *            recovered via jfs->GetConnection() when needed for recovery.
+     * @param[in] jetty Jetty snapshot at request-submit time. The owning connection is
+     *            recovered via jetty->GetConnection() when needed for recovery.
      * @param[in] remoteAddress Remote address string for logging.
      * @param[in] remoteInstanceId Remote instance id for logging.
      * @param[in] operationType Read or write.
      * @param[in] waiter Optional waiter used for notification.
      */
-    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaJfs> jfs, std::string remoteAddress, std::string remoteInstanceId,
-              OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr)
+    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaJetty> jetty, std::string remoteAddress,
+              std::string remoteInstanceId, OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr)
         : Event(requestId, std::move(waiter)),
-          jfs_(std::move(jfs)),
+          jetty_(std::move(jetty)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
           operationType_(operationType)
@@ -81,19 +89,19 @@ public:
     }
 
     /**
-     * @brief Get the connection that owned the JFS at request-submit time.
-     *        Derived from jfs_->GetConnection() rather than stored directly.
-     * @return Weak pointer to the associated connection (empty if JFS expired).
+     * @brief Get the connection that owned the Jetty at request-submit time.
+     *        Derived from jetty_->GetConnection() rather than stored directly.
+     * @return Weak pointer to the associated connection (empty if Jetty expired).
      */
     std::weak_ptr<UrmaConnection> GetConnection() const;
 
     /**
-     * @brief Get the JFS associated with this request when it was submitted.
-     * @return Weak pointer to the request JFS.
+     * @brief Get the Jetty associated with this request when it was submitted.
+     * @return Weak pointer to the request Jetty.
      */
-    std::weak_ptr<UrmaJfs> GetJfs() const
+    std::weak_ptr<UrmaJetty> GetJetty() const
     {
-        return jfs_;
+        return jetty_;
     }
 
     /**
@@ -134,7 +142,7 @@ public:
 
 private:
     int statusCode_{ 0 };
-    std::weak_ptr<UrmaJfs> jfs_;
+    std::weak_ptr<UrmaJetty> jetty_;
     std::string remoteAddress_;
     std::string remoteInstanceId_;
     OperationType operationType_{ OperationType::UNKNOWN };
@@ -246,89 +254,6 @@ private:
     urma_jfc_t *raw_ = nullptr;
 };
 
-class UrmaJfs {
-public:
-    explicit UrmaJfs(urma_jfs_t *raw, UrmaResource *resource) : raw_(raw), resource_(resource), valid_(true)
-    {
-        counter_.fetch_add(1);
-    }
-    ~UrmaJfs();
-
-    URMA_DISABLE_COPY_AND_MOVE(UrmaJfs);
-
-    /**
-     * @brief Create a jetty for send, obtaining context/jfc/priority from the owning resource.
-     * @param[in] resource Owning UrmaResource that provides context, jfc, and priority.
-     * @param[out] jfs Created JFS wrapper.
-     * @return Status of the call.
-     */
-    static Status Create(UrmaResource &resource, std::shared_ptr<UrmaJfs> &jfs);
-
-    /**
-     * @brief Get the underlying JFS handle.
-     * @return Raw JFS handle.
-     */
-    urma_jfs_t *Raw() const
-    {
-        return raw_;
-    }
-
-    /**
-     * @brief Check whether the JFS is still valid for issuing work requests.
-     * @return True if the JFS is valid, else false.
-     */
-    bool IsValid() const
-    {
-        return valid_;
-    }
-
-    /**
-     * @brief Atomically mark the JFS as invalid.
-     * @return True if the state changes from valid to invalid.
-     */
-    bool MarkInvalid()
-    {
-        bool expected = true;
-        return valid_.compare_exchange_strong(expected, false);
-    }
-
-    /**
-     * @brief Move the JFS to error state before cleanup or recreation.
-     * @return Status of the call.
-     */
-    Status ModifyToError();
-
-    /**
-     * @brief Get the Urma-assigned JFS id.
-     * @return JFS id.
-     */
-    uint32_t GetJfsId() const
-    {
-        return raw_->jfs_id.id;
-    }
-
-    /**
-     * @brief Bind this JFS to its owning connection. Must be called before the JFS
-     *        is published to any other thread or stored in a connection.
-     * @param[in] connection The owning connection.
-     */
-    void BindConnection(const std::shared_ptr<UrmaConnection> &connection);
-
-    /**
-     * @brief Get the connection that owns this JFS.
-     * @return Weak pointer to the owning connection.
-     */
-    std::weak_ptr<UrmaConnection> GetConnection() const;
-
-private:
-    static std::atomic<uint32_t> counter_;
-    urma_jfs_t *raw_ = nullptr;
-    UrmaResource *resource_ = nullptr;
-    mutable std::mutex connectionMutex_;
-    std::weak_ptr<UrmaConnection> connection_;
-    std::atomic<bool> valid_ = false;
-};
-
 class UrmaJfr {
 public:
     explicit UrmaJfr(urma_jfr_t *raw) : raw_(raw)
@@ -345,7 +270,7 @@ public:
      * @param[out] jfr Created JFR wrapper.
      * @return Status of the call.
      */
-    static Status Create(const UrmaResource &resource, std::unique_ptr<UrmaJfr> &jfr);
+    static Status Create(const UrmaResource &resource, uint32_t depth, std::shared_ptr<UrmaJfr> &jfr);
 
     /**
      * @brief Get the underlying JFR handle.
@@ -361,30 +286,80 @@ private:
     urma_jfr_t *raw_ = nullptr;
 };
 
-class UrmaTargetJfr {
+class UrmaJetty {
 public:
-    explicit UrmaTargetJfr(urma_target_jetty_t *raw) : raw_(raw)
+    UrmaJetty(urma_jetty_t *raw, std::shared_ptr<UrmaJfr> sharedJfr, UrmaResource *resource)
+        : raw_(raw), sharedJfr_(std::move(sharedJfr)), resource_(resource), valid_(true)
     {
+        counter_.fetch_add(1);
     }
-    ~UrmaTargetJfr();
+    ~UrmaJetty();
 
-    URMA_DISABLE_COPY_AND_MOVE(UrmaTargetJfr);
+    URMA_DISABLE_COPY_AND_MOVE(UrmaJetty);
 
     /**
-     * @brief Import a remote JFR as a target jetty.
-     * @param[in] context Local Urma context.
-     * @param[in] remoteJfr Remote JFR descriptor.
-     * @param[in] urmaToken Token used to import the remote JFR.
-     * @param[out] tjfr Imported target JFR wrapper.
+     * @brief Create a local Jetty. The implementation uses a shared JFR because UB providers require
+     *        jetty_cfg.shared.jfr to be populated.
+     * @param[in] resource Owning UrmaResource that provides context, JFC, priority, and token.
+     * @param[out] jetty Created Jetty wrapper.
      * @return Status of the call.
      */
-    static Status Import(urma_context_t *context, urma_rjfr_t *remoteJfr, urma_token_t urmaToken,
-                         std::unique_ptr<UrmaTargetJfr> &tjfr);
+    static Status Create(UrmaResource &resource, JettyType jettyType, std::shared_ptr<UrmaJetty> &jetty);
 
-    /**
-     * @brief Get the underlying target jetty handle.
-     * @return Raw target jetty handle.
-     */
+    urma_jetty_t *Raw() const
+    {
+        return raw_;
+    }
+
+    urma_jfr_t *SharedJfrRaw() const
+    {
+        return sharedJfr_ == nullptr ? nullptr : sharedJfr_->Raw();
+    }
+
+    bool IsValid() const
+    {
+        return valid_;
+    }
+
+    bool MarkInvalid()
+    {
+        bool expected = true;
+        return valid_.compare_exchange_strong(expected, false);
+    }
+
+    Status ModifyToError();
+
+    uint32_t GetJettyId() const
+    {
+        return raw_->jetty_id.id;
+    }
+
+    void BindConnection(const std::shared_ptr<UrmaConnection> &connection);
+
+    std::weak_ptr<UrmaConnection> GetConnection() const;
+
+private:
+    static std::atomic<uint32_t> counter_;
+    urma_jetty_t *raw_ = nullptr;
+    std::shared_ptr<UrmaJfr> sharedJfr_;
+    UrmaResource *resource_ = nullptr;
+    mutable std::mutex connectionMutex_;
+    std::weak_ptr<UrmaConnection> connection_;
+    std::atomic<bool> valid_ = false;
+};
+
+class UrmaTargetJetty {
+public:
+    explicit UrmaTargetJetty(urma_target_jetty_t *raw) : raw_(raw)
+    {
+    }
+    ~UrmaTargetJetty();
+
+    URMA_DISABLE_COPY_AND_MOVE(UrmaTargetJetty);
+
+    static Status Import(urma_context_t *context, urma_rjetty_t *remoteJetty, urma_token_t urmaToken,
+                         std::unique_ptr<UrmaTargetJetty> &tjetty);
+
     urma_target_jetty_t *Raw() const
     {
         return raw_;
@@ -471,19 +446,20 @@ class UrmaResource;
 class UrmaConnection : public std::enable_shared_from_this<UrmaConnection> {
 public:
     /**
-     * @brief Construct a connection with a local JFS and an imported remote target JFR.
-     *        Local JFR is managed separately in UrmaManager::localJfrMap_.
-     * @param[in] jfs Local JFS exclusively owned by this connection.
-     * @param[in] tjfr Imported remote target JFR for writing to the remote side's JFR.
-     * @param[in] urmaJfrInfo Remote JFR metadata.
+     * @brief Construct a connection with a local Jetty and an imported remote target Jetty.
+     * @param[in] jetty Local Jetty used by this connection.
+     * @param[in] tjetty Imported remote target Jetty.
+     * @param[in] urmaJfrInfo Remote Jetty metadata stored in the legacy JFR-shaped handshake structure.
      */
-    UrmaConnection(std::shared_ptr<UrmaJfs> jfs, std::unique_ptr<UrmaTargetJfr> tjfr, const UrmaJfrInfo &urmaJfrInfo)
-        : jfs_(std::move(jfs)), tjfr_(std::move(tjfr)), urmaJfrInfo_(urmaJfrInfo)
+    UrmaConnection(std::shared_ptr<UrmaJetty> jetty, std::unique_ptr<UrmaTargetJetty> tjetty,
+                   const UrmaJfrInfo &urmaJfrInfo)
+        : jetty_(std::move(jetty)), tjetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo)
     {
-        LOG(INFO) << "Created connection with JFS " << jfs_->GetJfsId() << " and remote JFR " << urmaJfrInfo_.jfrId;
+        LOG(INFO) << "Created connection with Jetty " << jetty_->GetJettyId() << " and remote Jetty "
+                  << urmaJfrInfo_.jfrId;
     }
 
-    ~UrmaConnection() = default;
+    ~UrmaConnection();
 
     URMA_DISABLE_COPY_AND_MOVE(UrmaConnection);
 
@@ -494,26 +470,26 @@ public:
     const UrmaJfrInfo &GetUrmaJfrInfo() const;
 
     /**
-     * @brief Get the current local JFS exclusively owned by this connection.
-     * @return Shared pointer to the bound JFS.
+     * @brief Get the current local Jetty owned by this connection.
+     * @return Shared pointer to the bound Jetty.
      */
-    std::shared_ptr<UrmaJfs> GetJfs() const;
+    std::shared_ptr<UrmaJetty> GetJetty() const;
 
     /**
-     * @brief Recreate the connection JFS for a failed request JFS.
+     * @brief Recreate the connection Jetty for a failed request Jetty.
      *        The failure marker and replacement are both performed while holding the
-     *        connection lock so only one thread handles a given failed JFS.
+     *        connection lock so only one thread handles a given failed Jetty.
      * @param[in] resource Urma resource used to create and retire JFS handles.
-     * @param[in] failedJfs The JFS that observed the CQE failure.
+     * @param[in] failedJetty The Jetty that observed the CQE failure.
      * @return Status of the call.
      */
-    Status ReCreateJfs(UrmaResource &resource, const std::shared_ptr<UrmaJfs> &failedJfs);
+    Status ReCreateJetty(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &failedJetty);
 
     /**
-     * @brief Get the imported remote target JFR handle.
-     * @return Raw target JFR handle.
+     * @brief Get the imported remote target Jetty handle.
+     * @return Raw target Jetty handle.
      */
-    urma_target_jetty_t *GetTargetJfr() const;
+    urma_target_jetty_t *GetTargetJetty() const;
 
     /**
      * @brief Look up an imported remote segment by its base address.
@@ -547,9 +523,9 @@ public:
     void Clear();
 
 private:
-    mutable std::mutex jfsMutex_;
-    std::shared_ptr<UrmaJfs> jfs_;
-    std::unique_ptr<UrmaTargetJfr> tjfr_;
+    mutable std::mutex jettyMutex_;
+    std::shared_ptr<UrmaJetty> jetty_;
+    std::unique_ptr<UrmaTargetJetty> tjetty_;
     UrmaJfrInfo urmaJfrInfo_;
     UrmaRemoteSegmentMap tsegs_;
 };
@@ -618,6 +594,23 @@ public:
     bool GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
 
     /**
+     * @brief Get the Jetty priority used when creating new Jetty instances.
+     * @return Jetty priority value.
+     */
+    uint8_t GetJettyPriority() const
+    {
+        return jettyPriority_;
+    }
+
+    /**
+     * @brief Gets the priority and sl for CTP (for Jetty).
+     * @param[out] priority The priority index for current tp_type
+     * @param[out] sl The sl for current tp_type
+     * @return Whether the priority/sl is fetched from device capability.
+     */
+    bool GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
+
+    /**
      * @brief Get the maximum supported Urma write size.
      * @return Maximum write size in bytes.
      */
@@ -636,86 +629,89 @@ public:
     }
 
     /**
-     * @brief Create a new JFS for exclusive use by a single connection.
-     * @param[out] jfs Created JFS wrapper.
+     * @brief Create a new Jetty for a connection.
+     * @param[out] jetty Created Jetty wrapper.
      * @return Status of the call.
      */
-    Status CreateJfs(std::shared_ptr<UrmaJfs> &jfs);
+    Status CreateJetty(std::shared_ptr<UrmaJetty> &jetty, JettyType jettyType = JettyType::SEND);
 
     /**
-     * @brief Create a new local JFR managed outside UrmaConnection.
-     * @param[out] jfr Created JFR wrapper.
+     * @brief Asynchronously move a Jetty to error state for later cleanup.
+     * @param[in] jetty Jetty to retire.
      * @return Status of the call.
      */
-    Status CreateJfr(std::unique_ptr<UrmaJfr> &jfr);
+    Status AsyncModifyJettyToError(std::shared_ptr<UrmaJetty> jetty);
 
     /**
-     * @brief Asynchronously move a JFS to error state for later cleanup.
-     * @param[in] jfs JFS to retire.
+     * @brief Asynchronously delete a Jetty that has been detached from service.
+     * @param[in] jettyId Urma-assigned Jetty id.
+     */
+    void AsyncDeleteJetty(uint32_t jettyId);
+
+    /**
+     * @brief Register a Jetty in the resource-level registry for AE lookup.
+     * @param[in] jetty Jetty to register.
      * @return Status of the call.
      */
-    Status AsyncModifyJfsToError(std::shared_ptr<UrmaJfs> jfs);
+    Status RegisterJetty(const std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Asynchronously delete a JFS that has been detached from service.
-     * @param[in] jfsId Urma-assigned JFS id.
+     * @brief Remove a Jetty from the registry.
+     * @param[in] jettyId Urma-assigned Jetty id.
+     * @param[in] expected Optional pointer; only unregister if the registered Jetty matches.
      */
-    void AsyncDeleteJfs(uint32_t jfsId);
+    void UnregisterJetty(uint32_t jettyId, const UrmaJetty *expected = nullptr);
 
     /**
-     * @brief Register a JFS in the resource-level registry for AE lookup.
-     * @param[in] jfs JFS to register.
+     * @brief Look up a Jetty by its Urma-assigned id.
+     * @param[in] jettyId Jetty id to look up.
+     * @param[out] jetty Locked shared pointer to the Jetty.
      * @return Status of the call.
      */
-    Status RegisterJfs(const std::shared_ptr<UrmaJfs> &jfs);
+    Status GetJettyById(uint32_t jettyId, std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Remove a JFS from the registry.
-     * @param[in] jfsId Urma-assigned JFS id.
-     * @param[in] expected Optional pointer; only unregister if the registered JFS matches.
-     */
-    void UnregisterJfs(uint32_t jfsId, const UrmaJfs *expected = nullptr);
-
-    /**
-     * @brief Look up a JFS by its Urma-assigned id.
-     * @param[in] jfsId JFS id to look up.
-     * @param[out] jfs Locked shared pointer to the JFS.
+     * @brief Get any valid registered Jetty, used by async-event injection tests.
+     * @param[out] jetty Locked shared pointer to a valid Jetty.
      * @return Status of the call.
      */
-    Status GetJfsById(uint32_t jfsId, std::shared_ptr<UrmaJfs> &jfs);
+    Status GetAnyValidJetty(std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Get any valid registered JFS, used by async-event injection tests.
-     * @param[out] jfs Locked shared pointer to a valid JFS.
+     * @brief Get or lazily create the context-level shared JFR for send-only Jetty.
+     * @param[out] jfr Shared JFR used by all Jetty under one urma context.
      * @return Status of the call.
      */
-    Status GetAnyValidJfs(std::shared_ptr<UrmaJfs> &jfs);
+    Status GetOrCreateSharedJettyJfr(std::shared_ptr<UrmaJfr> &jfr);
 
 private:
-    struct PendingDeleteJfs {
-        std::shared_ptr<UrmaJfs> jfs;
+    struct PendingDeleteJetty {
+        std::shared_ptr<UrmaJetty> jetty;
         std::string traceId;
     };
 
     /**
-     * @brief Retire a JFS to error state and store it for later deletion.
-     * @param[in] jfs Failed JFS instance.
+     * @brief Retire a Jetty to error state and store it for later deletion.
+     * @param[in] jetty Failed Jetty instance.
      * @return Status of the call.
      */
-    Status RetireJfsToError(const std::shared_ptr<UrmaJfs> &jfs);
+    Status RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty);
 
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
     uint8_t jfsPriority_ = 0;
+    uint8_t jettyPriority_ = 0;
     urma_device_attr_t urmaDeviceAttribute_ = {};
     std::unique_ptr<UrmaContext> context_;
     std::unique_ptr<UrmaJfce> jfce_;
     std::unique_ptr<UrmaJfc> jfc_;
-    std::unique_ptr<ThreadPool> deleteJfsThread_;
+    std::unique_ptr<ThreadPool> deleteJettyThread_;
     std::mutex pendingDeleteMutex_;
-    // jfs id to pending delete jfs object with trace context
-    std::unordered_map<uint32_t, PendingDeleteJfs> pendingDeleteJfs_;
-    std::mutex jfsRegistryMutex_;
-    std::unordered_map<uint32_t, std::weak_ptr<UrmaJfs>> jfsRegistry_;
+    // jetty id to pending delete jetty object with trace context
+    std::unordered_map<uint32_t, PendingDeleteJetty> pendingDeleteJettys_;
+    std::mutex jettyRegistryMutex_;
+    std::unordered_map<uint32_t, std::weak_ptr<UrmaJetty>> jettyRegistry_;
+    std::mutex sharedJettyJfrMutex_;
+    std::shared_ptr<UrmaJfr> sharedJettyJfr_;
 };
 
 }  // namespace datasystem

@@ -267,23 +267,6 @@ urma_status_t ds_urma_rearm_jfc(urma_jfc_t *jfc, bool enable_events)
         "urma_rearm_jfc", kUrmaDlopenErrorStatus, jfc, enable_events);
 }
 
-urma_jfs_t *ds_urma_create_jfs(urma_context_t *context, const urma_jfs_cfg_t *config)
-{
-    return static_cast<urma_jfs_t *>(CallPtr<decltype(&ds_urma_create_jfs)>("urma_create_jfs", context, config));
-}
-
-urma_status_t ds_urma_delete_jfs(urma_jfs_t *jfs)
-{
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfs)>("urma_delete_jfs",
-                                                                                    kUrmaDlopenErrorStatus, jfs);
-}
-
-urma_status_t ds_urma_modify_jfs(urma_jfs_t *jfs, urma_jfs_attr_t *attr)
-{
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_modify_jfs)>("urma_modify_jfs",
-                                                                                    kUrmaDlopenErrorStatus, jfs, attr);
-}
-
 urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *config)
 {
     return static_cast<urma_jfr_t *>(CallPtr<decltype(&ds_urma_create_jfr)>("urma_create_jfr", context, config));
@@ -291,8 +274,25 @@ urma_jfr_t *ds_urma_create_jfr(urma_context_t *context, const urma_jfr_cfg_t *co
 
 urma_status_t ds_urma_delete_jfr(urma_jfr_t *jfr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfr)>("urma_delete_jfr",
-                                                                                    kUrmaDlopenErrorStatus, jfr);
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jfr)>(
+        "urma_delete_jfr", kUrmaDlopenErrorStatus, jfr);
+}
+
+urma_jetty_t *ds_urma_create_jetty(urma_context_t *context, urma_jetty_cfg_t *config)
+{
+    return static_cast<urma_jetty_t *>(CallPtr<decltype(&ds_urma_create_jetty)>("urma_create_jetty", context, config));
+}
+
+urma_status_t ds_urma_delete_jetty(urma_jetty_t *jetty)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_delete_jetty)>(
+        "urma_delete_jetty", kUrmaDlopenErrorStatus, jetty);
+}
+
+urma_status_t ds_urma_modify_jetty(urma_jetty_t *jetty, urma_jetty_attr_t *attr)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_modify_jetty)>(
+        "urma_modify_jetty", kUrmaDlopenErrorStatus, jetty, attr);
 }
 
 urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_cfg_t *config)
@@ -303,14 +303,14 @@ urma_target_seg_t *ds_urma_register_seg(urma_context_t *context, const urma_seg_
 
 int ds_urma_wait_jfc(urma_jfce_t *jfce, int max_events, int timeout_ms, urma_jfc_t **ev_jfc)
 {
-    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_wait_jfc)>("urma_wait_jfc", -1, jfce, max_events,
-                                                                        timeout_ms, ev_jfc);
+    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_wait_jfc)>(
+        "urma_wait_jfc", -1, jfce, max_events, timeout_ms, ev_jfc);
 }
 
 int ds_urma_poll_jfc(urma_jfc_t *jfc, int max_cr, urma_cr_t *complete_records)
 {
-    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_poll_jfc)>("urma_poll_jfc", -1, jfc, max_cr,
-                                                                        complete_records);
+    return CallRet<UrmaLibType::URMA, int, decltype(&ds_urma_poll_jfc)>(
+        "urma_poll_jfc", -1, jfc, max_cr, complete_records);
 }
 
 void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num)
@@ -318,56 +318,23 @@ void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num)
     CallVoid<decltype(&ds_urma_ack_jfc)>("urma_ack_jfc", ev_jfc, ack_cnt, num);
 }
 
-urma_target_jetty_t *ds_urma_import_jfr(urma_context_t *context, const urma_rjfr_t *remote_jfr, urma_token_t *token)
+urma_target_jetty_t *ds_urma_import_jetty(urma_context_t *context, urma_rjetty_t *remote_jetty,
+                                          urma_token_t *token)
 {
     return static_cast<urma_target_jetty_t *>(
-        CallPtr<decltype(&ds_urma_import_jfr)>("urma_import_jfr", context, remote_jfr, token));
+        CallPtr<decltype(&ds_urma_import_jetty)>("urma_import_jetty", context, remote_jetty, token));
 }
 
-urma_status_t ds_urma_advise_jfr(urma_jfs_t *jfs, urma_target_jetty_t *tjfr)
+urma_status_t ds_urma_unimport_jetty(urma_target_jetty_t *tjetty)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_advise_jfr)>("urma_advise_jfr",
-                                                                                    kUrmaDlopenErrorStatus, jfs, tjfr);
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unimport_jetty)>(
+        "urma_unimport_jetty", kUrmaDlopenErrorStatus, tjetty);
 }
 
-urma_status_t ds_urma_unimport_jfr(urma_target_jetty_t *tjfr)
+urma_status_t ds_urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr)
 {
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_unimport_jfr)>("urma_unimport_jfr",
-                                                                                      kUrmaDlopenErrorStatus, tjfr);
-}
-
-urma_status_t ds_urma_write(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *remote_seg,
-                            urma_target_seg_t *local_seg, uint64_t remote_addr, uint64_t local_addr, uint64_t length,
-                            urma_jfs_wr_flag_t flag, uint64_t user_ctx)
-{
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_write)>(
-        "urma_write", kUrmaDlopenErrorStatus, jfs, tjfr, remote_seg, local_seg, remote_addr, local_addr, length, flag,
-        user_ctx);
-}
-
-urma_status_t ds_urma_write_affinity(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *remote_seg,
-                                     urma_target_seg_t *local_seg, uint64_t remote_addr, uint64_t local_addr,
-                                     uint64_t length, urma_jfs_wr_flag_t flag, uint64_t user_ctx, uint32_t src_chip_id,
-                                     uint32_t dst_chip_id)
-{
-    return CallRet<UrmaLibType::UB_AGG, urma_status_t, decltype(&ds_urma_write_affinity)>(
-        "urma_write_affinity", kUrmaDlopenErrorStatus, jfs, tjfr, remote_seg, local_seg, remote_addr, local_addr,
-        length, flag, user_ctx, src_chip_id, dst_chip_id);
-}
-
-urma_status_t ds_urma_read(urma_jfs_t *jfs, urma_target_jetty_t *tjfr, urma_target_seg_t *local_seg,
-                           urma_target_seg_t *remote_seg, uint64_t local_addr, uint64_t remote_addr, uint64_t length,
-                           urma_jfs_wr_flag_t flag, uint64_t user_ctx)
-{
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_read)>("urma_read", kUrmaDlopenErrorStatus, jfs,
-                                                                              tjfr, local_seg, remote_seg, local_addr,
-                                                                              remote_addr, length, flag, user_ctx);
-}
-
-urma_status_t ds_urma_post_jfs_wr(urma_jfs_t *jfs, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr)
-{
-    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_post_jfs_wr)>(
-        "urma_post_jfs_wr", kUrmaDlopenErrorStatus, jfs, wr, bad_wr);
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_post_jetty_send_wr)>(
+        "urma_post_jetty_send_wr", kUrmaDlopenErrorStatus, jetty, wr, bad_wr);
 }
 
 urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, urma_token_t *token, int flags,
