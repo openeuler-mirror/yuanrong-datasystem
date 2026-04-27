@@ -263,5 +263,25 @@ TEST_F(EtcdClusterManagerTest, NoProgressEarlyTermination)
     ASSERT_LT(elapsed, 15) << "WaitNodeTable should terminate early, but took " << elapsed << "s";
     ShutDownAllClusterManagers();
 }
+
+TEST_F(EtcdClusterManagerTest, NoProgressEarlyTerminationOnlyForRestart)
+{
+    int workerNum = 1;
+    InitTestEtcdInstance();
+    InitAllClusterManagers(workerNum);
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : etcdCMs_) {
+        DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
+    }
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", "call(2)"));
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)"));
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
+    ASSERT_EQ(inject::GetExecuteCount("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak", "call()"));
+
+    DS_ASSERT_OK(etcdCMs_[0]->CheckWaitNodeTableComplete());
+    ASSERT_EQ(inject::GetExecuteCount("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
+    ShutDownAllClusterManagers();
+}
 }  // namespace st
 }  // namespace datasystem
