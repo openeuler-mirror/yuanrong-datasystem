@@ -49,17 +49,17 @@
 
 ## Stable Subdomains Worth Knowing
 
-| Subdomain | Verified role | Build facts |
-| --- | --- | --- |
-| `rpc` | RPC plumbing plus code generation plugins and ZMQ-based transport implementation | builds rpc plugins, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr` |
-| `shared_memory` | shared-memory allocator, arena, mmap abstractions, shared-disk detection | builds `common_shared_memory` and `common_shm_unit_info` |
-| `kvstore` | metadata/backend storage families | split into `etcd`, `metastore`, `rocksdb` |
-| `log` | logging, access recording, tracing, failure handling | builds `common_log` |
-| `metrics` | resource metrics and exporters | builds `common_metrics` and exporter base |
-| `rdma` | fast transport wrappers and optional URMA/RDMA support | conditional build based on feature flags |
-| `l2cache` | persistence and secondary-storage support | includes OBS/SFS clients, distributed-disk slot client, and persistence API dispatch |
-| `device` | Ascend and optional Nvidia device support wrappers | builds `common_device` over backend-specific device libs |
-| `os_transport_pipeline` | optional pipeline H2D transport path | only built when `BUILD_PIPLN_H2D` is enabled |
+| Subdomain               | Verified role                                                                    | Build facts                                                                          |
+| ----------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `rpc`                   | RPC plumbing plus code generation plugins and ZMQ-based transport implementation | builds rpc plugins, `common_rpc_zmq`, `common_rpc_zmq_client`, `rpc_stub_cache_mgr`  |
+| `shared_memory`         | shared-memory allocator, arena, mmap abstractions, shared-disk detection         | builds `common_shared_memory` and `common_shm_unit_info`                             |
+| `kvstore`               | metadata/backend storage families                                                | split into `etcd`, `metastore`, `rocksdb`                                            |
+| `log`                   | logging, access recording, tracing, failure handling                             | builds `common_log`                                                                  |
+| `metrics`               | resource metrics and exporters                                                   | builds `common_metrics` and exporter base                                            |
+| `rdma`                  | fast transport wrappers and optional URMA/RDMA support                           | conditional build based on feature flags                                             |
+| `l2cache`               | persistence and secondary-storage support                                        | includes OBS/SFS clients, distributed-disk slot client, and persistence API dispatch |
+| `device`                | Ascend and optional Nvidia device support wrappers                               | builds `common_device` over backend-specific device libs                             |
+| `os_transport_pipeline` | optional pipeline H2D transport path                                             | only built when `BUILD_PIPLN_H2D` is enabled                                         |
 
 Detailed follow-up docs now exist for:
 
@@ -94,6 +94,9 @@ Detailed follow-up docs now exist for:
 
 - Verified:
   - `rpc` contains both generation tooling and the main ZMQ transport implementation.
+  - selected ZMQ, message-queue, and URMA IO threads can be deprioritized together via `io_thread_nice`, which
+    defaults to `10` and is applied with `setpriority(2)` in `ZmqFrontend`, `ZmqServerImpl` proxy execution,
+    `ZmqEpoll`, `MsgQueMgr`, and `UrmaManager` server event handling.
   - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends; when UB
     numa affinity is enabled it also records per-allocation NUMA ownership. Shared-memory pre-touch distribution is
     controlled by `shared_memory_distribution_policy` with values `none`, `interleave_all_numa`,
@@ -102,7 +105,7 @@ Detailed follow-up docs now exist for:
     distribution policy takes effect when `enable_urma=true` and
     `urma_register_whole_arena=true`. For `MemMmap`, `enable_huge_tlb=true` still selects explicit hugetlb mappings,
     while `enable_thp=true` leaves the process THP setting enabled and additionally applies `madvise(...,
-    MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
+MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
     `MAP_HUGETLB`.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.

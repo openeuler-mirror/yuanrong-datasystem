@@ -20,6 +20,11 @@
 #ifndef DATASYSTEM_COMMON_UTIL_THREAD_H
 #define DATASYSTEM_COMMON_UTIL_THREAD_H
 
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cerrno>
+
 #include <pthread.h>
 #include <string>
 #include <thread>
@@ -85,6 +90,11 @@ public:
         (void)pthread_setname_np(handle, truncateName.c_str());
     }
 
+    static bool SetCurrentThreadNice(int nice)
+    {
+        return SetNiceByTid(static_cast<pid_t>(syscall(SYS_gettid)), nice);
+    }
+
 private:
     // If an unhandled exception occurs in an std::thread, the stack is unwound before std::terminate is called, which
     // makes it impossible to find the location of the exception. The supposed fix was to use noexcept on the internal
@@ -93,6 +103,11 @@ private:
     static auto WrapFn(F &&f, Args &&...args) noexcept -> decltype(std::ref(f)(std::forward<Args>(args)...))
     {
         return std::ref(f)(std::forward<Args>(args)...);
+    }
+
+    static bool SetNiceByTid(pid_t tid, int nice)
+    {
+        return setpriority(PRIO_PROCESS, tid, nice) == 0;
     }
 
     std::thread thread_;

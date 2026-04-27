@@ -51,6 +51,11 @@ void ThreadWorkers::Join()
 
 void ThreadPool::DoThreadWork()
 {
+    // Reset worker nice to the default value so thread-pool workers do not inherit elevated priority from
+    // the thread that created the pool thread.
+    if (!Thread::SetCurrentThreadNice(0)) {
+        LOG(WARNING) << "Failed to set nice for thread pool [" << name_ << "], nice=" << 0 << ", errno=" << errno;
+    }
     while (true) {
         std::function<void()> task;
         {
