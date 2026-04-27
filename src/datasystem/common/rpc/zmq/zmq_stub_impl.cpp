@@ -32,8 +32,10 @@
 #include "datasystem/protos/meta_zmq.pb.h"
 
 namespace datasystem {
-ZmqStubImpl::AsyncCallBack::AsyncCallBack(std::shared_ptr<ZmqMsgQueRef> mQue, std::string svcName, int32_t methodIndex)
-    : mQue_(std::move(mQue)), svcName_(std::move(svcName)), methodIndex_(methodIndex)
+ZmqStubImpl::AsyncCallBack::AsyncCallBack(std::shared_ptr<ZmqMsgQueRef> mQue, std::string svcName, int32_t methodIndex,
+                                          MetaPb clientMeta)
+    : mQue_(std::move(mQue)), svcName_(std::move(svcName)), methodIndex_(methodIndex),
+      clientMeta_(std::move(clientMeta))
 {
 }
 
@@ -56,9 +58,10 @@ void ZmqStubImpl::Remove(int64_t tagId)
     }
 }
 
-int64_t ZmqStubImpl::Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::string &svcName, int32_t methodIndex)
+int64_t ZmqStubImpl::Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::string &svcName, int32_t methodIndex,
+                            MetaPb clientMeta)
 {
-    auto async_call = std::make_shared<AsyncCallBack>(std::move(mQue), svcName, methodIndex);
+    auto async_call = std::make_shared<AsyncCallBack>(std::move(mQue), svcName, methodIndex, std::move(clientMeta));
     auto id = seqNo_.fetch_add(1);
     std::lock_guard<std::mutex> lock(mux_);
     asyncCallBack_.emplace(id, std::move(async_call));

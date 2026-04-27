@@ -65,3 +65,28 @@ ds_cc_test(
         "//tests/st:st_common",
     ],
 )
+
+ds_cc_test(
+    name = "zmq_rpc_queue_latency_repl",
+    srcs = [
+        "zmq_rpc_queue_latency_repl.cpp",
+        "zmq_test.h",
+    ],
+    size = "large",
+    timeout = "long",
+    tags = ["manual"],
+    copts = [
+        '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/rdma:fast_transport_base",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/protos:zmq_test_zmq_cc_proto",
+        "//src/datasystem/server:common_server",
+        "@nlohmann_json//:json",
+    ],
+)
