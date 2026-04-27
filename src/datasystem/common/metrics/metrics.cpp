@@ -369,6 +369,14 @@ void Gauge::Set(int64_t value) const
     }
 }
 
+int64_t Gauge::Get() const
+{
+    if (slot_ != nullptr) {
+        return slot_->i64Value.load(std::memory_order_relaxed);
+    }
+    return 0;
+}
+
 void Gauge::Inc(int64_t delta) const
 {
     if (slot_ != nullptr) {

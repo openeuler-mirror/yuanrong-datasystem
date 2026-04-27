@@ -92,6 +92,7 @@ ds_cc_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/l2cache:l2_storage",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/parallel:common_parallel",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",

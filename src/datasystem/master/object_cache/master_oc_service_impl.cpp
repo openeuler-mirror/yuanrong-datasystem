@@ -121,7 +121,7 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     PerfPoint point(PerfKey::MASTER_CREATE_META);
     const std::string localAddr = GetLocalAddr().ToString();
     LOG(INFO) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
-              << AppendSrcDstForLog(req.address(), localAddr);
+             << AppendSrcDstForLog(req.address(), localAddr);
 
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
@@ -326,7 +326,7 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed in UpdateMeta");
     const std::string localAddr = GetLocalAddr().ToString();
     LOG(INFO) << FormatString("Processing UpdateMetaReq, redirect: %d", req.redirect())
-              << AppendSrcDstForLog(req.address(), localAddr);
+             << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -349,7 +349,7 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
 Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &resp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << "Master " << GetLocalAddr().ToString()
+    VLOG(1) << "Master " << GetLocalAddr().ToString()
               << " received GetObjectLocations req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),

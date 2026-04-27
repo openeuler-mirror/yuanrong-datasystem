@@ -419,7 +419,7 @@ Status WorkerOCServer::InitWorkerService()
     // Explicitly set the regular thread number to the default, so we get matching number of message queues.
     cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
     cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
     cfg.udsEnabled_ = false;
     builder_.AddService(workerSvc_.get(), cfg);
     return Status::OK();
@@ -1223,6 +1223,7 @@ void WorkerOCServer::ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::st
                 if (warmupExit_) {
                     return false;
                 }
+                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                 auto rc = objCacheClientWorkerSvc_->WarmupUrmaConnectionToPeer(peerAddr, BuildWarmupKey(peerAddr));
                 if (rc.IsError()) {
                     LOG(WARNING) << FormatString("[URMA_WARMUP] peer warmup failed, peer=%s, status=%s", peerAddr,

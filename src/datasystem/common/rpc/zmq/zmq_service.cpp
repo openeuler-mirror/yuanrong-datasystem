@@ -1053,6 +1053,8 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
         const int64_t US_TO_NS = 1000;
         const int64_t MS_TO_US = 1000;
         int64_t elapsedUs = timer.ElapsedMicroSecond();
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_TASK_DELAY))
+            .Observe(static_cast<int64_t>(elapsedUs));
         PerfPoint::RecordElapsed(PerfKey::ZMQ_SERVER_TASK_DELAY, elapsedUs * US_TO_NS);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         if (timeout > 0) {

@@ -62,6 +62,7 @@ enum class KvMetricId : uint16_t {
     ZMQ_RECEIVE_IO_LATENCY,
     ZMQ_RPC_SERIALIZE_LATENCY,
     ZMQ_RPC_DESERIALIZE_LATENCY,
+    ZMQ_SERVER_TASK_DELAY,
     // RPC Queue Flow Latency
     ZMQ_CLIENT_QUEUING_LATENCY,
     ZMQ_SERVER_QUEUE_WAIT_LATENCY,
@@ -102,6 +103,8 @@ enum class KvMetricId : uint16_t {
     WORKER_GET_META_ADDR_HASHRING_LATENCY,
     /** After QueryMetadataFromMaster OK: local follow-up */
     WORKER_GET_POST_QUERY_META_PHASE_LATENCY,
+    /** Worker outbound BatchGetObjectRemote requests currently in progress */
+    WORKER_INFLIGHT_REMOTE_GET_REQUEST,
     KV_METRIC_END
 };
 

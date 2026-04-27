@@ -93,7 +93,7 @@ Status AsyncUpdateLocationManager::AddTask(UpdateLocationTask &&task)
     CHECK_FAIL_RETURN_STATUS(running_.load(),
                              StatusCode::K_RUNTIME_ERROR, "The async update location manager is not running");
     size_t index = ObjectKey2QueueIndex(task.GetFirstObjectKey());
-    LOG(INFO) << "AddTask to the async queue, objectKey: " << task.GetFirstObjectKey() << ", index: " << index;
+    VLOG(1) << "AddTask to the async queue, objectKey: " << task.GetFirstObjectKey() << ", index: " << index;
     std::lock_guard<std::mutex> lock(*locks_[index]);
     if (!queues_[index].empty() &&
         queues_[index].back().GetParams().size() + task.GetParams().size() <= AGGREGRATE_TASK_PARAMS_THRESHOLD) {

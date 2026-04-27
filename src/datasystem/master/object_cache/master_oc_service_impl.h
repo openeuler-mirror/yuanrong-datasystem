@@ -489,6 +489,7 @@ private:
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;
     ReplicaManager *replicaManager_;
     ResourceManager *resourceManager_;
+
 };
 }  // namespace master
 }  // namespace datasystem

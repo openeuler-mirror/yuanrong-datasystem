@@ -785,6 +785,7 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY, "worker_get_threadpool_exec_latency" },
         { metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY, "worker_get_meta_addr_hashring_latency" },
         { metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY, "worker_get_post_query_meta_phase_latency" },
+        { metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST, "worker_inflight_remote_get_request" },
     };
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const size_t i = static_cast<size_t>(kTailMetrics[k].id);

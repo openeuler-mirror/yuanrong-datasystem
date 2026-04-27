@@ -29,6 +29,10 @@
 #include <string>
 #include <thread>
 
+#include "datasystem/common/flags/flags.h"
+
+DS_DECLARE_int32(io_thread_nice);
+
 namespace datasystem {
 class Thread {
 public:
@@ -92,6 +96,9 @@ public:
 
     static bool SetCurrentThreadNice(int nice)
     {
+        if (FLAGS_io_thread_nice == 0) {
+            return true;
+        }
         return SetNiceByTid(static_cast<pid_t>(syscall(SYS_gettid)), nice);
     }
 
