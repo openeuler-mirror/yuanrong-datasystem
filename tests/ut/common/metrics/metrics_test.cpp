@@ -394,6 +394,24 @@ TEST_F(MetricsTest, kv_metric_id_mapping_test)
     EXPECT_NE(summary.find(ScalarMetricJson("worker_allocated_memory_size", 10, 10)), std::string::npos);
 }
 
+TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
+{
+    size_t count = 0;
+    auto descs = metrics::GetKvMetricDescs(count);
+    ASSERT_NE(descs, nullptr);
+    ASSERT_GT(count, static_cast<size_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY));
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::URMA_IMPORT_JFR), 62);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::URMA_INFLIGHT_WR_COUNT), 63);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::URMA_NANOSLEEP_LATENCY), 64);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY), 65);
+    EXPECT_STREQ(descs[64].name, "urma_nanosleep_latency");
+    EXPECT_STREQ(descs[65].name, "worker_rpc_remote_get_inbound_latency");
+    EXPECT_STREQ(descs[66].name, "worker_get_threadpool_queue_latency");
+    EXPECT_STREQ(descs[67].name, "worker_get_threadpool_exec_latency");
+    EXPECT_STREQ(descs[68].name, "worker_get_meta_addr_hashring_latency");
+    EXPECT_STREQ(descs[69].name, "worker_get_post_query_meta_phase_latency");
+}
+
 TEST_F(MetricsTest, kv_metric_helper_inc_test)
 {
     DS_ASSERT_OK(metrics::InitKvMetrics());
