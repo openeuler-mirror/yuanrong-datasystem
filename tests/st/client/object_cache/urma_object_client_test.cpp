@@ -1569,7 +1569,7 @@ TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsFallbackPayloadAtOneMb)
     Status status = client->Set("key-one-mb", value);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
 }
 
 TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsWhenPendingWouldExceedTenMb)
@@ -1635,7 +1635,7 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsFallbackPayloadAtOneMb)
     Status status = client->Get("key-get-one-mb", getValue);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
 }
 
 class UrmaAsyncEventTest : public UrmaObjectClientTest {
@@ -1807,7 +1807,7 @@ TEST_F(UrmaFallbackTest, WorkerWorkerRejectsFallbackPayloadAtOneMb)
     Status status = client2->Get(key, getValue);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
 }
 
 TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWriteRejectsFallbackPayloadAtOneMb)
@@ -1828,7 +1828,7 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWriteRejectsFallbackPayloadAtOneMb)
     Status status = client2->Get({ key }, valuesGet);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR) << status.ToString();
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos) << status.ToString();
 }
 
 TEST_F(UrmaFallbackTest, WorkerWorkerBatchWriteFallback)
@@ -1909,7 +1909,7 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitRejectsFallbackPayloadAtOneMb)
     Status status = client2->Get({ key }, valuesGet);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR) << status.ToString();
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos) << status.ToString();
 }
 
 TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)

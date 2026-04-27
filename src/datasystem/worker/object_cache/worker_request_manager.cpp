@@ -490,7 +490,12 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
                               readOffset, readSize);
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
     if (ubRc.IsError()) {
-        RETURN_IF_NOT_OK(shmGuard.TrackUrmaFallbackTcp(readSize, ubRc, "worker->client"));
+        auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, ubRc, "worker->client");
+        if (rc.IsError()) {
+            LOG(WARNING) << "Worker-to-client TCP fallback payload rejected for object " << objectKeyUri
+                         << ": " << rc.ToString();
+            return rc;
+        }
     }
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
     METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, readSize);

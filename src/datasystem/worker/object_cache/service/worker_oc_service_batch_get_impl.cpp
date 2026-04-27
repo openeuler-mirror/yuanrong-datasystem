@@ -587,6 +587,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
+            LOG(INFO) << FormatString("Remote get request:[batch] src[%s] --dst(%s)--> objects count[%d]",
+                                      localAddress_.ToString(), address, reqPb.requests_size());
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;

@@ -45,6 +45,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
+DS_DECLARE_string(worker_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(oc_worker_worker_parallel_nums);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
@@ -148,7 +149,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     }
 
     pointImpl.Record();
-    LOG(INFO) << FormatString("pull success");
+    LOG(INFO) << "send data success";
     point.Record();
     return Status::OK();
 }
@@ -158,8 +159,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", req.object_key(),
-                              req.request_id(), req.read_offset(), req.read_size());
+    std::string callerAddress;
+    if (req.has_urma_info()) {
+        callerAddress = FormatString("%s:%d", req.urma_info().request_address().host(),
+                                     req.urma_info().request_address().port());
+    } else if (req.has_ucp_info()) {
+        callerAddress = FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(),
+                                     req.ucp_info().remote_ip_addr().port());
+    }
+    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              req.object_key(), FLAGS_worker_address, callerAddress,
+                              req.read_offset(), req.read_size());
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
     return Status::OK();
@@ -176,6 +186,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> eventKeys;
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
+    std::string callerAddress;
+    if (subReq.has_urma_info()) {
+        callerAddress = FormatString("%s:%d", subReq.urma_info().request_address().host(),
+                                     subReq.urma_info().request_address().port());
+    } else if (subReq.has_ucp_info()) {
+        callerAddress = FormatString("%s:%d", subReq.ucp_info().remote_ip_addr().host(),
+                                     subReq.ucp_info().remote_ip_addr().port());
+    }
+    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              subReq.object_key(), FLAGS_worker_address, callerAddress,
+                              subReq.read_offset(), subReq.read_size());
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
@@ -500,11 +521,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         uint64_t localSegSize;
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
         Status fastTransportStatus = Status::OK();
-        auto markFastTransferResult = [&rsp, &objectKey](const Status &status, const char *transportName) {
+        std::string fastTransportName;
+        auto markFastTransferResult = [&rsp](const Status &status) {
             if (status.IsError()) {
                 CHECK_FAIL_RETURN_STATUS(FLAGS_enable_transport_fallback, status.GetCode(), status.GetMsg());
-                LOG(WARNING) << FormatString("%s[%s] fallback to tcp, rc = %s", transportName, objectKey,
-                                             status.ToString());
                 return Status::OK();
             }
             rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
@@ -531,13 +551,15 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                 auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset,
                                            size, entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
                 fastTransportStatus = rc;
-                RETURN_IF_NOT_OK(markFastTransferResult(rc, "UrmaWrite"));
+                fastTransportName = "UrmaWrite";
+                RETURN_IF_NOT_OK(markFastTransferResult(rc));
             } else if (IsUcpEnabled()) {
                 // later add a check on data size and read size.
                 auto rc = UcpPutPayload(req.ucp_info(), localObjectAddress, offset, size, entry->GetMetadataSize(),
                                         blocking, eventKeys);
                 fastTransportStatus = rc;
-                RETURN_IF_NOT_OK(markFastTransferResult(rc, "UcpWrite"));
+                fastTransportName = "UcpWrite";
+                RETURN_IF_NOT_OK(markFastTransferResult(rc));
             }
         }
 
@@ -566,11 +588,15 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                         }
                         canPrepareFallbackPayload = false;
                     } else {
+                        LOG(WARNING) << FormatString("Worker-to-worker TCP fallback payload rejected for object %s: %s",
+                                                     objectKey, rc.ToString());
                         RETURN_IF_NOT_OK(rc);
                     }
                 }
             }
             if (canPrepareFallbackPayload) {
+                LOG_IF(WARNING, fastTransportStatus.IsError()) << FormatString(
+                    "%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey, fastTransportStatus.ToString());
                 RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
             }
         }
@@ -675,7 +701,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
     auto vlogLevel = payload.empty() ? 1 : 0;
-    VLOG(vlogLevel) << "pull success with payload size: " << payload.size();
+    VLOG(vlogLevel) << "send data success with payload size: " << payload.size();
     point.Record();
     return Status::OK();
 }
@@ -748,6 +774,7 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
             if (batchFallback) {
                 if (fallbackStatus.IsError()) {
                     // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                    LOG(WARNING) << "Worker-to-worker TCP fallback payload rejected: " << fallbackStatus.ToString();
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
                     index += coveredRespNum;
@@ -782,6 +809,14 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
         if (waitFailed) {
             if (fallbackStatus.IsError()) {
                 // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                HostPort requestAddress;
+                LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(req, requestAddress),
+                             "GetRemoteAddressFromBatchGetReq failed");
+                const auto targetAddress = requestAddress.ToString();
+                LOG(WARNING) << FormatString(
+                    "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
+                    "wait rc = %s, fallback rc = %s",
+                    srcAddress, targetAddress, status.ToString(), fallbackStatus.ToString());
                 rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
                 rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
                 return fallbackStatus;

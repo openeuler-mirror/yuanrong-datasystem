@@ -20,7 +20,6 @@
 
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 
 namespace datasystem {
@@ -89,7 +88,6 @@ Status UrmaFallbackTcpLimiter::TryAcquire(std::atomic<uint64_t> &pendingBytes, u
             transportStatus,
             FormatString("%s payload %llu bytes is not smaller than the limit %llu bytes", direction, bytes,
                          kMaxSinglePayloadBytes));
-        LOG(WARNING) << rc.ToString();
         return rc;
     }
 
@@ -100,7 +98,6 @@ Status UrmaFallbackTcpLimiter::TryAcquire(std::atomic<uint64_t> &pendingBytes, u
                 transportStatus,
                 FormatString("%s pending %llu bytes plus payload %llu bytes exceeds the limit %llu bytes", direction,
                              current, bytes, kMaxPendingBytes));
-            LOG(WARNING) << rc.ToString();
             return rc;
         }
         if (pendingBytes.compare_exchange_weak(current, current + bytes, std::memory_order_acq_rel,
@@ -113,11 +110,8 @@ Status UrmaFallbackTcpLimiter::TryAcquire(std::atomic<uint64_t> &pendingBytes, u
 
 Status UrmaFallbackTcpLimiter::BuildRejectStatus(const Status &transportStatus, const std::string &reason)
 {
-    if (transportStatus.IsOk()) {
-        LOG(WARNING) << "URMA fallback TCP limiter received OK transport status, use default URMA error instead.";
-    }
     const auto code = transportStatus.IsOk() ? StatusCode::K_URMA_ERROR : transportStatus.GetCode();
     const auto message = transportStatus.GetMsg().empty() ? "URMA transport failed" : transportStatus.GetMsg();
-    return Status(code, FormatString("%s, fallback tcp failed: %s", message, reason));
+    return Status(code, FormatString("%s, fallback tcp payload rejected by limiter: %s", message, reason));
 }
 }  // namespace datasystem
