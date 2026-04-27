@@ -522,6 +522,8 @@ private:
                                        std::unordered_set<uint64_t> &successCompletedReqs,
                                        std::unordered_map<uint64_t, int> &failedCompletedReqs);
 
+    Status TryRecoverFailedJfsFromCompletion(uint64_t requestId, int statusCode, uint32_t jfsId);
+
     Status HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event);
 
     /**
