@@ -138,21 +138,29 @@ Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t
     (void)errorHandler;
 #ifdef USE_URMA
     if (IsUrmaEnabled()) {
+        Status firstError = Status::OK();
         for (auto key : keys) {
             // Wait for the event until timeout
             Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime());
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(errorHandler(rc), "Failed to wait for URMA event.");
+            if (rc.IsError() && firstError.IsOk()) {
+                firstError = errorHandler(rc);
+            }
         }
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(firstError, "Failed to wait for URMA event.");
     }
 #endif
 
 #ifdef USE_RDMA
     if (IsUcpEnabled()) {
+        Status firstError = Status::OK();
         for (auto key : keys) {
             // Wait for the event until timeout
             Status rc = UcpManager::Instance().WaitToFinish(key, remainingTime());
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(errorHandler(rc), "Failed to wait for RDMA event.");
+            if (rc.IsError() && firstError.IsOk()) {
+                firstError = errorHandler(rc);
+            }
         }
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(firstError, "Failed to wait for RDMA event.");
     }
 #endif
     return Status::OK();

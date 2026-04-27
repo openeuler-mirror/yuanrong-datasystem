@@ -792,12 +792,6 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
     INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
-    if (timeoutMs < 0) {
-        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-        RETURN_STATUS_LOG_ERROR(
-            K_URMA_WAIT_TIMEOUT,
-            FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s", requestIdStr.c_str()));
-    }
     METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY);
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
@@ -805,6 +799,12 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     // wait until timeout
 
     Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
+    if (timeoutMs < 0) {
+        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
+        RETURN_STATUS_LOG_ERROR(
+            K_URMA_WAIT_TIMEOUT,
+            FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s", requestIdStr.c_str()));
+    }
 
     VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
@@ -994,7 +994,13 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
             Timer sleepTimer;
-            usleep(0);
+            const struct timespec ts{ 0, 1000 };
+            if (!tbbEventMap_.empty()) {
+                METRIC_TIMER(metrics::KvMetricId::URMA_NANOSLEEP_LATENCY);
+                nanosleep(&ts, nullptr);
+            } else {
+                nanosleep(&ts, nullptr);
+            }
             if (sleepTimer.ElapsedMilliSecond() > 1) {
                 LOG(INFO) << "[UrmaEventHandler]: Poll jfc sleep elapsed = " << sleepTimer.ElapsedMilliSecond() << "ms"
                           << ", cpuid: " << sched_getcpu();
