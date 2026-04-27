@@ -38,6 +38,7 @@
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
@@ -611,7 +612,7 @@ private:
     Status RemoveRemoteResources(const std::string &connectionKey, bool removeLocalJfr);
 
     // Polling thread
-    std::unique_ptr<std::thread> serverEventThread_{ nullptr };
+    std::unique_ptr<Thread> serverEventThread_{ nullptr };
     UrmaAsyncEventHandler aeHandler_;
     std::unique_ptr<UrmaResource> urmaResource_;
     std::atomic<uint64_t> requestId_{ 0 };

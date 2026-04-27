@@ -29,6 +29,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/zmq_context.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/validator.h"
@@ -335,6 +336,10 @@ Status ZmqServerImpl::Run()
     // Start a thread pool for these extra threads.
     RETURN_IF_EXCEPTION_OCCURS(thrdPool_ = std::make_unique<ThreadPool>(numThreadsNeeded, 0, "ZmqProxy"));
     auto func = [this] {
+        if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
+            LOG(WARNING) << "Failed to set nice for ZmqServerImpl proxy thread, nice=" << FLAGS_io_thread_nice
+                         << ", errno=" << errno;
+        }
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StartAllThreads(), "ZmqServer StartAllThreads failed");
         return Status::OK();
     };

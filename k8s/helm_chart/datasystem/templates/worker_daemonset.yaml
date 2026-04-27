@@ -213,6 +213,7 @@ spec:
         - -curve_key_dir=$(CURVE_KEY_DIR)
         - -zmq_server_io_context={{ $.Values.global.rpc.zmqServerIoContext }}
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
+        - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
         - -etcd_username={{ $.Values.global.etcd.etcdUsername }}

@@ -27,8 +27,10 @@
 
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/zmq/zmq_common.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/queue/queue.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -298,6 +300,10 @@ public:
             };
         }
         prefetcher_ = Thread([this]() {
+            if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
+                LOG(WARNING) << "Failed to set nice for MsgQueMgr prefetcher, nice=" << FLAGS_io_thread_nice
+                             << ", errno=" << errno;
+            }
             while (!interrupt_) {
                 const auto n = Wait(RPC_POLL_TIME, ind_.load() == 0);
                 for (auto i = 0; i < n && !interrupt_; ++i) {

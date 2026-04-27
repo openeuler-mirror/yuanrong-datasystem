@@ -306,6 +306,9 @@ global:
     # Optimize the performance of the client stub. Default value is 5.
     # The higher the throughput, the higher the value, but should be in range [1, 32]
     zmqClientIoContext: 5
+    # Nice value applied to selected IO threads by setpriority.
+    # Valid range: [-20, 19]. Lower values mean higher scheduling priority.
+    ioThreadNice: -15
     # Parallel payload split chunk size. Default to 1048756 bytes.
     zmqChunkSz: 1048576
     # Maximum number of sessions that can be cached, must be within [512, 10'000]

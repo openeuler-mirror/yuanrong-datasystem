@@ -222,7 +222,8 @@ Status UrmaManager::Init(const HostPort &hostport)
     }
     RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
-    serverEventThread_ = std::make_unique<std::thread>(&UrmaManager::ServerEventHandleThreadMain, this);
+    serverEventThread_ = std::make_unique<Thread>(&UrmaManager::ServerEventHandleThreadMain, this);
+    serverEventThread_->set_name("UrmaPollJfc");
     aeHandler_.Init(urmaResource_.get());
     aeHandler_.Start(serverStop_);
 
@@ -617,6 +618,10 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
 
 Status UrmaManager::ServerEventHandleThreadMain()
 {
+    if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
+        LOG(WARNING) << "Failed to set nice for UrmaManager server event thread, nice=" << FLAGS_io_thread_nice
+                     << ", errno=" << errno;
+    }
     // Run this method until serverStop is called.
     while (!serverStop_.load()) {
         std::unordered_set<uint64_t> successCompletedReqs;
@@ -804,9 +809,8 @@ Status UrmaManager::TryRecoverFailedJfsFromCompletion(uint64_t requestId, int st
     auto lookupRc = urmaResource_->GetJfsById(jfsId, failedJfs);
     if (lookupRc.IsError() || failedJfs == nullptr) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId
-            << " is not found, requestId=" << requestId << ", cqeStatus=" << statusCode
-            << ", rc=" << lookupRc.ToString();
+            << "[URMA_RECREATE_JFS_SKIP] Completion JFS " << jfsId << " is not found, requestId=" << requestId
+            << ", cqeStatus=" << statusCode << ", rc=" << lookupRc.ToString();
         return Status::OK();
     }
 
