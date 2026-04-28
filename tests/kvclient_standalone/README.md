@@ -116,14 +116,30 @@ python3 deploy.py --deploy config/deploy.json config/config.json
 
 `gen_deploy_config.py` 参数：
 
-| 参数 | 说明 |
-|------|------|
-| `-p` / `--prefix` | Pod 名称前缀（必填） |
-| `-n` / `--namespace` | k8s 命名空间（默认 default） |
-| `-w` / `--writer-count` | Writer 数量（默认 1），前 N 个 Pod 为 writer，其余为 reader |
-| `-e` / `--etcd-address` | 覆盖 config 中的 etcd_address |
-| `-c` / `--cluster-name` | 设置 config 中的 cluster_name |
-| `--remote-sdk-dir` | 容器内 SDK 路径（跳过从本机拷贝） |
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `-p` / `--prefix` | (必填) | Pod 名称前缀 |
+| `-n` / `--namespace` | `default` | k8s 命名空间 |
+| `-w` / `--writer-count` | `1` | Writer 数量，前 N 个 Pod 为 writer，其余为 reader |
+| `--pipeline` | `setStringView` | Writer pipeline ops，逗号分隔 |
+| `--notify-pipeline` | `getBuffer` | Notify pipeline ops，逗号分隔（所有节点共用） |
+| `--batch-keys-count` | `1` | Batch ops 的 key 数量，>1 时写入 deploy.json |
+| `-e` / `--etcd-address` | | 覆盖 config 中的 etcd_address |
+| `-c` / `--cluster-name` | | 设置 config 中的 cluster_name |
+| `--remote-sdk-dir` | | 容器内 SDK 路径（跳过从本机拷贝） |
+
+示例：
+
+```bash
+# 默认：setStringView 写入，getBuffer 通知读取
+python3 gen_deploy_config.py -p ds-worker -n datasystem -w 1
+
+# Batch 模式：mCreate+mSet 写入，mGet 通知读取，每次 5 个 key
+python3 gen_deploy_config.py -p ds-worker -n datasystem -w 1 \
+  --pipeline mCreate,mSet \
+  --notify-pipeline mGet \
+  --batch-keys-count 5
+```
 
 ## 典型场景
 
@@ -318,8 +334,9 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `target_qps` | 100 | 目标总 QPS，`0` = 不限速全速运行 |
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
-| `notify_delay_ms` | 10 | 写入后延迟通知时间(ms)，`0` = 不延迟 |
-| `enable_jitter` | false | 请求间隔随机化，打散多实例同步脉冲，QPS 均值不变 |
+| `enable_jitter` | true | 请求间隔随机化，打散多实例同步脉冲，QPS 均值不变 |
+| `batch_keys_count` | 1 | Batch ops 的 key 数量，`1` = 单 key 兼容 |
+| `enable_cross_node_connection` | true | 允许 failover 到其他节点的 standby worker |
 | `cpu_affinity` | `""` | CPU 绑核，如 `"0-7"` 或 `"0,2,4,6"`，空 = 自动检测容器可用 CPU |
 | `data_sizes` | `["8MB","512KB"]` | 测试数据大小 |
 | `ttl_seconds` | 5 | 写入数据 TTL |
@@ -355,6 +372,9 @@ Kubernetes 节点额外支持：`pod_name`、`pod_ip`、`namespace`、`transport
 | `createBuffer` | 创建共享内存 Buffer |
 | `memoryCopy` | 向 Buffer 写入数据 |
 | `setBuffer` | 提交 Buffer |
+| `mCreate` | 批量创建 Buffer（配合 `batch_keys_count`） |
+| `mSet` | 批量提交 Buffer（配合 `batch_keys_count`） |
+| `mGet` | 批量读取并验证数据（配合 `batch_keys_count`） |
 
 ## HTTP API
 

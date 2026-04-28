@@ -92,10 +92,6 @@ void KVWorker::PipelineLoop(int threadId) {
         double elapsedMs = std::chrono::duration<double, std::milli>(end - start).count();
 
         if (allOk) {
-            if (cfg_.notifyDelayMs > 0) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(cfg_.notifyDelayMs));
-            }
             NotifyPeers(ctx.batchKeys, size);
         }
 

@@ -20,7 +20,6 @@
 
   "// === Peer通知 ===": "",
   "notify_count": 10,
-  "notify_delay_ms": 10,
   "peers": ["http://host1:9000", "http://host2:9000"],
 
   "// === 运行配置 ===": "",
@@ -30,6 +29,6 @@
 
   "// === 可靠性 ===": "",
   "ttl_seconds": 5,
-  "enable_cross_node_connection": false,
-  "enable_jitter": false
+  "enable_cross_node_connection": true,
+  "enable_jitter": true
 }

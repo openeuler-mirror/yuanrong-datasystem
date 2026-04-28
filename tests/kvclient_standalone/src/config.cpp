@@ -49,7 +49,6 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("target_qps")) cfg.targetQps = j["target_qps"];
         if (j.contains("num_set_threads")) cfg.numSetThreads = j["num_set_threads"];
         if (j.contains("notify_count")) cfg.notifyCount = j["notify_count"];
-        if (j.contains("notify_delay_ms")) cfg.notifyDelayMs = j["notify_delay_ms"];
         if (j.contains("enable_jitter")) cfg.enableJitter = j["enable_jitter"];
         if (j.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = j["enable_cross_node_connection"];
         if (j.contains("batch_keys_count")) cfg.batchKeysCount = j["batch_keys_count"];

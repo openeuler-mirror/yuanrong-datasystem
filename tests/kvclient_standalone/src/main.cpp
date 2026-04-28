@@ -68,6 +68,7 @@ static int RunMode(const Config &cfg) {
     connOpts.serviceDiscovery = sd;
     connOpts.connectTimeoutMs = cfg.connectTimeoutMs;
     connOpts.requestTimeoutMs = cfg.requestTimeoutMs;
+    connOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
 
     auto client = std::make_shared<KVClient>(connOpts);
     rc = client->Init();

@@ -62,6 +62,18 @@ def main():
     parser.add_argument('-w', '--writer-count', type=int, default=1,
                         help='Number of writer instances (default: 1). '
                              'First N pods become writers, rest become readers.')
+    parser.add_argument('--pipeline', default='setStringView',
+                        help='Comma-separated writer pipeline ops '
+                             '(default: setStringView). '
+                             'Available: setStringView, getBuffer, exist, '
+                             'createBuffer, memoryCopy, setBuffer, '
+                             'mCreate, mSet, mGet')
+    parser.add_argument('--notify-pipeline', default='getBuffer',
+                        help='Comma-separated notify pipeline ops '
+                             '(default: getBuffer). '
+                             'Available: getBuffer, mGet, exist, ...')
+    parser.add_argument('--batch-keys-count', type=int, default=1,
+                        help='batch_keys_count for batch ops (default: 1)')
     args = parser.parse_args()
 
     pods = get_pods(args.namespace, args.prefix)
@@ -95,6 +107,12 @@ def main():
                 writer_indices.add(pod_queues[node].pop(0))
                 assigned += 1
 
+    def parse_pipeline(s):
+        return [op.strip() for op in s.split(',') if op.strip()] if s else []
+
+    writer_pipeline = parse_pipeline(args.pipeline)
+    notify_pipeline = parse_pipeline(args.notify_pipeline)
+
     nodes = []
     for i, pod in enumerate(pods):
         is_writer = i in writer_indices
@@ -104,9 +122,11 @@ def main():
             'namespace': args.namespace,
             'instance_id': i,
             'role': 'writer' if is_writer else 'reader',
-            'pipeline': ['setStringView'] if is_writer else [],
-            'notify_pipeline': ['getBuffer'],
+            'pipeline': writer_pipeline if is_writer else [],
+            'notify_pipeline': notify_pipeline,
         }
+        if args.batch_keys_count > 1:
+            node['batch_keys_count'] = args.batch_keys_count
         nodes.append(node)
 
     deploy = {
@@ -138,6 +158,12 @@ def main():
             overrides['etcd_address'] = args.etcd_address
         if args.cluster_name:
             overrides['cluster_name'] = args.cluster_name
+        if writer_pipeline:
+            overrides['pipeline'] = writer_pipeline
+        if notify_pipeline:
+            overrides['notify_pipeline'] = notify_pipeline
+        if args.batch_keys_count > 1:
+            overrides['batch_keys_count'] = args.batch_keys_count
         if overrides:
             with open(dst) as f:
                 cfg = json.load(f)

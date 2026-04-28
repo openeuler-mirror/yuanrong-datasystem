@@ -23,9 +23,8 @@ struct Config {
     int targetQps = 100; // 0 = unlimited
     int numSetThreads = 16;
     int notifyCount = 10;
-    int notifyDelayMs = 10;   // delay between set and notify (ms), 0 = no delay
-    bool enableJitter = false; // randomize sleep to stagger requests
-    bool enableCrossNodeConnection = false; // allow failover to standby workers on other nodes
+    bool enableJitter = true; // randomize sleep to stagger requests
+    bool enableCrossNodeConnection = true; // allow failover to standby workers on other nodes
     int batchKeysCount = 1;                 // batch 操作的 key 数量，1 = 单 key 兼容
     int metricsIntervalMs = 3000;
     std::string metricsFile = "metrics_{instance_id}.csv";

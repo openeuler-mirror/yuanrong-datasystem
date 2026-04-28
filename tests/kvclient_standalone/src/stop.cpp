@@ -1,6 +1,7 @@
 #include "stop.h"
 #include "httplib.h"
 #include "simple_log.h"
+#include <algorithm>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -8,7 +9,9 @@
 static void StopOnePeer(const std::string &peerUrl, std::atomic<int> &successCount) {
     try {
         std::string hostPort = peerUrl;
-        if (hostPort.substr(0, 7) == "http://") hostPort = hostPort.substr(7);
+        if (hostPort.size() > 7 && hostPort.compare(0, 7, "http://") == 0) {
+            hostPort = hostPort.substr(7);
+        }
 
         auto colonPos = hostPort.find(':');
         if (colonPos == std::string::npos) {
@@ -39,13 +42,21 @@ static void StopOnePeer(const std::string &peerUrl, std::atomic<int> &successCou
 int StopAllPeers(const std::vector<std::string> &peers) {
     SLOG_INFO("Stopping " << peers.size() << " peers...");
     std::atomic<int> successCount{0};
-    std::vector<std::thread> threads;
+    constexpr int kMaxConcurrent = 16;
+    size_t idx = 0;
 
-    for (auto &peer : peers) {
-        threads.emplace_back(StopOnePeer, std::cref(peer), std::ref(successCount));
+    while (idx < peers.size()) {
+        int batchSize = std::min(kMaxConcurrent,
+                                 static_cast<int>(peers.size() - idx));
+        std::vector<std::thread> batch;
+        for (int i = 0; i < batchSize; i++) {
+            batch.emplace_back(StopOnePeer,
+                               std::cref(peers[idx + i]),
+                               std::ref(successCount));
+        }
+        for (auto &t : batch) t.join();
+        idx += batchSize;
     }
-
-    for (auto &t : threads) t.join();
 
     SLOG_INFO("Stop result: " << successCount.load() << "/" << peers.size() << " succeeded");
     return successCount.load();

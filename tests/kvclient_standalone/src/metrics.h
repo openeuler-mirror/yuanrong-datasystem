@@ -61,5 +61,5 @@ private:
     std::atomic<uint64_t> verifyFailCount_{0};
     std::atomic<bool> running_{false};
     std::thread flushThread_;
-    bool started_ = false;
+    std::atomic<bool> started_{false};
 };
