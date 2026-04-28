@@ -64,6 +64,26 @@
 - Perf and ST tests:
   - best for controlled reproduction after the signal class is known.
 
+## URMA Request Wait Slowdown
+
+- Verified timing surface:
+  - `src/datasystem/common/rdma/urma_manager.cpp` logs `[URMA_ELAPSED_TOTAL]` when a request waits more than 1 ms
+    for the URMA JFC completion after `urma_post_jetty_send_wr`. The log includes request id, local source address,
+    remote target address, data size, CPU id, status, and an embedded next-step suggestion.
+  - If `[URMA_ELAPSED_TOTAL]` appears, check whether companion logs appear in the same time window:
+    `[URMA_ELAPSED_THREAD_SHED]`, `[URMA_ELAPSED_POLL_JFC]`, and `[URMA_ELAPSED_NOTIFY]`.
+  - `[URMA_ELAPSED_THREAD_SHED]` means `nanosleep(1us)` wake-up cost exceeded 100 us; route to OS scheduling
+    overhead investigation.
+  - `[URMA_ELAPSED_POLL_JFC]` means `urma_poll_jfc` cost exceeded 100 us; route to URMA analysis.
+  - `[URMA_ELAPSED_NOTIFY]` means notify wake-up cost exceeded 1 ms; route to OS scheduling overhead investigation.
+  - If `[URMA_ELAPSED_TOTAL]` appears but none of the companion logs appear, route to URMA and UDMA analysis.
+- Verified error surfaces:
+  - `src/datasystem/common/rdma/urma_resource.cpp` tags failed URMA resource calls with the underlying interface name,
+    including `urma_create_jfr`, `urma_create_jetty`, `urma_import_jetty`, and `urma_import_seg`.
+  - `src/datasystem/common/rdma/urma_manager.cpp` tags failed `urma_post_jetty_send_wr` logs with `[URMA_WRITE]` and
+    failed `urma_poll_jfc` return or completion-record errors with `[URMA_POLL_JFC]`; these logs include the URMA
+    return/status code and route to URMA further analysis.
+
 ## Current Signal Limits For `set/get`
 
 - Verified request-path timing surface today:

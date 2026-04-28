@@ -45,7 +45,8 @@ DS_DECLARE_bool(urma_event_mode);
 namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
-}
+constexpr const char *URMA_ERROR_SUGGEST = "check URMA";
+}  // namespace
 
 std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
 std::atomic<uint32_t> UrmaJetty::counter_{ 0 };
@@ -217,9 +218,9 @@ Status UrmaJfr::Create(const UrmaResource &resource, uint32_t depth, std::shared
     jfrConfig.user_ctx = (uint64_t)NULL;
 
     urma_jfr_t *raw = ds_urma_create_jfr(resource.GetContext(), &jfrConfig);
-    if (raw == nullptr) {
-        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfr, errno = %d", errno));
-    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        raw != nullptr, K_URMA_ERROR,
+        FormatString("[URMA_JFR]: call urma_create_jfr failed, errno = %d, suggest: %s", errno, URMA_ERROR_SUGGEST));
     jfr = std::make_shared<UrmaJfr>(raw);
     LOG(INFO) << "urma create jfr id " << jfr->Raw()->jfr_id.id << " success. jfr count: " << counter_.load();
     return Status::OK();
@@ -286,9 +287,10 @@ Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::share
     jettyConfig.user_ctx = 0;
 
     urma_jetty_t *raw = ds_urma_create_jetty(resource.GetContext(), &jettyConfig);
-    if (raw == nullptr) {
-        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jetty, errno = %d", errno));
-    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(raw != nullptr, K_URMA_ERROR,
+                                         FormatString("[URMA_JETTY]: call urma_create_jetty failed, errno = %d, "
+                                                      "suggest: %s",
+                                                      errno, URMA_ERROR_SUGGEST));
     jetty = std::make_shared<UrmaJetty>(raw, sharedJfr, &resource);
     LOG(INFO) << "urma create jetty id " << jetty->GetJettyId() << " success. jetty count: " << counter_.load();
     return Status::OK();
@@ -335,9 +337,9 @@ Status UrmaTargetJetty::Import(urma_context_t *context, urma_rjetty_t *remoteJet
     PerfPoint point(PerfKey::URMA_IMPORT_JFR);
     auto *rawTjetty = ds_urma_import_jetty(context, remoteJetty, &urmaToken);
     point.Record();
-    if (rawTjetty == nullptr) {
-        RETURN_STATUS(K_URMA_CONNECT_FAILED, "Failed to import jetty");
-    }
+    CHECK_FAIL_RETURN_STATUS(rawTjetty != nullptr, K_URMA_CONNECT_FAILED,
+                             FormatString("[URMA_CONNECT]: call urma_import_jetty failed, errno: %d, suggest: %s",
+                                          errno, URMA_ERROR_SUGGEST));
     tjetty = std::make_unique<UrmaTargetJetty>(rawTjetty);
     return Status::OK();
 }
@@ -394,7 +396,9 @@ Status UrmaRemoteSegment::Import(urma_context_t *context, urma_token_t urmaToken
                                  std::unique_ptr<UrmaRemoteSegment> &segment)
 {
     auto *rawSegment = ds_urma_import_seg(context, &remoteSegment, &urmaToken, 0, importSegmentFlag);
-    CHECK_FAIL_RETURN_STATUS(rawSegment != nullptr, K_URMA_ERROR, "Failed to import segment.");
+    CHECK_FAIL_RETURN_STATUS(
+        rawSegment != nullptr, K_URMA_ERROR,
+        FormatString("[URMA_CONNECT]: call urma_import_seg failed, errno: %d, suggest: %s", errno, URMA_ERROR_SUGGEST));
     segment = std::make_unique<UrmaRemoteSegment>(rawSegment);
     return Status::OK();
 }
@@ -667,8 +671,8 @@ Status UrmaResource::GetOrCreateSharedJettyJfr(std::shared_ptr<UrmaJfr> &jfr)
     if (sharedJettyJfr_ == nullptr) {
         RETURN_IF_NOT_OK_APPEND_MSG(UrmaJfr::Create(*this, SHARED_JFR_DEPTH, sharedJettyJfr_),
                                     "Failed to create context-level shared Jetty JFR");
-        LOG(INFO) << "Created context-level shared Jetty JFR with depth " << SHARED_JFR_DEPTH
-                  << ", jfr id " << sharedJettyJfr_->Raw()->jfr_id.id;
+        LOG(INFO) << "Created context-level shared Jetty JFR with depth " << SHARED_JFR_DEPTH << ", jfr id "
+                  << sharedJettyJfr_->Raw()->jfr_id.id;
     }
     jfr = sharedJettyJfr_;
     return Status::OK();
@@ -677,7 +681,7 @@ Status UrmaResource::GetOrCreateSharedJettyJfr(std::shared_ptr<UrmaJfr> &jfr)
 Status UrmaResource::AsyncModifyJettyToError(std::shared_ptr<UrmaJetty> jetty)
 {
     CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR,
-        "Failed to modify Jetty to error because Jetty is null");
+                             "Failed to modify Jetty to error because Jetty is null");
     auto traceId = Trace::Instance().GetTraceID();
     deleteJettyThread_->Execute([this, jetty, traceId]() {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);

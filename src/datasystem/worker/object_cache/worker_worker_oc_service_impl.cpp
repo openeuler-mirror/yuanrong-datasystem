@@ -72,6 +72,25 @@ void MovePayload(std::vector<RpcMessage> &src, std::vector<RpcMessage> &dst)
 {
     dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
 }
+
+Status GetRemoteAddressFromBatchGetReq(const BatchGetObjectRemoteReqPb &req, HostPort &requestAddress)
+{
+    CHECK_FAIL_RETURN_STATUS(req.requests_size() > 0, K_INVALID, "BatchGetObjectRemote request is empty");
+    const auto &firstReq = req.requests(0);
+    std::string host;
+    int port = -1;
+    if (firstReq.has_urma_info()) {
+        host = firstReq.urma_info().request_address().host();
+        port = firstReq.urma_info().request_address().port();
+    } else if (firstReq.has_ucp_info()) {
+        host = firstReq.ucp_info().remote_ip_addr().host();
+        port = firstReq.ucp_info().remote_ip_addr().port();
+    } else {
+        RETURN_STATUS(K_INVALID, "BatchGetObjectRemote request has no remote address");
+    }
+    requestAddress = HostPort(host, port);
+    return Status::OK();
+}
 }  // namespace
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
@@ -297,8 +316,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
-                                        fallbackStatus);
+    Status status =
+        GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo, fallbackStatus);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -534,8 +553,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
         if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
             bool canPrepareFallbackPayload = true;
-            if (FLAGS_enable_transport_fallback
-                && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr)) && isUrmaFastTransport) {
+            if (FLAGS_enable_transport_fallback && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr))
+                && isUrmaFastTransport) {
                 auto trackStatus = fastTransportStatus.IsOk()
                                        ? Status(StatusCode::K_URMA_ERROR, "URMA wait fallback payload precheck")
                                        : fastTransportStatus;
@@ -624,8 +643,9 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddress.ToString()
-            << ", remoteWorkerId=" << remoteWorkerId << ", remoteInstanceId="
-            << (req.urma_instance_id().empty() ? "UNKNOWN" : req.urma_instance_id()) << ", rc=" << rc.ToString();
+            << ", remoteWorkerId=" << remoteWorkerId
+            << ", remoteInstanceId=" << (req.urma_instance_id().empty() ? "UNKNOWN" : req.urma_instance_id())
+            << ", rc=" << rc.ToString();
     }
     return rc;
 }
@@ -698,10 +718,11 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
     }
 
     point.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
-    return MergeParallelBatchGetResult(parallelRes, rsp, payload);
+    return MergeParallelBatchGetResult(req, parallelRes, rsp, payload);
 }
 
-Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<ParallelRes> &parallelRes,
+Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObjectRemoteReqPb &req,
+                                                              std::vector<ParallelRes> &parallelRes,
                                                               BatchGetObjectRemoteRspPb &rsp,
                                                               std::vector<RpcMessage> &payload)
 {
@@ -737,8 +758,8 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
                 continue;
             }
 
-            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(loc, kp, rsp, payload, index, coveredRespNum,
-                                                          fallbackStatus));
+            RETURN_IF_NOT_OK(
+                WaitFastTransportAndFallback(req, loc, kp, rsp, payload, index, coveredRespNum, fallbackStatus));
         }
 
         loc.kps.clear();
@@ -749,12 +770,14 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(std::vector<Parall
 }
 
 Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
-    ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
-    BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum,
-    const Status &fallbackStatus)
+    const BatchGetObjectRemoteReqPb &req, ParallelRes &loc,
+    std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp, BatchGetObjectRemoteRspPb &rsp,
+    std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum, const Status &fallbackStatus)
 {
     auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
-    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus](Status &status) {
+    const auto srcAddress = localAddress_.ToString();
+    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus, &srcAddress,
+                         &req](Status &status) {
         const bool waitFailed = status.IsError();
         if (waitFailed) {
             if (fallbackStatus.IsError()) {
@@ -779,7 +802,12 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
             }
 
             if (FLAGS_enable_transport_fallback) {
-                LOG(WARNING) << FormatString("fallback to tcp, rc = %s", status.ToString());
+                HostPort requestAddress;
+                LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(req, requestAddress),
+                             "GetRemoteAddressFromBatchGetReq failed");
+                const auto targetAddress = requestAddress.ToString();
+                LOG(WARNING) << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
+                                             srcAddress, targetAddress, status.ToString());
                 return Status::OK();
             }
         }
