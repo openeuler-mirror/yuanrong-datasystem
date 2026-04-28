@@ -99,15 +99,16 @@ Status GetNumaNodesImpl(std::vector<NumaNodeInfo> &nodeInfos)
     return Status::OK();
 }
 
-std::vector<NumaNodeInfo> &GetNumaNodes()
+const std::vector<NumaNodeInfo> &GetNumaNodes()
 {
-    static std::vector<NumaNodeInfo> cachedNodeInfos;
-    if (cachedNodeInfos.empty()) {
-        auto rc = GetNumaNodesImpl(cachedNodeInfos);
+    static const std::vector<NumaNodeInfo> cachedNodeInfos = []() {
+        std::vector<NumaNodeInfo> nodeInfos;
+        auto rc = GetNumaNodesImpl(nodeInfos);
         if (rc.IsError()) {
-            LOG_FIRST_N(ERROR, 1) << "GetNumaNodes failed: " << rc.ToString();
+            LOG(ERROR) << "GetNumaNodes failed: " << rc.ToString();
         }
-    }
+        return nodeInfos;
+    }();
     return cachedNodeInfos;
 }
 
