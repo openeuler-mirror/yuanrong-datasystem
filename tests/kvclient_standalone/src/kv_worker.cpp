@@ -68,12 +68,15 @@ void KVWorker::PipelineLoop(int threadId) {
     while (running_) {
         uint64_t size = cfg_.dataSizes[sizeDist(rng)];
         auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-        std::string key = "kv_test_" + std::to_string(cfg_.instanceId)
-                        + "_" + std::to_string(threadId)
-                        + "_" + std::to_string(now);
 
         PipelineContext ctx;
-        ctx.key = key;
+        ctx.batchKeys.resize(cfg_.batchKeysCount);
+        for (int i = 0; i < cfg_.batchKeysCount; i++) {
+            ctx.batchKeys[i] = "kv_test_" + std::to_string(cfg_.instanceId)
+                             + "_" + std::to_string(threadId)
+                             + "_" + std::to_string(now) + "_" + std::to_string(i);
+        }
+        ctx.key = ctx.batchKeys[0];
         ctx.size = size;
         ctx.senderId = cfg_.instanceId;
         ctx.data = pregenData_[size];
@@ -93,7 +96,7 @@ void KVWorker::PipelineLoop(int threadId) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(cfg_.notifyDelayMs));
             }
-            NotifyPeers(key, size);
+            NotifyPeers(ctx.batchKeys, size);
         }
 
         double sleepMs = intervalMs - elapsedMs;
@@ -110,13 +113,13 @@ void KVWorker::PipelineLoop(int threadId) {
     SLOG_INFO("Thread " << threadId << " stopped");
 }
 
-void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
+void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) {
     if (cfg_.peers.empty() || cfg_.notifyCount <= 0) return;
 
     int total = static_cast<int>(cfg_.peers.size());
     int count = std::min(cfg_.notifyCount, total);
 
-    // Fisher-Yates partial shuffle: pick `count` random indices without copying peers
+    // Fisher-Yates partial shuffle
     std::vector<int> indices(total);
     std::iota(indices.begin(), indices.end(), 0);
     std::mt19937 rng(std::random_device{}());
@@ -125,13 +128,20 @@ void KVWorker::NotifyPeers(const std::string &key, uint64_t size) {
         std::swap(indices[i], indices[dist(rng)]);
     }
 
-    std::string body = "{\"key\":\"" + key + "\",\"sender\":"
-                     + std::to_string(cfg_.instanceId) + ",\"size\":"
-                     + std::to_string(size) + "}";
+    // JSON body: {"keys":["...","..."],"sender":0,"size":8388608}
+    std::string body = "{\"keys\":[";
+    for (size_t i = 0; i < keys.size(); i++) {
+        if (i > 0) body += ",";
+        body += "\"" + keys[i] + "\"";
+    }
+    body += "],\"sender\":" + std::to_string(cfg_.instanceId)
+          + ",\"size\":" + std::to_string(size) + "}";
 
     for (int i = 0; i < count; i++) {
         std::string hostPort = cfg_.peers[indices[i]];
-        if (hostPort.substr(0, 7) == "http://") hostPort = hostPort.substr(7);
+        if (hostPort.size() > 7 && hostPort.compare(0, 7, "http://") == 0) {
+            hostPort = hostPort.substr(7);
+        }
 
         auto colonPos = hostPort.find(':');
         if (colonPos == std::string::npos) continue;

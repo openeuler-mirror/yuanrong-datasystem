@@ -25,7 +25,7 @@ public:
 
 private:
     void PipelineLoop(int threadId);
-    void NotifyPeers(const std::string &key, uint64_t size);
+    void NotifyPeers(const std::vector<std::string> &keys, uint64_t size);
 
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
