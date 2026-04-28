@@ -9,6 +9,8 @@
 #include <memory>
 #include <atomic>
 #include <thread>
+#include <unordered_map>
+#include <mutex>
 
 class HttpServer {
 public:
@@ -33,4 +35,6 @@ private:
     ThreadPool notifyPool_;
     std::vector<std::pair<std::string, OpFunc>> notifyOps_;
     bool notifyNeedsData_ = false;
+    std::mutex pregenMutex_;
+    std::unordered_map<std::string, std::string> pregenData_;
 };
