@@ -27,6 +27,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
 #include "datasystem/common/l2cache/slot_client/slot_snapshot.h"
@@ -196,7 +197,8 @@ private:
     Status BuildBootstrapManifestFromDisk(SlotManifestData &manifest);
     Status RecoverManifestIfNeeded(SlotManifestData &manifest);
     Status RecoverCompactCommitting(SlotManifestData &manifest);
-    Status RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverRequest *request = nullptr);
+    Status RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverRequest *request = nullptr,
+                           std::vector<SlotPutRecord> *preloadPuts = nullptr);
     Status ContinueGc(SlotManifestData &manifest);
     Status DeleteFileIfExists(const std::string &relativePath, bool &deletedAnything);
     Status CleanupArtifactFiles(const std::vector<std::string> &relativePaths);
@@ -208,6 +210,8 @@ private:
     Status ReadRecordData(const SlotSnapshotValue &value, std::shared_ptr<std::stringstream> &content) const;
     Status EnsureWritable(const SlotManifestData &manifest) const;
     Status SyncActiveFiles(const SlotManifestData &manifest) const;
+    Status CollectPreloadPuts(const SlotTakeoverPlan &plan, const SlotTakeoverRequest &request,
+                              std::vector<SlotPutRecord> &visiblePuts) const;
     Status RunPreloadCallback(const SlotTakeoverPlan &plan, const SlotTakeoverRequest &request) const;
     Status RunPreloadCallback(const std::vector<SlotPutRecord> &visiblePuts, const SlotPreloadCallback &callback) const;
     Status ResetTransferTargetManifest(SlotManifestData &manifest);
