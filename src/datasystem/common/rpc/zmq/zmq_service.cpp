@@ -1332,7 +1332,8 @@ Status ZmqService::ServiceRequest(MetaPb &&meta, ZmqMsgFrames &&msgs)
     RETURN_IF_NOT_OK(rqQueue_->Put({ std::move(meta), std::move(msgs) }));
     auto timeSpent = timer.ElapsedMilliSecond();
     const int LOG_WARNING_FREQUENCY = 100;
-    LOG_IF_EVERY_N(WARNING, timeSpent > RPC_POLL_TIME, LOG_WARNING_FREQUENCY)
+    const int LOG_WARNING_THRESHOLD = 5;
+    LOG_IF_EVERY_N(WARNING, timeSpent > LOG_WARNING_THRESHOLD, LOG_WARNING_FREQUENCY)
         << FormatString("Service %s is congested. Proxy main thread congested for [%.3lf]ms. HWM setting is %d.",
                         ServiceName(), timeSpent, cfg_.hwm_);
     uint64_t eventFd = 1;

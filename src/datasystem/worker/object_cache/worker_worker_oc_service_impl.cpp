@@ -615,6 +615,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>>
         serverApi)
 {
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_GET_REMOTE_OBJECT_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     BatchGetObjectRemoteReqPb req;
     BatchGetObjectRemoteRspPb rsp;

@@ -212,7 +212,8 @@ Status UrmaJfs::Create(UrmaResource &resource, std::shared_ptr<UrmaJfs> &jfs)
     jfsConfig.max_sge = maxSge;
     jfsConfig.max_inline_data = 0;
     jfsConfig.rnr_retry = URMA_TYPICAL_RNR_RETRY;
-    jfsConfig.err_timeout = URMA_TYPICAL_ERR_TIMEOUT;
+    constexpr uint8_t errTimeout = 8;  // this timeout level means 128ms
+    jfsConfig.err_timeout = errTimeout;
     jfsConfig.jfc = resource.GetJfc();
     jfsConfig.user_ctx = 0;
     jfsConfig.flag.value = 0;
