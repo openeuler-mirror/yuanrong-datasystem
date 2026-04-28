@@ -667,14 +667,14 @@ public:
     }
 };
 
-TEST_F(SlotRecoveryTest, LocalFailureCompletes)
+TEST_F(SlotRecoveryTest, LocalFailureMarksTaskFailed)
 {
-    LOG(INFO) << "Scenario: local execution failure still completes recovery cleanup.";
+    LOG(INFO) << "Scenario: local execution failure must mark the task as FAILED.";
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     const std::string failedWorker = "127.0.0.1:4001";
     const std::string localWorker = "127.0.0.1:4002";
 
-    // Inject an execution failure so the manager must take the 'log error but still complete' branch.
+    // Inject an execution failure so the manager must mark the task FAILED instead of COMPLETED.
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 4002), store);
     manager.SetActiveWorkers({ localWorker });
     manager.SetExecutionHook([](const RecoveryTaskPb &) {
@@ -684,16 +684,15 @@ TEST_F(SlotRecoveryTest, LocalFailureCompletes)
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleFailedWorkers({ HostPort("127.0.0.1", 4001) }));
 
-    // Even after execution failure, the incident must converge through COMPLETED and then be cleaned up.
+    // Even after execution failure, the incident must converge through FAILED and then be cleaned up.
     ASSERT_TRUE(WaitUntil([&store, &failedWorker]() { return store->HasDeletedSnapshot(failedWorker); }));
     auto deleted = store->GetDeletedSnapshot(failedWorker);
     ASSERT_EQ(deleted.total_slots(), DISTRIBUTED_DISK_SLOT_NUM);
-    ASSERT_EQ(deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
-    ASSERT_EQ(deleted.failed_slots(), 0);
+    ASSERT_EQ(deleted.completed_slots(), 0);
+    ASSERT_EQ(deleted.failed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
     for (const auto &task : deleted.recovery_tasks()) {
         EXPECT_EQ(task.owner_worker(), localWorker);
-        EXPECT_EQ(task.source_worker(), localWorker);
-        EXPECT_EQ(task.task_status(), RecoveryTaskPb::COMPLETED);
+        EXPECT_EQ(task.task_status(), RecoveryTaskPb::FAILED);
     }
     EXPECT_FALSE(manager.GetExecutedTasks().empty());
 
@@ -710,6 +709,7 @@ TEST_F(SlotRecoveryTest, MultiFailureIsolation)
 
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 5003), store);
     manager.SetActiveWorkers({ localWorker });
+    manager.SetExecutionHook([](const RecoveryTaskPb &) { return Status::OK(); });
 
     DS_ASSERT_OK(manager.InitForTest());
     DS_ASSERT_OK(manager.HandleFailedWorkers({ HostPort("127.0.0.1", 5001), HostPort("127.0.0.1", 5002) }));
@@ -817,6 +817,7 @@ TEST_F(SlotRecoveryTest, CreatesLocalIncidentOnRestart)
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7001), store);
     manager.SetActiveWorkers({ "127.0.0.1:7001" });
+    manager.SetExecutionHook([](const RecoveryTaskPb &) { return Status::OK(); });
     DS_ASSERT_OK(manager.InitForTest());
 
     // With no local incident persisted, restart should synthesize and complete the canonical one.
@@ -1224,6 +1225,64 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskFailOnInvalidMeta)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_EQ(recoverMetadataCalls.load(), 1);
     manager.Shutdown();
+}
+
+// Regression test for issue #447 Bug A.
+// When one slot's PreloadSlot fails with a non-retryable error (e.g. K_RUNTIME_ERROR
+// from `Rename manifest.tmp -> manifest, errno=2 ENOENT`), other slots that already
+// finished preload must still have their recovered metas pushed to master. Otherwise
+// master keeps a half-empty meta entry (locations={}, primary_address="") and `Get`
+// returns `addr=""` -> "no object copy exists".
+TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldPushSucceededSlotsEvenWhenAnotherSlotPreloadFails)
+{
+    LOG(INFO) << "Scenario: a non-retryable preload failure on one slot must NOT prevent "
+              << "successfully preloaded slots from pushing their metas to master (issue 447 Bug A).";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7301), store);
+
+    auto persistApi = std::make_shared<FakePersistenceApi>(
+        [](const std::string &sourceWorkerAddress, uint32_t slotId, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(sourceWorkerAddress, "127.0.0.1:7300");
+            if (slotId == 12U) {
+                SlotPreloadMeta meta{ "tenant/object_x", 1, WriteMode::WRITE_THROUGH_L2_CACHE, 11 };
+                auto content = std::make_shared<std::stringstream>();
+                (*content) << "payload";
+                return callback(meta, content);
+            }
+            return Status(K_RUNTIME_ERROR, __LINE__, __FILE__,
+                          "Rename file from manifest.tmp.f3nQVn to manifest failed with errno: 2");
+        });
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7301), nullptr, nullptr, nullptr);
+    ExpectRecoverLocalEntriesAlwaysOk();
+
+    std::mutex pushedMutex;
+    std::vector<std::string> pushedKeys;
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&pushedMutex, &pushedKeys](const std::vector<ObjectMetaPb> &metas,
+                                                           std::vector<std::string> &failedIds, std::string) {
+            std::lock_guard<std::mutex> lock(pushedMutex);
+            for (const auto &m : metas) {
+                pushedKeys.emplace_back(m.object_key());
+            }
+            failedIds.clear();
+            return Status::OK();
+        }));
+
+    RecoveryTaskPb task;
+    task.set_failed_worker("127.0.0.1:7300");
+    task.add_slots(6);
+    task.add_slots(12);
+
+    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7301), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+
+    auto rc = manager.ExecuteRecoveryTask(task);
+    DS_ASSERT_NOT_OK(rc);
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+
+    std::lock_guard<std::mutex> lock(pushedMutex);
+    EXPECT_THAT(pushedKeys, ::testing::Contains(std::string("tenant/object_x")))
+        << "Slot 12 already recovered tenant/object_x; even though slot 6 failed, the meta "
+           "of tenant/object_x must still be pushed to master, otherwise issue 447 will recur.";
 }
 
 }  // namespace ut

@@ -25,7 +25,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-AggregatedPersistenceApi::AggregatedPersistenceApi(std::unique_ptr<StorageClient> storageClient)
+AggregatedPersistenceApi::AggregatedPersistenceApi(std::shared_ptr<StorageClient> storageClient)
     : storageClient_(std::move(storageClient))
 {
 }
