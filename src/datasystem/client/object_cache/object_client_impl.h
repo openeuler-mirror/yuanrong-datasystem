@@ -676,6 +676,12 @@ public:
      * @return K_OK on any object success; the error code otherwise.
      */
     Status HealthCheck(ServerState &state);
+    
+    /**
+     * @brief Get transport data type between client and worker.
+     * @return Transport type.
+     */
+    std::string GetTransportType();
 
 private:
     friend Buffer;

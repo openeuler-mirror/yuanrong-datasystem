@@ -268,6 +268,9 @@ std::string RequestParam::ToString() const
     if (!cacheType.empty()) {
         ret.append("cacheType:").append(cacheType).append(",");
     }
+    if (!transportType.empty()) {
+        ret.append("transportType:").append(transportType).append(",");
+    }
     if (ret.length() > 1) {
         ret.pop_back();
     }

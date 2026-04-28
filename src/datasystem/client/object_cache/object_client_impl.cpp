@@ -97,6 +97,7 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
+thread_local bool g_IsThroughUb = false;
 
 namespace datasystem {
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -1950,6 +1951,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                          uint64_t length)
 {
+    g_IsThroughUb = true;
     auto api = std::dynamic_pointer_cast<IClientWorkerApi>(workerApi_[LOCAL_WORKER]);
     RETURN_RUNTIME_ERROR_IF_NULL(api);
     return api->SendBufferViaUb(bufferInfo, data, length);
@@ -2236,6 +2238,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
+    g_IsThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
@@ -2373,6 +2376,7 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
         getParam.ubMetaResolved = true;
+        g_IsThroughUb = true;
         if (metaRc.IsError()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
         } else if (objMetas.size() != objectsNeedToGet.size()) {
@@ -2997,6 +3001,7 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
 
 Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 {
+    g_IsThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
@@ -3034,6 +3039,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
+    g_IsThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKey(key));
     FullParam param;
@@ -4019,5 +4025,14 @@ Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
     SetClientRemoteH2DConfig(enableRemoteH2D_, devId);
     return Status::OK();
 }
+
+std::string ObjectClientImpl::GetTransportType()
+{
+    if (g_IsThroughUb) {
+        return "UB";
+    }
+    return "SHM";
+}
+
 }  // namespace object_cache
 }  // namespace datasystem
