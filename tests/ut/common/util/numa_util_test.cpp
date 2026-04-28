@@ -18,11 +18,47 @@
  * Description: test numa util function.
  */
 #include "ut/common.h"
+
+#include <future>
+#include <thread>
+#include <vector>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "datasystem/common/util/numa_util.h"
+#include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
 namespace ut {
 class NumaUtilTest : public CommonTest {};
+
+namespace {
+pid_t ForkForTest(std::function<void()> func)
+{
+    pid_t child = fork();
+    if (child == 0) {
+        std::thread thread(std::move(func));
+        thread.join();
+        exit(0);
+    }
+    return child;
+}
+
+int WaitForChildFork(pid_t pid)
+{
+    if (pid == 0) {
+        return 0;
+    }
+    int statLoc = 0;
+    if (waitpid(pid, &statLoc, 0) < 0) {
+        return -1;
+    }
+    if (WIFEXITED(statLoc)) {
+        return WEXITSTATUS(statLoc);
+    }
+    return -1;
+}
+}  // namespace
 
 TEST_F(NumaUtilTest, TestParseCpuListSuccess)
 {
@@ -91,6 +127,36 @@ TEST_F(NumaUtilTest, TestNumaIdToChipIdWithNumaCount4)
 TEST_F(NumaUtilTest, TestNumaIdToChipIdInvalidWhenNumaIdOutOfRange)
 {
     EXPECT_EQ(NumaIdToChipId(4, 4), INVALID_CHIP_ID);
+}
+
+TEST_F(NumaUtilTest, TestNumaIdToChipIdConcurrentFirstCallDoesNotCrash)
+{
+    constexpr int threadCount = 32;
+    constexpr int repeatPerThread = 1000;
+
+    pid_t child = ForkForTest([]() {
+        std::promise<void> ready;
+        std::shared_future<void> start(ready.get_future());
+        ThreadPool pool(threadCount);
+        std::vector<std::future<void>> futures;
+        futures.reserve(threadCount);
+        for (int i = 0; i < threadCount; ++i) {
+            futures.emplace_back(pool.Submit([start]() mutable {
+                start.wait();
+                for (int j = 0; j < repeatPerThread; ++j) {
+                    const uint8_t chipId = NumaIdToChipId(0);
+                    ASSERT_TRUE(chipId == 1 || chipId == INVALID_CHIP_ID);
+                }
+            }));
+        }
+
+        ready.set_value();
+        for (auto &future : futures) {
+            future.get();
+        }
+    });
+
+    ASSERT_EQ(WaitForChildFork(child), 0);
 }
 }  // namespace ut
 }  // namespace datasystem
