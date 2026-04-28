@@ -126,6 +126,9 @@ static bool OpMGet(PipelineContext &ctx, double &latencyMs) {
                           << " expected=" << ctx.size << " got=" << bufSize);
                 if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
             }
+        } else {
+            SLOG_WARN("mGet missing result: key=" << ctx.batchKeys[i]);
+            if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
         }
     }
     return true;
