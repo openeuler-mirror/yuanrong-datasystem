@@ -291,11 +291,11 @@ Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &r
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         auto &mgr = UrmaManager::Instance();
-        // Get or create a local JFR for this target node (reused across reconnections)
-        uint32_t jfrId = 0;
-        RETURN_IF_NOT_OK(mgr.GetOrCreateLocalJfr(senderAddr, jfrId));
+        // Get or create a local Jetty for this target node (reused across reconnections).
+        uint32_t jettyId = 0;
+        RETURN_IF_NOT_OK(mgr.GetOrCreateLocalJetty(senderAddr, jettyId, JettyType::RECV));
         auto localInfo = mgr.GetLocalUrmaInfo();
-        localInfo.jfrId = jfrId;
+        localInfo.jfrId = jettyId;
         localInfo.ToProto(req);
         if (!mgr.GetClientId().empty()) {
             req.set_client_id(mgr.GetClientId());

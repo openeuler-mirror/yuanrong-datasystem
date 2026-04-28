@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: URMA async event handler for JFS/JFC error events.
+ * Description: URMA async event handler for Jetty/JFC error events.
  */
 #ifndef DATASYSTEM_COMMON_RDMA_URMA_ASYNC_EVENT_HANDLER_H
 #define DATASYSTEM_COMMON_RDMA_URMA_ASYNC_EVENT_HANDLER_H
@@ -81,11 +81,11 @@ private:
     Status HandleUrmaAsyncEvent(const urma_async_event_t &event);
 
     /**
-     * @brief Handle a JFS_ERR async event by looking up the JFS and triggering recovery.
-     * @param[in] rawJfs Raw JFS handle from the async event.
+     * @brief Handle a JETTY_ERR async event by looking up the Jetty and triggering recovery.
+     * @param[in] rawJetty Raw Jetty handle from the async event.
      * @return Status of the call.
      */
-    Status HandleJfsErrAsyncEvent(urma_jfs_t *rawJfs);
+    Status HandleJettyErrAsyncEvent(urma_jetty_t *rawJetty);
 
     /**
      * @brief Handle a JFC_ERR async event.

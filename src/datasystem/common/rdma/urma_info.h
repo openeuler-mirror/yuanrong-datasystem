@@ -30,6 +30,7 @@ namespace datasystem {
 struct UrmaJfrInfo {
     std::string eid;
     uint32_t uasid{ 0 };
+    // Legacy protobuf field name is jfr_ids; after Jetty migration the value is the local jetty_id.
     uint32_t jfrId{ 0 };
     HostPort localAddress;
     std::string uniqueInstanceId;
@@ -57,7 +58,7 @@ struct UrmaJfrInfo {
         uasid = proto.uasid();
         if (proto.jfr_ids_size() != 1) {
             return Status(K_RUNTIME_ERROR,
-                          FormatString("Expected exactly 1 jfr_id in handshake, got %d", proto.jfr_ids_size()));
+                          FormatString("Expected exactly 1 jetty_id in handshake, got %d", proto.jfr_ids_size()));
         }
         jfrId = proto.jfr_ids(0);
         localAddress = HostPort(proto.address().host(), proto.address().port());

@@ -1154,7 +1154,7 @@ TEST_F(UrmaClientWorkerDisableUDS, UrmaConnectionFailedBase)
     std::shared_ptr<KVClient> client;
     const int timeoutMs = 1'000;
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "urma.import_jfr", "1*return(K_URMA_ERROR)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "urma.import_jetty", "1*return(K_URMA_ERROR)"));
     DS_ASSERT_OK(inject::Set("client.set.urma_write_ok", "call()"));
     DS_ASSERT_OK(inject::Set("client.urma_handshake_retry", "pause()"));
     InitTestKVClient(0, client, timeoutMs);
@@ -1308,7 +1308,7 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerGetCqeError)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJetty", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-1", getValue));
     ASSERT_EQ(value, getValue);
     DS_ASSERT_OK(client3->Get("key-100", getValue));
@@ -1358,7 +1358,7 @@ TEST_F(UrmaCqeErrorTest, RemoteWorkerMultiGetCqeError)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.VerifyExclusiveJetty", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-1", getValue));
     ASSERT_EQ(value, getValue);
     DS_ASSERT_OK(client3->Get("key-100", getValue));
@@ -1543,14 +1543,14 @@ TEST_F(UrmaAsyncEventTest, RemoteWorkerGetJfsAsyncEvent)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.VerifyExclusiveJfs", "1000*call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.VerifyExclusiveJetty", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-0", getValue));
     ASSERT_EQ(value, getValue);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.HandleJfsErrAsyncEvent", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.HandleJettyErrAsyncEvent", "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.InjectAsyncEvent",
-                                           "2*return(" + std::to_string(static_cast<int>(URMA_EVENT_JFS_ERR)) + ")"));
-    WaitForWorkerInjectExecuteCount(1, "UrmaManager.HandleJfsErrAsyncEvent", 1);
+                                           "2*return(" + std::to_string(static_cast<int>(URMA_EVENT_JETTY_ERR)) + ")"));
+    WaitForWorkerInjectExecuteCount(1, "UrmaManager.HandleJettyErrAsyncEvent", 1);
 
     for (int i = 0; i < keyCount; i++) {
         DS_ASSERT_OK(client2->Get("key-" + std::to_string(i), getValue));
