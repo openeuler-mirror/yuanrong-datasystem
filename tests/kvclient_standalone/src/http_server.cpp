@@ -71,17 +71,37 @@ void HttpServer::Stop() {
 void HttpServer::HandleNotify(const std::string &body) {
     try {
         json j = json::parse(body);
-        std::string key = j["key"];
         int sender = j["sender"];
         uint64_t expectedSize = j["size"];
 
-        notifyPool_.Submit([this, key, sender, expectedSize]() {
+        // 兼容两种格式：keys 数组（batch）和 key 字符串（单 key）
+        std::vector<std::string> keys;
+        if (j.contains("keys") && j["keys"].is_array()) {
+            for (auto &k : j["keys"]) keys.push_back(k.get<std::string>());
+        } else if (j.contains("key")) {
+            keys.push_back(j["key"].get<std::string>());
+        }
+
+        if (keys.empty()) return;
+
+        notifyPool_.Submit([this, keys = std::move(keys), sender, expectedSize]() {
             PipelineContext ctx;
-            ctx.key = key;
+            ctx.key = keys[0];
+            ctx.batchKeys = keys;
             ctx.size = expectedSize;
             ctx.senderId = sender;
             if (notifyNeedsData_) {
-                ctx.data = GeneratePatternData(expectedSize, sender);
+                auto cacheKey = std::to_string(expectedSize) + "_" + std::to_string(sender);
+                {
+                    std::lock_guard<std::mutex> lock(pregenMutex_);
+                    auto it = pregenData_.find(cacheKey);
+                    if (it != pregenData_.end()) {
+                        ctx.data = it->second;
+                    } else {
+                        ctx.data = GeneratePatternData(expectedSize, sender);
+                        pregenData_[cacheKey] = ctx.data;
+                    }
+                }
             }
             ctx.client = client_;
             ctx.param.writeMode = WriteMode::NONE_L2_CACHE;
