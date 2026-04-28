@@ -1296,6 +1296,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         if (useNumaAffinity) {
             VLOG(1) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
                     << ", dst=" << static_cast<uint32_t>(args.dstChipId);
+            INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
                               remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
         } else {
@@ -1573,6 +1574,10 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey, bool
     TbbUrmaConnectionMap::accessor connectionAccessor;
     if (urmaConnectionMap_.find(connectionAccessor, connectionKey)) {
         LOG(INFO) << "Remove UrmaConnection for " << connectionKey;
+        auto& connection = connectionAccessor->second;
+        if (connection != nullptr) {
+            RETURN_IF_NOT_OK(connection->ModifyJettyToError(*urmaResource_));
+        }
         urmaConnectionMap_.erase(connectionAccessor);
         removed = true;
     }
