@@ -46,6 +46,60 @@ bool IsRestartRecoverableWriteMode(uint32_t writeMode)
     return mode == WriteMode::WRITE_THROUGH_L2_CACHE || mode == WriteMode::WRITE_BACK_L2_CACHE
            || mode == WriteMode::WRITE_BACK_L2_CACHE_EVICT;
 }
+
+bool CanRecoverRestartMeta(const ObjectMetaPb &meta)
+{
+    if (meta.object_key().empty()) {
+        LOG(WARNING) << "Skip restart recovery metadata with empty object key.";
+        return false;
+    }
+    if (static_cast<DataFormat>(meta.config().data_format()) != DataFormat::BINARY) {
+        LOG(INFO) << FormatString("[ObjectKey %s] Skip non-binary restart recovery metadata.", meta.object_key());
+        return false;
+    }
+    if (!IsRestartRecoverableWriteMode(meta.config().write_mode())) {
+        LOG(INFO) << FormatString("[ObjectKey %s] Skip non-L2 restart recovery metadata.", meta.object_key());
+        return false;
+    }
+    if (static_cast<ObjectLifeState>(meta.life_state()) == ObjectLifeState::OBJECT_INVALID) {
+        LOG(INFO) << FormatString("[ObjectKey %s] Skip invalid restart recovery metadata.", meta.object_key());
+        return false;
+    }
+    return true;
+}
+
+bool HasNewerLocalEntry(const ObjectMetaPb &meta, const std::shared_ptr<SafeObjType> &entry, bool isInsert)
+{
+    if (isInsert || entry->Get() == nullptr || entry->Get()->GetCreateTime() <= meta.version()) {
+        return false;
+    }
+    LOG(INFO) << FormatString(
+        "[ObjectKey %s] Skip restart recovery metadata because local version %ld is newer than recovery version %ld.",
+        meta.object_key(), entry->Get()->GetCreateTime(), meta.version());
+    return true;
+}
+
+Status SaveRecoveredContentToMemory(const ObjectMetaPb &meta, const std::shared_ptr<std::stringstream> &contentStream,
+                                    const std::shared_ptr<SafeObjType> &entry,
+                                    const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
+                                    const std::shared_ptr<ThreadPool> &memCpyThreadPool)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(evictionManager != nullptr, K_RUNTIME_ERROR, "evictionManager is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(memCpyThreadPool != nullptr, K_RUNTIME_ERROR, "memCpyThreadPool is null");
+    const auto content = contentStream->str();
+    std::vector<RpcMessage> payloads;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        CopyAndSplitBuffer(TenantAuthManager::ExtractTenantId(meta.object_key()), content.data(), content.size(),
+                           payloads),
+        FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
+    ObjectKV objectKV(meta.object_key(), *entry);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        SaveBinaryObjectToMemory(objectKV, payloads, evictionManager, memCpyThreadPool, false),
+        FormatString("[ObjectKey %s] SaveBinaryObjectToMemory failed.", meta.object_key()));
+    (*entry)->stateInfo.SetCacheInvalid(false);
+    (*entry)->stateInfo.SetIncompleted(false);
+    return Status::OK();
+}
 }  // namespace
 
 MetaDataRecoveryManager::MetaDataRecoveryManager(
@@ -265,20 +319,7 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
     CHECK_FAIL_RETURN_STATUS(objectTable_ != nullptr, K_RUNTIME_ERROR, "objectTable is null");
 
     for (const auto &meta : recoverMetas) {
-        if (meta.object_key().empty()) {
-            LOG(WARNING) << "Skip restart recovery metadata with empty object key.";
-            continue;
-        }
-        if (static_cast<DataFormat>(meta.config().data_format()) != DataFormat::BINARY) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Skip non-binary restart recovery metadata.", meta.object_key());
-            continue;
-        }
-        if (!IsRestartRecoverableWriteMode(meta.config().write_mode())) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Skip non-L2 restart recovery metadata.", meta.object_key());
-            continue;
-        }
-        if (static_cast<ObjectLifeState>(meta.life_state()) == ObjectLifeState::OBJECT_INVALID) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Skip invalid restart recovery metadata.", meta.object_key());
+        if (!CanRecoverRestartMeta(meta)) {
             continue;
         }
 
@@ -287,6 +328,9 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->ReserveGetAndLock(meta.object_key(), entry, isInsert),
                                          FormatString("[ObjectKey %s] ReserveGetAndLock failed.", meta.object_key()));
         Raii unlock([&entry]() { entry->WUnlock(); });
+        if (HasNewerLocalEntry(meta, entry, isInsert)) {
+            continue;
+        }
 
         SetObjectEntryAccordingToMeta(meta, metadataSize_, *entry);
         (*entry)->SetAddress(localAddress_.ToString());
@@ -294,22 +338,9 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
 
         auto foundContent = recoveredContents.find(meta.object_key());
         if (foundContent != recoveredContents.end() && foundContent->second != nullptr) {
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(evictionManager_ != nullptr, K_RUNTIME_ERROR,
-                                                 "evictionManager is null");
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(memCpyThreadPool_ != nullptr, K_RUNTIME_ERROR,
-                                                 "memCpyThreadPool is null");
-            const auto content = foundContent->second->str();
-            std::vector<RpcMessage> payloads;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                CopyAndSplitBuffer(TenantAuthManager::ExtractTenantId(meta.object_key()), content.data(),
-                                   content.size(), payloads),
-                FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
-            ObjectKV objectKV(meta.object_key(), *entry);
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                SaveBinaryObjectToMemory(objectKV, payloads, evictionManager_, memCpyThreadPool_, false),
-                FormatString("[ObjectKey %s] SaveBinaryObjectToMemory failed.", meta.object_key()));
-            (*entry)->stateInfo.SetCacheInvalid(false);
-            (*entry)->stateInfo.SetIncompleted(false);
+                SaveRecoveredContentToMemory(meta, foundContent->second, entry, evictionManager_, memCpyThreadPool_),
+                FormatString("[ObjectKey %s] SaveRecoveredContentToMemory failed.", meta.object_key()));
         }
         recoveredObjectKeys.emplace_back(meta.object_key());
 
