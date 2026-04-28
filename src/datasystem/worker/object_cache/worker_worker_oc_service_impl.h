@@ -137,6 +137,7 @@ private:
         std::vector<GetObjectRemoteRspPb> respPbs;
         std::vector<std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>>> kps;
         std::vector<RpcMessage> fallbackPayloads;
+        std::vector<Status> fallbackStatuses;
         std::vector<uint64_t> eventKeys;
         uint64_t subIndex = 0;
     };
@@ -155,7 +156,7 @@ private:
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
                                std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                               RemoteH2DRootInfoPb *batchRootInfo = nullptr);
+                               RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
@@ -211,7 +212,7 @@ private:
     Status WaitFastTransportAndFallback(
         ParallelRes &loc, std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
         BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index,
-        uint64_t coveredRespNum);
+        uint64_t coveredRespNum, const Status &fallbackStatus);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to process requests in parallel.
@@ -259,7 +260,7 @@ private:
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr);
+                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr);
 
     /**
      * @brief Get the safe object entry.
