@@ -1308,6 +1308,10 @@ private:
                                        std::unique_ptr<client::MmapManager> &localMmapManager,
                                        std::shared_ptr<client::ListenWorker> &localListenWorker);
 
+    void ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::MmapManager> &localMmapManager,
+                                           std::shared_ptr<client::ListenWorker> &oldLocalListener,
+                                           std::unique_ptr<client::MmapManager> &oldMmapManager);
+
     bool CommitPreferredLocalWorker(WorkerNode oldNode, const HostPort &localAddress,
                                     const std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
                                     std::unique_ptr<client::MmapManager> localMmapManager,
