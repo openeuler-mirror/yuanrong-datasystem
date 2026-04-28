@@ -239,6 +239,7 @@ spec:
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
+        - -enable_urma_perf={{ $.Values.global.performance.urmaEnablePerf }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}

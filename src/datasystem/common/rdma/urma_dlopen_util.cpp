@@ -399,3 +399,21 @@ void ds_urma_ack_async_event(urma_async_event_t *event)
 {
     CallVoid<decltype(&ds_urma_ack_async_event)>("urma_ack_async_event", event);
 }
+
+urma_status_t ds_urma_start_perf(void)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_start_perf)>("urma_start_perf",
+                                                                                    kUrmaDlopenErrorStatus);
+}
+
+urma_status_t ds_urma_stop_perf(void)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_stop_perf)>("urma_stop_perf",
+                                                                                   kUrmaDlopenErrorStatus);
+}
+
+urma_status_t ds_urma_get_perf_info(char *perf_buf, uint32_t *length)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_perf_info)>(
+        "urma_get_perf_info", kUrmaDlopenErrorStatus, perf_buf, length);
+}

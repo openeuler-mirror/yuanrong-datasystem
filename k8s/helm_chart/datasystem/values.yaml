@@ -435,6 +435,9 @@ global:
     urmaMode: "UB"
     # Number of complete record to poll at a time, 16 is the max this device can poll.
     urmaPollSize: 8
+    # Enable periodic performance logging for URMA operations.
+    # This option only takes effect when enableUrma=true.
+    urmaEnablePerf: false
     # Register the whole arena as segment during init, otherwise, register each object as a segment.
     urmaRegisterWholeArena: true
     # [DEPRECATED] Retained for compatibility only and ignored internally.

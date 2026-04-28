@@ -21,8 +21,11 @@
 
 #include <sys/mman.h>
 #include <ub/umdk/urma/urma_opcode.h>
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
@@ -48,6 +51,7 @@
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
+DS_DECLARE_bool(enable_urma_perf);
 
 namespace datasystem {
 namespace {
@@ -156,6 +160,11 @@ UrmaManager::~UrmaManager()
 Status UrmaManager::Stop()
 {
     serverStop_ = true;
+    if (perfThread_ && perfThread_->joinable()) {
+        LOG(INFO) << "Waiting for Perf thread to exit";
+        perfThread_->join();
+        perfThread_.reset();
+    }
     if (serverEventThread_ && serverEventThread_->joinable()) {
         LOG(INFO) << "Waiting for Event thread to exit";
         serverEventThread_->join();
@@ -222,6 +231,7 @@ Status UrmaManager::Init(const HostPort &hostport)
     }
     RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
+    serverStop_ = false;
     serverEventThread_ = std::make_unique<Thread>(&UrmaManager::ServerEventHandleThreadMain, this);
     serverEventThread_->set_name("UrmaPollJfc");
     aeHandler_.Init(urmaResource_.get());
@@ -232,6 +242,9 @@ Status UrmaManager::Init(const HostPort &hostport)
         clientId_ = GetStringUuid();
         RETURN_IF_NOT_OK(InitMemoryBufferPool());
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
+    }
+    if (FLAGS_enable_urma_perf) {
+        perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
     }
     needRollback = false;
     return Status::OK();
@@ -616,6 +629,48 @@ Status UrmaManager::GetOrRegisterSegment(const uint64_t &segAddress, const uint6
     return Status::OK();
 }
 
+Status UrmaManager::PerfThreadMain()
+{
+    constexpr uint32_t perfBufferLen = 16 * 1024;
+    constexpr int perfIntervalMs = 10000;  // 10s
+    constexpr int sleepIntervalMs = 10;
+
+    while (!serverStop_.load()) {
+        urma_status_t ret = ds_urma_start_perf();
+        if (ret != URMA_SUCCESS) {
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << "[URMA_PERF] Failed to start perf, ret = " << ret;
+        }
+
+        Timer timer;
+        while (timer.ElapsedMilliSecond() < perfIntervalMs && !serverStop_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepIntervalMs));
+        }
+
+        if (ret != URMA_SUCCESS) {
+            continue;
+        }
+
+        ret = ds_urma_stop_perf();
+        if (ret != URMA_SUCCESS) {
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << "[URMA_PERF] Failed to stop perf, ret = " << ret;
+            continue;
+        }
+
+        uint32_t len = perfBufferLen;
+        std::vector<char> buffer(len);
+        ret = ds_urma_get_perf_info(buffer.data(), &len);
+        if (ret != URMA_SUCCESS) {
+            LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << "[URMA_PERF] Failed to get perf info, ret = " << ret;
+            continue;
+        }
+
+        std::string msg(buffer.data(), len);
+        LOG(INFO) << "[URMA_PERF]:\n" << msg;
+    }
+
+    return Status::OK();
+}
+
 Status UrmaManager::ServerEventHandleThreadMain()
 {
     if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
@@ -677,7 +732,7 @@ Status UrmaManager::CheckAndNotify()
             // we dont need lock for finishedRequests_ as its accessed only by single thread
             it = finishedRequests_.erase(it);
         } else {
-            VLOG(1) << "[UrmaEventHandler] Event is missing, dropping request id: " << requestId;
+            LOG(INFO) << "[UrmaEventHandler] Event is missing, dropping request id: " << requestId;
             // The event may already be removed by waiter cleanup; drop this finished request id.
             failedRequests_.erase(requestId);
             it = finishedRequests_.erase(it);
@@ -740,6 +795,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
             K_URMA_WAIT_TIMEOUT,
             FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s", requestIdStr.c_str()));
     }
+    METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY);
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
     // use this unique request id as key to wait
@@ -751,11 +807,16 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    auto logLevel = elapsedMs > 1 ? 0 : 1;
+    VLOG(logLevel) << "[UrmaEventHandler] URMA wait elapsed " << elapsedMs << "ms, request id:" << requestId
+                   << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString();
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
-        return Status(K_URMA_WAIT_TIMEOUT, waitRc.GetMsg());
+        return Status(K_URMA_WAIT_TIMEOUT,
+                      FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
     }
     RETURN_IF_NOT_OK(waitRc);
-    workerOperationTimeCost.Append("Urma wait time.", timer.ElapsedMilliSecond());
+    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(elapsedMs));
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     VLOG(1) << "[UrmaEventHandler] Done waiting for the request id: " << requestId;
@@ -852,7 +913,8 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
                       << ", jfs id: " << jfsId;
             urmaResource_->AsyncDeleteJfs(jfsId);
         } else if (crStatus == URMA_CR_SUCCESS) {
-            VLOG(1) << "[UrmaEventHandler] Got event with request id: " << userCtx;
+            VLOG(1) << "[UrmaEventHandler] Got event with request id: " << userCtx << ", count:" << count
+                    << ", cpuid: " << sched_getcpu();
             successCompletedReqs.insert(userCtx);
         } else {
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
@@ -918,11 +980,21 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
 
     // trys maxTryCount times to get an event
     for (uint64_t i = 0; i < maxTryCount; ++i) {
+        Timer timer;
         cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
+        if (timer.ElapsedMilliSecond() > 1) {
+            LOG(INFO) << "[UrmaEventHandler]: Poll jfc elapsed = " << timer.ElapsedMilliSecond() << "ms"
+                      << ", cpuid: " << sched_getcpu();
+        }
         if (cnt == 0) {
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
+            Timer sleepTimer;
             usleep(0);
+            if (sleepTimer.ElapsedMilliSecond() > 1) {
+                LOG(INFO) << "[UrmaEventHandler]: Poll jfc sleep elapsed = " << sleepTimer.ElapsedMilliSecond() << "ms"
+                          << ", cpuid: " << sched_getcpu();
+            }
         } else if (cnt < 0) {
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to poll jfc, ret = %d", cnt));
         } else if (cnt > 0) {
@@ -1007,9 +1079,16 @@ Status UrmaManager::ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_p
 {
     urma_rjfr_t remoteJfr{};
     RETURN_IF_NOT_OK(BuildRemoteJfr(remoteInfo, remoteJfr));
+    Timer timer;
+    METRIC_TIMER(metrics::KvMetricId::URMA_IMPORT_JFR);
     RETURN_IF_NOT_OK_APPEND_MSG(
         UrmaTargetJfr::Import(urmaResource_->GetContext(), &remoteJfr, urmaResource_->GetUrmaToken(), targetJfr),
         FormatString("Failed to import target jfr, %s", remoteInfo.ToString()));
+    if (timer.ElapsedMilliSecond() > 1) {
+        LOG(INFO) << "[UrmaImportJfr] Import target jfr elapsed = " << timer.ElapsedMilliSecond() << "ms"
+                  << ", cpuid: " << sched_getcpu();
+    }
+
     return Status::OK();
 }
 
@@ -1091,6 +1170,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jfs, args.remoteAddress,
                                      UrmaEvent::OperationType::WRITE, args.waiter));
         urma_status_t ret;
+        Timer t;
+        METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
         if (useNumaAffinity) {
             VLOG(1) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
                     << ", dst=" << static_cast<uint32_t>(args.dstChipId);
@@ -1112,6 +1193,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
                                     FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
         }
+        VLOG(1) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << t.ElapsedMilliSecond()
+                << ", request id:" << key;
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;
