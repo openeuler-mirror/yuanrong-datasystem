@@ -141,6 +141,18 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_ERROR("batch_keys_count must be >= 1, got " << cfg.batchKeysCount);
         return false;
     }
+    if (cfg.connectTimeoutMs <= 0) {
+        SLOG_ERROR("connect_timeout_ms must be > 0, got " << cfg.connectTimeoutMs);
+        return false;
+    }
+    if (cfg.requestTimeoutMs < 0) {
+        SLOG_ERROR("request_timeout_ms must be >= 0, got " << cfg.requestTimeoutMs);
+        return false;
+    }
+    if (cfg.metricsIntervalMs <= 0) {
+        SLOG_ERROR("metrics_interval_ms must be > 0, got " << cfg.metricsIntervalMs);
+        return false;
+    }
     if (cfg.ttlSeconds == 0) {
         SLOG_WARN("ttl_seconds is 0, data will not expire");
     }

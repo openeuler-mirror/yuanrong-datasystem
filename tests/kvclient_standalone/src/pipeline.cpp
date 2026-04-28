@@ -107,6 +107,12 @@ static bool OpMSet(PipelineContext &ctx, double &latencyMs) {
         latencyMs = 0;
         return false;
     }
+    if (ctx.batchBuffers.size() != ctx.batchKeys.size()) {
+        SLOG_WARN("mSet: buffer/key count mismatch (" << ctx.batchBuffers.size()
+                  << " vs " << ctx.batchKeys.size() << ")");
+        latencyMs = 0;
+        return false;
+    }
     return Measure([&]() {
         return ctx.client->MSet(ctx.batchBuffers);
     }, latencyMs);

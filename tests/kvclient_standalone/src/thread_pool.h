@@ -1,5 +1,6 @@
 #pragma once
 
+#include "simple_log.h"
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -20,6 +21,7 @@ public:
     void Submit(std::function<void()> task) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (stopped_) return;
             tasks_.push(std::move(task));
         }
         cv_.notify_one();
@@ -54,7 +56,13 @@ private:
                 task = std::move(tasks_.front());
                 tasks_.pop();
             }
-            task();
+            try {
+                task();
+            } catch (const std::exception &e) {
+                SLOG_ERROR("ThreadPool task threw: " << e.what());
+            } catch (...) {
+                SLOG_ERROR("ThreadPool task threw unknown exception");
+            }
         }
     }
 
