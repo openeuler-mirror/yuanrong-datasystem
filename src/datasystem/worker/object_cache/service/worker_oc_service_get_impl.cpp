@@ -1277,12 +1277,11 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
             ReadObjectKV objectKV(readKey, *entry);
             RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
             RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
-            entry->WUnlock();
-            RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(request->GetH2DChunkManager(),
-                readKey.objectKey,
-                reinterpret_cast<char*>(entry->Get()->GetShmUnit()->GetPointer()),
-                entry->Get()->GetMetadataSize(),
+            RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
+                request->GetH2DChunkManager(), readKey.objectKey,
+                reinterpret_cast<char *>(entry->Get()->GetShmUnit()->GetPointer()), entry->Get()->GetMetadataSize(),
                 entry->Get()->GetDataSize()));
+            entry->WUnlock();
             return Status::OK();
         }
         return Status(K_NOT_FOUND, "");
