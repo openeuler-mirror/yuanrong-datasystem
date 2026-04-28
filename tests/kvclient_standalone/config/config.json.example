@@ -1,21 +1,35 @@
 {
-  "listen_port": 9000,
+  "instance_id": 0,
+
+  "// === KVClient连接 ===": "",
   "etcd_address": "127.0.0.1:2379",
   "cluster_name": "",
   "host_id_env_name": "JD_HOST_IP",
   "connect_timeout_ms": 1000,
   "request_timeout_ms": 20,
+  "listen_port": 9000,
+
+  "// === Pipeline配置 ===": "",
+  "role": "writer",
+  "pipeline": ["setStringView"],
+  "notify_pipeline": ["getBuffer"],
   "data_sizes": ["8MB", "512KB"],
-  "ttl_seconds": 5,
   "target_qps": 100,
   "num_set_threads": 16,
+  "batch_keys_count": 1,
+
+  "// === Peer通知 ===": "",
   "notify_count": 10,
   "notify_delay_ms": 10,
-  "enable_jitter": false,
+  "peers": ["http://host1:9000", "http://host2:9000"],
+
+  "// === 运行配置 ===": "",
   "cpu_affinity": "",
   "metrics_interval_ms": 3000,
   "metrics_file": "metrics_{instance_id}.csv",
-  "role": "writer",
-  "pipeline": ["setStringView"],
-  "notify_pipeline": ["getBuffer"]
+
+  "// === 可靠性 ===": "",
+  "ttl_seconds": 5,
+  "enable_cross_node_connection": false,
+  "enable_jitter": false
 }

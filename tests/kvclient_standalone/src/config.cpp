@@ -13,6 +13,10 @@ uint64_t ParseSize(const std::string &str) {
     char *end = nullptr;
     double val = std::strtod(str.c_str(), &end);
     if (end == str.c_str()) return 0;
+    if (val < 0 || val == HUGE_VAL || val == -HUGE_VAL) {
+        SLOG_WARN("ParseSize: invalid value '" << str << "', treating as 0");
+        return 0;
+    }
 
     std::string unit(end);
     uint64_t multiplier = 1;
@@ -47,6 +51,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("notify_count")) cfg.notifyCount = j["notify_count"];
         if (j.contains("notify_delay_ms")) cfg.notifyDelayMs = j["notify_delay_ms"];
         if (j.contains("enable_jitter")) cfg.enableJitter = j["enable_jitter"];
+        if (j.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = j["enable_cross_node_connection"];
+        if (j.contains("batch_keys_count")) cfg.batchKeysCount = j["batch_keys_count"];
         if (j.contains("cpu_affinity")) cfg.cpuAffinity = j["cpu_affinity"].get<std::string>();
         if (j.contains("metrics_interval_ms")) cfg.metricsIntervalMs = j["metrics_interval_ms"];
         if (j.contains("metrics_file")) cfg.metricsFile = j["metrics_file"];
@@ -113,6 +119,31 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_ERROR("etcd_address is required");
         return false;
     }
+    if (cfg.listenPort <= 0 || cfg.listenPort > 65535) {
+        SLOG_ERROR("Invalid listen_port: " << cfg.listenPort);
+        return false;
+    }
+    if (cfg.numSetThreads <= 0) {
+        SLOG_ERROR("num_set_threads must be > 0, got " << cfg.numSetThreads);
+        return false;
+    }
+    if (cfg.targetQps < 0) {
+        SLOG_ERROR("target_qps must be >= 0, got " << cfg.targetQps);
+        return false;
+    }
+    for (auto sz : cfg.dataSizes) {
+        if (sz == 0) {
+            SLOG_ERROR("data_sizes contains a zero-size entry");
+            return false;
+        }
+    }
+    if (cfg.batchKeysCount < 1) {
+        SLOG_ERROR("batch_keys_count must be >= 1, got " << cfg.batchKeysCount);
+        return false;
+    }
+    if (cfg.ttlSeconds == 0) {
+        SLOG_WARN("ttl_seconds is 0, data will not expire");
+    }
 
     auto joinStr = [](const std::vector<std::string> &v) -> std::string {
         std::string r;
@@ -133,6 +164,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
               << ", peers=" << cfg.peers.size()
               << ", data_sizes_count=" << cfg.dataSizes.size()
               << ", target_qps=" << cfg.targetQps
-              << ", threads=" << cfg.numSetThreads);
+              << ", threads=" << cfg.numSetThreads
+              << ", batch_keys_count=" << cfg.batchKeysCount);
     return true;
 }
