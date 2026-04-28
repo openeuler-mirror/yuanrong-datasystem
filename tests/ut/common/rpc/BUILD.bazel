@@ -11,3 +11,11 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "timeout_duration_test",
+    srcs = ["timeout_duration_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:timeout_duration",
+    ],
+)

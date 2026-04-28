@@ -107,12 +107,31 @@ public:
      */
     int64_t CalcRemainingTime()
     {
-        return CalcRealRemainingTime() * OP_USE_TIME_FACTOR;
+        return ScaleTimeoutMs(CalcRealRemainingTime(), OP_USE_TIME_FACTOR);
+    }
+
+    static int64_t ScaleTimeoutMs(int64_t timeoutMs, double scaleFactor)
+    {
+        if (timeoutMs <= 0) {
+            return timeoutMs;
+        }
+        if (timeoutMs > SMALL_TIMEOUT_ROUND_THRESHOLD_MS) {
+            return timeoutMs * scaleFactor;
+        }
+        int64_t timeoutUs = timeoutMs * MS_TO_US * scaleFactor;
+        int64_t scaledTimeoutMs = timeoutUs / MS_TO_US;
+        if (timeoutUs % MS_TO_US >= ROUND_UP_US) {
+            ++scaledTimeoutMs;
+        }
+        return scaledTimeoutMs > 0 ? scaledTimeoutMs : 1;
     }
 
 private:
     static constexpr int DEFAULT_TIMEOUT = RPC_TIMEOUT;
-    static constexpr float OP_USE_TIME_FACTOR = 0.8;
+    static constexpr int64_t MS_TO_US = 1'000;
+    static constexpr int64_t ROUND_UP_US = 500;
+    static constexpr int64_t SMALL_TIMEOUT_ROUND_THRESHOLD_MS = 5;
+    static constexpr double OP_USE_TIME_FACTOR = 0.8;
 
     bool initialized_ = false;
     int64_t defaultDuration_ = DEFAULT_TIMEOUT;
