@@ -19,6 +19,7 @@
  */
 
 #include <functional>
+#include <future>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -1985,6 +1986,42 @@ TEST_F(SlotStoreTest, PreloadStopsCallbackOnError)
     RunPreloadCallbackStopCase(baseDir_, SOURCE_WORKER_ADDRESS_B, 0u, "tenant/preloadCallbackErr",
                                Status(StatusCode::K_IO_ERROR, "stop on other error"), callbackInvoked);
     ASSERT_EQ(callbackInvoked, 1u);
+}
+
+TEST_F(SlotStoreTest, PreloadCallbackDoesNotHoldTargetSlotLock)
+{
+    constexpr uint32_t slotId = 7;
+    const std::string sourcePath = GetSlotPath(baseDir_, slotId, SOURCE_WORKER_ADDRESS_A);
+    Slot sourceManager(slotId, sourcePath, 1024);
+    Slot targetManager(slotId, GetSlotPath(baseDir_, slotId, TARGET_WORKER_ADDRESS), 1024);
+    SavePayload(sourceManager, "tenant/preloadNoSlotLock/source", 1, "source_payload");
+    SavePayload(targetManager, "tenant/preloadNoSlotLock/existing", 1, "existing_payload");
+    SlotPreloadCallback callback = [&targetManager](const SlotPreloadMeta &meta,
+                                                    const std::shared_ptr<std::stringstream> &content) {
+        EXPECT_EQ(meta.objectKey, "tenant/preloadNoSlotLock/source");
+        EXPECT_EQ(content->str(), "source_payload");
+        auto saveBody = MakeBody("callback_payload");
+        std::promise<Status> savePromise;
+        auto saveFuture = savePromise.get_future();
+        std::thread saveThread([&targetManager, saveBody, promise = std::move(savePromise)]() mutable {
+            promise.set_value(targetManager.Save("tenant/preloadNoSlotLock/callback", 2, saveBody));
+        });
+        constexpr auto callbackWait = std::chrono::seconds(2);
+        if (saveFuture.wait_for(callbackWait) != std::future_status::ready) {
+            saveThread.detach();
+            ADD_FAILURE() << "Slot Save from preload callback was blocked by the target slot lock.";
+            return Status(StatusCode::K_RUNTIME_ERROR, "callback save blocked by target slot lock");
+        }
+        saveThread.join();
+        EXPECT_TRUE(saveFuture.get().IsOk());
+        return Status::OK();
+    };
+    SlotTakeoverRequest request;
+    request.mode = SlotTakeoverMode::PRELOAD;
+    request.callback = callback;
+    ASSERT_TRUE(targetManager.Takeover(sourcePath, request).IsOk());
+    ExpectSlotValue(targetManager, "tenant/preloadNoSlotLock/source", 1, "source_payload");
+    ExpectSlotValue(targetManager, "tenant/preloadNoSlotLock/callback", 2, "callback_payload");
 }
 
 TEST_F(SlotStoreTest, SlotClientDeleteAllVersionsMakesKeyInvisible)
