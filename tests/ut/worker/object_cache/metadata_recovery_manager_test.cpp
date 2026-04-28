@@ -264,6 +264,35 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
     entry->RUnlock();
 }
 
+TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesSkipsOlderMetaWhenLocalEntryIsNewer)
+{
+    const std::string objectKey = "tenant/newer_local_obj";
+    constexpr uint64_t newerVersion = 10;
+    constexpr uint64_t newerDataSize = 4096;
+    AddObject(objectKey, newerVersion, newerDataSize);
+
+    auto oldMeta = BuildRecoverMeta(objectKey, WriteMode::WRITE_THROUGH_L2_CACHE);
+    oldMeta.set_version(newerVersion - 1);
+    oldMeta.set_data_size(2048);
+    auto oldContent = std::make_shared<std::stringstream>();
+    (*oldContent) << "old_payload";
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
+        { objectKey, oldContent }
+    };
+
+    std::vector<std::string> recoveredObjectKeys;
+    DS_ASSERT_OK(manager_->RecoverLocalEntries({ oldMeta }, recoveredContents, recoveredObjectKeys));
+    EXPECT_TRUE(recoveredObjectKeys.empty());
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    ASSERT_TRUE(entry->RLock().IsOk());
+    EXPECT_EQ((*entry)->GetCreateTime(), newerVersion);
+    EXPECT_EQ((*entry)->GetDataSize(), newerDataSize);
+    EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+    entry->RUnlock();
+}
+
 class MetadataRecoverySelectorTest : public CommonTest {
 public:
     void SetUp() override
