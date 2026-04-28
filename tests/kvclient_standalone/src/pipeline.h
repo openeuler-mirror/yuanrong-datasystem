@@ -17,6 +17,9 @@ struct PipelineContext {
     datasystem::SetParam param;
     std::shared_ptr<datasystem::KVClient> client;
     std::shared_ptr<datasystem::Buffer> buffer;
+    std::vector<std::string> batchKeys;
+    std::vector<std::shared_ptr<datasystem::Buffer>> batchBuffers;
+    std::vector<datasystem::Optional<datasystem::Buffer>> batchResults;
     std::atomic<uint64_t> *verifyFailCount = nullptr;
 };
 
@@ -30,6 +33,9 @@ inline constexpr const char *kOpExist = "exist";
 inline constexpr const char *kOpCreateBuffer = "createBuffer";
 inline constexpr const char *kOpMemoryCopy = "memoryCopy";
 inline constexpr const char *kOpSetBuffer = "setBuffer";
+inline constexpr const char *kOpMCreate = "mCreate";
+inline constexpr const char *kOpMSet = "mSet";
+inline constexpr const char *kOpMGet = "mGet";
 
 // All known op names (for metrics pre-creation).
 const std::vector<const char *> &GetAllOpNames();

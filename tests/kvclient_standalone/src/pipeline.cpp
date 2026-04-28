@@ -92,6 +92,45 @@ static bool OpSetBuffer(PipelineContext &ctx, double &latencyMs) {
     }, latencyMs);
 }
 
+// mCreate: client->MCreate(keys, sizes, param, buffers)
+static bool OpMCreate(PipelineContext &ctx, double &latencyMs) {
+    std::vector<uint64_t> sizes(ctx.batchKeys.size(), ctx.size);
+    return Measure([&]() {
+        return ctx.client->MCreate(ctx.batchKeys, sizes, ctx.param, ctx.batchBuffers);
+    }, latencyMs);
+}
+
+// mSet: client->MSet(buffers)
+static bool OpMSet(PipelineContext &ctx, double &latencyMs) {
+    if (ctx.batchBuffers.empty()) {
+        SLOG_WARN("mSet: no buffers (mCreate not called?)");
+        latencyMs = 0;
+        return false;
+    }
+    return Measure([&]() {
+        return ctx.client->MSet(ctx.batchBuffers);
+    }, latencyMs);
+}
+
+// mGet: client->Get(keys, buffers)
+static bool OpMGet(PipelineContext &ctx, double &latencyMs) {
+    bool ok = Measure([&]() {
+        return ctx.client->Get(ctx.batchKeys, ctx.batchResults);
+    }, latencyMs);
+    if (!ok) return false;
+    for (size_t i = 0; i < ctx.batchResults.size(); i++) {
+        if (ctx.batchResults[i]) {
+            int64_t bufSize = ctx.batchResults[i]->GetSize();
+            if (static_cast<uint64_t>(bufSize) != ctx.size) {
+                SLOG_WARN("mGet size mismatch: key=" << ctx.batchKeys[i]
+                          << " expected=" << ctx.size << " got=" << bufSize);
+                if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+            }
+        }
+    }
+    return true;
+}
+
 // ---- Registry ----
 
 static const std::vector<std::pair<std::string, OpFunc>> kOpRegistry = {
@@ -101,11 +140,15 @@ static const std::vector<std::pair<std::string, OpFunc>> kOpRegistry = {
     {kOpCreateBuffer, OpCreateBuffer},
     {kOpMemoryCopy, OpMemoryCopy},
     {kOpSetBuffer, OpSetBuffer},
+    {kOpMCreate, OpMCreate},
+    {kOpMSet, OpMSet},
+    {kOpMGet, OpMGet},
 };
 
 static const std::vector<const char *> kAllOpNames = {
     kOpSetStringView, kOpGetBuffer, kOpExist,
     kOpCreateBuffer, kOpMemoryCopy, kOpSetBuffer,
+    kOpMCreate, kOpMSet, kOpMGet,
 };
 
 const std::vector<const char *> &GetAllOpNames() { return kAllOpNames; }
