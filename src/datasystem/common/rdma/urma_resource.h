@@ -495,6 +495,13 @@ public:
     Status ReCreateJetty(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &failedJetty);
 
     /**
+     * @brief Mark the current connection Jetty invalid and asynchronously move it to error state.
+     * @param[in] resource Urma resource used to retire the Jetty.
+     * @return Status of the call.
+     */
+    Status ModifyJettyToError(UrmaResource &resource);
+
+    /**
      * @brief Get the imported remote target Jetty handle.
      * @return Raw target Jetty handle.
      */

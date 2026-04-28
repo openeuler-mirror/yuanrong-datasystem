@@ -468,6 +468,28 @@ Status UrmaConnection::ReCreateJetty(UrmaResource &resource, const std::shared_p
     return resource.AsyncModifyJettyToError(failedJetty);
 }
 
+Status UrmaConnection::ModifyJettyToError(UrmaResource &resource)
+{
+    std::shared_ptr<UrmaJetty> jetty;
+    {
+        std::lock_guard<std::mutex> lock(jettyMutex_);
+        CHECK_FAIL_RETURN_STATUS(jetty_ != nullptr, K_RUNTIME_ERROR, "Jetty already cleared for connection");
+        jetty = jetty_;
+        if (!jetty->MarkInvalid()) {
+            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_MODIFY_JETTY_TO_ERROR_SKIP] Jetty " << jetty->GetJettyId()
+                << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+                << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+            return Status::OK();
+        }
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_MODIFY_JETTY_TO_ERROR] Mark Jetty " << jetty->GetJettyId()
+            << " invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+    }
+    return resource.AsyncModifyJettyToError(jetty);
+}
+
 urma_target_jetty_t *UrmaConnection::GetTargetJetty() const
 {
     return tjetty_ == nullptr ? nullptr : tjetty_->Raw();
@@ -705,6 +727,7 @@ Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
         pendingDeleteJettys_[jettyId] = { jetty, traceId };
     }
     LOG(INFO) << "Retired jetty id " << jettyId << " to pending delete";
+    INJECT_POINT("urma.ModifyJettyToError");
     return Status::OK();
 }
 
