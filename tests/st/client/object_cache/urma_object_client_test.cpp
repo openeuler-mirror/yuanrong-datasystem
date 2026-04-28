@@ -125,6 +125,22 @@ public:
         ASSERT_NE(externalCluster, nullptr);
         DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne(indexes));
     }
+
+    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
+                                         uint64_t timeoutMs = 5000)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        uint64_t executeCount = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+            if (executeCount >= expectedCount) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+        ASSERT_GE(executeCount, expectedCount) << name;
+    }
 };
 
 class UrmaObjectClientAuthorizationTest : public UrmaObjectClientTest {
@@ -1179,6 +1195,55 @@ TEST_F(UrmaClientWorkerDisableUDS, UrmaConnectionFailedBase)
     ASSERT_EQ(inject::GetExecuteCount("client.set.urma_write_ok"), 1);
 }
 
+class UrmaTestWorkerDisconnect : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.numWorkers -= 1;
+        opts.enableDistributedMaster = "true";
+        opts.workerGflagParams +=
+            " -urma_mode=UB -ipc_through_shared_memory=true --enable_data_replication=false"
+            " --enable_transport_fallback=false"
+            " -inject_actions=worker.bind_unix_path:return(K_OK) ";
+    }
+};
+
+TEST_F(UrmaTestWorkerDisconnect, StopWorkerForUbDisconnect)
+{
+    FLAGS_v = 1;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 32;
+    const int dataSize = 8 * 1024 * 1024;
+    std::string value(dataSize, 'a');
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back(value);
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(keys[i], getValue));
+        ASSERT_EQ(value, getValue);
+    }
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "urma.ModifyJettyToError", "call()"));
+    kill(cluster_->GetWorkerPid(1), SIGTERM);
+    WaitForWorkerInjectExecuteCount(0, "urma.ModifyJettyToError", 1);
+    LOG(INFO) << "Success";
+}
+
 class UrmaObjectClientTestMismatch : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -1514,23 +1579,6 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_transport_fallback=false ";
-    }
-
-protected:
-    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
-                                         uint64_t timeoutMs = 5000)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        uint64_t executeCount = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-            if (executeCount >= expectedCount) {
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-        ASSERT_GE(executeCount, expectedCount) << name;
     }
 };
 
