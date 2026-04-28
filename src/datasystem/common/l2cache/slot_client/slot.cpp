@@ -842,63 +842,69 @@ Status Slot::Takeover(const std::string &sourceSlotPath, const SlotTakeoverReque
         RETURN_IF_NOT_OK(sourceManager.Repair());
     }
 
-    std::lock_guard<std::mutex> lock(mu_);
-    RETURN_IF_NOT_OK(EnsureRuntimeReadyLocked());
-    RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
-    SlotManifestData targetManifest = runtime_.manifest;
-    RETURN_IF_NOT_OK(EnsureWritable(targetManifest));
-    RETURN_IF_NOT_OK(CleanupStaleTakeoverArtifacts());
+    std::string txnId;
+    std::vector<SlotPutRecord> preloadPuts;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        RETURN_IF_NOT_OK(EnsureRuntimeReadyLocked());
+        RETURN_IF_NOT_OK(FlushRuntimeLocked(true));
+        SlotManifestData targetManifest = runtime_.manifest;
+        RETURN_IF_NOT_OK(EnsureWritable(targetManifest));
+        RETURN_IF_NOT_OK(CleanupStaleTakeoverArtifacts());
 
-    const std::string txnId = GenerateTxnId(slotId_);
-    const std::string recoverySlotPath = BuildRecoverySlotPath(sourceSlotPath, txnId);
+        txnId = GenerateTxnId(slotId_);
+        const std::string recoverySlotPath = BuildRecoverySlotPath(sourceSlotPath, txnId);
 
-    targetManifest.state = SlotState::IN_OPERATION;
-    targetManifest.opType = SlotOperationType::TRANSFER;
-    targetManifest.opPhase = SlotOperationPhase::TRANSFER_FENCING;
-    targetManifest.role = SlotOperationRole::TARGET;
-    targetManifest.txnId = txnId;
-    targetManifest.ownerEpoch += 1;
-    targetManifest.peerSlotPath = sourceSlotPath;
-    targetManifest.recoverySlotPath = recoverySlotPath;
-    targetManifest.transferPlanPath.clear();
-    targetManifest.transferFileMap.clear();
-    RETURN_IF_NOT_OK(PersistManifest(targetManifest));
-    VLOG(1) << "Slot takeover fenced target manifest, slotId=" << slotId_ << ", txnId=" << txnId
-            << ", recoverySlotPath=" << recoverySlotPath;
-    INJECT_POINT("slotstore.Slot.Takeover.AfterManifestFencing", []() { return Status::OK(); });
+        targetManifest.state = SlotState::IN_OPERATION;
+        targetManifest.opType = SlotOperationType::TRANSFER;
+        targetManifest.opPhase = SlotOperationPhase::TRANSFER_FENCING;
+        targetManifest.role = SlotOperationRole::TARGET;
+        targetManifest.txnId = txnId;
+        targetManifest.ownerEpoch += 1;
+        targetManifest.peerSlotPath = sourceSlotPath;
+        targetManifest.recoverySlotPath = recoverySlotPath;
+        targetManifest.transferPlanPath.clear();
+        targetManifest.transferFileMap.clear();
+        RETURN_IF_NOT_OK(PersistManifest(targetManifest));
+        VLOG(1) << "Slot takeover fenced target manifest, slotId=" << slotId_ << ", txnId=" << txnId
+                << ", recoverySlotPath=" << recoverySlotPath;
+        INJECT_POINT("slotstore.Slot.Takeover.AfterManifestFencing", []() { return Status::OK(); });
 
-    if (!FileExist(recoverySlotPath)) {
-        CHECK_FAIL_RETURN_STATUS(FileExist(sourceSlotPath), StatusCode::K_NOT_FOUND,
-                                 "Source slot path not found for takeover: " + sourceSlotPath);
-        RETURN_IF_NOT_OK(RenameFile(sourceSlotPath, recoverySlotPath));
+        if (!FileExist(recoverySlotPath)) {
+            CHECK_FAIL_RETURN_STATUS(FileExist(sourceSlotPath), StatusCode::K_NOT_FOUND,
+                                     "Source slot path not found for takeover: " + sourceSlotPath);
+            RETURN_IF_NOT_OK(RenameFile(sourceSlotPath, recoverySlotPath));
+        }
+        RETURN_IF_NOT_OK(PersistSourceTransferManifest(recoverySlotPath, targetManifest, sourceSlotPath,
+                                                       SlotOperationPhase::TRANSFER_FENCING));
+
+        SlotManifestData sourceManifest;
+        RETURN_IF_NOT_OK(SlotManifest::Load(recoverySlotPath, sourceManifest));
+        SlotSnapshot sourceSnapshot;
+        RETURN_IF_NOT_OK(SlotSnapshot::Replay(recoverySlotPath, sourceManifest, sourceSnapshot));
+
+        SlotTakeoverPlan plan;
+        RETURN_IF_NOT_OK(SlotTakeoverPlanner::BuildPlan(sourceSlotPath, recoverySlotPath, sourceManifest,
+                                                        sourceSnapshot, slotPath_, targetManifest, request, txnId,
+                                                        plan));
+        RETURN_IF_NOT_OK(SlotTakeoverPlanner::DumpPlan(slotPath_, plan));
+        VLOG(1) << "Slot takeover durable plan ready, slotId=" << slotId_ << ", txnId=" << txnId
+                << ", dataMappingCount=" << plan.dataMappings.size();
+        INJECT_POINT("slotstore.Slot.Takeover.AfterPlanDurable", []() { return Status::OK(); });
+
+        targetManifest.transferPlanPath = FormatTakeoverPlanFileName(plan.txnId);
+        targetManifest.transferFileMap = EncodeTransferFileMap(plan);
+        targetManifest.opPhase = SlotOperationPhase::TRANSFER_PREPARED;
+        RETURN_IF_NOT_OK(PersistManifest(targetManifest));
+        RETURN_IF_NOT_OK(PersistSourceTransferManifest(recoverySlotPath, targetManifest, sourceSlotPath,
+                                                       SlotOperationPhase::TRANSFER_PREPARED));
+        INJECT_POINT("slotstore.Slot.Takeover.AfterManifestImporting", []() { return Status::OK(); });
+
+        RETURN_IF_NOT_OK(RecoverTransfer(targetManifest, &request, &preloadPuts));
+        ResetRuntimeLocked();
+        RETURN_IF_NOT_OK(BuildRuntimeStateLocked());
     }
-    RETURN_IF_NOT_OK(PersistSourceTransferManifest(recoverySlotPath, targetManifest, sourceSlotPath,
-                                                   SlotOperationPhase::TRANSFER_FENCING));
-
-    SlotManifestData sourceManifest;
-    RETURN_IF_NOT_OK(SlotManifest::Load(recoverySlotPath, sourceManifest));
-    SlotSnapshot sourceSnapshot;
-    RETURN_IF_NOT_OK(SlotSnapshot::Replay(recoverySlotPath, sourceManifest, sourceSnapshot));
-
-    SlotTakeoverPlan plan;
-    RETURN_IF_NOT_OK(SlotTakeoverPlanner::BuildPlan(sourceSlotPath, recoverySlotPath, sourceManifest, sourceSnapshot,
-                                                    slotPath_, targetManifest, request, txnId, plan));
-    RETURN_IF_NOT_OK(SlotTakeoverPlanner::DumpPlan(slotPath_, plan));
-    VLOG(1) << "Slot takeover durable plan ready, slotId=" << slotId_ << ", txnId=" << txnId
-            << ", dataMappingCount=" << plan.dataMappings.size();
-    INJECT_POINT("slotstore.Slot.Takeover.AfterPlanDurable", []() { return Status::OK(); });
-
-    targetManifest.transferPlanPath = FormatTakeoverPlanFileName(plan.txnId);
-    targetManifest.transferFileMap = EncodeTransferFileMap(plan);
-    targetManifest.opPhase = SlotOperationPhase::TRANSFER_PREPARED;
-    RETURN_IF_NOT_OK(PersistManifest(targetManifest));
-    RETURN_IF_NOT_OK(PersistSourceTransferManifest(recoverySlotPath, targetManifest, sourceSlotPath,
-                                                   SlotOperationPhase::TRANSFER_PREPARED));
-    INJECT_POINT("slotstore.Slot.Takeover.AfterManifestImporting", []() { return Status::OK(); });
-
-    RETURN_IF_NOT_OK(RecoverTransfer(targetManifest, &request));
-    ResetRuntimeLocked();
-    RETURN_IF_NOT_OK(BuildRuntimeStateLocked());
+    RETURN_IF_NOT_OK(RunPreloadCallback(preloadPuts, request.callback));
     VLOG(1) << "Slot takeover end, slotId=" << slotId_ << ", targetSlot=" << slotPath_ << ", txnId=" << txnId;
     return Status::OK();
 }
@@ -951,7 +957,8 @@ Status Slot::RecoverCompactCommitting(SlotManifestData &manifest)
     return Status::OK();
 }
 
-Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverRequest *request)
+Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverRequest *request,
+                             std::vector<SlotPutRecord> *preloadPuts)
 {
     CHECK_FAIL_RETURN_STATUS(IsTransferManifest(manifest), StatusCode::K_INVALID,
                              "RecoverTransfer requires transfer manifest");
@@ -1047,8 +1054,8 @@ Status Slot::RecoverTransfer(SlotManifestData &manifest, const SlotTakeoverReque
                     RETURN_IF_NOT_OK(FsyncDir(plan.sourceRecoverySlotPath));
                 }
                 RETURN_IF_NOT_OK(FsyncDir(slotPath_));
-                if (request != nullptr && request->IsPreload() && request->callback) {
-                    RETURN_IF_NOT_OK(RunPreloadCallback(plan, *request));
+                if (preloadPuts != nullptr && request != nullptr && request->IsPreload() && request->callback) {
+                    RETURN_IF_NOT_OK(CollectPreloadPuts(plan, *request, *preloadPuts));
                 }
 
                 bool published = false;
@@ -1289,8 +1296,10 @@ Status Slot::SyncActiveFiles(const SlotManifestData &manifest) const
     return Status::OK();
 }
 
-Status Slot::RunPreloadCallback(const SlotTakeoverPlan &plan, const SlotTakeoverRequest &request) const
+Status Slot::CollectPreloadPuts(const SlotTakeoverPlan &plan, const SlotTakeoverRequest &request,
+                                std::vector<SlotPutRecord> &visiblePuts) const
 {
+    visiblePuts.clear();
     if (!request.IsPreload() || !request.callback) {
         return Status::OK();
     }
@@ -1298,7 +1307,6 @@ Status Slot::RunPreloadCallback(const SlotTakeoverPlan &plan, const SlotTakeover
     size_t validBytes = 0;
     RETURN_IF_NOT_OK(
         SlotIndexCodec::ReadAllRecords(JoinPath(slotPath_, plan.importIndexFile), importRecords, validBytes));
-    std::vector<SlotPutRecord> visiblePuts;
     visiblePuts.reserve(importRecords.size());
     for (const auto &record : importRecords) {
         if (record.type != SlotRecordType::PUT) {
@@ -1306,6 +1314,13 @@ Status Slot::RunPreloadCallback(const SlotTakeoverPlan &plan, const SlotTakeover
         }
         visiblePuts.emplace_back(record.put);
     }
+    return Status::OK();
+}
+
+Status Slot::RunPreloadCallback(const SlotTakeoverPlan &plan, const SlotTakeoverRequest &request) const
+{
+    std::vector<SlotPutRecord> visiblePuts;
+    RETURN_IF_NOT_OK(CollectPreloadPuts(plan, request, visiblePuts));
     return RunPreloadCallback(visiblePuts, request.callback);
 }
 
