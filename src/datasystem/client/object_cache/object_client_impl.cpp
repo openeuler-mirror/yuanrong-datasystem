@@ -2998,6 +2998,8 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
 Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 {
     RETURN_IF_NOT_OK(IsClientReady());
+    CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "The buffer should not be empty.");
+    RETURN_IF_NOT_OK(buffer->CheckDeprecated());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
     LOG(INFO) << "Start putting buffer";
