@@ -28,7 +28,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/util/timer.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -53,7 +53,14 @@ Status WorkerWorkerTransportServiceImpl::Init()
 Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req,
                                                                              UrmaHandshakeRspPb &rsp)
 {
-    return ExchangeJfr(req, rsp);
+    Timer timer;
+    const std::string peerAddress =
+        req.has_address() ? req.address().host() + ":" + std::to_string(req.address().port()) : "UNKNOWN";
+    LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo start, peerAddress=" << peerAddress;
+    auto rc = ExchangeJfr(req, rsp);
+    LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo finish, elapsed ms: "
+              << timer.ElapsedMilliSecond() << ", status=" << rc.ToString();
+    return rc;
 }
 }  // namespace object_cache
 }  // namespace datasystem
