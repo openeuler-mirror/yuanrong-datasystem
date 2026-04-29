@@ -3972,7 +3972,7 @@ void ObjectClientImpl::ShutdownMetricsThread(bool dumpSummary)
 Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryEtcd,
                                const bool isLocal)
 {
-    PerfPoint perfPoint(PerfKey::HETERO_CLIENT_EXIST);
+    PerfPoint perfPoint(PerfKey::CLIENT_EXIST);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,

@@ -255,7 +255,7 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY);
     INJECT_POINT("worker.remote_query_meta");
-    PerfPoint point(PerfKey::WORKER_QUERY_META);
+    PerfPoint point(PerfKey::WORKER_QUERY_META_REMOTE);
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%lld ms).", -remainingTime));
@@ -1025,7 +1025,7 @@ Status WorkerLocalMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY);
     INJECT_POINT("worker.query_meta");
-    PerfPoint point(PerfKey::WORKER_QUERY_META);
+    PerfPoint point(PerfKey::WORKER_QUERY_META_LOCAL);
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));

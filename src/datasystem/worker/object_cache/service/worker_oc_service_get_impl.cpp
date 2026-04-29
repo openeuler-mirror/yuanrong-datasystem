@@ -1274,6 +1274,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
                                                            bool isFromOtherAz, datasystem::master::QueryMetaRspPb &rsp,
                                                            std::vector<RpcMessage> &payloads)
 {
+    PerfPoint point(PerfKey::WORKER_QUERY_META_IMPL);
     datasystem::master::QueryMetaReqPb req;
     SetQueryMetaInfo(req, objKeysToQuery, destMasterHostPort.ToString(), true, isFromOtherAz);
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
@@ -2578,6 +2579,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     workerOperationTimeCost.Clear();
     Timer timer;
+    PerfPoint point(PerfKey::WORKER_EXIST_PRE_PROCESS);
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
     INJECT_POINT("Exist.Sleep");
     auto clientId = ClientKey::Intern(req.client_id());
@@ -2587,6 +2589,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto keys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
+
+    point.RecordAndReset(PerfKey::WORKER_EXIST_LOCAL_CHECK);
     std::unordered_set<std::string> existKeys;
     std::vector<std::string> nonLocalKeys;
     for (const auto &key : keys) {
@@ -2600,6 +2604,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 
     Status rc;
     if (!req.is_local() && !nonLocalKeys.empty()) {
+        point.RecordAndReset(PerfKey::WORKER_EXIST_QUERY_MASTER);
         QueryMetadataFromMasterResult queryResult;
         std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
         std::vector<RpcMessage> payloads;
@@ -2610,6 +2615,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         }
     }
 
+    point.RecordAndReset(PerfKey::WORKER_EXIST_BUILD_RSP);
     for (const auto &key : keys) {
         rsp.add_exists(existKeys.count(key));
     }

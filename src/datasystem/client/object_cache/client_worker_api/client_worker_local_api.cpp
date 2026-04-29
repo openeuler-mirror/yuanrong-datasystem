@@ -585,6 +585,7 @@ Status ClientWorkerLocalApi::HealthCheck(ServerState &state)
 Status ClientWorkerLocalApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists,
                                    const bool queryL2Cache, const bool isLocal)
 {
+    PerfPoint point(PerfKey::CLIENT_EXIST_LOCAL);
     reqTimeoutDuration.Init(connectTimeoutMs_);
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
