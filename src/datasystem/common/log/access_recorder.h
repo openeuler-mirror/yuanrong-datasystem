@@ -60,6 +60,7 @@ struct RequestParam {
     std::string outReq;
     std::string cacheType;
     std::string remoteClientId;
+    std::string transportType;
 };
 
 struct StreamRequestParam {

@@ -98,6 +98,7 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
+thread_local bool g_isThroughUb = false;
 
 namespace datasystem {
 namespace {
@@ -1975,6 +1976,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                          uint64_t length)
 {
+    g_isThroughUb = true;
     auto api = std::dynamic_pointer_cast<IClientWorkerApi>(workerApi_[LOCAL_WORKER]);
     RETURN_RUNTIME_ERROR_IF_NULL(api);
     return api->SendBufferViaUb(bufferInfo, data, length);
@@ -2261,6 +2263,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
+    g_isThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
@@ -2398,6 +2401,7 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
         getParam.ubMetaResolved = true;
+        g_isThroughUb = true;
         if (metaRc.IsError()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
         } else if (objMetas.size() != objectsNeedToGet.size()) {
@@ -3022,6 +3026,7 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
 
 Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 {
+    g_isThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
@@ -3031,6 +3036,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
+    g_isThroughUb = false;
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "The buffer list must not be empty.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
                                          FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -3059,6 +3065,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
+    g_isThroughUb = false;
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKey(key));
     FullParam param;
@@ -3322,6 +3329,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
                               const MSetParam &param, std::vector<std::string> &outFailedKeys)
 {
     PerfPoint point(PerfKey::CLIENT_MSET_INPUT_CHECK);
+    g_isThroughUb = false;
     std::vector<std::string> deduplicateKeys;
     std::vector<StringView> deduplicateVals;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
@@ -3375,6 +3383,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &setParam)
 {
+    g_isThroughUb = false;
     // Validate the effectiveness of parameters.
     RETURN_IF_NOT_OK(IsClientReady());
     std::map<std::string, StringView> kv;
@@ -4044,5 +4053,14 @@ Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
     SetClientRemoteH2DConfig(enableRemoteH2D_, devId);
     return Status::OK();
 }
+
+std::string ObjectClientImpl::GetTransportType() const
+{
+    if (g_isThroughUb) {
+        return "UB";
+    }
+    return "SHM";
+}
+
 }  // namespace object_cache
 }  // namespace datasystem
