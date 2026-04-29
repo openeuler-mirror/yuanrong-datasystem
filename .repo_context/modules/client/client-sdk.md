@@ -159,6 +159,7 @@
 - Important invariants:
   - `DsClient` init order is KV -> Hetero -> Object; shutdown order is Object -> Hetero -> KV.
   - worker connectivity and auth material may come from explicit options or environment fallback in shared client backend code.
+  - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:
   - `src/datasystem/client/object_cache/object_client_impl.cpp`
