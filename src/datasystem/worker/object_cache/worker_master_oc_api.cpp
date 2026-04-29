@@ -35,6 +35,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
@@ -46,7 +47,7 @@ namespace datasystem {
 namespace worker {
 static constexpr int64_t WORKER_ADD_MILLISECOND = 5 * 1000;
 static constexpr int64_t WORKER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
-static constexpr float WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
+static constexpr double WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
 static constexpr int64_t RETRY_WAIT_MAX_TIME_MS = 2;
 
 #define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                               \
@@ -60,7 +61,8 @@ static constexpr int64_t RETRY_WAIT_MAX_TIME_MS = 2;
 
 inline int64_t WorkerGetRequestTimeout(int32_t timeout)
 {
-    return std::max(int64_t(timeout * WORKER_TIMEOUT_DESCEND_FACTOR), timeout - WORKER_TIMEOUT_MINUS_MILLISECOND);
+    return std::max(TimeoutDuration::ScaleTimeoutMs(timeout, WORKER_TIMEOUT_DESCEND_FACTOR),
+                    timeout - WORKER_TIMEOUT_MINUS_MILLISECOND);
 }
 
 // Base class methods

@@ -35,6 +35,7 @@
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
@@ -278,8 +279,9 @@ protected:
     static int64_t ClientGetRequestTimeout(int32_t timeout)
     {
         const int64_t CLIENT_TIMEOUT_MINUS_MILLISECOND = 1000;
-        const float CLIENT_TIMEOUT_DESCEND_FACTOR = 0.9;
-        return std::max(int64_t(timeout * CLIENT_TIMEOUT_DESCEND_FACTOR), timeout - CLIENT_TIMEOUT_MINUS_MILLISECOND);
+        const double CLIENT_TIMEOUT_DESCEND_FACTOR = 0.9;
+        return std::max(TimeoutDuration::ScaleTimeoutMs(timeout, CLIENT_TIMEOUT_DESCEND_FACTOR),
+                        timeout - CLIENT_TIMEOUT_MINUS_MILLISECOND);
     }
 
     /**
