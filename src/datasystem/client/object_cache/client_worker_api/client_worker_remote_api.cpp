@@ -609,14 +609,14 @@ Status ClientWorkerRemoteApi::DecreaseShmRef(const ShmKey &shmId, const std::fun
         decreaseRPCQ_->NotifyNotEmpty();
         break;
     } while (true);
-    
+
     // Time for wait rsp , it can wake up by worker rsp or disconnect.
     // requestTimeoutMs_ is milliseconds; timespec expects seconds + nanoseconds.
     // Avoid intermediate overflow by taking modulo before scaling.
     timeoutStruct.tv_sec = static_cast<time_t>(requestTimeoutMs_ / ONE_THOUSAND);
     timeoutStruct.tv_nsec =
         static_cast<long>((static_cast<int64_t>(requestTimeoutMs_ % ONE_THOUSAND) * ONE_THOUSAND) * ONE_THOUSAND);
-    
+
     auto rc = CheckShmFutexResult((uint32_t *)waitFlag, waitNum, timeoutStruct);
     std::lock_guard<std::mutex> lock(mtx_);  // protect the circular queue.
     waitRespMap_.erase(slotIndex);
@@ -1161,7 +1161,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
     });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
     ExistRspPb rsp;
-    PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_EXIST);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
     auto status = RetryOnError(
         requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
