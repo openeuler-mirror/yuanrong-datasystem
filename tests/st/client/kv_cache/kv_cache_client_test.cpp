@@ -30,6 +30,8 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "client/object_cache/oc_client_common.h"
@@ -2777,6 +2779,7 @@ public:
 
     void TearDown() override
     {
+        clients_.clear();
         client_.reset();
         ExternalClusterTest::TearDown();
     }
@@ -2801,6 +2804,18 @@ public:
         connectOptions.serviceDiscovery = serviceDiscovery;
         client = std::make_shared<KVClient>(connectOptions);
         DS_ASSERT_OK(client->Init());
+    }
+
+    void InitClientsByServiceDiscovery(const std::string &hostIdEnvName, size_t clientNum,
+                                       std::vector<std::shared_ptr<KVClient>> &clients)
+    {
+        clients.clear();
+        clients.reserve(clientNum);
+        for (size_t i = 0; i < clientNum; ++i) {
+            std::shared_ptr<KVClient> client;
+            InitClientByServiceDiscovery(hostIdEnvName, client);
+            clients.emplace_back(std::move(client));
+        }
     }
 
     Status WaitServiceDiscoverySelectsRemoteWorker(const std::string &hostIdEnvName)
@@ -2838,8 +2853,13 @@ public:
 
     Status CurrentClientWorkerUuid(std::string &workerUuid)
     {
+        return CurrentClientWorkerUuid(client_, workerUuid);
+    }
+
+    Status CurrentClientWorkerUuid(const std::shared_ptr<KVClient> &client, std::string &workerUuid)
+    {
         std::string key;
-        RETURN_IF_NOT_OK(client_->GenerateKey("", key));
+        RETURN_IF_NOT_OK(client->GenerateKey("", key));
         // GenerateKey appends ";worker_uuid", so the suffix tells which worker the client is currently using.
         auto pos = key.rfind(';');
         CHECK_FAIL_RETURN_STATUS(pos != std::string::npos && pos + 1 < key.size(), K_RUNTIME_ERROR,
@@ -2867,9 +2887,53 @@ public:
         return Status::OK();
     }
 
+    Status CheckClientsRedistributedToRemoteWorkers(const std::vector<std::shared_ptr<KVClient>> &clients,
+                                                    const std::unordered_set<std::string> &remoteWorkerUuids)
+    {
+        std::unordered_set<std::string> usedWorkerUuids;
+        for (size_t i = 0; i < clients.size(); ++i) {
+            std::string key = FormatString("switch_spread_%zu_%s", i, GetStringUuid());
+            std::string value = "clients should be redistributed across remaining workers";
+            RETURN_IF_NOT_OK(clients[i]->Set(key, value));
+
+            std::string result;
+            RETURN_IF_NOT_OK(clients[i]->Get(key, result));
+            CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
+
+            std::string currentWorkerUuid;
+            RETURN_IF_NOT_OK(CurrentClientWorkerUuid(clients[i], currentWorkerUuid));
+            CHECK_FAIL_RETURN_STATUS(remoteWorkerUuids.count(currentWorkerUuid) == 1, K_NOT_READY,
+                                     FormatString("Client %zu is still on unexpected worker uuid %s.", i,
+                                                  currentWorkerUuid));
+            usedWorkerUuids.emplace(std::move(currentWorkerUuid));
+        }
+        CHECK_FAIL_RETURN_STATUS(usedWorkerUuids.size() == remoteWorkerUuids.size(), K_NOT_READY,
+                                 FormatString("Clients only spread to %zu remote workers, expected %zu.",
+                                              usedWorkerUuids.size(), remoteWorkerUuids.size()));
+        return Status::OK();
+    }
+
+    Status LogClientDistribution(const std::string &stage, const std::vector<std::shared_ptr<KVClient>> &clients)
+    {
+        std::unordered_map<std::string, size_t> workerClientCounts;
+        for (const auto &client : clients) {
+            std::string currentWorkerUuid;
+            RETURN_IF_NOT_OK(CurrentClientWorkerUuid(client, currentWorkerUuid));
+            ++workerClientCounts[currentWorkerUuid];
+        }
+        LOG(INFO) << FormatString("[ClientDistribution] stage=%s total_clients=%zu worker_count=%zu", stage,
+                                  clients.size(), workerClientCounts.size());
+        for (const auto &entry : workerClientCounts) {
+            LOG(INFO) << FormatString("[ClientDistribution] stage=%s worker_uuid=%s client_count=%zu", stage,
+                                      entry.first, entry.second);
+        }
+        return Status::OK();
+    }
+
 protected:
     std::vector<HostPort> workerAddress_;
     std::shared_ptr<KVClient> client_;
+    std::vector<std::shared_ptr<KVClient>> clients_;
 };
 
 TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
@@ -2896,6 +2960,37 @@ TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
     // The client should actively recover to the local worker while normal KV traffic keeps succeeding.
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [this, &localWorkerUuid]() { return CheckClientUsesWorker(localWorkerUuid); }, 8, K_OK));
+}
+
+TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcrossRemainingWorkers)
+{
+    constexpr size_t clientNum = 20;
+    InitClientsByServiceDiscovery("switch_back_host_id_env0", clientNum, clients_);
+
+    std::string initialWorkerUuid;
+    DS_ASSERT_OK(CurrentClientWorkerUuid(clients_.front(), initialWorkerUuid));
+    for (const auto &client : clients_) {
+        std::string currentWorkerUuid;
+        DS_ASSERT_OK(CurrentClientWorkerUuid(client, currentWorkerUuid));
+        ASSERT_EQ(currentWorkerUuid, initialWorkerUuid);
+    }
+    DS_ASSERT_OK(LogClientDistribution("before_failover", clients_));
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+
+    std::string remoteWorkerUuid1;
+    std::string remoteWorkerUuid2;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this, &remoteWorkerUuid1]() { return GetWorkerUuid(1, remoteWorkerUuid1); }, 10, K_OK));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this, &remoteWorkerUuid2]() { return GetWorkerUuid(2, remoteWorkerUuid2); }, 10, K_OK));
+    ASSERT_NE(remoteWorkerUuid1, remoteWorkerUuid2);
+
+    std::unordered_set<std::string> remoteWorkerUuids = { remoteWorkerUuid1, remoteWorkerUuid2 };
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this, &remoteWorkerUuids]() { return CheckClientsRedistributedToRemoteWorkers(clients_, remoteWorkerUuids); },
+        10, K_OK));
+    DS_ASSERT_OK(LogClientDistribution("after_failover", clients_));
 }
 
 class KVCacheClientL2FallBackTest : public OCClientCommon {
