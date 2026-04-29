@@ -1592,9 +1592,13 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey, bool
         }
     }
 
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        removed, K_NOT_FOUND,
-        FormatString("Cannot remove URMA resources, connection key %s does not exist", connectionKey.c_str()));
+    if (!removed) {
+        const auto msg = FormatString("Skip removing URMA resources, connection key %s not found; may be already "
+                                      "cleaned up or not established",
+                                      connectionKey.c_str());
+        LOG(INFO) << msg;
+        RETURN_STATUS(K_NOT_FOUND, msg);
+    }
     return Status::OK();
 }
 

@@ -898,6 +898,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalS
     // thread) runs after switchNodeMutex_ is released; otherwise it can deadlock against
     // ProcessWorkerLost waiting on the same mutex.
     std::shared_ptr<client::ListenWorker> oldLocalListener;
+    std::unique_ptr<client::MmapManager> oldMmapManager;
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
@@ -906,9 +907,8 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalS
         }
         ipAddress_ = localAddress;
         workerApi_[LOCAL_WORKER] = localWorkerApi;
-        oldLocalListener = std::move(listenWorker_[LOCAL_WORKER]);
+        ReplacePreferredLocalWorkerLocked(localMmapManager, oldLocalListener, oldMmapManager);
         listenWorker_[LOCAL_WORKER] = localListenWorker;
-        mmapManager_ = std::move(localMmapManager);
         clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
         memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
         currentNode_ = LOCAL_WORKER;
@@ -935,6 +935,15 @@ void ObjectClientImpl::RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64
     if (switchInProgress_ && switchGeneration_ == switchGeneration && currentNode_ == current) {
         MarkWorkerAvailableLocked();
     }
+}
+
+void ObjectClientImpl::ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::MmapManager> &localMmapManager,
+                                                         std::shared_ptr<client::ListenWorker> &oldLocalListener,
+                                                         std::unique_ptr<client::MmapManager> &oldMmapManager)
+{
+    oldLocalListener = std::move(listenWorker_[LOCAL_WORKER]);
+    mmapManager_.swap(localMmapManager);
+    oldMmapManager = std::move(localMmapManager);
 }
 
 bool ObjectClientImpl::TrySwitchBackToLocalWorker()
@@ -1067,6 +1076,7 @@ bool ObjectClientImpl::CommitPreferredLocalWorker(WorkerNode oldNode, const Host
 {
     // See TrySwitchToLocalSameHost for why the old listener must destruct outside the lock.
     std::shared_ptr<client::ListenWorker> oldLocalListener;
+    std::unique_ptr<client::MmapManager> oldMmapManager;
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         if (currentNode_ == LOCAL_WORKER || currentNode_ != oldNode
@@ -1075,9 +1085,8 @@ bool ObjectClientImpl::CommitPreferredLocalWorker(WorkerNode oldNode, const Host
         }
         ipAddress_ = localAddress;
         workerApi_[LOCAL_WORKER] = localWorkerApi;
-        oldLocalListener = std::move(listenWorker_[LOCAL_WORKER]);
+        ReplacePreferredLocalWorkerLocked(localMmapManager, oldLocalListener, oldMmapManager);
         listenWorker_[LOCAL_WORKER] = localListenWorker;
-        mmapManager_ = std::move(localMmapManager);
         clientEnableP2Ptransfer_ = localWorkerApi->workerEnableP2Ptransfer_;
         memoryRefCount_.SetSupportMultiShmRefCount(localWorkerApi->workerSupportMultiShmRefCount_);
         currentNode_ = LOCAL_WORKER;
