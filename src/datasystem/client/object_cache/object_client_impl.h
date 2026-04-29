@@ -677,6 +677,12 @@ public:
      */
     Status HealthCheck(ServerState &state);
 
+    /**
+     * @brief Get transport data type between client and worker.
+     * @return Transport type.
+     */
+    std::string GetTransportType() const;
+
 private:
     friend Buffer;
     friend DeviceBuffer;

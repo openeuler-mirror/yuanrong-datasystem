@@ -153,6 +153,7 @@ Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
     Status rc = impl_->Set(buffer);
     RequestParam reqParam;
     reqParam.objectKey = buffer->bufferInfo_->objectKey;
+    reqParam.transportType = impl_->GetTransportType();
     accessPoint.Record(rc.GetCode(), std::to_string(buffer->GetSize()), reqParam, rc.GetMsg());
     return rc;
 }
@@ -168,6 +169,7 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     RequestParam reqParam;
     reqParam.objectKey = buffers[0]->bufferInfo_->objectKey;
+    reqParam.transportType = impl_->GetTransportType();
     accessPoint.Record(rc.GetCode(), std::to_string(buffers.size()), reqParam, rc.GetMsg());
     return rc;
 }
@@ -185,6 +187,7 @@ Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t s
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     reqParam.timeout = std::to_string(subTimeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
     RETURN_IF_NOT_OK(rc);
@@ -205,6 +208,7 @@ Status KVClient::Get(const std::vector<std::string> &keys,
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(keys);
     reqParam.timeout = std::to_string(subTimeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(buffers.size()), reqParam, rc.GetMsg());
     return rc;
@@ -222,6 +226,7 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
     reqParam.ttlSecond = std::to_string(setParam.ttlSecond);
     reqParam.existence = std::to_string(static_cast<int>(setParam.existence));
     reqParam.cacheType = std::to_string(static_cast<int>(setParam.cacheType));
+    reqParam.transportType = impl_->GetTransportType();
     accessPoint.Record(rc.GetCode(), std::to_string(val.size()), reqParam, rc.GetMsg());
     return rc;
 }
@@ -238,6 +243,7 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
     reqParam.writeMode = std::to_string(static_cast<int>(setParam.writeMode));
     reqParam.ttlSecond = std::to_string(setParam.ttlSecond);
     reqParam.cacheType = std::to_string(static_cast<int>(setParam.cacheType));
+    reqParam.transportType = impl_->GetTransportType();
     accessPoint.Record(rc.GetCode(), std::to_string(val.size()), reqParam);
     return key;
 }
@@ -309,6 +315,7 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     reqParam.timeout = std::to_string(timeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
     if (rc.IsOk()) {
@@ -330,6 +337,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(keys);
     reqParam.timeout = std::to_string(subTimeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
     return rc;
@@ -348,6 +356,7 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
     RequestParam reqParam;
     reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     reqParam.timeout = std::to_string(subTimeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
     RETURN_IF_NOT_OK(rc);
@@ -372,6 +381,7 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
     reqParam.ttlSecond = std::to_string(param.ttlSecond);
     reqParam.existence = std::to_string(static_cast<int>(param.existence));
     reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
+    reqParam.transportType = impl_->GetTransportType();
     accessPoint.Record(rc.GetCode(), std::to_string(vals.size()), reqParam, rc.GetMsg());
     return rc;
 }
@@ -402,6 +412,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
     RequestParam reqParam;
     reqParam.objectKey = objectKeysToString(keys);
     reqParam.timeout = std::to_string(subTimeoutMs);
+    reqParam.transportType = impl_->GetTransportType();
     StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
     accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
     return rc;
