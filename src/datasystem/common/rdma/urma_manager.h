@@ -58,9 +58,11 @@ const std::string UB_MAX_SET_BUFFER_SIZE = "UB_MAX_SET_BUFFER_SIZE";
 
 using TbbUrmaConnectionMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaConnection>>;
 using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<UrmaEvent>>;
-using TbbJfrMap = tbb::concurrent_hash_map<std::string, std::unique_ptr<UrmaJfr>>;
+using TbbJettyMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaJetty>>;
 
 class UrmaManager {
+    friend class UrmaAsyncEventHandler;
+
 public:
     /**
      * @brief Singleton mode, obtaining instance.
@@ -220,13 +222,13 @@ public:
     uint64_t GetUasid();
 
     /**
-     * @brief Get or create the local JFR used for a given connection key.
-     *        Reuses existing JFR when reconnecting to the same target.
+     * @brief Get or create the local recv Jetty used for a given connection key.
+     *        Reuses existing Jetty when reconnecting to the same target.
      * @param[in] key Connection key (remote address or client id).
-     * @param[out] jfrId The JFR ID to publish in the handshake.
+     * @param[out] jettyId The Jetty ID to publish in the handshake.
      * @return Status of the call.
      */
-    Status GetOrCreateLocalJfr(const std::string &key, uint32_t &jfrId);
+    Status GetOrCreateLocalJetty(const std::string &key, uint32_t &jettyId, JettyType jettyType = JettyType::SEND);
 
     /**
      * @brief Register segment
@@ -317,13 +319,12 @@ public:
     Status RemoveRemoteDevice(const std::string &deviceId);
 
     /**
-     * @brief Import a remote JFR as target JFR and create a per-connection JFS (responder side).
-     *        Also creates or reuses the local JFR managed separately for this remote key.
-     * @param[in] urmaInfo Remote JFR metadata from handshake.
-     * @param[out] localJfrId The local JFR ID to include in the handshake response.
+     * @brief Import a remote Jetty as target Jetty and create/advice a local Jetty (responder side).
+     * @param[in] urmaInfo Remote Jetty metadata from handshake.
+     * @param[out] localJettyId The local Jetty ID to include in the handshake response.
      * @return Status of the call.
      */
-    Status ImportRemoteJfr(const UrmaJfrInfo &urmaInfo, uint32_t &localJfrId);
+    Status ImportRemoteJetty(const UrmaJfrInfo &urmaInfo, uint32_t &localJettyId);
 
     /**
      * @brief Urma write operation waits on the CV to check completion status
@@ -523,25 +524,26 @@ private:
                                        std::unordered_set<uint64_t> &successCompletedReqs,
                                        std::unordered_map<uint64_t, int> &failedCompletedReqs);
 
-    Status TryRecoverFailedJfsFromCompletion(uint64_t requestId, int statusCode, uint32_t jfsId);
+    Status TryRecoverFailedJettyFromCompletion(uint64_t requestId, int statusCode, uint32_t jettyId);
 
     Status HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event);
 
     /**
-     * @brief Get the valid JFS currently owned by a connection.
+     * @brief Get the valid Jetty currently owned by a connection.
      * @param[in] connection URMA connection.
-     * @param[out] jfs Valid JFS bound to the connection.
+     * @param[out] jetty Valid Jetty bound to the connection.
      * @return Status of the call.
      */
-    Status GetJfsFromConnection(const std::shared_ptr<UrmaConnection> &connection, std::shared_ptr<UrmaJfs> &jfs);
+    Status GetJettyFromConnection(const std::shared_ptr<UrmaConnection> &connection, std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Import a remote JFR as a target jetty (used by both initiator and responder).
-     * @param[in] remoteInfo Remote JFR metadata containing the JFR ID to import.
-     * @param[out] targetJfr Imported target JFR handle.
+     * @brief Import a remote Jetty as a target jetty (used by both initiator and responder).
+     * @param[in] remoteInfo Remote Jetty metadata containing the Jetty ID to import.
+     * @param[out] targetJetty Imported target Jetty handle.
      * @return Status of the call.
      */
-    Status ImportTargetJfr(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJfr> &targetJfr);
+    Status ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJetty> &targetJetty,
+        urma_jetty_t *localJetty);
 
     /**
      * @brief Register segment
@@ -582,15 +584,15 @@ private:
      * @return Status of the call.
      */
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                       const std::shared_ptr<UrmaJfs> &jfs, const std::string &remoteAddress,
+                       const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress,
                        UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr);
 
     struct UrmaWriteArgs {
         std::shared_ptr<UrmaConnection> connection;
-        std::shared_ptr<UrmaJfs> jfs;
+        std::shared_ptr<UrmaJetty> jetty;
         std::shared_ptr<EventWaiter> waiter;
         std::string remoteAddress;
-        urma_target_jetty_t *targetJfr = nullptr;
+        urma_target_jetty_t *targetJetty = nullptr;
         urma_target_seg_t *remoteSeg = nullptr;
         urma_target_seg_t *localSeg = nullptr;
         uint64_t remoteDataAddress = 0;
@@ -621,9 +623,9 @@ private:
     urma_reg_seg_flag_t registerSegmentFlag_{};
     urma_import_seg_flag_t importSegmentFlag_{};
     UrmaJfrInfo localUrmaInfo_;
-    // Local JFRs keyed by remote connection ID. JFRs are created/reused per target node
-    // and persist across reconnections. Not owned by UrmaConnection.
-    TbbJfrMap localJfrMap_;
+    // Local Jettys keyed by remote connection ID. Jettys are created/reused per target node
+    // and persist across reconnections.
+    TbbJettyMap localJettyMap_;
 
     // protect for segment maps.
     mutable std::shared_timed_mutex localMapMutex_;
@@ -636,6 +638,8 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+    mutable std::mutex connectionKeyMutex_;
+    std::unordered_map<UrmaConnection *, std::string> connectionKeys_;
     urma_log_cb_t urmaLogCallback_{};
 
     enum InitState { UNINITIALIZED = 0, INITIALIZED, DISABLED };

@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: URMA async event handler for JFS/JFC error events.
+ * Description: URMA async event handler for Jetty/JFC error events.
  */
 #include "datasystem/common/rdma/urma_async_event_handler.h"
 
@@ -63,12 +63,12 @@ Status UrmaAsyncEventHandler::GetAsyncEvent(urma_async_event_t &event)
     CHECK_FAIL_RETURN_STATUS(urmaResource_ != nullptr, K_RUNTIME_ERROR, "URMA resource is null");
     INJECT_POINT("UrmaManager.InjectAsyncEvent", [this, &event](int eventType) {
         switch (eventType) {
-            case URMA_EVENT_JFS_ERR: {
-                std::shared_ptr<UrmaJfs> jfs;
-                RETURN_IF_NOT_OK(urmaResource_->GetAnyValidJfs(jfs));
+            case URMA_EVENT_JETTY_ERR: {
+                std::shared_ptr<UrmaJetty> jetty;
+                RETURN_IF_NOT_OK(urmaResource_->GetAnyValidJetty(jetty));
                 event.urma_ctx = urmaResource_->GetContext();
-                event.event_type = URMA_EVENT_JFS_ERR;
-                event.element.jfs = jfs->Raw();
+                event.event_type = URMA_EVENT_JETTY_ERR;
+                event.element.jetty = jetty->Raw();
                 return Status::OK();
             }
             case URMA_EVENT_JFC_ERR:
@@ -153,8 +153,8 @@ Status UrmaAsyncEventHandler::Run(const std::atomic<bool> &stopFlag)
 Status UrmaAsyncEventHandler::HandleUrmaAsyncEvent(const urma_async_event_t &event)
 {
     switch (event.event_type) {
-        case URMA_EVENT_JFS_ERR:
-            return HandleJfsErrAsyncEvent(event.element.jfs);
+        case URMA_EVENT_JETTY_ERR:
+            return HandleJettyErrAsyncEvent(event.element.jetty);
         case URMA_EVENT_JFC_ERR:
             return HandleJfcErrAsyncEvent(event.element.jfc);
         default:
@@ -163,37 +163,40 @@ Status UrmaAsyncEventHandler::HandleUrmaAsyncEvent(const urma_async_event_t &eve
     }
 }
 
-Status UrmaAsyncEventHandler::HandleJfsErrAsyncEvent(urma_jfs_t *rawJfs)
+Status UrmaAsyncEventHandler::HandleJettyErrAsyncEvent(urma_jetty_t *rawJetty)
 {
     CHECK_FAIL_RETURN_STATUS(urmaResource_ != nullptr, K_RUNTIME_ERROR, "URMA resource is null");
-    if (rawJfs == nullptr) {
-        LOG(ERROR) << "[URMA_AE_JFS_ERR] rawJfs is null in async event";
+    if (rawJetty == nullptr) {
+        LOG(ERROR) << "[URMA_AE_JETTY_ERR] rawJetty is null in async event";
         return Status::OK();
     }
-    const uint32_t jfsId = rawJfs->jfs_id.id;
-    LOG(WARNING) << "[URMA_AE_JFS_ERR] jfsId=" << jfsId;
+    const uint32_t jettyId = rawJetty->jetty_id.id;
+    LOG(WARNING) << "[URMA_AE_JETTY_ERR] jettyId=" << jettyId;
 
-    std::shared_ptr<UrmaJfs> failedJfs;
-    auto lookupRc = urmaResource_->GetJfsById(jfsId, failedJfs);
-    if (lookupRc.IsError() || failedJfs == nullptr) {
-        LOG(WARNING) << "[URMA_AE_JFS_ERR] JFS " << jfsId << " not found in registry, may have already been cleaned up";
+    std::shared_ptr<UrmaJetty> failedJetty;
+    auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
+    if (lookupRc.IsError() || failedJetty == nullptr) {
+        LOG(WARNING) << "[URMA_AE_JETTY_ERR] Jetty " << jettyId
+                     << " not found in registry, may have already been cleaned up";
         return Status::OK();
     }
 
-    auto connection = failedJfs->GetConnection().lock();
+    auto connection = failedJetty->GetConnection().lock();
     if (connection == nullptr) {
-        LOG(WARNING) << "[URMA_AE_JFS_ERR] JFS " << jfsId << " has no bound connection, cannot trigger recovery";
+        LOG(WARNING) << "[URMA_AE_JETTY_ERR] Jetty " << jettyId
+                     << " has no bound connection, cannot trigger recovery";
         return Status::OK();
     }
 
-    LOG(WARNING) << "[URMA_AE_JFS_ERR] Triggering ReCreateJfs for jfsId=" << jfsId;
-    auto recreateRc = connection->ReCreateJfs(*urmaResource_, failedJfs);
+    LOG(WARNING) << "[URMA_AE_JETTY_ERR] Triggering ReCreateJetty for jettyId=" << jettyId;
+    auto recreateRc = connection->ReCreateJetty(*urmaResource_, failedJetty);
     if (recreateRc.IsError()) {
-        LOG(ERROR) << "[URMA_AE_JFS_ERR] ReCreateJfs failed for jfsId=" << jfsId << ": " << recreateRc.ToString();
+        LOG(ERROR) << "[URMA_AE_JETTY_ERR] ReCreateJetty failed for jettyId=" << jettyId << ": "
+                   << recreateRc.ToString();
     } else {
-        LOG(INFO) << "[URMA_AE_JFS_ERR] ReCreateJfs succeeded for jfsId=" << jfsId;
+        LOG(INFO) << "[URMA_AE_JETTY_ERR] ReCreateJetty succeeded for jettyId=" << jettyId;
     }
-    INJECT_POINT("UrmaManager.HandleJfsErrAsyncEvent");
+    INJECT_POINT("UrmaManager.HandleJettyErrAsyncEvent");
     return Status::OK();
 }
 

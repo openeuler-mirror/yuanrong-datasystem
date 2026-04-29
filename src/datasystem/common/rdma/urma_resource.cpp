@@ -27,6 +27,7 @@
 #include "securec.h"
 
 #include <ub/umdk/urma/urma_opcode.h>
+#include <ub/umdk/urma/urma_ubagg.h>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
@@ -46,10 +47,12 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 }
 
-std::atomic<uint32_t> UrmaJfs::counter_{ 0 };
 std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
+std::atomic<uint32_t> UrmaJetty::counter_{ 0 };
 
 const uint32_t JETTY_SIZE = 256;
+const uint32_t SHARED_JFR_DEPTH = 32;
+const uint32_t RECV_JETTY_JFS_DEPTH = 32;
 
 UrmaContext::~UrmaContext()
 {
@@ -161,9 +164,9 @@ Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &device
 
 std::weak_ptr<UrmaConnection> UrmaEvent::GetConnection() const
 {
-    auto jfs = jfs_.lock();
-    if (jfs) {
-        return jfs->GetConnection();
+    auto jetty = jetty_.lock();
+    if (jetty) {
+        return jetty->GetConnection();
     }
     return {};
 }
@@ -178,80 +181,6 @@ Status UrmaJfc::Rearm() const
     }
     LOG(INFO) << "urma rearm jfc success";
     return Status::OK();
-}
-
-UrmaJfs::~UrmaJfs()
-{
-    if (resource_ != nullptr) {
-        resource_->UnregisterJfs(GetJfsId(), this);
-    }
-    if (raw_ == nullptr) {
-        return;
-    }
-    std::stringstream oss;
-    oss << "delete jfs id " << raw_->jfs_id.id;
-    oss << ", valid: " << (valid_.load() ? "true" : "false") << " ";
-    const auto ret = ds_urma_delete_jfs(raw_);
-    if (ret == URMA_SUCCESS) {
-        oss << "success";
-    } else {
-        oss << FormatString("failed. ret = %d", ret);
-    }
-    counter_.fetch_sub(1);
-    oss << ". jfs count: " << counter_.load();
-    LOG(INFO) << oss.str();
-}
-
-Status UrmaJfs::Create(UrmaResource &resource, std::shared_ptr<UrmaJfs> &jfs)
-{
-    urma_jfs_cfg_t jfsConfig{};
-    jfsConfig.depth = JETTY_SIZE;
-    jfsConfig.trans_mode = URMA_TM_RM;
-    jfsConfig.priority = resource.GetJfsPriority();
-    const auto maxSge = 13;
-    jfsConfig.max_sge = maxSge;
-    jfsConfig.max_inline_data = 0;
-    jfsConfig.rnr_retry = URMA_TYPICAL_RNR_RETRY;
-    constexpr uint8_t errTimeout = 8;  // this timeout level means 128ms
-    jfsConfig.err_timeout = errTimeout;
-    jfsConfig.jfc = resource.GetJfc();
-    jfsConfig.user_ctx = 0;
-    jfsConfig.flag.value = 0;
-#ifdef URMA_OVER_UB
-    jfsConfig.flag.bs.multi_path = 1;
-#endif
-
-    urma_jfs_t *raw = ds_urma_create_jfs(resource.GetContext(), &jfsConfig);
-    if (raw == nullptr) {
-        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfs, errno = %d", errno));
-    }
-    jfs = std::make_shared<UrmaJfs>(raw, &resource);
-    LOG(INFO) << "urma create jfs id " << jfs->GetJfsId() << " success. jfs count: " << counter_.load();
-    return Status::OK();
-}
-
-Status UrmaJfs::ModifyToError()
-{
-    urma_jfs_attr_t attr{};
-    attr.mask = JFS_STATE;
-    attr.state = URMA_JETTY_STATE_ERROR;
-    auto ret = ds_urma_modify_jfs(raw_, &attr);
-    if (ret != URMA_SUCCESS) {
-        return Status(K_URMA_ERROR, FormatString("Failed to set jfs error, ret = %d", ret));
-    }
-    return Status::OK();
-}
-
-void UrmaJfs::BindConnection(const std::shared_ptr<UrmaConnection> &connection)
-{
-    std::lock_guard<std::mutex> lock(connectionMutex_);
-    connection_ = connection;
-}
-
-std::weak_ptr<UrmaConnection> UrmaJfs::GetConnection() const
-{
-    std::lock_guard<std::mutex> lock(connectionMutex_);
-    return connection_;
 }
 
 UrmaJfr::~UrmaJfr()
@@ -273,10 +202,10 @@ UrmaJfr::~UrmaJfr()
     raw_ = nullptr;
 }
 
-Status UrmaJfr::Create(const UrmaResource &resource, std::unique_ptr<UrmaJfr> &jfr)
+Status UrmaJfr::Create(const UrmaResource &resource, uint32_t depth, std::shared_ptr<UrmaJfr> &jfr)
 {
     urma_jfr_cfg_t jfrConfig{};
-    jfrConfig.depth = JETTY_SIZE;
+    jfrConfig.depth = depth;
     jfrConfig.flag.value = 0;
     jfrConfig.flag.bs.tag_matching = URMA_NO_TAG_MATCHING;
     jfrConfig.trans_mode = URMA_TM_RM;
@@ -291,32 +220,125 @@ Status UrmaJfr::Create(const UrmaResource &resource, std::unique_ptr<UrmaJfr> &j
     if (raw == nullptr) {
         RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jfr, errno = %d", errno));
     }
-    jfr = std::make_unique<UrmaJfr>(raw);
+    jfr = std::make_shared<UrmaJfr>(raw);
     LOG(INFO) << "urma create jfr id " << jfr->Raw()->jfr_id.id << " success. jfr count: " << counter_.load();
     return Status::OK();
 }
 
-UrmaTargetJfr::~UrmaTargetJfr()
+UrmaJetty::~UrmaJetty()
+{
+    if (resource_ != nullptr && raw_ != nullptr) {
+        resource_->UnregisterJetty(GetJettyId(), this);
+    }
+    if (raw_ == nullptr) {
+        return;
+    }
+    std::stringstream oss;
+    oss << "delete jetty id " << raw_->jetty_id.id;
+    oss << ", valid: " << (valid_.load() ? "true" : "false") << " ";
+    const auto ret = ds_urma_delete_jetty(raw_);
+    if (ret == URMA_SUCCESS) {
+        oss << "success";
+    } else {
+        oss << FormatString("failed. ret = %d", ret);
+    }
+    counter_.fetch_sub(1);
+    oss << ". jetty count: " << counter_.load();
+    LOG(INFO) << oss.str();
+    raw_ = nullptr;
+    sharedJfr_.reset();
+}
+
+Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::shared_ptr<UrmaJetty> &jetty)
+{
+    const bool isSendJetty = (jettyType == JettyType::SEND);
+    std::shared_ptr<UrmaJfr> sharedJfr;
+    if (isSendJetty) {
+        RETURN_IF_NOT_OK_APPEND_MSG(resource.GetOrCreateSharedJettyJfr(sharedJfr),
+                                    "Failed to get context-level shared JFR for Jetty");
+    } else {
+        RETURN_IF_NOT_OK_APPEND_MSG(UrmaJfr::Create(resource, JETTY_SIZE, sharedJfr),
+                                    "Failed to create dedicated JFR for recv Jetty");
+    }
+
+    urma_jfs_cfg_t jfsConfig{};
+    jfsConfig.depth = isSendJetty ? JETTY_SIZE : RECV_JETTY_JFS_DEPTH;
+    jfsConfig.trans_mode = URMA_TM_RM;
+    jfsConfig.priority = resource.GetJfsPriority();
+    const auto maxSge = 13;
+    jfsConfig.max_sge = maxSge;
+    jfsConfig.max_inline_data = 0;
+    jfsConfig.rnr_retry = URMA_TYPICAL_RNR_RETRY;
+    jfsConfig.err_timeout = 0;
+    jfsConfig.jfc = resource.GetJfc();
+    jfsConfig.user_ctx = 0;
+    jfsConfig.flag.value = 0;
+#ifdef URMA_OVER_UB
+    jfsConfig.flag.bs.multi_path = 1;
+#endif
+
+    urma_jetty_cfg_t jettyConfig{};
+    jettyConfig.flag.value = 0;
+    jettyConfig.flag.bs.share_jfr = URMA_SHARE_JFR;
+    jettyConfig.jfs_cfg = jfsConfig;
+    jettyConfig.shared.jfr = sharedJfr->Raw();
+    jettyConfig.shared.jfc = resource.GetJfc();
+    jettyConfig.user_ctx = 0;
+
+    urma_jetty_t *raw = ds_urma_create_jetty(resource.GetContext(), &jettyConfig);
+    if (raw == nullptr) {
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma create jetty, errno = %d", errno));
+    }
+    jetty = std::make_shared<UrmaJetty>(raw, sharedJfr, &resource);
+    LOG(INFO) << "urma create jetty id " << jetty->GetJettyId() << " success. jetty count: " << counter_.load();
+    return Status::OK();
+}
+
+Status UrmaJetty::ModifyToError()
+{
+    urma_jetty_attr_t attr{};
+    attr.mask = JETTY_STATE;
+    attr.state = URMA_JETTY_STATE_ERROR;
+    auto ret = ds_urma_modify_jetty(raw_, &attr);
+    if (ret != URMA_SUCCESS) {
+        return Status(K_URMA_ERROR, FormatString("Failed to set jetty error, ret = %d", ret));
+    }
+    return Status::OK();
+}
+
+void UrmaJetty::BindConnection(const std::shared_ptr<UrmaConnection> &connection)
+{
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    connection_ = connection;
+}
+
+std::weak_ptr<UrmaConnection> UrmaJetty::GetConnection() const
+{
+    std::lock_guard<std::mutex> lock(connectionMutex_);
+    return connection_;
+}
+
+UrmaTargetJetty::~UrmaTargetJetty()
 {
     if (raw_ == nullptr) {
         return;
     }
-    const auto ret = ds_urma_unimport_jfr(raw_);
-    LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to unimport jfr, ret = " << ret;
+    const auto ret = ds_urma_unimport_jetty(raw_);
+    LOG_IF(ERROR, ret != URMA_SUCCESS) << "Failed to unimport jetty, ret = " << ret;
     raw_ = nullptr;
 }
 
-Status UrmaTargetJfr::Import(urma_context_t *context, urma_rjfr_t *remoteJfr, urma_token_t urmaToken,
-                             std::unique_ptr<UrmaTargetJfr> &tjfr)
+Status UrmaTargetJetty::Import(urma_context_t *context, urma_rjetty_t *remoteJetty, urma_token_t urmaToken,
+                               std::unique_ptr<UrmaTargetJetty> &tjetty)
 {
-    INJECT_POINT("urma.import_jfr");
+    INJECT_POINT("urma.import_jetty");
     PerfPoint point(PerfKey::URMA_IMPORT_JFR);
-    auto *rawTjfr = ds_urma_import_jfr(context, remoteJfr, &urmaToken);
+    auto *rawTjetty = ds_urma_import_jetty(context, remoteJetty, &urmaToken);
     point.Record();
-    if (rawTjfr == nullptr) {
-        RETURN_STATUS(K_URMA_CONNECT_FAILED, "Failed to import jfr");
+    if (rawTjetty == nullptr) {
+        RETURN_STATUS(K_URMA_CONNECT_FAILED, "Failed to import jetty");
     }
-    tjfr = std::make_unique<UrmaTargetJfr>(rawTjfr);
+    tjetty = std::make_unique<UrmaTargetJetty>(rawTjetty);
     return Status::OK();
 }
 
@@ -382,65 +404,69 @@ const UrmaJfrInfo &UrmaConnection::GetUrmaJfrInfo() const
     return urmaJfrInfo_;
 }
 
-std::shared_ptr<UrmaJfs> UrmaConnection::GetJfs() const
+UrmaConnection::~UrmaConnection()
 {
-    std::lock_guard<std::mutex> lock(jfsMutex_);
-    return jfs_;
+    Clear();
 }
 
-Status UrmaConnection::ReCreateJfs(UrmaResource &resource, const std::shared_ptr<UrmaJfs> &failedJfs)
+std::shared_ptr<UrmaJetty> UrmaConnection::GetJetty() const
 {
-    if (failedJfs == nullptr) {
+    std::lock_guard<std::mutex> lock(jettyMutex_);
+    return jetty_;
+}
+
+Status UrmaConnection::ReCreateJetty(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &failedJetty)
+{
+    if (failedJetty == nullptr) {
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS_SKIP] failedJfs is null, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+            << "[URMA_RECREATE_JETTY_SKIP] failedJetty is null, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
             << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
         return Status::OK();
     }
-    // failedJfs must be the exact JFS that reported the failure, either from
-    // the completion record, async event, or request event.
-    // connection->jfs_ may already have been swapped to a newly recreated JFS
-    // by another thread. If we read jfs_ here and call MarkInvalid() on it,
-    // we may incorrectly invalidate the new healthy JFS instead of the failed one.
+    // failedJetty must come from the UrmaEvent that reported the failure.
+    // connection->jetty_ may already have been swapped to a newly recreated Jetty
+    // by another thread. If we read jetty_ here and call MarkInvalid() on it,
+    // we may incorrectly invalidate the new healthy Jetty instead of the failed one.
     {
-        std::lock_guard<std::mutex> lock(jfsMutex_);
-        // Keep MarkInvalid() and the recreate decision under jfsMutex_.
-        // The same JFS may concurrently receive multiple CQE error-9 events:
-        // only one thread is allowed to mark it invalid and recreate jfs_,
+        std::lock_guard<std::mutex> lock(jettyMutex_);
+        // Keep MarkInvalid() and the recreate decision under jettyMutex_.
+        // The same Jetty may concurrently receive multiple CQE error-9 events:
+        // only one thread is allowed to mark it invalid and recreate jetty_,
         // while other threads must wait here and observe the recreated state.
-        if (!failedJfs->MarkInvalid()) {
+        if (!failedJetty->MarkInvalid()) {
             LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_RECREATE_JFS_SKIP] JFS " << failedJfs->GetJfsId()
+                << "[URMA_RECREATE_JETTY_SKIP] Jetty " << failedJetty->GetJettyId()
                 << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
                 << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS] Mark JFS " << failedJfs->GetJfsId()
+            << "[URMA_RECREATE_JETTY] Mark Jetty " << failedJetty->GetJettyId()
             << " invalid and recreate, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
             << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-        CHECK_FAIL_RETURN_STATUS(jfs_ != nullptr, K_RUNTIME_ERROR, "JFS already cleared for connection");
-        if (jfs_.get() != failedJfs.get()) {
+        CHECK_FAIL_RETURN_STATUS(jetty_ != nullptr, K_RUNTIME_ERROR, "Jetty already cleared for connection");
+        if (jetty_.get() != failedJetty.get()) {
             LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_RECREATE_JFS_SKIP] JFS " << failedJfs->GetJfsId()
-                << " is invalid but connection points to another JFS, remoteAddress="
+                << "[URMA_RECREATE_JETTY_SKIP] Jetty " << failedJetty->GetJettyId()
+                << " is invalid but connection points to another Jetty, remoteAddress="
                 << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
-        std::shared_ptr<UrmaJfs> newJfs;
-        RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJfs(newJfs), "Failed to recreate JFS");
-        newJfs->BindConnection(shared_from_this());
-        jfs_ = std::move(newJfs);
+        std::shared_ptr<UrmaJetty> newJetty;
+        RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJetty(newJetty), "Failed to recreate Jetty");
+        newJetty->BindConnection(shared_from_this());
+        jetty_ = std::move(newJetty);
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JFS] connection switched to newJfsId=" << jfs_->GetJfsId()
+            << "[URMA_RECREATE_JETTY] connection switched to newJettyId=" << jetty_->GetJettyId()
             << ", remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
             << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
     }
-    return resource.AsyncModifyJfsToError(failedJfs);
+    return resource.AsyncModifyJettyToError(failedJetty);
 }
 
-urma_target_jetty_t *UrmaConnection::GetTargetJfr() const
+urma_target_jetty_t *UrmaConnection::GetTargetJetty() const
 {
-    return tjfr_ == nullptr ? nullptr : tjfr_->Raw();
+    return tjetty_ == nullptr ? nullptr : tjetty_->Raw();
 }
 
 Status UrmaConnection::GetRemoteSeg(uint64_t segVa, UrmaRemoteSegmentMap::const_accessor &accessor) const
@@ -495,10 +521,10 @@ Status UrmaConnection::UnimportRemoteSeg(uint64_t segmentAddress)
 void UrmaConnection::Clear()
 {
     {
-        std::lock_guard<std::mutex> lock(jfsMutex_);
-        jfs_.reset();
+        std::lock_guard<std::mutex> lock(jettyMutex_);
+        jetty_.reset();
     }
-    tjfr_.reset();
+    tjetty_.reset();
     tsegs_.clear();
     urmaJfrInfo_ = UrmaJfrInfo();
 }
@@ -515,8 +541,8 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
 
     uint8_t priority = 0;
     uint32_t sl = 0;
-    bool foundPriority = GetJfsPriorityInfoForCTP(priority, sl);
-    jfsPriority_ = priority;
+    bool foundPriority = GetJettyPriorityInfoForCTP(priority, sl);
+    jettyPriority_ = priority;
     LOG(INFO) << "UrmaResource CTP priority=" << static_cast<uint32_t>(priority) << ", SL=" << sl
               << ", useDefaultPriority=" << !foundPriority;
 
@@ -531,7 +557,7 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     }
 
     constexpr uint32_t threadCount = 1;
-    deleteJfsThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
+    deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJetty");
     RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw()));
     return Status::OK();
 }
@@ -576,149 +602,188 @@ bool UrmaResource::GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) con
     return false;
 }
 
+bool UrmaResource::GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const
+{
+    constexpr uint8_t defaultPriorityForCTP = 6;
+    constexpr uint32_t defaultSLForCTP = 6;
+    urma_tp_type_en tpTypeEn;
+    tpTypeEn.value = 0;
+    tpTypeEn.bs.ctp = 1;
+
+    for (uint32_t i = 0; i <= URMA_MAX_PRIORITY; ++i) {
+        auto &priorityInfo = urmaDeviceAttribute_.dev_cap.priority_info[i];
+        VLOG(1) << "Checking priority " << i << " with tp_type: " << priorityInfo.tp_type.value
+                << " expect tp_type: " << tpTypeEn.value;
+        if (priorityInfo.tp_type.value == tpTypeEn.value) {
+            priority = i;
+            sl = priorityInfo.SL;
+            return true;
+        }
+    }
+    // Older URMA versions may not populate priority_info, so fall back
+    // to the default priority and SL for CTP.
+    priority = defaultPriorityForCTP;
+    sl = defaultSLForCTP;
+    return false;
+}
+
 void UrmaResource::Clear()
 {
     OsXprtPipln::UnInitOsPiplnH2DEnv();
+
     {
-        std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
-        jfsRegistry_.clear();
+        std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+        jettyRegistry_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(sharedJettyJfrMutex_);
+        sharedJettyJfr_.reset();
     }
     {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
-        pendingDeleteJfs_.clear();
+        pendingDeleteJettys_.clear();
     }
-    jfsPriority_ = 0;
+    jettyPriority_ = 0;
     jfc_.reset();
     jfce_.reset();
     context_.reset();
 }
 
-Status UrmaResource::CreateJfs(std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::CreateJetty(std::shared_ptr<UrmaJetty> &jetty, JettyType jettyType)
 {
-    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFS");
-    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFS");
-    RETURN_IF_NOT_OK(UrmaJfs::Create(*this, jfs));
-    RETURN_IF_NOT_OK(RegisterJfs(jfs));
+    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating Jetty");
+    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating Jetty");
+    RETURN_IF_NOT_OK(UrmaJetty::Create(*this, jettyType, jetty));
+    RETURN_IF_NOT_OK(RegisterJetty(jetty));
     return Status::OK();
 }
 
-Status UrmaResource::CreateJfr(std::unique_ptr<UrmaJfr> &jfr)
+Status UrmaResource::GetOrCreateSharedJettyJfr(std::shared_ptr<UrmaJfr> &jfr)
 {
-    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR, "URMA context is null when creating JFR");
-    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating JFR");
-    return UrmaJfr::Create(*this, jfr);
+    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR,
+                             "URMA context is null when creating shared Jetty JFR");
+    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating shared Jetty JFR");
+    std::lock_guard<std::mutex> lock(sharedJettyJfrMutex_);
+    if (sharedJettyJfr_ == nullptr) {
+        RETURN_IF_NOT_OK_APPEND_MSG(UrmaJfr::Create(*this, SHARED_JFR_DEPTH, sharedJettyJfr_),
+                                    "Failed to create context-level shared Jetty JFR");
+        LOG(INFO) << "Created context-level shared Jetty JFR with depth " << SHARED_JFR_DEPTH
+                  << ", jfr id " << sharedJettyJfr_->Raw()->jfr_id.id;
+    }
+    jfr = sharedJettyJfr_;
+    return Status::OK();
 }
 
-Status UrmaResource::AsyncModifyJfsToError(std::shared_ptr<UrmaJfs> jfs)
+Status UrmaResource::AsyncModifyJettyToError(std::shared_ptr<UrmaJetty> jetty)
 {
-    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "Failed to modify JFS to error because JFS is null");
+    CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR,
+        "Failed to modify Jetty to error because Jetty is null");
     auto traceId = Trace::Instance().GetTraceID();
-    deleteJfsThread_->Execute([this, jfs, traceId]() {
+    deleteJettyThread_->Execute([this, jetty, traceId]() {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        LOG_IF_ERROR(RetireJfsToError(jfs), "RetireJfsToError failed");
+        LOG_IF_ERROR(RetireJettyToError(jetty), "RetireJettyToError failed");
     });
     return Status::OK();
 }
 
-Status UrmaResource::RetireJfsToError(const std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
 {
-    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "JFS is null when retiring to error");
+    CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR, "Jetty is null when retiring to error");
 
-    const auto jfsId = jfs->GetJfsId();
-    LOG(INFO) << "Try modify jfs id " << jfsId << " to state URMA_JETTY_STATE_ERROR";
+    const auto jettyId = jetty->GetJettyId();
+    LOG(INFO) << "Try modify jetty id " << jettyId << " to state URMA_JETTY_STATE_ERROR";
 
-    RETURN_IF_NOT_OK_APPEND_MSG(jfs->ModifyToError(),
-                                FormatString("Failed to modify jfs with id %u to error state", jfsId));
+    RETURN_IF_NOT_OK_APPEND_MSG(jetty->ModifyToError(),
+                                FormatString("Failed to modify jetty with id %u to error state", jettyId));
     auto traceId = Trace::Instance().GetTraceID();
     {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
-        pendingDeleteJfs_[jfsId] = { jfs, traceId };
+        pendingDeleteJettys_[jettyId] = { jetty, traceId };
     }
-    LOG(INFO) << "Retired jfs id " << jfsId << " to pending delete";
+    LOG(INFO) << "Retired jetty id " << jettyId << " to pending delete";
     return Status::OK();
 }
 
-void UrmaResource::AsyncDeleteJfs(uint32_t jfsId)
+void UrmaResource::AsyncDeleteJetty(uint32_t jettyId)
 {
-    deleteJfsThread_->Submit([this, jfsId]() {
-        std::shared_ptr<UrmaJfs> jfs;
+    deleteJettyThread_->Submit([this, jettyId]() {
+        std::shared_ptr<UrmaJetty> jetty;
         std::string traceId;
         {
             std::lock_guard<std::mutex> lock(pendingDeleteMutex_);
-            auto iter = pendingDeleteJfs_.find(jfsId);
-            if (iter == pendingDeleteJfs_.end()) {
-                LOG(WARNING) << "JFS with id " << jfsId << " does not exist in pendingDeleteJfs_";
+            auto iter = pendingDeleteJettys_.find(jettyId);
+            if (iter == pendingDeleteJettys_.end()) {
+                LOG(WARNING) << "Jetty with id " << jettyId << " does not exist in pendingDeleteJettys_";
                 return;
             }
-            jfs = std::move(iter->second.jfs);
+            jetty = std::move(iter->second.jetty);
             traceId = std::move(iter->second.traceId);
-            pendingDeleteJfs_.erase(iter);
+            pendingDeleteJettys_.erase(iter);
         }
 
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        // Reset outside the critical section so the UrmaJfs destructor runs after the mutex is released.
-        LOG(INFO) << "Remove JFS with id " << jfsId << " from pendingDeleteJfs_ ";
-        jfs.reset();
+        LOG(INFO) << "Remove Jetty with id " << jettyId << " from pendingDeleteJettys_ ";
+        jetty.reset();
     });
 }
 
-Status UrmaResource::RegisterJfs(const std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::RegisterJetty(const std::shared_ptr<UrmaJetty> &jetty)
 {
-    CHECK_FAIL_RETURN_STATUS(jfs != nullptr, K_RUNTIME_ERROR, "Cannot register null JFS");
-    const auto jfsId = jfs->GetJfsId();
-    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
-    jfsRegistry_[jfsId] = jfs;
-    LOG(INFO) << "[UrmaResource] Registered JFS " << jfsId << " in registry";
+    CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR, "Cannot register null Jetty");
+    const auto jettyId = jetty->GetJettyId();
+    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+    jettyRegistry_[jettyId] = jetty;
+    LOG(INFO) << "[UrmaResource] Registered Jetty " << jettyId << " in registry";
     return Status::OK();
 }
 
-void UrmaResource::UnregisterJfs(uint32_t jfsId, const UrmaJfs *expected)
+void UrmaResource::UnregisterJetty(uint32_t jettyId, const UrmaJetty *expected)
 {
-    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
-    auto it = jfsRegistry_.find(jfsId);
-    if (it == jfsRegistry_.end()) {
+    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+    auto it = jettyRegistry_.find(jettyId);
+    if (it == jettyRegistry_.end()) {
         return;
     }
     if (expected != nullptr) {
         auto locked = it->second.lock();
         if (locked && locked.get() != expected) {
-            return;  // Different JFS object registered under the same id; do not remove.
+            return;
         }
     }
-    jfsRegistry_.erase(it);
-    LOG(INFO) << "[UrmaResource] Unregistered JFS " << jfsId << " from registry";
+    jettyRegistry_.erase(it);
+    LOG(INFO) << "[UrmaResource] Unregistered Jetty " << jettyId << " from registry";
 }
 
-Status UrmaResource::GetJfsById(uint32_t jfsId, std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::GetJettyById(uint32_t jettyId, std::shared_ptr<UrmaJetty> &jetty)
 {
-    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
-    auto it = jfsRegistry_.find(jfsId);
-    if (it == jfsRegistry_.end()) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("JFS %u not found in registry", jfsId));
+    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+    auto it = jettyRegistry_.find(jettyId);
+    if (it == jettyRegistry_.end()) {
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Jetty %u not found in registry", jettyId));
     }
-    jfs = it->second.lock();
-    if (jfs == nullptr) {
-        jfsRegistry_.erase(it);
-        RETURN_STATUS(K_NOT_FOUND, FormatString("JFS %u expired in registry", jfsId));
+    jetty = it->second.lock();
+    if (jetty == nullptr) {
+        jettyRegistry_.erase(it);
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Jetty %u expired in registry", jettyId));
     }
     return Status::OK();
 }
 
-Status UrmaResource::GetAnyValidJfs(std::shared_ptr<UrmaJfs> &jfs)
+Status UrmaResource::GetAnyValidJetty(std::shared_ptr<UrmaJetty> &jetty)
 {
-    std::lock_guard<std::mutex> lock(jfsRegistryMutex_);
-    for (auto it = jfsRegistry_.begin(); it != jfsRegistry_.end();) {
-        jfs = it->second.lock();
-        if (jfs == nullptr) {
-            it = jfsRegistry_.erase(it);
+    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+    for (auto it = jettyRegistry_.begin(); it != jettyRegistry_.end();) {
+        jetty = it->second.lock();
+        if (jetty == nullptr) {
+            it = jettyRegistry_.erase(it);
             continue;
         }
-        if (jfs->IsValid()) {
+        if (jetty->IsValid()) {
             return Status::OK();
         }
         ++it;
     }
-    RETURN_STATUS(K_NOT_FOUND, "No valid JFS found in registry");
+    RETURN_STATUS(K_NOT_FOUND, "No valid Jetty found in registry");
 }
 
 }  // namespace datasystem
