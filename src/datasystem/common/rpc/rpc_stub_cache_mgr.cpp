@@ -237,8 +237,8 @@ StubPriority GetStubPriority(StubType type)
 {
     switch (type) {
         case StubType::MASTER_WORKER_OC_SVC:
-        case StubType::WORKER_WORKER_TRANS_SVC:
             return StubPriority::LOW;
+        case StubType::WORKER_WORKER_TRANS_SVC:
         case StubType::WORKER_WORKER_OC_SVC:
         case StubType::WORKER_MASTER_OC_SVC:
         case StubType::WORKER_WORKER_SC_SVC:
