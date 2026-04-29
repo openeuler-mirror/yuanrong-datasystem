@@ -67,6 +67,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -99,6 +100,19 @@ const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALL
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 
 namespace datasystem {
+namespace {
+constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
+
+void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
+{
+    if (candidates.size() < MIN_SHUFFLE_CANDIDATE_COUNT) {
+        return;
+    }
+    std::mt19937 generator(static_cast<uint32_t>(RandomData::GetRandomSeed()));
+    std::shuffle(candidates.begin(), candidates.end(), generator);
+}
+}  // namespace
+
 inline void ReadFromEnv(std::string &param, std::string env)
 {
     if (param.empty()) {
@@ -806,6 +820,8 @@ void ObjectClientImpl::GetStandbyWorkersForSwitch(const std::shared_ptr<IClientW
         others.emplace_back(hostPort);
         return true;
     });
+    ShuffleWorkerCandidates(sameHost);
+    ShuffleWorkerCandidates(others);
 }
 
 bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, uint64_t switchGeneration,
