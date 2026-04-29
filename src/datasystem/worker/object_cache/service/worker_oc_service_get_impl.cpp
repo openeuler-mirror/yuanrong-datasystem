@@ -985,10 +985,12 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
-        << ", remoteWorkerId=" << remoteWorkerId << ", lastResult=" << lastResult.ToString();
+        << ", remoteWorkerId=" << remoteWorkerId << ", realRemainingTimeMs="
+        << reqTimeoutDuration.CalcRealRemainingTime() << ", lastResult=" << lastResult.ToString();
 
     HostPort hostAddress;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddress.ParseString(endPoint), "ParseString failed");
+    Timer reconnectTimer;
 
     TbbTransportStubTable::const_accessor constAccApi;
     while (!tarnsportApiTable_.find(constAccApi, endPoint)) {
@@ -1002,7 +1004,14 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
 
     UrmaHandshakeRspPb dummyRsp;
-    RETURN_IF_NOT_OK(constAccApi->second->ExecOnceParrallelExchange(dummyRsp));
+    auto rc = constAccApi->second->ExecOnceParrallelExchange(dummyRsp);
+    auto elapsedMs = reconnectTimer.ElapsedMilliSecond();
+    static const int logThresholdMs = 2'000;
+    LOG_IF(INFO, elapsedMs > logThresholdMs)
+        << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker finished, remoteAddress=" << endPoint
+        << ", remoteWorkerId=" << remoteWorkerId << ", elapsed ms: " << elapsedMs
+        << ", realRemainingTimeMs=" << reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
+    RETURN_IF_NOT_OK(rc);
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }
 
