@@ -42,7 +42,7 @@ class Deployer:
 
     def _build_ssh_cmd(self, node):
         """Build base SSH command list with options and port."""
-        cmd = ['ssh'] + self._ssh_args()
+        cmd = ['ssh', '-T', '-n'] + self._ssh_args()
         port = node.get('ssh_port')
         if port:
             cmd += ['-p', str(port)]
@@ -60,9 +60,12 @@ class Deployer:
         return node.get('ssh_user', self.default_ssh_user)
 
     def _transport(self, node):
+        t = node.get('transport', self.default_transport)
+        if t == 'ssh' and node.get('host') == 'localhost':
+            return 'ssh'
         if node.get('host') == 'localhost':
             return 'localhost'
-        return node.get('transport', self.default_transport)
+        return t
 
     def _exec_target(self, node):
         """Target for run_on / scp_to (IP for SSH, pod name for kubectl)."""
@@ -285,20 +288,18 @@ class Deployer:
             print(f'{tag} mkdir {self.remote_work_dir}')
             self.run_on(node, f'mkdir -p {self.remote_work_dir}')
 
-            # Step 2: Upload binary
+            # Step 2: Upload binary + SDK (under host lock to avoid concurrent races)
             remote_binary = f'{self.remote_work_dir}/kvclient_standalone_test'
+            remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
             with self._get_host_lock(node):
                 print(f'{tag} uploading binary ({os.path.getsize(self.binary_path) // 1024}KB)')
                 self.scp_to(node, self.binary_path, remote_binary)
-
-            # Step 3: SDK
-            remote_sdk = node.get('remote_sdk_dir', self.deploy.get('remote_sdk_dir', ''))
-            if remote_sdk:
-                print(f'{tag} using container SDK: {remote_sdk}')
-            elif os.path.isdir(self.datasystem_sdk_dir):
-                print(f'{tag} deploying SDK libs...')
-                self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
-                self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
+                if remote_sdk:
+                    print(f'{tag} using container SDK: {remote_sdk}')
+                elif os.path.isdir(self.datasystem_sdk_dir):
+                    print(f'{tag} deploying SDK libs...')
+                    self.run_on(node, f'rm -rf {self.remote_work_dir}/lib')
+                    self.scp_to(node, self.datasystem_sdk_dir, f'{self.remote_work_dir}/lib')
 
             # Step 4: Upload config
             remote_config = f'{self.remote_work_dir}/config_{instance_id}.json'
@@ -326,7 +327,8 @@ class Deployer:
                 f"cd {self.remote_work_dir} && "
                 f"{env_prefix}"
                 f"nohup ./kvclient_standalone_test config_{instance_id}.json "
-                f"> stdout_{instance_id}.log 2>&1 </dev/null &")
+                f"> stdout_{instance_id}.log 2>&1 </dev/null & "
+                f"echo $!")
             print(f'{tag} starting kvclient (role={role})...')
             self.run_on(node, start_cmd)
 
@@ -354,7 +356,7 @@ class Deployer:
                 procmon_cmd = (
                     f"cd {self.remote_work_dir} && "
                     f"nohup python3 procmon.py --pid {pid} -i 2"
-                    f" > procmon_{instance_id}.log 2>&1 </dev/null &")
+                    f" > procmon_{instance_id}.log 2>&1 </dev/null & disown")
                 self.run_on(node, procmon_cmd, check=False)
 
             print(f'  {target} -> OK')
