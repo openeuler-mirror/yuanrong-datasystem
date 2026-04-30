@@ -22,8 +22,12 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <future>
 #include <mutex>
+#include <memory>
 #include <thread>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -359,6 +363,44 @@ private:
     Status WaitForServiceReady();
 
     /**
+     * @brief Prepare local warmup object and start async URMA peer connection warmup if enabled.
+     * @return Status of the call.
+     */
+    Status MaybeStartConnectionWarmup();
+
+    /**
+     * @brief Stop URMA connection warmup background work.
+     */
+    void StopConnectionWarmup();
+
+    /**
+     * @brief Release one-shot URMA warmup thread pool.
+     */
+    void ReleaseWarmupThreadPool();
+
+    /**
+     * @brief Run async peer scanning and warmup tasks.
+     */
+    void RunUrmaWarmupController();
+
+    /**
+     * @brief Submit URMA warmup tasks for newly discovered ready peers.
+     */
+    void ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers,
+                                 std::unordered_set<std::string> &scheduledPeers,
+                                 std::vector<std::future<bool>> &futures);
+
+    /**
+     * @brief Count successful URMA warmup tasks.
+     */
+    size_t GetUrmaWarmupSuccessCount(std::vector<std::future<bool>> &futures) const;
+
+    /**
+     * @brief Check whether the URMA warmup controller should exit.
+     */
+    bool ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const;
+
+    /**
      * @brief Notify shutdown message to etcd.
      */
     void NotifyShutdownToEtcd();
@@ -520,6 +562,9 @@ private:
     std::unique_ptr<Thread> checkAsyncTasksThread_{ nullptr };
     std::atomic<bool> checkThreadRunning_{ true };
     std::atomic<bool> checkAsyncTasksDone_{ false };
+    std::unique_ptr<Thread> warmupControllerThread_{ nullptr };
+    std::shared_ptr<ThreadPool> warmupThreadPool_{ nullptr };
+    std::atomic<bool> warmupExit_{ false };
     std::unique_ptr<Thread> clientsExitChecker_{ nullptr };
     std::atomic<bool> allClientsExited_{ false };
     int64_t lastRequestArrivalTime_{ 0 };

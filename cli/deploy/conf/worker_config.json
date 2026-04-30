@@ -531,6 +531,10 @@
         "value": "false",
         "description": "Option to turn on urma for OC worker to worker data transfer, default false."
     },
+    "warmup_connection": {
+        "value": "urma",
+        "description": "Warm up worker-worker connection during worker startup. Optional values: none, urma."
+    },
     "enable_urma_perf": {
         "value": "false",
         "description": "Enable periodic performance logging for URMA operations. This option takes effect only when enable_urma is true."

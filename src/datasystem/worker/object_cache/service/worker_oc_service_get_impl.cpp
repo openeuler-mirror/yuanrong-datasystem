@@ -47,6 +47,7 @@
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -875,6 +876,35 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerWithoutDump(const std::s
     evictionManager_->Add(objectKV.GetObjKey());
     objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::WarmupGetObjectFromRemoteWorker(const std::string &address,
+                                                               const std::string &objectKey, uint64_t dataSize)
+{
+    CHECK_FAIL_RETURN_STATUS(!address.empty(), K_INVALID, "URMA warmup remote address is empty.");
+    CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "URMA warmup object key is empty.");
+    if (address == localAddress_.ToString()) {
+        return Status::OK();
+    }
+    INJECT_POINT("WorkerOcServiceGetImpl.WarmupGetObjectFromRemoteWorker.begin");
+    std::shared_ptr<SafeObjType> entry;
+    bool isInsert = false;
+    RETURN_IF_NOT_OK(RetryWhenDeadlock([this, &objectKey, &entry, &isInsert] {
+        return objectTable_->ReserveGetAndLock(objectKey, entry, isInsert, false, true);
+    }));
+    (void)isInsert;
+    Raii unlock([&entry]() { entry->WUnlock(); });
+    Raii cleanup([this, &entry, &objectKey]() {
+        (void)evictionManager_->Erase(objectKey);
+        LOG_IF_ERROR(objectTable_->Erase(objectKey, *entry),
+                     FormatString("[URMA_WARMUP] erase local temp warmup object failed, objectKey=%s", objectKey));
+    });
+    SetNewObjectEntry(objectKey, ConsistencyType::CAUSAL, WriteMode::NONE_L2_CACHE, CacheType::MEMORY, dataSize,
+                      GetMetadataSize(), *entry);
+    ReadKey readKey(objectKey, 0, dataSize);
+    ReadObjectKV objectKV(readKey, *entry);
+    auto rc = GetObjectFromRemoteWorkerWithoutDump(address, "", dataSize, objectKV);
+    return rc;
 }
 
 Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &objectKV, bool isAsyncBatchGet)

@@ -91,6 +91,16 @@ public:
                                  std::vector<RpcMessage> &payloads);
 
     /**
+     * @brief Trigger direct remote get for URMA connection warmup without querying metadata from master.
+     * @param[in] address The remote worker address.
+     * @param[in] objectKey The warmup object key on the remote worker.
+     * @param[in] dataSize The warmup object data size.
+     * @return Status of the call.
+     */
+    Status WarmupGetObjectFromRemoteWorker(const std::string &address, const std::string &objectKey,
+                                           uint64_t dataSize);
+
+    /**
      * @brief Get data from L2Cache for primary copy.
      * @param[in] objectKey Object key.
      * @param[in] version Expected object version.
