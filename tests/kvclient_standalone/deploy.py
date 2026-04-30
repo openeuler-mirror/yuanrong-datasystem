@@ -86,28 +86,41 @@ class Deployer:
 
     # --- Transport primitives ---
 
-    def run_on(self, node, cmd, check=True, timeout=60):
-        """Run command on node via SSH, kubectl exec, or local shell."""
+    def run_on(self, node, cmd, check=True, timeout=60, allow_timeout=False):
+        """Run command on node via SSH, kubectl exec, or local shell.
+
+        If allow_timeout is True, return a dummy result instead of raising
+        TimeoutExpired. Useful for fire-and-forget start commands.
+        """
         transport = self._transport(node)
         target = self._exec_target(node)
 
+        dummy = subprocess.CompletedProcess(args=[], returncode=0,
+                                            stdout='', stderr='')
+
+        def _run(sub_cmd, **kwargs):
+            try:
+                return subprocess.run(sub_cmd, **kwargs)
+            except subprocess.TimeoutExpired:
+                if allow_timeout:
+                    return dummy
+                raise
+
         if transport == 'localhost':
-            return subprocess.run(cmd, shell=True, check=check,
-                                  capture_output=True, text=True, timeout=timeout)
+            return _run(cmd, shell=True, check=check,
+                        capture_output=True, text=True, timeout=timeout)
         elif transport == 'kubectl':
             ns = self._namespace(node)
             kubectl_cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'sh', '-c', cmd]
             print(f'  $ {" ".join(kubectl_cmd)}')
-            return subprocess.run(
-                kubectl_cmd,
-                check=check, capture_output=True, text=True, timeout=timeout)
+            return _run(kubectl_cmd,
+                        check=check, capture_output=True, text=True, timeout=timeout)
         else:
             user = self._user_for(node)
             ssh_cmd = self._build_ssh_cmd(node) + [f'{user}@{target}', cmd]
             print(f'  $ {" ".join(ssh_cmd)}')
-            return subprocess.run(
-                ssh_cmd,
-                check=check, capture_output=True, text=True, timeout=timeout)
+            return _run(ssh_cmd,
+                        check=check, capture_output=True, text=True, timeout=timeout)
 
     def scp_to(self, node, src, dst):
         """Copy file or directory to node via SCP, kubectl cp, or local copy."""
@@ -330,9 +343,9 @@ class Deployer:
                 f"> stdout_{instance_id}.log 2>&1 </dev/null & "
                 f"echo $!")
             print(f'{tag} starting kvclient (role={role})...')
-            # Use short timeout + check=False: SSH nohup may not return in nested SSH
-            # environments, but the remote process still starts. Verify with pgrep below.
-            self.run_on(node, start_cmd, check=False, timeout=10)
+            # allow_timeout: SSH nohup may not return in nested SSH environments,
+            # but the remote process still starts. Verify with pgrep below.
+            self.run_on(node, start_cmd, check=False, timeout=10, allow_timeout=True)
 
             # Step 8: Verify process started
             time.sleep(1)
@@ -359,7 +372,7 @@ class Deployer:
                     f"cd {self.remote_work_dir} && "
                     f"nohup python3 procmon.py --pid {pid} -i 2"
                     f" > procmon_{instance_id}.log 2>&1 </dev/null & disown")
-                self.run_on(node, procmon_cmd, check=False)
+                self.run_on(node, procmon_cmd, check=False, allow_timeout=True)
 
             print(f'  {target} -> OK')
             return True
