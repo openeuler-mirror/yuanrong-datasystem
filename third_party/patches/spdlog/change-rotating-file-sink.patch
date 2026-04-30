@@ -1,7 +1,6 @@
-diff --git a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks/rotating_file_sink-inl.h
-index cf8b9d5c..64eadda9 100644
---- a/include/spdlog/sinks/rotating_file_sink-inl.h
-+++ b/include/spdlog/sinks/rotating_file_sink-inl.h
+diff -ruN a/include/spdlog/sinks/rotating_file_sink-inl.h b/include/spdlog/sinks/rotating_file_sink-inl.h
+--- a/include/spdlog/sinks/rotating_file_sink-inl.h	2026-05-01 01:01:26.663599812 +0800
++++ b/include/spdlog/sinks/rotating_file_sink-inl.h	2026-05-01 01:01:26.667599778 +0800
 @@ -16,7 +16,9 @@
  #include <cerrno>
  #include <chrono>
@@ -12,28 +11,30 @@ index cf8b9d5c..64eadda9 100644
  #include <string>
  #include <tuple>
  
-@@ -64,6 +66,20 @@ SPDLOG_INLINE filename_t rotating_file_sink<Mutex>::calc_filename(const filename
+@@ -64,6 +66,22 @@
      return fmt_lib::format(SPDLOG_FILENAME_T("{}.{}{}"), basename, index, ext);
  }
  
-+// calc filename according to timestamp and file extension if exists.
-+// e.g. calc_filename("logs/mylog.txt, 2024-10-21 15:30:45) => "logs/mylog.20241021153045.txt".
++// calc filename according to timestamp (with milliseconds) and file extension if exists.
++// e.g. calc_filename("logs/mylog.txt", 2024-10-21 15:30:45, 123) => "logs/mylog.20241021153045_123.txt".
 +template <typename Mutex>
 +SPDLOG_INLINE filename_t rotating_file_sink<Mutex>::calc_filename(const filename_t &filename,
-+                                                                  std::tm time_tm) {
++                                                                  std::tm time_tm,
++                                                                  int millis) {
 +    filename_t basename;
 +    filename_t ext;
 +    std::tie(basename, ext) = details::file_helper::split_by_extension(filename);
 +
 +    std::ostringstream oss;
-+    oss << basename << "." << std::put_time(&time_tm, "%Y%m%d%H%M%S") << ext;
++    oss << basename << "." << std::put_time(&time_tm, "%Y%m%d%H%M%S")
++        << "_" << std::setfill('0') << std::setw(3) << millis << ext;
 +    return oss.str();
 +}
 +
  template<typename Mutex>
  SPDLOG_INLINE filename_t rotating_file_sink<Mutex>::filename()
  {
-@@ -101,41 +117,36 @@ SPDLOG_INLINE void rotating_file_sink<Mutex>::flush_()
+@@ -101,41 +119,53 @@
  }
  
  // Rotate files:
@@ -44,7 +45,7 @@ index cf8b9d5c..64eadda9 100644
 -template<typename Mutex>
 -SPDLOG_INLINE void rotating_file_sink<Mutex>::rotate_()
 -{
-+// log.txt -> log.YYYYMMDDHHMMSS.txt  (e.g., log.20251020143022.txt)
++// log.txt -> log.YYYYMMDDHHMMSS_mmm.txt  (e.g., log.20251020143022_123.txt)
 +template <typename Mutex>
 +SPDLOG_INLINE void rotating_file_sink<Mutex>::rotate_() {
      using details::os::filename_to_str;
@@ -65,31 +66,45 @@ index cf8b9d5c..64eadda9 100644
 -            // if failed try again after a small delay.
 -            // this is a workaround to a windows issue, where very high rotation
 -            // rates can cause the rename to fail with permission denied (because of antivirus?).
--            details::os::sleep_for_millis(100);
--            if (!rename_file_(src, target))
--            {
--                file_helper_.reopen(true); // truncate the log file anyway to prevent it to grow beyond its limit!
--                current_size_ = 0;
--                throw_spdlog_ex("rotating_file_sink: failed renaming " + filename_to_str(src) + " to " + filename_to_str(target), errno);
--            }
 +    auto now = std::chrono::system_clock::now();
 +    auto now_time_t = std::chrono::system_clock::to_time_t(now);
 +    auto tm_time = details::os::localtime(now_time_t);
++    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
++                  now.time_since_epoch()) % 1000;
 +
-+    filename_t archive_filename = calc_filename(base_filename_, tm_time);
++    filename_t archive_filename = calc_filename(base_filename_, tm_time, static_cast<int>(ms.count()));
 +
 +    if (!rename_file_(base_filename_, archive_filename)) {
-+        // if failed try again after a small delay.
-+        // this is a workaround to a windows issue, where very high rotation
-+        // rates can cause the rename to fail with permission denied (because of antivirus?).
-+        details::os::sleep_for_millis(100);
-+        if (!rename_file_(base_filename_, archive_filename)) {
-+            file_helper_.reopen(true);
-+            current_size_ = 0;
-+            throw_spdlog_ex("rotating_file_sink: failed renaming " +
-+                                filename_to_str(base_filename_) + " to " +
-+                                filename_to_str(archive_filename),
-+                            errno);
++        // Fallback: try appending counter suffix to avoid filename collision.
++        bool renamed = false;
++        for (int i = 1; i <= 10; ++i) {
++            filename_t fb_basename;
++            filename_t fb_ext;
++            std::tie(fb_basename, fb_ext) =
++                details::file_helper::split_by_extension(archive_filename);
++            std::ostringstream oss;
++            oss << fb_basename << "_" << i << fb_ext;
++            if (rename_file_(base_filename_, oss.str())) {
++                renamed = true;
++                break;
++            }
++        }
++        if (!renamed) {
++            // Last resort: sleep and retry once.
+             details::os::sleep_for_millis(100);
+-            if (!rename_file_(src, target))
+-            {
+-                file_helper_.reopen(true); // truncate the log file anyway to prevent it to grow beyond its limit!
++            if (!rename_file_(base_filename_, archive_filename)) {
++                file_helper_.reopen(true);
+                 current_size_ = 0;
+-                throw_spdlog_ex("rotating_file_sink: failed renaming " + filename_to_str(src) + " to " + filename_to_str(target), errno);
++                throw_spdlog_ex(
++                    "rotating_file_sink: failed renaming " +
++                        filename_to_str(base_filename_) + " to " +
++                        filename_to_str(archive_filename),
++                    errno);
+             }
          }
      }
 +
@@ -98,10 +113,9 @@ index cf8b9d5c..64eadda9 100644
  }
  
  // delete the target if exists, and rename the src file  to target
-diff --git a/include/spdlog/sinks/rotating_file_sink.h b/include/spdlog/sinks/rotating_file_sink.h
-index ce0d7b1e..f77c9629 100644
---- a/include/spdlog/sinks/rotating_file_sink.h
-+++ b/include/spdlog/sinks/rotating_file_sink.h
+diff -ruN a/include/spdlog/sinks/rotating_file_sink.h b/include/spdlog/sinks/rotating_file_sink.h
+--- a/include/spdlog/sinks/rotating_file_sink.h	2026-05-01 01:01:26.663599812 +0800
++++ b/include/spdlog/sinks/rotating_file_sink.h	2026-05-01 01:01:26.667599778 +0800
 @@ -8,6 +8,7 @@
  #include <spdlog/details/null_mutex.h>
  #include <spdlog/details/synchronous_factory.h>
@@ -110,15 +124,15 @@ index ce0d7b1e..f77c9629 100644
  #include <chrono>
  #include <mutex>
  #include <string>
-@@ -25,6 +26,7 @@ public:
+@@ -25,6 +26,7 @@
      rotating_file_sink(filename_t base_filename, std::size_t max_size, std::size_t max_files, bool rotate_on_open = false,
          const file_event_handlers &event_handlers = {});
      static filename_t calc_filename(const filename_t &filename, std::size_t index);
-+    static filename_t calc_filename(const filename_t &filename, std::tm time_tm);
++    static filename_t calc_filename(const filename_t &filename, std::tm time_tm, int millis);
      filename_t filename();
  
  protected:
-@@ -33,10 +35,7 @@ protected:
+@@ -33,10 +35,7 @@
  
  private:
      // Rotate files:
@@ -126,7 +140,7 @@ index ce0d7b1e..f77c9629 100644
 -    // log.1.txt -> log.2.txt
 -    // log.2.txt -> log.3.txt
 -    // log.3.txt -> delete
-+    // log.txt -> log.YYYYMMDDHHMMSS.txt  (e.g., log.20251020143022.txt)
++    // log.txt -> log.YYYYMMDDHHMMSS_mmm.txt  (e.g., log.20251020143022_123.txt)
      void rotate_();
  
      // delete the target if exists, and rename the src file  to target
