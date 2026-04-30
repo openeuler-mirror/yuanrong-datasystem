@@ -330,7 +330,9 @@ class Deployer:
                 f"> stdout_{instance_id}.log 2>&1 </dev/null & "
                 f"echo $!")
             print(f'{tag} starting kvclient (role={role})...')
-            self.run_on(node, start_cmd)
+            # Use short timeout + check=False: SSH nohup may not return in nested SSH
+            # environments, but the remote process still starts. Verify with pgrep below.
+            self.run_on(node, start_cmd, check=False, timeout=10)
 
             # Step 8: Verify process started
             time.sleep(1)
