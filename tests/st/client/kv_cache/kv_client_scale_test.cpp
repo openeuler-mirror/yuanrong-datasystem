@@ -2244,6 +2244,37 @@ TEST_F(STCStandByTest, TestSwitchWorker)
     DS_ASSERT_OK(kvClient0->Get(key, valGet1));
 }
 
+TEST_F(STCStandByTest, TestSetShmBufferAfterSwitchWorkerReturnsDeprecated)
+{
+    constexpr int64_t SHM_SIZE = 500 * 1024;
+    DS_ASSERT_OK(cluster_->StartOBS());
+    StartWorkerAndWaitReady({ 0, 1 });
+    std::shared_ptr<KVClient> kvClient0;
+    InitTestKVClient(0, kvClient0, [](ConnectOptions &opts) {
+        opts.enableCrossNodeConnection = true;
+        opts.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        opts.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+    });
+
+    SetParam param;
+    std::shared_ptr<Buffer> buffer;
+    auto data = GenRandomString(SHM_SIZE);
+    DS_ASSERT_OK(kvClient0->Create("shm_buffer_after_switch", data.size(), param, buffer));
+    DS_ASSERT_OK(buffer->MemoryCopy(data.data(), data.size()));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.PreShutDown.skip", "return(K_OK)"));
+    inject::Set("client.switch_worker_end", "call()");
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
+    Timer timer;
+    while (timer.ElapsedSecond() < 5 && inject::GetExecuteCount("client.switch_worker_end") == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    auto switchCount = inject::GetExecuteCount("client.switch_worker_end");
+    inject::Clear("client.switch_worker_end");
+    ASSERT_GT(switchCount, 0);
+    ASSERT_EQ(kvClient0->Set(buffer).GetCode(), K_BUFFER_DEPRECATED);
+}
+
 TEST_F(STCStandByTest, TestFunctionAfterSwitchWorker)
 {
     constexpr int64_t NON_SHM_SIZE = 50 * 1024;

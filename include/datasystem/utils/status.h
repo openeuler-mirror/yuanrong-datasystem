@@ -85,6 +85,7 @@ enum StatusCode : uint32_t {
     K_WRITE_BACK_QUEUE_FULL = 2003,
     K_OC_KEY_ALREADY_EXIST = 2004,
     K_WORKER_PULL_OBJECT_NOT_FOUND = 2005,
+    K_BUFFER_DEPRECATED = 2006,
 
     // stream error code, range: [3000, 4000)
     K_SC_STREAM_NOT_FOUND = 3000,

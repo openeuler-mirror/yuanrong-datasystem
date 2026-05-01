@@ -364,13 +364,16 @@ Status Buffer::CheckDeprecated()
     RETURN_OK_IF_TRUE(!isShm_);
 
     // In the shared memory scenario, the worker may have released the memory when the network is unavailable.
+    if (clientId_ != clientImpl->GetClientId()) {
+        RETURN_STATUS(K_BUFFER_DEPRECATED, "The buffer is deprecated, please destruct it!");
+    }
     Status status = clientImpl->CheckConnection();
     if (status.IsError()) {
         return status;
     }
     if (bufferInfo_->version != clientImpl->GetWorkerVersion()
         || clientImpl->GetState() != (uint16_t)ClientState::INITIALIZED) {
-        RETURN_STATUS(K_RUNTIME_ERROR, "The buffer is useless, please destruct it!");
+        RETURN_STATUS(K_BUFFER_DEPRECATED, "The buffer is deprecated, please destruct it!");
     }
     return Status::OK();
 }

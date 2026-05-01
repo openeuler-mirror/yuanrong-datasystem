@@ -35,6 +35,7 @@ STATUS_CODE_DEF(K_SCALING, "The cluster is scaling")
 STATUS_CODE_DEF(K_CLIENT_DEADLOCK, "The client timeout")
 STATUS_CODE_DEF(K_LRU_HARD_LIMIT, "Lru hard limit")
 STATUS_CODE_DEF(K_LRU_SOFT_LIMIT, "Lru soft limit")
+STATUS_CODE_DEF(K_BUFFER_DEPRECATED, "Buffer deprecated")
 
 // rpc
 STATUS_CODE_DEF(K_RPC_CANCELLED, "RPC cancelled")
