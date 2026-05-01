@@ -133,37 +133,56 @@ void KVWorker::NotifyPeers(const std::vector<std::string> &keys, uint64_t size) 
     body += "],\"sender\":" + std::to_string(cfg_.instanceId)
           + ",\"size\":" + std::to_string(size) + "}";
 
+    // Resolve peer addresses
+    struct PeerAddr { std::string host; int port; };
+    std::vector<PeerAddr> targets;
+    targets.reserve(count);
     for (int i = 0; i < count; i++) {
         std::string hostPort = cfg_.peers[indices[i]];
         if (hostPort.size() > 7 && hostPort.compare(0, 7, "http://") == 0) {
             hostPort = hostPort.substr(7);
         }
-
         auto colonPos = hostPort.find(':');
         if (colonPos == std::string::npos) continue;
-
-        std::string host;
-        int port;
         try {
-            host = hostPort.substr(0, colonPos);
-            port = std::stoi(hostPort.substr(colonPos + 1));
-        } catch (...) {
-            continue;
-        }
+            targets.push_back({hostPort.substr(0, colonPos),
+                              std::stoi(hostPort.substr(colonPos + 1))});
+        } catch (...) { continue; }
+    }
 
-        notifyPool_.Submit([host, port, body]() {
-            try {
-                thread_local std::unordered_map<std::string,
-                    std::unique_ptr<httplib::Client>> clientCache;
-                std::string ckey = host + ":" + std::to_string(port);
-                auto &ref = clientCache[ckey];
-                if (!ref) {
-                    ref = std::make_unique<httplib::Client>(host, port);
-                    ref->set_connection_timeout(2);
-                    ref->set_read_timeout(2);
+    auto sendOne = [](const std::string &host, int port, const std::string &body) {
+        try {
+            thread_local std::unordered_map<std::string,
+                std::unique_ptr<httplib::Client>> clientCache;
+            std::string ckey = host + ":" + std::to_string(port);
+            auto &ref = clientCache[ckey];
+            if (!ref) {
+                ref = std::make_unique<httplib::Client>(host, port);
+                ref->set_connection_timeout(2);
+                ref->set_read_timeout(2);
+            }
+            ref->Post("/notify", body, "application/json");
+        } catch (...) {}
+    };
+
+    if (cfg_.notifyIntervalUs > 0) {
+        // Sequential: offload to thread pool, notify one by one with interval
+        int intervalUs = cfg_.notifyIntervalUs;
+        notifyPool_.Submit([targets = std::move(targets), body, intervalUs, sendOne]() {
+            for (size_t i = 0; i < targets.size(); i++) {
+                if (i > 0) {
+                    std::this_thread::sleep_for(
+                        std::chrono::microseconds(intervalUs));
                 }
-                ref->Post("/notify", body, "application/json");
-            } catch (...) {}
+                sendOne(targets[i].host, targets[i].port, body);
+            }
         });
+    } else {
+        // Parallel: fire-and-forget via thread pool
+        for (auto &t : targets) {
+            notifyPool_.Submit([h = t.host, p = t.port, body, sendOne]() {
+                sendOne(h, p, body);
+            });
+        }
     }
 }

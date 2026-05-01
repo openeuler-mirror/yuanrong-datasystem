@@ -334,6 +334,7 @@ REMOTE_HOST=myserver bash test_deploy.sh
 | `target_qps` | 100 | 目标总 QPS，`0` = 不限速全速运行 |
 | `num_set_threads` | 16 | Writer 线程数 |
 | `notify_count` | 10 | 每次写入后通知几个 peer（0 = 不通知） |
+| `notify_interval_us` | 0 | 逐个通知 peer 的间隔(微秒)，`0` = 并行通知 |
 | `enable_jitter` | true | 请求间隔随机化，打散多实例同步脉冲，QPS 均值不变 |
 | `batch_keys_count` | 1 | Batch ops 的 key 数量，`1` = 单 key 兼容 |
 | `enable_cross_node_connection` | true | 允许 failover 到其他节点的 standby worker |

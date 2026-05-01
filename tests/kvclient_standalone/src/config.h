@@ -23,6 +23,7 @@ struct Config {
     int targetQps = 100; // 0 = unlimited
     int numSetThreads = 16;
     int notifyCount = 10;
+    int notifyIntervalUs = 0; // delay between peer notifications in microseconds, 0 = parallel
     bool enableJitter = true; // randomize sleep to stagger requests
     bool enableCrossNodeConnection = true; // allow failover to standby workers on other nodes
     int batchKeysCount = 1;                 // batch 操作的 key 数量，1 = 单 key 兼容

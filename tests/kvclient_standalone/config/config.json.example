@@ -20,6 +20,7 @@
 
   "// === Peer通知 ===": "",
   "notify_count": 10,
+  "notify_interval_us": 0,
   "peers": ["http://host1:9000", "http://host2:9000"],
 
   "// === 运行配置 ===": "",
