@@ -421,6 +421,8 @@ global:
     ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: false
+    # Warm up worker-worker connections during worker startup. Optional values: none, urma.
+    warmupConnection: "urma"
     # Shared memory distribution policy.
     # Optional values:
     #   - none: do not perform NUMA distribution pre-touch.
