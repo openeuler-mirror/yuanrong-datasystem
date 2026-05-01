@@ -19,12 +19,18 @@
  */
 #include "datasystem/worker/worker_oc_server.h"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <exception>
 #include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <vector>
 #include <unistd.h>
 
@@ -189,7 +195,15 @@ constexpr int32_t DEFAULT_STREAM_SOCKET_NUM = 8;       // The default stream soc
 constexpr double DFT_TIMEOUT_MULT = 1.0;          // A default timeout multiplier iartWorkerf file cache HA is used.
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;  // size limit of the thread pool
 constexpr int32_t CHECK_ASYNC_SLEEP_TIME_S = 1;   // Check async task time interval.
+constexpr int32_t WARMUP_THREAD_NUM = 4;
+constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
+constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
+constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
+constexpr uint32_t WARMUP_STABLE_ROUNDS = 3;
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
+static const std::string WARMUP_CONNECTION_NONE_OPTION = "none";
+static const std::string URMA_WARMUP_OPTION = "urma";
+static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 
 namespace {
 bool IsWorkerScopedSlotStoreEnabled()
@@ -205,6 +219,16 @@ bool EnableOCService()
 bool EnableSCService()
 {
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
+}
+
+std::string BuildWarmupKey(const std::string &workerAddr)
+{
+    std::string encoded = workerAddr;
+    std::replace_if(encoded.begin(), encoded.end(), [](unsigned char c) {
+        return !(std::isalnum(c) || c == '-' || c == '_' || c == '!' || c == '@' || c == '#' || c == '%' ||
+                 c == '^' || c == '*' || c == '(' || c == ')' || c == '+' || c == '=' || c == ':' || c == ';');
+    }, '_');
+    return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 }  // namespace
 
@@ -223,6 +247,7 @@ static bool ValidateEtcdOrMetastoreAddress()
 
 WorkerOCServer::~WorkerOCServer()
 {
+    StopConnectionWarmup();
     if (replicaManager_ != nullptr) {
         replicaManager_->Shutdown();
     }
@@ -1136,6 +1161,146 @@ Status WorkerOCServer::WaitForServiceReady()
     return Status::OK();
 }
 
+Status WorkerOCServer::MaybeStartConnectionWarmup()
+{
+    if (FLAGS_warmup_connection == WARMUP_CONNECTION_NONE_OPTION) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(FLAGS_warmup_connection == URMA_WARMUP_OPTION, K_INVALID,
+                             FormatString("Unsupported warmup_connection value: %s", FLAGS_warmup_connection));
+    if (!FLAGS_enable_urma) {
+        LOG(WARNING) << "[URMA_WARMUP] warmup_connection=urma but enable_urma=false, skip warmup.";
+        return Status::OK();
+    }
+    if (!EnableOCService()) {
+        LOG(WARNING) << "[URMA_WARMUP] object cache service is disabled, skip warmup.";
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY, "Object cache service is not ready.");
+    RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->PrepareUrmaWarmupObject(BuildWarmupKey(hostPort_.ToString())));
+    warmupExit_ = false;
+    RETURN_IF_EXCEPTION_OCCURS(warmupThreadPool_ =
+                                   std::make_shared<ThreadPool>(WARMUP_THREAD_NUM, WARMUP_THREAD_NUM, "UrmaWarmup"));
+    RaiiPlus cleanupWarmupThreadPool([this]() { ReleaseWarmupThreadPool(); });
+    RETURN_IF_EXCEPTION_OCCURS(warmupControllerThread_ = std::make_unique<Thread>([this]() {
+        RunUrmaWarmupController();
+    }));
+    cleanupWarmupThreadPool.ClearAllTask();
+    warmupControllerThread_->set_name("UrmaWarmup");
+    return Status::OK();
+}
+
+void WorkerOCServer::StopConnectionWarmup()
+{
+    warmupExit_ = true;
+    if (warmupControllerThread_ != nullptr) {
+        warmupControllerThread_->join();
+        warmupControllerThread_.reset();
+    }
+    warmupThreadPool_.reset();
+}
+
+void WorkerOCServer::ReleaseWarmupThreadPool()
+{
+    warmupThreadPool_.reset();
+}
+
+void WorkerOCServer::ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers,
+                                             std::unordered_set<std::string> &scheduledPeers,
+                                             std::vector<std::future<bool>> &futures)
+{
+    for (const auto &worker : workers) {
+        if (warmupExit_) {
+            break;
+        }
+        if (worker.first == hostPort_.ToString() || scheduledPeers.count(worker.first) > 0) {
+            continue;
+        }
+        KeepAliveValue keepAliveValue;
+        auto parseRc = KeepAliveValue::FromString(worker.second, keepAliveValue);
+        if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+            continue;
+        }
+        scheduledPeers.emplace(worker.first);
+        try {
+            futures.emplace_back(warmupThreadPool_->Submit([this, peerAddr = worker.first]() {
+                if (warmupExit_) {
+                    return false;
+                }
+                auto rc = objCacheClientWorkerSvc_->WarmupUrmaConnectionToPeer(peerAddr, BuildWarmupKey(peerAddr));
+                if (rc.IsError()) {
+                    LOG(WARNING) << FormatString("[URMA_WARMUP] peer warmup failed, peer=%s, status=%s", peerAddr,
+                                                 rc.ToString());
+                    return false;
+                }
+                return true;
+            }));
+        } catch (const std::exception &e) {
+            LOG(WARNING) << FormatString("[URMA_WARMUP] submit peer warmup failed, peer=%s, error=%s", worker.first,
+                                         e.what());
+            scheduledPeers.erase(worker.first);
+        }
+    }
+}
+
+size_t WorkerOCServer::GetUrmaWarmupSuccessCount(std::vector<std::future<bool>> &futures) const
+{
+    size_t successCount = 0;
+    for (auto &future : futures) {
+        try {
+            if (future.valid() && future.get()) {
+                ++successCount;
+            }
+        } catch (const std::exception &e) {
+            LOG(WARNING) << "[URMA_WARMUP] peer warmup task failed, error=" << e.what();
+        }
+    }
+    return successCount;
+}
+
+bool WorkerOCServer::ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const
+{
+    return elapsedMs >= WARMUP_MAX_SCAN_MS ||
+           (elapsedMs >= WARMUP_MIN_SCAN_MS && stableRounds >= WARMUP_STABLE_ROUNDS);
+}
+
+void WorkerOCServer::RunUrmaWarmupController()
+{
+    Raii releaseWarmupPool([this]() { ReleaseWarmupThreadPool(); });
+    if (etcdStore_ == nullptr) {
+        LOG(WARNING) << "[URMA_WARMUP] etcd store is null, skip peer warmup.";
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    std::unordered_set<std::string> scheduledPeers;
+    std::vector<std::future<bool>> futures;
+    for (uint32_t stableRounds = 0; !warmupExit_;) {
+        std::vector<std::pair<std::string, std::string>> workers;
+        int64_t revision = 0;
+        auto rc = etcdStore_->GetAll(ETCD_CLUSTER_TABLE, workers, revision);
+        if (rc.IsError()) {
+            LOG(WARNING) << "[URMA_WARMUP] get ready workers failed, status=" << rc.ToString();
+        }
+        auto oldPeerCount = scheduledPeers.size();
+        ScheduleUrmaWarmupTasks(workers, scheduledPeers, futures);
+
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        stableRounds = scheduledPeers.size() == oldPeerCount ? stableRounds + 1 : 0;
+        if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(WARMUP_SCAN_INTERVAL_MS));
+    }
+
+    auto successCount = GetUrmaWarmupSuccessCount(futures);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    LOG(INFO) << FormatString("[URMA_WARMUP] finished actual_success_count=%zu/total_count=%zu, elapsed_ms=%lld, "
+                              "discovered_peer_count=%zu",
+                              successCount, futures.size(), elapsedMs, scheduledPeers.size());
+}
+
 Status WorkerOCServer::ReadinessProbe()
 {
     // delete health check flag for worker service
@@ -1183,6 +1348,7 @@ Status WorkerOCServer::Start()
             RETURN_IF_NOT_OK(SetHealthProbe());
         }
     }
+    RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartConnectionWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK(metrics::InitKvMetrics());
     RETURN_IF_NOT_OK(ResMetricCollector::Instance().Init());
@@ -1338,6 +1504,7 @@ Status WorkerOCServer::Shutdown()
 {
     INJECT_POINT("worker.BeforeShutdown");
     LOG(INFO) << "Worker process executing a shutdown.";
+    StopConnectionWarmup();
     StopLivenessCheck();
     // Stop the background resource collector to prevent the background resource collector from invoking the background
     // resource collector when some objects of the worker exit.
