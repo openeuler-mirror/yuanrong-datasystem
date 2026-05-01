@@ -856,8 +856,6 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
                     << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
                     << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
                     << ", urma_inflight_wr_count: " << tbbEventMap_.size()
-                    << ", numa affinity srcChipId: " << static_cast<uint32_t>(args.srcChipId)
-                    << ", numa affinity dstChipId: " << static_cast<uint32_t>(args.dstChipId)
                     << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
