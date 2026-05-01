@@ -79,6 +79,8 @@ global:
     enableWorkerWorkerBatchGet: true
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: true
+    # Warm up worker-worker connections during worker startup. Optional values: none, urma.
+    warmupConnection: "urma"
     # Number of complete record to poll at a time, 16 is the max this device can poll.
     urmaPollSize: 8
     # [DEPRECATED] Retained for compatibility only and ignored internally. JFS/JFR are now created per connection.
