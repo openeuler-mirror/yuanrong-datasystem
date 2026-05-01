@@ -601,11 +601,18 @@ Status EtcdStore::LaunchKeepAliveThreads()
                 networkFailedConfirmTimes = 0;
                 needHandleKeepAlivefailed = true;
             }
-            bool etcdAvaliableWhenNetworkFaile = false;
+            bool etcdAvaliableWhenNetworkFailed = false;
             if (needHandleKeepAlivefailed && checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
-                etcdAvaliableWhenNetworkFaile = checkEtcdStateWhenNetworkFailedHandler_();
+                etcdAvaliableWhenNetworkFailed = checkEtcdStateWhenNetworkFailedHandler_();
+                if (!etcdAvaliableWhenNetworkFailed) {
+                    // No peer can reach etcd either, so this is a cluster-wide outage, not a local fault.
+                    // Reset the failure timer and confirmation counter so they only measure local failures.
+                    keepAliveTimeoutTimer_.Reset();
+                    networkFailedConfirmTimes = 0;
+                }
             }
-            if (etcdAvaliableWhenNetworkFaile && ++networkFailedConfirmTimes >= networkFailedConfirmMinTimes) {
+            // retry-based failure check
+            if (etcdAvaliableWhenNetworkFailed && ++networkFailedConfirmTimes >= networkFailedConfirmMinTimes) {
                 auto rc1 = HandleKeepAliveFailed();
                 LOG_IF_ERROR(rc1, "add remove event failed when keep alive failed");
                 if (rc1.IsOk()) {
@@ -626,7 +633,8 @@ Status EtcdStore::LaunchKeepAliveThreads()
                 LOG(INFO) << "Etcd is currently not available for keepAlive, we only need to retry, no other "
                              "additional operations are required.";
             }
-            if (etcdAvaliableWhenNetworkFaile
+            // independant timeout-based failure check
+            if (etcdAvaliableWhenNetworkFailed
                 && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
                 && FLAGS_auto_del_dead_node) {
                 LOG(WARNING) << FormatString(
