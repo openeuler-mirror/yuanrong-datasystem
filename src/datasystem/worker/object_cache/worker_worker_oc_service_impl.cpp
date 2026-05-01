@@ -158,8 +158,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] offset[%ld] size[%ld]", req.object_key(),
-                              req.request_id(), req.read_offset(), req.read_size());
+    std::string callerAddress;
+    if (req.has_urma_info()) {
+        callerAddress = FormatString("%s:%d", req.urma_info().request_address().host(),
+                                     req.urma_info().request_address().port());
+    } else if (req.has_ucp_info()) {
+        callerAddress = FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(),
+                                     req.ucp_info().remote_ip_addr().port());
+    }
+    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              req.object_key(), req.request_id(), callerAddress, localAddress_.ToString(),
+                              req.read_offset(), req.read_size());
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
     return Status::OK();
@@ -176,6 +185,17 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> eventKeys;
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
+    std::string callerAddress;
+    if (subReq.has_urma_info()) {
+        callerAddress = FormatString("%s:%d", subReq.urma_info().request_address().host(),
+                                     subReq.urma_info().request_address().port());
+    } else if (subReq.has_ucp_info()) {
+        callerAddress = FormatString("%s:%d", subReq.ucp_info().remote_ip_addr().host(),
+                                     subReq.ucp_info().remote_ip_addr().port());
+    }
+    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              subReq.object_key(), subReq.request_id(), callerAddress, localAddress_.ToString(),
+                              subReq.read_offset(), subReq.read_size());
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
