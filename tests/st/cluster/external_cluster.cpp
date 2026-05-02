@@ -33,6 +33,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/log/trace.h"
+#include "cluster/test_port_allocator.h"
 
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_bool(enable_etcd_auth);
@@ -884,6 +885,8 @@ Status ExternalCluster::StartEtcdNode(int index)
     LOG(INFO) << "Launch etcd [" << index << "] command: " << etcdCmd;
     auto etcdProcess = std::make_unique<EtcdProcess>(etcdCmd, opts_.etcdIpAddrs[index]);
     RETURN_IF_NOT_OK(etcdProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.etcdIpAddrs[index].first.Port(), etcdProcess->Pid());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.etcdIpAddrs[index].second.Port(), etcdProcess->Pid());
     etcdProcesses_.emplace_back(std::move(etcdProcess));
     return Status::OK();
 }
@@ -915,6 +918,7 @@ Status ExternalCluster::StartMaster(int index)
     LOG(INFO) << "Launch master [" << index << "] command: " << masterCmd;
     auto masterProcess = std::make_unique<MasterProcess>(masterCmd, opts_.masterIpAddrs[index]);
     RETURN_IF_NOT_OK(masterProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.masterIpAddrs[index].Port(), masterProcess->Pid());
     masterProcesses_.emplace_back(std::move(masterProcess));
     return Status::OK();
 }
@@ -1064,6 +1068,10 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     std::string workerName = "worker_" + std::to_string(index);
     workerProcess->SetEnv({ std::make_pair("POD_NAME", workerName) });
     RETURN_IF_NOT_OK(workerProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.workerConfigs[index].Port(), workerProcess->Pid());
+    if (static_cast<size_t>(index) < opts_.workerOcDirectPorts.size()) {
+        TestPortAllocator::Instance().RegisterChildPid(opts_.workerOcDirectPorts[index], workerProcess->Pid());
+    }
     workerProcesses_[index].reset(workerProcess.release());
     if (opts_.waitWorkerReady) {
         RETURN_IF_NOT_OK(WaitNodeReady(WORKER, index, WAIT_TIMEOUT_SECS));
@@ -1124,6 +1132,7 @@ Status ExternalCluster::StartOBS(int index)
     LOG(INFO) << "Launch mock OBS [" << index << "] command: " << cmd;
     auto csProcess = std::make_unique<OBSProcess>(cmd, opts_.OBSIpAddrs[index]);
     RETURN_IF_NOT_OK(csProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.OBSIpAddrs[index].Port(), csProcess->Pid());
     OBSProcesses_.emplace_back(std::move(csProcess));
     return Status::OK();
 }

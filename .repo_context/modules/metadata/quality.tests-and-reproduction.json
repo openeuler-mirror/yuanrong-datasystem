@@ -6,11 +6,15 @@
   "module_type": "leaf",
   "canonical_docs": {
     "overview": ".repo_context/modules/quality/tests-and-reproduction.md",
-    "design": null,
-    "details": []
+    "design": ".repo_context/modules/quality/test-suite-design.md",
+    "details": [
+      ".repo_context/modules/quality/build-test-debug.md"
+    ]
   },
   "playbooks": {
-    "feature": [],
+    "feature": [
+      ".repo_context/playbooks/features/quality/test-implementation.md"
+    ],
     "operations": [
       ".repo_context/playbooks/operations/incident-triage.md",
       ".repo_context/playbooks/operations/performance-investigation.md"
@@ -21,9 +25,18 @@
   },
   "source_roots": [
     "tests",
-    "build.sh"
+    "build.sh",
+    "scripts/build_cmake.sh",
+    "scripts/build_bazel.sh",
+    "cmake/util.cmake",
+    "cmake/scripts/GoogleTestToCTest.cmake"
   ],
-  "key_tests": [],
+  "key_tests": [
+    "tests/ut/CMakeLists.txt",
+    "tests/st/CMakeLists.txt",
+    "tests/python/test_ds_client.py",
+    "tests/python/prefetch_tests/test_multi_key_prefetch.py"
+  ],
   "module_boundary": {
     "related_modules": [
       "quality.build-test-debug"
@@ -34,10 +47,19 @@
     "keywords": [
       "tests",
       "reproduction",
-      "bug repro"
+      "bug repro",
+      "ctest",
+      "gtest",
+      "unittest",
+      "labels",
+      "run_python",
+      "run_example"
     ],
     "intent_examples": [
-      "choose tests or reproduce a bug"
+      "choose tests or reproduce a bug",
+      "add a test case",
+      "understand CTest labels",
+      "run Python tests"
     ]
   }
 }
