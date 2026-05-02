@@ -734,6 +734,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
                    [](const auto &kv) { return kv.first.objectKey; });
 
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_QUERY_META);
+    Timer queryMetaTimer;
     QueryMetadataFromMasterResult queryMetaResult;
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
     std::vector<RpcMessage> &payloads = queryMetaResult.payloads;
@@ -767,8 +768,9 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
-    VLOG(1) << FormatString("Query meta success: target num %d, success num %d", objectsNeedGetRemote.size(),
-                            queryMetas.size());
+    LOG(INFO) << FormatString("Query meta success: target num %d, success num %d, elapsed %.3f ms",
+                              objectsNeedGetRemote.size(), queryMetas.size(),
+                              queryMetaTimer.ElapsedMilliSecond());
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -1176,6 +1178,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     }
 
     bool dataSizeChange;
+    Timer remoteGetTimer;
     const int32_t minRetryOnceRpcMs = 1; // The 1st level of retryIntervalsMs
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> clientApi;
     do {
@@ -1239,7 +1242,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
     rpcPoint.Record();
-    LOG(INFO) << "Remote get success";
+    LOG(INFO) << FormatString("Remote get success, elapsed %.3f ms", remoteGetTimer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -1515,9 +1518,11 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             const std::vector<std::string> &currentIds = item.second;
             bool isFromOtherAz = item.first.IsFromOtherAz();
             datasystem::master::QueryMetaRspPb &rsp = res.rsp;
+            Timer queryMetaTimer;
             auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, isFromOtherAz, rsp, res.payloads);
             if (rc.IsError()) {
-                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s", masterAddr.ToString(), rc.ToString());
+                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
+                                           masterAddr.ToString(), rc.ToString(), queryMetaTimer.ElapsedMilliSecond());
                 res.failedKeys.insert(currentIds.begin(), currentIds.end());
                 return rc;
             }
@@ -1734,7 +1739,8 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
     LOG(INFO) << "Query metadata from master: " << masterAddr << ", objects: " << VectorToString(objectKeys)
-              << ", request id: " << queryReqId;
+              << ", request id: " << queryReqId << ", remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
+              << "ms";
     *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
     req.set_request_id(queryReqId);
     req.set_redirect(redirect);
@@ -1843,26 +1849,32 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
             const auto &readKey = subIter->first;
             std::shared_ptr<SafeObjType> &subEntry = subIter->second.safeObj;
             bool isInsert = subIter->second.insert;
+            Timer getFromRemoteTimer;
             Status status = GetObjectFromAnywhereWithLock(readKey, request, subEntry, isInsert, queryMeta, payloads);
+            double remoteElapsed = getFromRemoteTimer.ElapsedMilliSecond();
 
             // Protects access to successIds, needRetryIds, failedIds, and lastRc
             std::lock_guard<std::mutex> lock(commonMutex);
 
             if (status.IsOk()) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
+                LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success, elapsed %.3f ms.", objectKey,
+                                          remoteElapsed);
                 successIds.push_back(objectKey);
                 return status;
             }
             failedIds.emplace(objectKey);
             if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
+                LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker, elapsed %.3f ms.",
+                                          objectKey, remoteElapsed);
                 (void)needRetryIds.emplace(readKey);
             } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", objectKey);
+                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort, elapsed %.3f ms.",
+                                          objectKey, remoteElapsed);
                 lastRc = status;
                 abortAllTasks.store(true);
             } else {
-                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
+                LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s, elapsed %.3f ms.", objectKey,
+                                           status.ToString(), remoteElapsed);
                 lastRc = status;
             }
             return status;
@@ -1910,24 +1922,30 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereSerially(const std::vector<
             continue;
         }
         const auto &readKey = iter->first;
+        Timer getFromRemoteTimer;
         auto status = GetObjectFromAnywhereWithLock(readKey, request, iter->second.safeObj, iter->second.insert,
                                                     queryMeta, payloads);
+        double remoteElapsed = getFromRemoteTimer.ElapsedMilliSecond();
         if (status.IsOk()) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success.", objectKey);
+            LOG(INFO) << FormatString("[ObjectKey %s] Get from remote success, elapsed %.3f ms.", objectKey,
+                                      remoteElapsed);
             successIds.push_back(objectKey);
             continue;
         }
         failedIds.emplace(objectKey);
         if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker.", objectKey);
+            LOG(INFO) << FormatString("[ObjectKey %s] Object not found in remote worker, elapsed %.3f ms.", objectKey,
+                                      remoteElapsed);
             lastRc = Status::OK();
             (void)needRetryIds.emplace(readKey);
         } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort.", objectKey);
+            LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort, elapsed %.3f ms.", objectKey,
+                                      remoteElapsed);
             lastRc = status;
             break;
         } else {
-            LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s.", objectKey, status.ToString());
+            LOG(ERROR) << FormatString("[ObjectKey %s] Get from remote failed: %s, elapsed %.3f ms.", objectKey,
+                                       status.ToString(), remoteElapsed);
             lastRc = status;
         }
     }
