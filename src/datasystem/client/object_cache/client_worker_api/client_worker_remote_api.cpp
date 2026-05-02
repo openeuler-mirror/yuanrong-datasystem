@@ -386,7 +386,8 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when get date.");
-            VLOG(1) << "Start to send rpc to get object, rpc timeout: " << realRpcTimeout;
+            VLOG(1) << "Start to send rpc to get object, worker address: " << hostPort_.ToString()
+                    << ", rpc timeout: " << realRpcTimeout;
             getStatus = stub_->Get(opts, req, rsp, payloads);
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);

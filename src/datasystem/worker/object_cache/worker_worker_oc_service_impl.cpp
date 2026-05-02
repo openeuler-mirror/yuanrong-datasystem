@@ -148,7 +148,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     }
 
     pointImpl.Record();
-    LOG(INFO) << FormatString("pull success");
+    LOG(INFO) << "send data success";
     point.Record();
     return Status::OK();
 }
@@ -695,7 +695,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
     auto vlogLevel = payload.empty() ? 1 : 0;
-    VLOG(vlogLevel) << "pull success with payload size: " << payload.size();
+    VLOG(vlogLevel) << "send data success with payload size: " << payload.size();
     point.Record();
     return Status::OK();
 }
