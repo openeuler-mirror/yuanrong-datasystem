@@ -81,9 +81,9 @@
   - `WorkerOCServer::Start()` calls `etcdCM_->SetWorkerReady()` before `CommonServer::Start()`, then starts worker
     service tasks, runs `ReadinessProbe()`, and writes the configured ready-check file only after the worker RPC
     health check succeeds
-  - `warmup_connection=urma` runs after object-cache startup/restart handling and before `ReadinessProbe()`;
-    `warmup_connection=none` disables the warmup path. When enabled, it
-    synchronously prepares the local warmup object, then starts best-effort async peer warmup without delaying readiness
+  - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
+    `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
+    without delaying readiness
 - Steady state:
   - accept/register clients
   - manage shared-memory or socket-based FD passing for client-worker IPC

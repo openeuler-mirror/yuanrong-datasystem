@@ -201,8 +201,6 @@ constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
 constexpr uint32_t WARMUP_STABLE_ROUNDS = 3;
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
-static const std::string WARMUP_CONNECTION_NONE_OPTION = "none";
-static const std::string URMA_WARMUP_OPTION = "urma";
 static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 
 namespace {
@@ -1159,13 +1157,8 @@ Status WorkerOCServer::WaitForServiceReady()
 
 Status WorkerOCServer::MaybeStartConnectionWarmup()
 {
-    if (FLAGS_warmup_connection == WARMUP_CONNECTION_NONE_OPTION) {
-        return Status::OK();
-    }
-    CHECK_FAIL_RETURN_STATUS(FLAGS_warmup_connection == URMA_WARMUP_OPTION, K_INVALID,
-                             FormatString("Unsupported warmup_connection value: %s", FLAGS_warmup_connection));
     if (!FLAGS_enable_urma) {
-        LOG(WARNING) << "[URMA_WARMUP] warmup_connection=urma but enable_urma=false, skip warmup.";
+        LOG(INFO) << "[URMA_WARMUP] enable_urma=false, skip warmup.";
         return Status::OK();
     }
     if (!EnableOCService()) {
