@@ -59,6 +59,7 @@ constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
 constexpr uint32_t URMA_LOG_LIMIT_US = 100;
+constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr const char *RECV_JETTY_KEY_PREFIX = "recv:";
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
     "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
@@ -1312,8 +1313,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                                  "ret: %d, suggest: %s",
                                                  key, ret, URMA_ERROR_SUGGEST));
         }
-        VLOG(1) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << t.ElapsedMilliSecond()
-                << ", request id:" << key;
+        auto elapsedUs = t.ElapsedMicroSecond();
+        auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
+        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu()
+                        << ", elapsed:" << elapsedUs << " us, request id:" << key;
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;

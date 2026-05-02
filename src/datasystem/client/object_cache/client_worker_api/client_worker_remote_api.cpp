@@ -54,9 +54,13 @@ Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shar
                             std::vector<MemView> &payloads, UrmaFallbackTcpLimiter::Ticket &ticket)
 {
     if (IsUrmaFallbackPayload(bufferInfo)) {
-        RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(
+        auto rc = UrmaFallbackTcpLimiter::TryAcquire(
             pendingBytes, bufferInfo->dataSize,
-            Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG), CLIENT_TO_WORKER_FALLBACK, ticket));
+            Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG), CLIENT_TO_WORKER_FALLBACK, ticket);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Client-to-worker TCP fallback payload rejected: " << rc.ToString();
+            return rc;
+        }
     }
     payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
     return Status::OK();

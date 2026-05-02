@@ -33,7 +33,7 @@ TEST(UrmaFallbackTcpLimiterTest, RejectsPayloadNotSmallerThanOneMb)
         "worker->client", ticket);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
     ASSERT_EQ(pendingBytes.load(), 0UL);
 }
 
@@ -46,7 +46,7 @@ TEST(UrmaFallbackTcpLimiterTest, RejectsWhenPendingPlusCurrentExceedsTenMb)
                                            "worker->worker", ticket, false);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
     ASSERT_EQ(pendingBytes.load(), UrmaFallbackTcpLimiter::kMaxPendingBytes - 256);
 }
 
