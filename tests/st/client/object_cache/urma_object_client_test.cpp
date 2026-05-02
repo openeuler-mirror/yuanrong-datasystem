@@ -135,7 +135,6 @@ protected:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -warmup_connection=urma";
         opts.injectActions += opts.injectActions.empty() ? "" : ";";
         opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT + ":call();"
                               + QUERY_META_INJECT + ":call()";
@@ -154,20 +153,9 @@ class UrmaConnectionWarmupFailureTest : public UrmaObjectClientTest {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -warmup_connection=urma";
         opts.injectActions += opts.injectActions.empty() ? "" : ";";
         opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT
                               + ":return(K_RPC_UNAVAILABLE)";
-    }
-};
-
-class UrmaConnectionWarmupDisabledTest : public UrmaObjectClientTest {
-    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
-    {
-        UrmaObjectClientTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -warmup_connection=none";
-        opts.injectActions += opts.injectActions.empty() ? "" : ";";
-        opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT + ":call()";
     }
 };
 
@@ -223,18 +211,6 @@ TEST_F(UrmaConnectionWarmupWithoutBatchGetTest, RemoteWarmupRunsWhenBatchGetDisa
     for (uint32_t i = 0; i < WORKER_NUM; ++i) {
         WaitForWorkerInjectExecuteCount(i, WARMUP_PREPARE_INJECT, 1);
         WaitForWorkerInjectExecuteCount(i, WARMUP_REMOTE_GET_INJECT, 1, 60'000);
-    }
-}
-
-TEST_F(UrmaConnectionWarmupDisabledTest, WarmupConnectionNoneSkipsWarmup)
-{
-    for (uint32_t i = 0; i < WORKER_NUM; ++i) {
-        uint64_t prepareCount = 0;
-        uint64_t remoteGetCount = 0;
-        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, i, WARMUP_PREPARE_INJECT, prepareCount));
-        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, i, WARMUP_REMOTE_GET_INJECT, remoteGetCount));
-        ASSERT_EQ(prepareCount, 0ul);
-        ASSERT_EQ(remoteGetCount, 0ul);
     }
 }
 

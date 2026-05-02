@@ -54,15 +54,6 @@ bool ValidateUrmaMode(const char *flagName, const std::string &value)
 #endif
 }
 
-bool ValidateWarmupConnection(const char *flagName, const std::string &value)
-{
-    if (value == "none" || value == "urma") {
-        return true;
-    }
-    LOG(ERROR) << FormatString("Invalid %s value: %s. Optional values are 'none' and 'urma'.", flagName, value);
-    return false;
-}
-
 bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::string &value)
 {
     if (value == "none" || value == "interleave_all_numa" || value == "interleave_affinity_numa") {
@@ -125,7 +116,6 @@ DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
-DS_DEFINE_validator(warmup_connection, &ValidateWarmupConnection);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
