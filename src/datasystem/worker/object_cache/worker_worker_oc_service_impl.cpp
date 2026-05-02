@@ -520,11 +520,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         uint64_t localSegSize;
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
         Status fastTransportStatus = Status::OK();
-        auto markFastTransferResult = [&rsp, &objectKey](const Status &status, const char *transportName) {
+        std::string fastTransportName;
+        auto markFastTransferResult = [&rsp](const Status &status) {
             if (status.IsError()) {
                 CHECK_FAIL_RETURN_STATUS(FLAGS_enable_transport_fallback, status.GetCode(), status.GetMsg());
-                LOG(WARNING) << FormatString("%s[%s] fallback to tcp, rc = %s", transportName, objectKey,
-                                             status.ToString());
                 return Status::OK();
             }
             rsp.set_data_source(datasystem::DataTransferSource::DATA_ALREADY_TRANSFERRED);
@@ -551,13 +550,15 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                 auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize, localObjectAddress, offset,
                                            size, entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
                 fastTransportStatus = rc;
-                RETURN_IF_NOT_OK(markFastTransferResult(rc, "UrmaWrite"));
+                fastTransportName = "UrmaWrite";
+                RETURN_IF_NOT_OK(markFastTransferResult(rc));
             } else if (IsUcpEnabled()) {
                 // later add a check on data size and read size.
                 auto rc = UcpPutPayload(req.ucp_info(), localObjectAddress, offset, size, entry->GetMetadataSize(),
                                         blocking, eventKeys);
                 fastTransportStatus = rc;
-                RETURN_IF_NOT_OK(markFastTransferResult(rc, "UcpWrite"));
+                fastTransportName = "UcpWrite";
+                RETURN_IF_NOT_OK(markFastTransferResult(rc));
             }
         }
 
@@ -586,11 +587,15 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                         }
                         canPrepareFallbackPayload = false;
                     } else {
+                        LOG(WARNING) << FormatString("Worker-to-worker TCP fallback payload rejected for object %s: %s",
+                                                     objectKey, rc.ToString());
                         RETURN_IF_NOT_OK(rc);
                     }
                 }
             }
             if (canPrepareFallbackPayload) {
+                LOG_IF(WARNING, fastTransportStatus.IsError()) << FormatString(
+                    "%s[%s] fallback to tcp, rc = %s", fastTransportName, objectKey, fastTransportStatus.ToString());
                 RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayload, objKv.GetReadOffset(), objKv.GetReadSize()));
             }
         }
@@ -768,6 +773,7 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
             if (batchFallback) {
                 if (fallbackStatus.IsError()) {
                     // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                    LOG(WARNING) << "Worker-to-worker TCP fallback payload rejected: " << fallbackStatus.ToString();
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
                     rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
                     index += coveredRespNum;
@@ -802,6 +808,14 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
         if (waitFailed) {
             if (fallbackStatus.IsError()) {
                 // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
+                HostPort requestAddress;
+                LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(req, requestAddress),
+                             "GetRemoteAddressFromBatchGetReq failed");
+                const auto targetAddress = requestAddress.ToString();
+                LOG(WARNING) << FormatString(
+                    "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
+                    "wait rc = %s, fallback rc = %s",
+                    srcAddress, targetAddress, status.ToString(), fallbackStatus.ToString());
                 rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
                 rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
                 return fallbackStatus;
