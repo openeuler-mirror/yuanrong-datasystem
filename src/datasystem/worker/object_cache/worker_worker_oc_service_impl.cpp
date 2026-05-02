@@ -45,6 +45,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
+DS_DECLARE_string(worker_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(oc_worker_worker_parallel_nums);
 DS_DECLARE_int32(oc_worker_worker_parallel_min);
@@ -166,8 +167,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
         callerAddress = FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(),
                                      req.ucp_info().remote_ip_addr().port());
     }
-    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
-                              req.object_key(), req.request_id(), callerAddress, localAddress_.ToString(),
+    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              req.object_key(), FLAGS_worker_address, callerAddress,
                               req.read_offset(), req.read_size());
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
@@ -193,8 +194,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
         callerAddress = FormatString("%s:%d", subReq.ucp_info().remote_ip_addr().host(),
                                      subReq.ucp_info().remote_ip_addr().port());
     }
-    LOG(INFO) << FormatString("Processing pull object[%s] request[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
-                              subReq.object_key(), subReq.request_id(), callerAddress, localAddress_.ToString(),
+    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
+                              subReq.object_key(), FLAGS_worker_address, callerAddress,
                               subReq.read_offset(), subReq.read_size());
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
