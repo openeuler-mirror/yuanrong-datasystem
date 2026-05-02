@@ -106,10 +106,8 @@
   - validates Metastore-specific settings
   - starts head node first only in Metastore mode
 - URMA connection warmup config surfaces:
-  - `dscli` config-file mode uses `worker_config.json` key `warmup_connection`; inline mode can pass
-    `--warmup_connection=urma` to enable or `--warmup_connection=none` to disable
-  - DaemonSet Helm deployment uses `global.performance.warmupConnection`, rendered as `-warmup_connection`;
-    supported values are `urma` and `none`
+  - there is no standalone warmup selector; when `enable_urma=true`, workers use URMA warmup
+  - DaemonSet Helm deployment uses `global.performance.enableUrma`, rendered as `-enable_urma`
   - Deployment image mode uses `k8s_deployment/helm_chart/worker.config` because `worker_entry.sh` starts the worker with `dscli start -f ${CONFIG_FILE}`
 
 ## Common Questions And First Places To Look
