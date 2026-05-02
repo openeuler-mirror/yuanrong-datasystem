@@ -128,7 +128,8 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   └── quality/
 │       ├── README.md
 │       ├── build-test-debug.md
-│       └── tests-and-reproduction.md
+│       ├── tests-and-reproduction.md
+│       └── test-suite-design.md
 ├── playbooks/
 │   ├── README.md
 │   ├── operations/
@@ -141,6 +142,9 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   └── skill-trigger-routing.md
 │   └── features/
 │       ├── README.md
+│       ├── quality/
+│       │   ├── README.md
+│       │   └── test-implementation.md
 │       └── infra/
 │           ├── README.md
 │           ├── l2cache/
@@ -177,6 +181,8 @@ The first pass is intentionally coarse. It currently covers:
 - navigation for moving from broad repository orientation to domain documents;
 - coarse module boundaries across source, SDK, CLI, docs, and tests;
 - build, test, and debug entrypoints already used by this repository;
+- current `tests/` layout, CMake/gtest-to-CTest registration, CTest labels, Python unittest orchestration, example
+  smoke-test flow, and test implementation workflow guidance;
 - a generated file-tree index to support fast orientation;
 - first-pass domain documents grouped under `overview`, `client`, `runtime`, `infra`, and `quality`;
 - repository-local skill inventory and trigger routing for `.skills/`;

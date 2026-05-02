@@ -18,6 +18,9 @@ playbooks/
 │   └── module-context-generation.md
 └── features/
     ├── README.md
+    ├── quality/
+    │   ├── README.md
+    │   └── test-implementation.md
     └── infra/
         ├── README.md
         ├── l2cache/
@@ -59,6 +62,8 @@ Task-oriented guidance now starts in:
 - `upkeep/module-context-generation.md`
 - `upkeep/skill-trigger-routing.md`
 - `features/README.md`
+- `features/quality/README.md`
+- `features/quality/test-implementation.md`
 - `features/infra/README.md`
 - `features/infra/l2cache/README.md`
 - `features/infra/l2cache/implementation.md`

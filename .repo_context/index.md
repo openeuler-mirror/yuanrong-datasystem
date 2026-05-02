@@ -41,6 +41,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | investigate a performance regression or latency issue | `modules/infra/observability/performance-troubleshooting.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*`, `tests/perf/*` |
 | understand readiness, liveness, and runtime health checks | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | choose tests or reproduce a bug | `modules/quality/tests-and-reproduction.md` | `tests/*`, `build.sh` |
+| understand test harness structure, CTest labels, or C++/Python/example test flows | `modules/quality/test-suite-design.md` | `tests/*`, `cmake/scripts/GoogleTestToCTest.cmake`, `scripts/build_cmake.sh` |
+| add, move, label, or review tests | `playbooks/features/quality/test-implementation.md` | `modules/quality/tests-and-reproduction.md`, `modules/quality/test-suite-design.md`, nearest existing tests |
 | design and implement a low-risk logging feature | `playbooks/features/infra/logging/implementation.md` | `modules/infra/logging/design.md`, `src/datasystem/common/log/*` |
 | triage a production-style incident or collect first-pass evidence | `playbooks/operations/incident-triage.md` | `modules/infra/observability/diagnosis-and-operations.md`, `modules/quality/tests-and-reproduction.md` |
 | run a structured performance investigation | `playbooks/operations/performance-investigation.md` | `modules/infra/observability/performance-troubleshooting.md`, `tests/perf/*` |
@@ -82,6 +84,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | runtime health and runbook | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | build/test/debug | `modules/quality/build-test-debug.md` | `build.sh`, `tests`, top-level CMake |
 | test selection and repro | `modules/quality/tests-and-reproduction.md` | `tests/ut`, `tests/st` |
+| test harness design | `modules/quality/test-suite-design.md` | `tests/CMakeLists.txt`, `cmake/util.cmake`, `cmake/scripts/GoogleTestToCTest.cmake` |
+| test implementation workflow | `playbooks/features/quality/test-implementation.md` | `tests`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt` |
 | l2 cache feature workflow | `playbooks/features/infra/l2cache/implementation.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | slot feature workflow | `playbooks/features/infra/slot/implementation.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 

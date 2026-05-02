@@ -19,3 +19,4 @@ Rules:
 Current docs:
 
 - `infra/README.md`
+- `quality/README.md`

@@ -8,3 +8,4 @@ Current docs:
 
 - `build-test-debug.md`: build entrypoints, debug tooling, sanitizer, and coverage orientation.
 - `tests-and-reproduction.md`: test selection and bug reproduction guidance.
+- `test-suite-design.md`: current test harness structure, CMake/gtest-to-CTest registration, labels, and runtime flows.
