@@ -4,6 +4,8 @@ Use this file when you know the problem type but not the owning module.
 
 ## Feature Work
 
+- If the change adds, moves, labels, or reviews tests:
+  - read `playbooks/features/quality/test-implementation.md`
 - If the change starts from a public SDK call:
   - read `modules/client/client-sdk.md`
 - If the change touches worker startup, request handling, or service flags:
@@ -26,6 +28,8 @@ Use this file when you know the problem type but not the owning module.
 
 - If you need to know what tests to run first:
   - read `modules/quality/tests-and-reproduction.md`
+- If the failure depends on generated CTest names, labels, disabled tests, or serial execution:
+  - read `modules/quality/test-suite-design.md`
 - If the failure is in client init, auth, or SDK binding:
   - read `modules/client/client-sdk.md`
 - If the failure appears only after worker start or during client registration:

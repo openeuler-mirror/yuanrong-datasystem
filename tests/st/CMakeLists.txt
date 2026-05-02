@@ -61,7 +61,8 @@ list(APPEND DS_ST_EMBEDDED_CLIENT_SRCS
         test_main.cpp
         cluster/external_cluster.cpp
         cluster/subprocess.cpp
-        cluster/common.cpp)
+        cluster/common.cpp
+        cluster/test_port_allocator.cpp)
 
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*curvekey_generator.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*encrypt_util.cpp)
