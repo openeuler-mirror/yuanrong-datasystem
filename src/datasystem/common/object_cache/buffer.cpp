@@ -243,8 +243,9 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
         const void *dataPtr = ImmutableData();
         if (dataPtr != nullptr && dataSize > 0) {
             Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize);
-            VLOG(DEBUG_LOG_LEVEL) << "Try to publish via UB, object key: " << bufferInfo_->objectKey
-                                  << ", ub send status: " << ubStatus.ToString();
+            LOG_IF(ERROR, ubStatus.IsError())
+                << "Try to publish via UB but failed! object key: " << bufferInfo_->objectKey
+                << ", ub send status: " << ubStatus.ToString();
         }
     }
 
