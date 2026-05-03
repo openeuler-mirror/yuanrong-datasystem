@@ -43,6 +43,9 @@ constexpr int WORKER_NUM = 3;
 const int K_2 = 2, K_5 = 5, K_10 = 10, K_100 = 100;
 constexpr int64_t SHM_SIZE = 500 * 1024;
 constexpr int ABNORMAL_EXIT_CODE = -2;
+const char *WARMUP_PREPARE_INJECT = "WorkerOCServiceImpl.PrepareUrmaWarmupObject.done";
+const char *WARMUP_REMOTE_GET_INJECT = "WorkerOcServiceGetImpl.WarmupGetObjectFromRemoteWorker.begin";
+const char *QUERY_META_INJECT = "worker.before_query_meta";
 }  // namespace
 class UrmaObjectClientTest : public OCClientCommon {
 public:
@@ -125,6 +128,51 @@ public:
         ASSERT_NE(externalCluster, nullptr);
         DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne(indexes));
     }
+
+    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
+                                         uint64_t timeoutMs = 5000)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        uint64_t executeCount = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+            if (executeCount >= expectedCount) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+        ASSERT_GE(executeCount, expectedCount) << name;
+    }
+};
+
+class UrmaConnectionWarmupTest : public UrmaObjectClientTest {
+protected:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.injectActions += opts.injectActions.empty() ? "" : ";";
+        opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT + ":call();"
+                              + QUERY_META_INJECT + ":call()";
+    }
+};
+
+class UrmaConnectionWarmupWithoutBatchGetTest : public UrmaConnectionWarmupTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaConnectionWarmupTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -enable_worker_worker_batch_get=false";
+    }
+};
+
+class UrmaConnectionWarmupFailureTest : public UrmaObjectClientTest {
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.injectActions += opts.injectActions.empty() ? "" : ";";
+        opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT
+                              + ":return(K_RPC_UNAVAILABLE)";
+    }
 };
 
 class UrmaObjectClientAuthorizationTest : public UrmaObjectClientTest {
@@ -142,6 +190,45 @@ protected:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
+
+TEST_F(UrmaConnectionWarmupTest, StartupAndRestartTriggerWarmup)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "URMA warmup ST requires USE_URMA.";
+#endif
+    for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+        WaitForWorkerInjectExecuteCount(i, WARMUP_PREPARE_INJECT, 1);
+        WaitForWorkerInjectExecuteCount(i, WARMUP_REMOTE_GET_INJECT, 1, 60'000);
+        uint64_t queryMetaCount = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, i, QUERY_META_INJECT, queryMetaCount));
+        ASSERT_EQ(queryMetaCount, 0ul);
+    }
+    RestartWorkerAndWaitReady({ 0 });
+    WaitForWorkerInjectExecuteCount(0, WARMUP_PREPARE_INJECT, 1);
+    WaitForWorkerInjectExecuteCount(0, WARMUP_REMOTE_GET_INJECT, 1, 60'000);
+}
+
+TEST_F(UrmaConnectionWarmupFailureTest, RemoteWarmupFailureDoesNotBlockReady)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "URMA warmup ST requires USE_URMA.";
+#endif
+    for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+        WaitForWorkerInjectExecuteCount(i, WARMUP_PREPARE_INJECT, 1);
+        WaitForWorkerInjectExecuteCount(i, WARMUP_REMOTE_GET_INJECT, 1, 60'000);
+    }
+}
+
+TEST_F(UrmaConnectionWarmupWithoutBatchGetTest, RemoteWarmupRunsWhenBatchGetDisabled)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "URMA warmup ST requires USE_URMA.";
+#endif
+    for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+        WaitForWorkerInjectExecuteCount(i, WARMUP_PREPARE_INJECT, 1);
+        WaitForWorkerInjectExecuteCount(i, WARMUP_REMOTE_GET_INJECT, 1, 60'000);
+    }
+}
 
 TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
 {
@@ -1514,23 +1601,6 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_transport_fallback=false ";
-    }
-
-protected:
-    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
-                                         uint64_t timeoutMs = 5000)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        uint64_t executeCount = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-            if (executeCount >= expectedCount) {
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-        ASSERT_GE(executeCount, expectedCount) << name;
     }
 };
 

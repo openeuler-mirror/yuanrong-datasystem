@@ -518,6 +518,21 @@ public:
     Status WhetherNonRestart();
 
     /**
+     * @brief Prepare the local one-byte object used by URMA worker-worker connection warmup.
+     * @param[in] objectKey Warmup object key.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status PrepareUrmaWarmupObject(const std::string &objectKey);
+
+    /**
+     * @brief Trigger direct remote get to a peer's warmup object.
+     * @param[in] peerAddr Peer worker address.
+     * @param[in] peerKey Peer warmup object key.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status WarmupUrmaConnectionToPeer(const std::string &peerAddr, const std::string &peerKey);
+
+    /**
      * @brief Try to give up waiting for reconciliation to be done when using distributed master. If the local worker
      * needs reconciliation from distributed masters, but did not receive expected number of reconciliations and waiting
      * time is too long (timeout), the local worker will give up waiting and set health file to process client requests.

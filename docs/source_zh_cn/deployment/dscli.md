@@ -861,7 +861,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
-| enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输 |
+| enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
 | enable_urma_perf | bool | `false` | 是否开启 URMA 性能日志采样。仅在 `enable_urma=true` 时生效，开启后 worker 会周期性采集并输出 URMA 性能信息。 |
 | enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
 | shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |

@@ -74,6 +74,21 @@
   - cluster manager owns worker-address keyed node state and subscribes to several hash-ring and cluster-related events
   - it can construct other-AZ hash rings when distributed-master and multi-cluster settings are enabled
   - shutdown removes subscribers and stops background threads cleanly
+  - `EtcdClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
+    `WaitWorkerReadyIfNeed()` before processing node utility events
+- Verified from `ServiceDiscovery`:
+  - `ServiceDiscovery::GetAllWorkers()` obtains worker entries from `ETCD_CLUSTER_TABLE`, parses `KeepAliveValue`, and
+    returns only workers whose keepalive state is `ETCD_NODE_READY`
+  - host affinity is optional: `PREFERRED_SAME_NODE` partitions workers into same-host and other-host lists,
+    `REQUIRED_SAME_NODE` returns only same-host workers, and `RANDOM` returns all workers through `otherAddrs`
+- Verified from remote-get transport:
+  - KV `Get` delegates to object-cache `Get`; with `enable_worker_worker_batch_get=true`, worker remote get can use
+    `BatchGetObjectFromRemoteWorker`
+  - URMA connection warmup bypasses client `Get` and metadata query; it prepares an internal local object and calls
+    worker-side direct remote get so the request still reaches `GetObjectRemote` and `CheckConnectionStable`
+  - when URMA is enabled, the requester fills URMA memory information into the remote-get request; a provider response
+    with `K_URMA_NEED_CONNECT` triggers `WorkerRemoteWorkerTransApi::ExecOnceParrallelExchange()`, which calls
+    `WorkerWorkerExchangeUrmaConnectInfo()` and finalizes the outbound connection
 - Useful takeaway:
   - cluster management is event-driven and tightly coupled to hash-ring and node-state transitions
 
@@ -90,6 +105,10 @@
   - reads cluster config and worker config
   - validates Metastore-specific settings
   - starts head node first only in Metastore mode
+- URMA connection warmup config surfaces:
+  - there is no standalone warmup selector; when `enable_urma=true`, workers use URMA warmup
+  - DaemonSet Helm deployment uses `global.performance.enableUrma`, rendered as `-enable_urma`
+  - Deployment image mode uses `k8s_deployment/helm_chart/worker.config` because `worker_entry.sh` starts the worker with `dscli start -f ${CONFIG_FILE}`
 
 ## Common Questions And First Places To Look
 

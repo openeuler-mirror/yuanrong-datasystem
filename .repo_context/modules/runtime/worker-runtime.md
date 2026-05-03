@@ -78,6 +78,12 @@
   - initialize logs and worker flags
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
+  - `WorkerOCServer::Start()` calls `etcdCM_->SetWorkerReady()` before `CommonServer::Start()`, then starts worker
+    service tasks, runs `ReadinessProbe()`, and writes the configured ready-check file only after the worker RPC
+    health check succeeds
+  - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
+    `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
+    without delaying readiness
 - Steady state:
   - accept/register clients
   - manage shared-memory or socket-based FD passing for client-worker IPC
@@ -107,6 +113,11 @@
   - worker runtime expects valid worker address configuration before serving traffic;
   - `PreShutDown` is a meaningful phase distinct from `ShutDown`;
   - metadata backend must be ETCD or Metastore, not neither.
+  - changes that must finish before Kubernetes readiness should run before `ReadinessProbe()` writes the ready-check
+    file; background work that only optimizes later traffic should start after core services are registered and avoid
+    delaying `Worker::InitWorker()` completion.
+  - URMA connection warmup must not add client/KVClient dependencies; worker-side discovery uses existing `EtcdStore`
+    state and worker-side remote-get helpers.
 - Useful files during debugging:
   - `src/datasystem/worker/worker_main.cpp`
   - `src/datasystem/worker/worker.cpp`
