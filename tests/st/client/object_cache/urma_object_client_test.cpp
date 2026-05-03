@@ -128,6 +128,22 @@ public:
         ASSERT_NE(externalCluster, nullptr);
         DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne(indexes));
     }
+
+    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
+                                         uint64_t timeoutMs = 5000)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        uint64_t executeCount = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+            if (executeCount >= expectedCount) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
+        ASSERT_GE(executeCount, expectedCount) << name;
+    }
 };
 
 class UrmaConnectionWarmupTest : public UrmaObjectClientTest {
@@ -1585,23 +1601,6 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_transport_fallback=false ";
-    }
-
-protected:
-    void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
-                                         uint64_t timeoutMs = 5000)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        uint64_t executeCount = 0;
-        while (std::chrono::steady_clock::now() < deadline) {
-            DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-            if (executeCount >= expectedCount) {
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIdx, name, executeCount));
-        ASSERT_GE(executeCount, expectedCount) << name;
     }
 };
 
