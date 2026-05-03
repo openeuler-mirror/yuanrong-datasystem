@@ -92,6 +92,7 @@ target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json gener
 target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_other_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
+target_compile_definitions(_ds_st_other_obj PRIVATE LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/.")
 
 add_executable(ds_st_stream_cache $<TARGET_OBJECTS:_ds_st_stream_cache_obj>)
 add_executable(ds_st_object_cache $<TARGET_OBJECTS:_ds_st_object_cache_obj>)
