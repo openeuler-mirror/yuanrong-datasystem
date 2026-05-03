@@ -19,6 +19,7 @@
  */
 #include "common.h"
 
+#include "cluster/test_port_allocator.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -109,7 +110,9 @@ void ClusterTest::TearDown()
         LOG(INFO) << "ClusterTest start to TearDown";
         startShutdown_ = true;
         ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->Shutdown());
+        Status rc = cluster_->Shutdown();
+        TestPortAllocator::Instance().ReleaseAll();
+        DS_ASSERT_OK(rc);
     } else {
         LOG(INFO) << "ClusterTest have started TearDown";
     }
@@ -124,6 +127,10 @@ std::string ClusterTest::NewObjectKey()
 Status ExternalClusterTest::Init()
 {
     ExternalClusterOptions opts;
+    std::string caseName;
+    std::string name;
+    GetCurTestName(caseName, name);
+    TestPortAllocator::Instance().SetOwnerInfo("st_gtest", caseName + "." + name, GetTestCaseDataDir());
     SetClusterSetupOptions(opts);
     SetDefaultOptions(opts);
 
@@ -133,28 +140,52 @@ Status ExternalClusterTest::Init()
 
 void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
 {
+    std::vector<std::string> roles;
+    for (uint32_t i = 0; i < opts.numMasters; ++i) {
+        roles.emplace_back("master_rpc_" + std::to_string(i));
+    }
+    for (uint32_t i = 0; i < opts.numWorkers; ++i) {
+        roles.emplace_back("worker_rpc_" + std::to_string(i));
+        roles.emplace_back("worker_direct_" + std::to_string(i));
+    }
+    const bool needDefaultEtcd = opts.etcdIpAddrs.empty();
+    if (needDefaultEtcd) {
+        for (uint32_t i = 0; i < opts.numEtcd; ++i) {
+            roles.emplace_back("etcd_client_" + std::to_string(i));
+            roles.emplace_back("etcd_peer_" + std::to_string(i));
+        }
+    }
+    for (uint32_t i = 0; i < opts.numOBS; ++i) {
+        roles.emplace_back("obs_" + std::to_string(i));
+    }
+
+    std::vector<TestPortLease> leases;
+    DS_ASSERT_OK(TestPortAllocator::Instance().ReserveBatch(roles, leases));
+    ASSERT_EQ(leases.size(), roles.size());
+    size_t leaseIdx = 0;
+
     // Launch one master and one worker.
     for (uint32_t i = 0; i < opts.numMasters; ++i) {
-        int port = GetFreePort();
+        int port = leases[leaseIdx++].Port();
         ASSERT_NE(port, -1);
         opts.masterIpAddrs.emplace_back("127.0.0.1", port);
     }
     // And launch a number of worker nodes
     for (uint32_t i = 0; i < opts.numWorkers; ++i) {
-        int port = GetFreePort();
+        int port = leases[leaseIdx++].Port();
         ASSERT_NE(port, -1);
         opts.workerConfigs.emplace_back("127.0.0.1", port);
-        opts.workerOcDirectPorts.emplace_back(GetFreePort());
+        opts.workerOcDirectPorts.emplace_back(leases[leaseIdx++].Port());
         ASSERT_NE(opts.workerOcDirectPorts.back(), -1);
     }
 
     // If a testcase has manually added etcd addresses already, then do not add the default ones
     // here.
-    if (opts.etcdIpAddrs.size() == 0) {
+    if (needDefaultEtcd) {
         for (uint32_t i = 0; i < opts.numEtcd; ++i) {
-            int clientPort = GetFreePort();
+            int clientPort = leases[leaseIdx++].Port();
             ASSERT_NE(clientPort, -1);
-            int serverPort = GetFreePort();
+            int serverPort = leases[leaseIdx++].Port();
             ASSERT_NE(serverPort, -1);
             opts.etcdIpAddrs.emplace_back(
                 std::make_pair(HostPort("127.0.0.1", clientPort), HostPort("127.0.0.1", serverPort)));
@@ -165,7 +196,7 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
 
     for (uint32_t i = 0; i < opts.numOBS; ++i) {
         ASSERT_EQ(opts.numOBS, 1u) << "only support one obs now.";
-        int port = GetFreePort();
+        int port = leases[leaseIdx++].Port();
         ASSERT_NE(port, -1);
         opts.OBSIpAddrs.emplace_back(HostPort("127.0.0.1", port));
     }
@@ -206,69 +237,17 @@ Status ExecuteCmd(const std::string &cmd)
     }
 }
 
-namespace {
-Status Str2Int(const std::string &numStr, int &result)
-{
-    try {
-        result = std::stoi(numStr);
-    } catch (const std::invalid_argument &e) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, e.what());
-    } catch (const std::out_of_range &e) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, e.what());
-    } catch (const std::exception &e) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, e.what());
-    }
-    return Status::OK();
-}
-
-/**
- * @brief Verify if the port is free.
- * @param[in] port Port to be verified.
- * @return Status::OK() if port is free.
- */
-Status IsFreePort(int port)
-{
-    std::string cmd = FormatString(
-        R"(netstat -atun | grep ":%d " | awk '%d == "tcp" && $NF == "LISTEN" {print $0}' | wc -l)", port, port);
-    std::string result;
-    RETURN_IF_NOT_OK(ExecuteCmd(cmd, result));
-    int tcpNum = -1;
-    RETURN_IF_NOT_OK(Str2Int(result, tcpNum));
-    if (tcpNum != 0) {
-        RETURN_STATUS(StatusCode::K_TRY_AGAIN, "try again");
-    }
-
-    cmd = FormatString(R"(netstat -atun | grep ":%d " | awk '%d == "udp" && $NF == "127.0.0.1:*" {print $0}' | wc -l)",
-                       port, port);
-    result.clear();
-    RETURN_IF_NOT_OK(ExecuteCmd(cmd, result));
-    int udpNum = -1;
-    RETURN_IF_NOT_OK(Str2Int(result, udpNum));
-    if (udpNum != 0) {
-        RETURN_STATUS(StatusCode::K_TRY_AGAIN, "try again");
-    }
-
-    return Status::OK();
-}
-}  // namespace
-
 void ExternalClusterTest::GetFreePort(int &port, const int maxPort) const
 {
-    Status rc;
-    do {
-        int baseNum1 = 1025;
-        int baseNum2 = maxPort - baseNum1;
-        port = baseNum1 + static_cast<int>(hRandomData_.GetRandomUint32() % baseNum2);
-        rc = IsFreePort(port);
-        if (rc.IsOk()) {
-            break;
-        } else if (rc.GetCode() == StatusCode::K_TRY_AGAIN) {
-            continue;
-        } else {
-            LOG(ERROR) << "Unrecoverable error: " << rc.ToString();
-            FAIL();
-        }
-    } while (true);
+    TestPortLease lease;
+    Status rc = TestPortAllocator::Instance().Reserve("manual", lease, maxPort);
+    if (rc.IsError()) {
+        port = -1;
+        LOG(ERROR) << "Reserve ST port failed: " << rc.ToString();
+        FAIL();
+        return;
+    }
+    port = lease.Port();
 }
 
 int ExternalClusterTest::GetFreePort(const int maxPort) const

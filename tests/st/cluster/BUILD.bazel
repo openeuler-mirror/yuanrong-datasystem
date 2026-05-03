@@ -10,11 +10,13 @@ cc_library(
     srcs = [
         "external_cluster.cpp",
         "subprocess.cpp",
+        "test_port_allocator.cpp",
     ],
     hdrs = [
         "base_cluster.h",
         "external_cluster.h",
         "subprocess.h",
+        "test_port_allocator.h",
     ],
     copts = [
         '-DMASTER_BIN_PATH=\\"/usr/local/bin/master\\"',
