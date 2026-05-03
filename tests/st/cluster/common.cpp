@@ -23,6 +23,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "kill_timer.h"
 
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(alsologtostderr);
@@ -94,6 +95,8 @@ ClusterTest::ClusterTest()
     randomData_ = RandomData(seed);
     hRandomData_ = HRandomData();
 }
+
+ClusterTest::~ClusterTest() = default;
 
 void ClusterTest::SetUp()
 {

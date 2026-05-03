@@ -33,6 +33,7 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/timer.h"
 
 DS_DECLARE_bool(log_monitor);
 

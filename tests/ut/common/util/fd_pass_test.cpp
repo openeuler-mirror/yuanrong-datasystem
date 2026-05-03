@@ -30,6 +30,8 @@
 #include <string>
 #include <thread>
 
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"

@@ -26,8 +26,7 @@
 #include <string>
 
 #include <gtest/gtest.h>
-#include <securec.h>
-#include "datasystem/common/util/random_data.h"
+
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
 
@@ -111,33 +110,6 @@ public:
 
     // every TEST_F macro will call TearDown when end
     void TearDown() override{};
-};
-
-class ClusterTest : public CommonTest {
-public:
-    ClusterTest();
-
-    ~ClusterTest() override = default;
-
-    void SetUp() override;
-
-    void TearDown() override;
-
-    // get new object keys for each cases a new ID is needed
-    std::string NewObjectKey();
-
-protected:
-    virtual Status Init() = 0;
-
-    // For master client random policy.
-    mutable RandomData randomData_;
-
-private:
-    std::atomic<bool> startShutdown_{ false };
-
-    const int DEFAULT_CLIENT_TIMEOUT_SECS = 10;
-
-    const int DEFAULT_TESTCASE_TIMEOUT_SECS = 80;
 };
 
 // Obtain the test case name.

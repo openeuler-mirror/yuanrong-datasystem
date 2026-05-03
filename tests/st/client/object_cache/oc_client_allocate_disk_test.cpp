@@ -21,6 +21,7 @@
 
 #include "common.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 

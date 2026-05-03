@@ -57,12 +57,6 @@ file(GLOB_RECURSE DS_ST_KV_CACHE_SRCS CONFIGURE_DEPENDS
 
 file(GLOB_RECURSE DS_ST_EMBEDDED_CLIENT_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/embedded_client/*.cpp")
-list(APPEND DS_ST_EMBEDDED_CLIENT_SRCS
-        test_main.cpp
-        cluster/external_cluster.cpp
-        cluster/subprocess.cpp
-        cluster/common.cpp
-        cluster/test_port_allocator.cpp)
 
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*curvekey_generator.cpp)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*encrypt_util.cpp)
@@ -73,41 +67,54 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/embedded_client/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/object_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/kv_cache/.*)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/st_oc_service_impl\\.cpp$)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
+list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
+list(FILTER DS_ST_STREAM_CACHE_SRCS EXCLUDE REGEX .*/common/stream_cache/element_generator\\.cpp$)
 
 if (NOT ENABLE_PERF)
     list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/perf_client/.*)
 endif()
 
 set(ST_COMMON_SRCS
-        test_main.cpp
+        client/object_cache/oc_client_common.cpp
         st_oc_service_impl.cpp
         common/stream_cache/element_generator.cpp)
 
-add_library(_ds_st_stream_cache_obj OBJECT ${DS_ST_STREAM_CACHE_SRCS} ${ST_COMMON_SRCS})
-add_library(_ds_st_object_cache_obj OBJECT ${DS_ST_OBJECT_CACHE_SRCS} ${ST_COMMON_SRCS})
-add_library(_ds_st_kv_cache_obj OBJECT ${DS_ST_KV_CACHE_SRCS} ${ST_COMMON_SRCS})
-add_library(_ds_st_other_obj OBJECT ${DS_TEST_ST_SRCS} ${ST_COMMON_SRCS})
+add_library(_ds_st_main_obj OBJECT test_main.cpp)
+add_library(_ds_st_group_common_obj OBJECT ${ST_COMMON_SRCS})
+add_library(_ds_st_stream_cache_obj OBJECT ${DS_ST_STREAM_CACHE_SRCS})
+add_library(_ds_st_object_cache_obj OBJECT ${DS_ST_OBJECT_CACHE_SRCS})
+add_library(_ds_st_kv_cache_obj OBJECT ${DS_ST_KV_CACHE_SRCS})
+add_library(_ds_st_other_obj OBJECT ${DS_TEST_ST_SRCS})
 
+target_link_libraries(_ds_st_main_obj GTest::gtest GTest::gmock)
+target_link_libraries(_ds_st_group_common_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_other_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 
-add_executable(ds_st_stream_cache $<TARGET_OBJECTS:_ds_st_stream_cache_obj>)
-add_executable(ds_st_object_cache $<TARGET_OBJECTS:_ds_st_object_cache_obj>)
-add_executable(ds_st_kv_cache $<TARGET_OBJECTS:_ds_st_kv_cache_obj>)
-add_executable(ds_st $<TARGET_OBJECTS:_ds_st_other_obj>)
-add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS})
+function(add_ds_st_grouped_executable TARGET_NAME OBJECT_TARGET)
+    add_executable(${TARGET_NAME}
+            $<TARGET_OBJECTS:${OBJECT_TARGET}>
+            $<TARGET_OBJECTS:_ds_st_main_obj>
+            $<TARGET_OBJECTS:_ds_st_group_common_obj>)
+endfunction()
+
+add_ds_st_grouped_executable(ds_st_stream_cache _ds_st_stream_cache_obj)
+add_ds_st_grouped_executable(ds_st_object_cache _ds_st_object_cache_obj)
+add_ds_st_grouped_executable(ds_st_kv_cache _ds_st_kv_cache_obj)
+add_ds_st_grouped_executable(ds_st _ds_st_other_obj)
+add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
 
 target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS})
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS})
-target_link_libraries(ds_st_embedded_client  GTest::gtest GTest::gmock common_etcd  nlohmann_json::nlohmann_json generic_service_protos datasystem)
-target_compile_definitions(ds_st_embedded_client PRIVATE MASTER_BIN_PATH="${_MASTER_BIN_DIR}/master"
-        WORKER_BIN_PATH="${_WORKER_BIN_DIR}/datasystem_worker"
-        LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/."
-        HASH_PHRASE_PATH="${CMAKE_CURRENT_BINARY_DIR}/hashring_parser")
+target_link_libraries(ds_st_embedded_client  GTest::gtest GTest::gmock common_etcd  nlohmann_json::nlohmann_json generic_service_protos datasystem cluster)
+target_compile_definitions(ds_st_embedded_client PRIVATE HASH_PHRASE_PATH="${CMAKE_CURRENT_BINARY_DIR}/hashring_parser")
 
 find_package(absl PATHS absl_PKG_PATH)
 
@@ -261,13 +268,12 @@ add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_embedded_client TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
-        test_main.cpp
         "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"
         )
 if (NOT BUILD_HETERO_GPU)
     list(FILTER DS_DEVICE_TEST_SRCS EXCLUDE REGEX ".*/hetero_d2h_test_gpu\\.cpp$")
 endif()
-add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS})
+add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
 
 if (BUILD_HETERO)
     set(DS_DEVICE_LLT_DEPEND_LIB

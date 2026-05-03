@@ -17,6 +17,8 @@
 /**
  * Description: Test memory util function.
  */
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/random_data.h"

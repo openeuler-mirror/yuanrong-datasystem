@@ -23,7 +23,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/object/object_enum.h"
 #include "datasystem/kv_client.h"
 #include <cstdint>
 #include <functional>
@@ -41,8 +40,6 @@
 #include "client/kv_cache/kv_client_scale_common.h"
 
 #include "datasystem/worker/hash_ring/hash_ring.h"
-#include "datasystem/master/object_cache/store/object_meta_store.h"
-
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(log_dir);
 
@@ -820,8 +817,8 @@ TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_MasterAsyncTaskRecover)
     table1 << ETCD_GLOBAL_CACHE_TABLE_PREFIX << ETCD_HASH_SUFFIX;
     table2 << ETCD_GLOBAL_CACHE_TABLE_PREFIX << ETCD_WORKER_SUFFIX;
     uint32_t begin = 0, end = UINT32_MAX;
-    std::string keyBegin = master::Hash2Str(begin);
-    std::string keyEnd = master::Hash2Str(end);
+    std::string keyBegin = HashToStr(begin);
+    std::string keyEnd = HashToStr(end);
     std::vector<std::pair<std::string, std::string>> metas, metas1;
     DS_ASSERT_OK(db_->RangeSearch(table1.str(), keyBegin, keyEnd, metas));
     ASSERT_FALSE(metas.empty());

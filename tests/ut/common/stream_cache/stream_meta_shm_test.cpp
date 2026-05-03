@@ -19,6 +19,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit.h"

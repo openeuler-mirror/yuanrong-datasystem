@@ -30,6 +30,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 #include "common/rpc_stub_cache_mgr/rpc_stub_cache_mgr_test_helper.h"

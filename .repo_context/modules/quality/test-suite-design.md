@@ -23,7 +23,7 @@
   - `tests/ut/CMakeLists.txt`
   - `tests/st/CMakeLists.txt`
 - Last verified against source:
-  - `2026-05-02`
+  - `2026-05-04`
 - Related context docs:
   - `tests-and-reproduction.md`
   - `build-test-debug.md`
@@ -90,11 +90,14 @@
 
 1. `tests/CMakeLists.txt` adds the test subdirectories.
 2. `tests/ut/CMakeLists.txt` and `tests/st/CMakeLists.txt` collect source files and split them into gtest binaries.
-3. Each gtest binary calls `add_datasystem_test`.
-4. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
-5. The script executes the binary with `--gtest_list_tests`.
-6. The script writes generated CTest `add_test` and `set_tests_properties` commands.
-7. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
+3. UT and ST binaries reuse small OBJECT targets for shared `test_main` and common helper sources, so new test files
+   still enter their existing glob-based buckets while shared helper code is compiled once.
+4. `ds_st_embedded_client` links the existing `cluster` helper library instead of recompiling `tests/st/cluster/*.cpp`.
+5. Each gtest binary calls `add_datasystem_test`.
+6. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
+7. The script executes the binary with `--gtest_list_tests`.
+8. The script writes generated CTest `add_test` and `set_tests_properties` commands.
+9. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
 
 Failure-sensitive steps:
 
@@ -163,6 +166,8 @@ Failure-sensitive steps:
 - `LEVEL1_` and `LEVEL2_` can appear on suite or test names.
 - Executable path/name controls `object`, `stream`, `ut`, and `st` labels.
 - Adding a test under a filtered directory can move it into a different binary from nearby files.
+- New test files should continue to be added under the existing domain directories so the glob/filter buckets pick them
+  up automatically; only shared test entrypoints or helper sources should be added to the common OBJECT targets.
 
 ## Validation Guidance
 

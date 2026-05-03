@@ -25,6 +25,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "common.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/flags.h"

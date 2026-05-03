@@ -31,13 +31,10 @@
 #include "client/kv_cache/kv_client_common.h"
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
-#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"
-#include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 DS_DECLARE_string(etcd_address);
 

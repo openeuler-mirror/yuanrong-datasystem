@@ -19,6 +19,7 @@
  */
 #include <algorithm>
 #include <mutex>
+#include <thread>
 
 #include "ut/common.h"
 #include "datasystem/common/util/uuid_generator.h"

@@ -31,6 +31,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/object_client.h"

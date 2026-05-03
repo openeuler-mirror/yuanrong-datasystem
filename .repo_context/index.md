@@ -19,6 +19,9 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand overall repo shape | `modules/overview/repository-overview.md` | `generated/repo_index.md` |
 | understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
 | find build, sanitizer, or coverage entrypoints | `modules/quality/build-test-debug.md` | `build.sh`, `CMakeLists.txt` |
+| understand CMake build rules, third-party dependencies, install outputs, or target graph | `modules/quality/cmake-build/README.md` | `build.sh`, `scripts/build_cmake.sh`, `scripts/build_thirdparty.sh`, `CMakeLists.txt`, `cmake/*`, `src/datasystem/**/CMakeLists.txt` |
+| validate CMake release package shape | `modules/quality/cmake-build/README.md` | `scripts/verify_package_manifest.py`, `scripts/package_manifest/*`, generated `output/*.tar.gz` and `output/*.whl` |
+| optimize CMake compile speed or change CMake target/package dependencies | `playbooks/features/quality/cmake-build-optimization.md` | `modules/quality/cmake-build/design.md`, nearest `CMakeLists.txt`, `cmake/package.cmake` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
 | understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `docs/source_zh_cn/design_document/cluster_management.md`, `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/*.py` |
@@ -83,9 +86,13 @@ Use it to jump from a question type to the smallest useful document instead of r
 | performance troubleshooting | `modules/infra/observability/performance-troubleshooting.md` | `src/datasystem/worker/*`, `src/datasystem/common/log/*`, `src/datasystem/common/metrics/*`, `tests/perf` |
 | runtime health and runbook | `modules/infra/observability/runtime-health-and-runbook.md` | `src/datasystem/worker/worker_liveness_check.*`, `src/datasystem/worker/worker_main.cpp`, `src/datasystem/worker/worker_oc_server.cpp` |
 | build/test/debug | `modules/quality/build-test-debug.md` | `build.sh`, `tests`, top-level CMake |
+| CMake build system | `modules/quality/cmake-build/README.md` | `build.sh`, `scripts/build_cmake.sh`, `scripts/build_thirdparty.sh`, `CMakeLists.txt`, `cmake`, `src/datasystem/**/CMakeLists.txt` |
+| CMake build design | `modules/quality/cmake-build/design.md` | `cmake/dependency.cmake`, `cmake/package.cmake`, `src/datasystem/**/CMakeLists.txt` |
+| CMake package manifest validation | `modules/quality/cmake-build/README.md` | `scripts/verify_package_manifest.py`, `scripts/package_manifest` |
 | test selection and repro | `modules/quality/tests-and-reproduction.md` | `tests/ut`, `tests/st` |
 | test harness design | `modules/quality/test-suite-design.md` | `tests/CMakeLists.txt`, `cmake/util.cmake`, `cmake/scripts/GoogleTestToCTest.cmake` |
 | test implementation workflow | `playbooks/features/quality/test-implementation.md` | `tests`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt` |
+| CMake build optimization workflow | `playbooks/features/quality/cmake-build-optimization.md` | `build.sh`, `scripts/build_cmake.sh`, `cmake/*.cmake`, `src/datasystem/**/CMakeLists.txt` |
 | l2 cache feature workflow | `playbooks/features/infra/l2cache/implementation.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | slot feature workflow | `playbooks/features/infra/slot/implementation.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 

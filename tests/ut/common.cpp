@@ -19,6 +19,8 @@
  */
 #include "common.h"
 
+#include <securec.h>
+
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uuid_generator.h"

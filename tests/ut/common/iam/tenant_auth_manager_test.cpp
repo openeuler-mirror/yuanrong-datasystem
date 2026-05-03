@@ -26,6 +26,8 @@
 #include <gtest/gtest.h>
 #include <google/protobuf/repeated_field.h>
 
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/httpclient/http_client.h"
 #include "datasystem/common/iam/iam.h"

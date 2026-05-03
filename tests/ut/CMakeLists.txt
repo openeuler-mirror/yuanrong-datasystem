@@ -47,10 +47,14 @@ set(UT_COMMON_SRCS
         test_main.cpp
         common.cpp)
 
+set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
 
@@ -60,12 +64,33 @@ endif()
 
 list(APPEND DS_UT_STREAM_SRCS)
 
-add_executable(ds_ut ${DS_TEST_UT_SRCS})
-add_executable(ds_ut_stream ${DS_UT_STREAM_SRCS} ${UT_COMMON_SRCS})
-add_executable(ds_ut_object ${DS_UT_OBJECT_SRCS} ${UT_COMMON_SRCS})
+add_library(_ds_ut_main_obj OBJECT test_main.cpp)
+add_library(_ds_ut_common_obj OBJECT common.cpp)
+target_compile_definitions(_ds_ut_main_obj PRIVATE ${BIN_PATH_LIST})
+target_compile_definitions(_ds_ut_common_obj PRIVATE ${BIN_PATH_LIST})
+target_link_libraries(_ds_ut_main_obj PRIVATE GTest::gtest GTest::gmock)
+target_link_libraries(_ds_ut_common_obj PRIVATE ${DS_UT_DEPEND_LIBS})
+
+function(add_ds_ut_executable TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_compile_definitions(${TARGET_NAME} PRIVATE ${BIN_PATH_LIST})
+endfunction()
+
+add_ds_ut_executable(ds_ut
+        ${DS_TEST_UT_SRCS}
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_ds_ut_executable(ds_ut_stream
+        ${DS_UT_STREAM_SRCS}
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_ds_ut_executable(ds_ut_object
+        ${DS_UT_OBJECT_SRCS}
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
 add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
-        test_main.cpp)
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
 target_link_libraries(ds_ut PRIVATE ${DS_UT_DEPEND_LIBS})
 target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache datasystem_worker_static)
@@ -79,11 +104,6 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_log
         common_util)
 
-set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
-
-target_compile_definitions(ds_ut PRIVATE ${BIN_PATH_LIST})
-target_compile_definitions(ds_ut_stream PRIVATE ${BIN_PATH_LIST})
-target_compile_definitions(ds_ut_object PRIVATE ${BIN_PATH_LIST})
 target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)

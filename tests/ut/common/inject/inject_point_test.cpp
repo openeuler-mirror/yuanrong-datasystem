@@ -18,6 +18,7 @@
  * Description: injection test.
  */
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ut/common.h"

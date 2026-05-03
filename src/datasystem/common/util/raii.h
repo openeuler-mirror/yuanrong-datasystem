@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_UTIL_RAII_H
 
 #include <functional>
+#include <vector>
 
 namespace datasystem {
 class Raii {

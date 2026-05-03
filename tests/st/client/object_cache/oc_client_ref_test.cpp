@@ -24,6 +24,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 
 DS_DECLARE_string(etcd_address);

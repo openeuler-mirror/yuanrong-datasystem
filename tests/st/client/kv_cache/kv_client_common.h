@@ -21,6 +21,9 @@
 #define DATASYSTEM_TEST_ST_CLIENT_KV_CACHE_KV_CLIENT_COMMON_H
 
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
+
 namespace datasystem {
 namespace st {
 class KVClientCommon : virtual public OCClientCommon {

@@ -30,6 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/object_client.h"
+#include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/router_client.h"
  
 DS_DECLARE_string(cluster_name);

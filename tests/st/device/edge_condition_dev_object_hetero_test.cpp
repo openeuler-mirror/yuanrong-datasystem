@@ -33,6 +33,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"

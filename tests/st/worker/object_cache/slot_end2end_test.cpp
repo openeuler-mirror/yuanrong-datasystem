@@ -41,6 +41,7 @@
 #include "datasystem/common/l2cache/slot_client/slot_index_codec.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/slot_recovery.pb.h"
 

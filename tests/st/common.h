@@ -31,7 +31,6 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
-#include "kill_timer.h"
 
 using datasystem::Status;
 using datasystem::StatusCode;
@@ -92,6 +91,8 @@ using datasystem::StatusCode;
 
 namespace datasystem {
 namespace st {
+class KillTimer;
+
 class CommonTest : public testing::Test {
 public:
     CommonTest();
@@ -111,7 +112,7 @@ class ClusterTest : public CommonTest {
 public:
     ClusterTest();
 
-    ~ClusterTest() override = default;
+    ~ClusterTest() override;
 
     void SetUp() override;
 

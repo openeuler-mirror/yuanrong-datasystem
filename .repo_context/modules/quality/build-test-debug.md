@@ -16,6 +16,10 @@ Primary build configuration:
 - `WORKSPACE`
 - `.bazelrc`
 
+For detailed CMake build-system knowledge, including supported source-build platform boundaries, third-party
+dependencies, compiler flags, install outputs, and target graph notes, read `cmake-build/README.md` and
+`cmake-build/design.md`.
+
 ## Default Build Facts
 
 Backed by `build.sh` and `CMakeLists.txt`:

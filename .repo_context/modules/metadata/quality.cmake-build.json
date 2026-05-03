@@ -1,0 +1,66 @@
+{
+  "id": "quality.cmake-build",
+  "title": "CMake Build Context",
+  "status": "active",
+  "domain": "quality",
+  "module_type": "composite",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/quality/cmake-build/README.md",
+    "design": ".repo_context/modules/quality/cmake-build/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/quality/cmake-build-optimization.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "build.sh",
+    "scripts/build_common.sh",
+    "scripts/build_cmake.sh",
+    "scripts/build_thirdparty.sh",
+    "scripts/verify_package_manifest.py",
+    "scripts/package_manifest",
+    "CMakeLists.txt",
+    "cmake",
+    "src/datasystem"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "quality.build-test-debug",
+      "quality.tests-and-reproduction",
+      "quality.test-suite-design"
+    ],
+    "split_signals": [
+      "build_system_architecture",
+      "multi_language_packaging",
+      "third_party_dependency_rules",
+      "compile_speed_optimization"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "cmake",
+      "build.sh",
+      "third-party",
+      "install",
+      "package",
+      "package manifest",
+      "release package shape",
+      "compile speed",
+      "target graph"
+    ],
+    "intent_examples": [
+      "understand CMake build modules and dependencies",
+      "optimize CMake compile speed",
+      "find C++ Python Java Go install outputs",
+      "understand build.sh and CMake packaging relationship",
+      "validate CMake release package shape"
+    ]
+  }
+}
