@@ -17,6 +17,8 @@
 #ifndef DATASYSTEM_COMMON_METRICS_METRICS_H
 #define DATASYSTEM_COMMON_METRICS_METRICS_H
 
+#include <array>
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -72,6 +74,29 @@ private:
     explicit Histogram(MetricSlot *slot) : slot_(slot) {}
     MetricSlot *slot_;
 };
+
+// P99 histogram: 20 fixed buckets (1us ~ 60s, optimized for 0-5ms). Summary JSON includes p50, p90, p99.
+constexpr std::array<uint64_t, 20> HIST_BUCKET_UPPER = {
+    1, 2, 5, 10, 20, 50, 100, 200, 500, 1000,
+    2000, 3000, 4000, 5000,
+    10000, 20000, 50000, 100000, 1000000, 60000000
+};
+constexpr size_t HIST_BUCKET_NUM = HIST_BUCKET_UPPER.size();
+using HistBuckets = std::array<uint64_t, HIST_BUCKET_NUM>;
+
+// upper_bound: first bucket > value -> P99 returns bucket upper bound
+inline size_t BucketIndex(uint64_t value)
+{
+    auto it = std::upper_bound(HIST_BUCKET_UPPER.begin(), HIST_BUCKET_UPPER.end(), value);
+    size_t idx = static_cast<size_t>(it - HIST_BUCKET_UPPER.begin());
+    if (idx >= HIST_BUCKET_NUM) {
+        idx = HIST_BUCKET_NUM - 1;
+    }
+    return idx;
+}
+
+uint64_t PercentileFromBuckets(const HistBuckets &buckets, uint64_t count, uint32_t percentile,
+    uint64_t overflowMax = 0);
 
 Counter GetCounter(uint16_t id);
 Gauge GetGauge(uint16_t id);

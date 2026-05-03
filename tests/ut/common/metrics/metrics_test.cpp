@@ -19,6 +19,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <random>
 #include <set>
 #include <sstream>
 #include <string>
@@ -56,6 +58,54 @@ void InitKvMetricsForTest()
     DS_ASSERT_OK(metrics::InitKvMetrics());
 }
 
+// Rank formula matches PercentileFromBuckets: target = (n * p + 99) / 100 (ceil-style), then take
+// the target-th smallest value (1-based rank into ascending order).
+uint64_t GroundTruthPercentile(const std::vector<uint64_t> &samples, uint32_t percentile)
+{
+    if (samples.empty()) {
+        return 0;
+    }
+    std::vector<uint64_t> sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+    const uint64_t n = static_cast<uint64_t>(sorted.size());
+    uint64_t target = (n * static_cast<uint64_t>(percentile) + 99U) / 100U;
+    if (target == 0) {
+        target = 1;
+    }
+    if (target > n) {
+        target = n;
+    }
+    return sorted[static_cast<size_t>(target - 1U)];
+}
+
+metrics::HistBuckets BuildBucketsFromSamples(const std::vector<uint64_t> &samples)
+{
+    metrics::HistBuckets buckets{};
+    for (uint64_t v : samples) {
+        buckets[metrics::BucketIndex(v)]++;
+    }
+    return buckets;
+}
+
+uint64_t HistogramPercentileFromSamples(const std::vector<uint64_t> &samples, uint32_t percentile)
+{
+    const auto buckets = BuildBucketsFromSamples(samples);
+    const uint64_t count = static_cast<uint64_t>(samples.size());
+    const uint64_t maxVal = *std::max_element(samples.begin(), samples.end());
+    return metrics::PercentileFromBuckets(buckets, count, percentile, maxVal);
+}
+
+// Replay samples through the real histogram + DumpSummaryForTest (same JSON as production summary).
+void ObserveSamplesAndLogMetricsSummary(const char *utCaseTag, const std::vector<uint64_t> &samples)
+{
+    InitMetrics();
+    auto h = metrics::GetHistogram(HISTOGRAM_ID);
+    for (uint64_t v : samples) {
+        h.Observe(v);
+    }
+    LOG(INFO) << "[metrics_summary] " << utCaseTag << ' ' << metrics::DumpSummaryForTest();
+}
+
 std::string ScalarMetricJson(const std::string &name, int64_t total, int64_t delta)
 {
     std::ostringstream os;
@@ -64,12 +114,16 @@ std::string ScalarMetricJson(const std::string &name, int64_t total, int64_t del
 }
 
 std::string HistogramMetricJson(const std::string &name, uint64_t totalCount, uint64_t totalAvg, uint64_t totalMax,
-                                uint64_t deltaCount, uint64_t deltaAvg, uint64_t deltaMax)
+                                uint64_t totalP50, uint64_t totalP90, uint64_t totalP99, uint64_t deltaCount,
+                                uint64_t deltaAvg, uint64_t deltaMax, uint64_t deltaP50, uint64_t deltaP90,
+                                uint64_t deltaP99)
 {
     std::ostringstream os;
     os << "{\"name\":\"" << name << "\",\"total\":{\"count\":" << totalCount << ",\"avg_us\":" << totalAvg
-       << ",\"max_us\":" << totalMax << "},\"delta\":{\"count\":" << deltaCount << ",\"avg_us\":" << deltaAvg
-       << ",\"max_us\":" << deltaMax << "}}";
+       << ",\"max_us\":" << totalMax << ",\"p50\":" << totalP50 << ",\"p90\":" << totalP90
+       << ",\"p99\":" << totalP99 << "},\"delta\":{\"count\":" << deltaCount << ",\"avg_us\":" << deltaAvg
+       << ",\"max_us\":" << deltaMax << ",\"p50\":" << deltaP50 << ",\"p90\":" << deltaP90
+       << ",\"p99\":" << deltaP99 << "}}";
     return os.str();
 }
 
@@ -112,7 +166,8 @@ TEST_F(MetricsTest, histogram_observe_test)
     hist.Observe(10);
     hist.Observe(30);
     auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 2, 20, 30, 2, 20, 30)), std::string::npos);
+    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 2, 20, 30, 30, 30, 30, 2, 20, 30, 30, 30, 30)),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, histogram_empty_test)
@@ -180,7 +235,9 @@ TEST_F(MetricsTest, histogram_concurrent_observe_test)
         worker.join();
     }
     auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 64000, 10, 10, 64000, 10, 10)), std::string::npos);
+    // All 64000 samples in one us bucket (10,20]; P99 interpolates toward upper bound → 20 rather than 10.
+    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 64000, 10, 10, 10, 10, 10, 64000, 10, 10, 10, 10, 10)),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, writer_summary_format_test)
@@ -221,6 +278,24 @@ TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
     EXPECT_NE(output.find(" | " + traceId + " | "), std::string::npos);
     EXPECT_NE(output.find("{\"event\":\"metrics_summary\""), std::string::npos);
     EXPECT_EQ(output.find("\"trace_id\":"), std::string::npos);
+}
+
+// Exercises LogSummary → LOG(INFO): stderr carries the same single-line metrics_summary JSON as
+// DumpSummaryForTest(), including histogram total/delta p50, p90, and p99 (PR / doc sample).
+TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
+{
+    InitMetrics();
+    metrics::GetHistogram(HISTOGRAM_ID).Observe(10);
+    metrics::GetHistogram(HISTOGRAM_ID).Observe(30);
+    testing::internal::CaptureStderr();
+    metrics::PrintSummary();
+    std::string err = testing::internal::GetCapturedStderr();
+    EXPECT_NE(err.find("{\"event\":\"metrics_summary\""), std::string::npos) << err;
+    EXPECT_NE(err.find("\"p99\":30"), std::string::npos) << err;
+    EXPECT_NE(err.find(HistogramMetricJson("test_histogram", 2, 20, 30, 30, 30, 30, 2, 20, 30, 30, 30, 30)), std::string::npos)
+        << err;
+    EXPECT_NE(err.find("\"p90\":30"), std::string::npos) << err;
+    EXPECT_NE(err.find("\"p50\":30"), std::string::npos) << err;
 }
 
 TEST_F(MetricsTest, print_summary_splits_large_payload_test)
@@ -286,7 +361,272 @@ TEST_F(MetricsTest, writer_histogram_delta_test)
     (void)metrics::DumpSummaryForTest();
     metrics::GetHistogram(HISTOGRAM_ID).Observe(30);
     auto summary = metrics::DumpSummaryForTest();
-    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 2, 20, 30, 1, 30, 30)), std::string::npos);
+    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 2, 20, 30, 30, 30, 30, 1, 30, 30, 30, 30, 30)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, histogram_p99_total_even_split_test)
+{
+    InitMetrics();
+    auto h = metrics::GetHistogram(HISTOGRAM_ID);
+    for (int i = 0; i < 50; ++i) {
+        h.Observe(10);
+    }
+    for (int i = 0; i < 50; ++i) {
+        h.Observe(30);
+    }
+    auto summary = metrics::DumpSummaryForTest();
+    // Bucket interpolation can exceed observed max; summary clamps p90/p99 to max_us (30).
+    EXPECT_NE(summary.find(HistogramMetricJson("test_histogram", 100, 20, 30, 20, 30, 30, 100, 20, 30, 20, 30, 30)),
+              std::string::npos)
+        << summary;
+}
+
+TEST_F(MetricsTest, histogram_p99_total_and_delta_across_windows_test)
+{
+    InitMetrics();
+    auto h = metrics::GetHistogram(HISTOGRAM_ID);
+    for (int i = 0; i < 100; ++i) {
+        h.Observe(10);
+    }
+    (void)metrics::DumpSummaryForTest();
+    for (int i = 0; i < 100; ++i) {
+        h.Observe(10);
+    }
+    h.Observe(100);
+    auto summary = metrics::DumpSummaryForTest();
+    // total: 201 samples, max=100; 200×10µs share (10,20] bin so P99 interpolates to 20 (< max, not 100).
+    // sum=2100, avg=10; dSum=1100, dAvg=10; delta P99 matches same bucket math.
+    EXPECT_NE(
+        summary.find(HistogramMetricJson("test_histogram", 201, 10, 100, 16, 20, 20, 101, 10, 100, 16, 20, 20)),
+        std::string::npos)
+        << summary;
+}
+
+// PercentileFromBuckets unit checks (same implementation as BuildSummary P99 path).
+TEST_F(MetricsTest, percentile_from_buckets_sparse_two_values_returns_overflow_max)
+{
+    metrics::HistBuckets buckets{};
+    buckets[metrics::BucketIndex(10)]++;
+    buckets[metrics::BucketIndex(30)]++;
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 2, 99, 30), 30u);
+}
+
+TEST_F(MetricsTest, percentile_from_buckets_single_ten)
+{
+    metrics::HistBuckets buckets{};
+    buckets[metrics::BucketIndex(10)]++;
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 1, 99, 10), 10u);
+}
+
+TEST_F(MetricsTest, percentile_from_buckets_single_thirty)
+{
+    metrics::HistBuckets buckets{};
+    buckets[metrics::BucketIndex(30)]++;
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 1, 99, 30), 30u);
+}
+
+TEST_F(MetricsTest, percentile_from_buckets_overflow_bucket_uses_overflow_max)
+{
+    metrics::HistBuckets buckets{};
+    buckets[metrics::BucketIndex(100000000)]++;
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 1, 99, 100000000), 100000000u);
+}
+
+TEST_F(MetricsTest, percentile_from_buckets_empty)
+{
+    metrics::HistBuckets buckets{};
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 0, 99, 0), 0u);
+}
+
+TEST_F(MetricsTest, percentile_from_buckets_even_split_interpolation)
+{
+    metrics::HistBuckets buckets{};
+    for (int i = 0; i < 50; ++i) {
+        buckets[metrics::BucketIndex(10)]++;
+    }
+    for (int i = 0; i < 50; ++i) {
+        buckets[metrics::BucketIndex(30)]++;
+    }
+    EXPECT_EQ(metrics::PercentileFromBuckets(buckets, 100, 99, 30), 30u);
+}
+
+// Ground-truth order statistic vs fixed-bucket histogram (always <= observed max after clamp).
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_all_identical)
+{
+    std::vector<uint64_t> samples(5000, 777U);
+    ObserveSamplesAndLogMetricsSummary("MetricsTest.histogram_percentile_vs_ground_truth_all_identical", samples);
+    EXPECT_EQ(GroundTruthPercentile(samples, 99), 777u);
+    EXPECT_EQ(HistogramPercentileFromSamples(samples, 99), 777u);
+    EXPECT_EQ(GroundTruthPercentile(samples, 90), 777u);
+    EXPECT_EQ(HistogramPercentileFromSamples(samples, 90), 777u);
+}
+
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_two_point_mass)
+{
+    std::vector<uint64_t> samples;
+    samples.reserve(100);
+    for (int i = 0; i < 50; ++i) {
+        samples.push_back(10);
+    }
+    for (int i = 0; i < 50; ++i) {
+        samples.push_back(30);
+    }
+    ObserveSamplesAndLogMetricsSummary("MetricsTest.histogram_percentile_vs_ground_truth_two_point_mass", samples);
+    const uint64_t gt99 = GroundTruthPercentile(samples, 99);
+    const uint64_t apx99 = HistogramPercentileFromSamples(samples, 99);
+    EXPECT_EQ(gt99, 30u);
+    EXPECT_EQ(apx99, 30u);
+}
+
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_sparse_outlier_documents_bias)
+{
+    std::vector<uint64_t> samples;
+    samples.reserve(100);
+    for (int i = 0; i < 99; ++i) {
+        samples.push_back(10);
+    }
+    samples.push_back(10000);
+    ObserveSamplesAndLogMetricsSummary(
+        "MetricsTest.histogram_percentile_vs_ground_truth_sparse_outlier_documents_bias", samples);
+    const uint64_t gt99 = GroundTruthPercentile(samples, 99);
+    const uint64_t apx99 = HistogramPercentileFromSamples(samples, 99);
+    EXPECT_EQ(gt99, 10u);
+    EXPECT_EQ(apx99, 20u);
+    EXPECT_LE(apx99, *std::max_element(samples.begin(), samples.end()));
+}
+
+// Rounded i.i.d. Gaussian: symmetric unimodal — tail quantiles sit above the sample mean (contrast with
+// point-mass + rare huge outlier, where mean ≫ p99 order statistic).
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_near_gaussian)
+{
+    std::mt19937 gen(20260504);
+    std::normal_distribution<double> dist(2500.0, 320.0);
+    constexpr int kN = 12000;
+    std::vector<uint64_t> samples;
+    samples.reserve(static_cast<size_t>(kN));
+    const double cap = static_cast<double>(metrics::HIST_BUCKET_UPPER.back());
+    for (int i = 0; i < kN; ++i) {
+        double x = dist(gen);
+        if (x < 1.0) {
+            x = 1.0;
+        }
+        if (x > cap) {
+            x = cap;
+        }
+        samples.push_back(static_cast<uint64_t>(std::llround(x)));
+    }
+    ObserveSamplesAndLogMetricsSummary("MetricsTest.histogram_percentile_vs_ground_truth_near_gaussian", samples);
+    uint64_t sum = 0;
+    for (uint64_t v : samples) {
+        sum += v;
+    }
+    const uint64_t avg = sum / static_cast<uint64_t>(kN);
+    const uint64_t gt99 = GroundTruthPercentile(samples, 99);
+    const uint64_t gt90 = GroundTruthPercentile(samples, 90);
+    const uint64_t apx99 = HistogramPercentileFromSamples(samples, 99);
+    const uint64_t apx90 = HistogramPercentileFromSamples(samples, 90);
+    const uint64_t mx = *std::max_element(samples.begin(), samples.end());
+
+    EXPECT_GT(gt99, avg);
+    EXPECT_GT(gt90, avg);
+    EXPECT_LE(apx99, mx);
+    EXPECT_LE(apx90, mx);
+
+    uint64_t maxSpan = 0;
+    for (uint64_t v : samples) {
+        const size_t bi = metrics::BucketIndex(v);
+        const uint64_t lo = bi == 0 ? 0ULL : metrics::HIST_BUCKET_UPPER[bi - 1];
+        const uint64_t span = metrics::HIST_BUCKET_UPPER[bi] - lo;
+        if (span > maxSpan) {
+            maxSpan = span;
+        }
+    }
+    const auto abs64 = [](int64_t x) -> int64_t { return x < 0 ? -x : x; };
+    const uint64_t tol = 8U * maxSpan + 50U;
+    EXPECT_LE(abs64(static_cast<int64_t>(apx99) - static_cast<int64_t>(gt99)), static_cast<int64_t>(tol));
+    EXPECT_LE(abs64(static_cast<int64_t>(apx90) - static_cast<int64_t>(gt90)), static_cast<int64_t>(tol));
+}
+
+// Tight bulk (+ smooth spread) plus a single enormous sample: p99 must stay with the bulk, not track max.
+// (If p99 ≈ max here, summary would misrepresent typical latency — max already exposes the spike.)
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_smooth_bulk_one_spike)
+{
+    constexpr int kBulk = 12000;
+    constexpr uint64_t kSpike = 8000000ULL;
+    std::mt19937 gen(20260505);
+    std::uniform_int_distribution<uint64_t> bulkDist(240, 260);
+    std::vector<uint64_t> samples;
+    samples.reserve(static_cast<size_t>(kBulk + 1));
+    for (int i = 0; i < kBulk; ++i) {
+        samples.push_back(bulkDist(gen));
+    }
+    samples.push_back(kSpike);
+
+    ObserveSamplesAndLogMetricsSummary(
+        "MetricsTest.histogram_percentile_vs_ground_truth_smooth_bulk_one_spike", samples);
+
+    const uint64_t mx = *std::max_element(samples.begin(), samples.end());
+    const uint64_t gt99 = GroundTruthPercentile(samples, 99);
+    const uint64_t apx99 = HistogramPercentileFromSamples(samples, 99);
+    ASSERT_EQ(mx, kSpike);
+
+    EXPECT_LE(gt99, 280u);
+    EXPECT_GE(gt99, 240u);
+    EXPECT_LE(apx99, mx);
+    EXPECT_LT(gt99, mx / 1000U);
+    EXPECT_LT(apx99, mx / 1000U);
+
+    uint64_t maxSpan = 0;
+    for (uint64_t v : samples) {
+        if (v == kSpike) {
+            continue;
+        }
+        const size_t bi = metrics::BucketIndex(v);
+        const uint64_t lo = bi == 0 ? 0ULL : metrics::HIST_BUCKET_UPPER[bi - 1];
+        const uint64_t span = metrics::HIST_BUCKET_UPPER[bi] - lo;
+        if (span > maxSpan) {
+            maxSpan = span;
+        }
+    }
+    const auto abs64 = [](int64_t x) -> int64_t { return x < 0 ? -x : x; };
+    const uint64_t tol = 8U * maxSpan + 50U;
+    EXPECT_LE(abs64(static_cast<int64_t>(apx99) - static_cast<int64_t>(gt99)), static_cast<int64_t>(tol));
+}
+
+TEST_F(MetricsTest, histogram_percentile_vs_ground_truth_random_single_bucket_tight)
+{
+    std::mt19937 gen(20260503);
+    std::uniform_int_distribution<uint64_t> dist(150, 180);
+    const int kIters = 300;
+    const int kN = 900;
+    for (int iter = 0; iter < kIters; ++iter) {
+        std::vector<uint64_t> samples;
+        samples.reserve(static_cast<size_t>(kN));
+        for (int i = 0; i < kN; ++i) {
+            samples.push_back(dist(gen));
+        }
+        if (iter == 0) {
+            ObserveSamplesAndLogMetricsSummary(
+                "MetricsTest.histogram_percentile_vs_ground_truth_random_single_bucket_tight/iter0", samples);
+        }
+        const uint64_t mx = *std::max_element(samples.begin(), samples.end());
+        const uint64_t gt99 = GroundTruthPercentile(samples, 99);
+        const uint64_t apx99 = HistogramPercentileFromSamples(samples, 99);
+        const uint64_t gt90 = GroundTruthPercentile(samples, 90);
+        const uint64_t apx90 = HistogramPercentileFromSamples(samples, 90);
+        EXPECT_LE(apx99, mx) << "iter " << iter;
+        EXPECT_LE(apx90, mx) << "iter " << iter;
+        const int64_t d99 = static_cast<int64_t>(apx99) - static_cast<int64_t>(gt99);
+        const int64_t d90 = static_cast<int64_t>(apx90) - static_cast<int64_t>(gt90);
+        const size_t bi = metrics::BucketIndex(mx);
+        const uint64_t bucketLo = bi == 0 ? 0ULL : metrics::HIST_BUCKET_UPPER[bi - 1];
+        const uint64_t bucketSpan = metrics::HIST_BUCKET_UPPER[bi] - bucketLo;
+        const uint64_t tol = bucketSpan + 1U;
+        const auto abs64 = [](int64_t x) -> int64_t { return x < 0 ? -x : x; };
+        EXPECT_LE(abs64(d99), static_cast<int64_t>(tol)) << "iter " << iter;
+        EXPECT_LE(abs64(d90), static_cast<int64_t>(tol)) << "iter " << iter;
+    }
 }
 
 TEST_F(MetricsTest, writer_zero_delta_test)
@@ -434,7 +774,8 @@ TEST_F(MetricsTest, client_put_metrics_counter_test)
 {
     InitKvMetricsForTest();
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_request_total", 1, 1)), std::string::npos);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_request_total", 1, 1)),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, client_put_metrics_error_counter_test)
@@ -448,7 +789,8 @@ TEST_F(MetricsTest, client_get_metrics_counter_test)
 {
     InitKvMetricsForTest();
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_get_request_total", 1, 1)), std::string::npos);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_get_request_total", 1, 1)),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, client_get_metrics_error_counter_test)
@@ -658,8 +1000,9 @@ TEST_F(MetricsTest, kv_metrics_create_meta_test)
 {
     InitKvMetricsForTest();
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_CREATE_META_LATENCY)).Observe(10);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(HistogramMetricJson("worker_rpc_create_meta_latency", 1, 10, 10, 1,
-                                                                     10, 10)),
+    EXPECT_NE(metrics::DumpSummaryForTest()
+                  .find(HistogramMetricJson("worker_rpc_create_meta_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10,
+                                          10)),
               std::string::npos);
 }
 
@@ -667,8 +1010,9 @@ TEST_F(MetricsTest, kv_metrics_query_meta_test)
 {
     InitKvMetricsForTest();
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_QUERY_META_LATENCY)).Observe(10);
-    EXPECT_NE(metrics::DumpSummaryForTest().find(HistogramMetricJson("worker_rpc_query_meta_latency", 1, 10, 10, 1, 10,
-                                                                     10)),
+    EXPECT_NE(metrics::DumpSummaryForTest()
+                  .find(HistogramMetricJson("worker_rpc_query_meta_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10,
+                                          10)),
               std::string::npos);
 }
 
@@ -677,10 +1021,10 @@ TEST_F(MetricsTest, kv_metrics_remote_get_test)
     InitKvMetricsForTest();
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY))
         .Observe(10);
-    EXPECT_NE(
-        metrics::DumpSummaryForTest().find(
-            HistogramMetricJson("worker_rpc_remote_get_outbound_latency", 1, 10, 10, 1, 10, 10)),
-        std::string::npos);
+    EXPECT_NE(metrics::DumpSummaryForTest()
+                  .find(HistogramMetricJson("worker_rpc_remote_get_outbound_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10,
+                                          10, 10, 10)),
+              std::string::npos);
 }
 
 TEST_F(MetricsTest, kv_metrics_urma_path_test)
@@ -690,7 +1034,8 @@ TEST_F(MetricsTest, kv_metrics_urma_path_test)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY)).Observe(10);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find(ScalarMetricJson("client_get_urma_read_total_bytes", 32, 32)), std::string::npos);
-    EXPECT_NE(summary.find(HistogramMetricJson("worker_urma_write_latency", 1, 10, 10, 1, 10, 10)),
+    EXPECT_NE(summary.find(HistogramMetricJson("worker_urma_write_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10,
+                                                 10)),
               std::string::npos);
 }
 
@@ -701,7 +1046,9 @@ TEST_F(MetricsTest, kv_metrics_tcp_fallback_test)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY)).Observe(10);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find(ScalarMetricJson("client_get_tcp_read_total_bytes", 64, 64)), std::string::npos);
-    EXPECT_NE(summary.find(HistogramMetricJson("worker_tcp_write_latency", 1, 10, 10, 1, 10, 10)), std::string::npos);
+    EXPECT_NE(
+        summary.find(HistogramMetricJson("worker_tcp_write_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10, 10)),
+        std::string::npos);
 }
 
 TEST_F(MetricsTest, kv_metrics_summary_format_test)
