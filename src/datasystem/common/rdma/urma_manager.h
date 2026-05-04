@@ -657,7 +657,7 @@ private:
     void *memoryBuffer_ = nullptr;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    static std::atomic<uint64_t> ubTransportMemSize_;  // 128 MB
+    static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB
     uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
     uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB
 };

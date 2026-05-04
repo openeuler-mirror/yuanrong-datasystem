@@ -62,7 +62,6 @@ DS_DEFINE_string(shared_memory_distribution_policy, "none",
                  "Shared memory NUMA distribution policy. Optional values: "
                  "'none', 'interleave_all_numa', 'interleave_affinity_numa'.");
 DS_DEFINE_bool(urma_event_mode, false, "Uses interrupt mode to poll completion events.");
-DS_DEFINE_bool(enable_urma_perf, false, "Enable performance logging for URMA operations");
 DS_DEFINE_bool(enable_worker_worker_batch_get, false, "Enable worker->worker OC batch get, default false.");
 DS_DEFINE_bool(enable_remote_h2d, false, "Option to turn on Remote H2D, default false.");
 DS_DEFINE_string(urma_mode, "UB", "Option to enable URMA over IB or UB, default UB to run with URMA over UB.");
