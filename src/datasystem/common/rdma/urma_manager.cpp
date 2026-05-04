@@ -343,6 +343,7 @@ Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle,
     if (size == 0) {
         return Status(K_INVALID, "UB Get buffer size is 0");
     }
+    INJECT_POINT("UrmaManager.GetMemoryBufferHandle");
     std::shared_ptr<ShmUnit> unit = std::make_shared<ShmUnit>();
     RETURN_IF_NOT_OK(
         unit->AllocateMemory(DEFAULT_TENANTID, size, false, ServiceType::OBJECT, AllocateType::UB_TRANSPORT));
@@ -1719,6 +1720,12 @@ Status UrmaManager::RemoveRemoteClient(ClientKey clientEntityId)
     }
     LOG(INFO) << "Remove URMA resources for client " << clientEntityId << ", connection key " << remoteConnectionId;
     return RemoveRemoteResources(remoteConnectionId, true);
+}
+
+bool UrmaManager::HasRemoteClient(ClientKey clientEntityId)
+{
+    std::lock_guard<std::mutex> lock(clientIdMutex_);
+    return clientIdMapping_.find(clientEntityId) != clientIdMapping_.end();
 }
 
 const std::string &UrmaManager::GetClientId()

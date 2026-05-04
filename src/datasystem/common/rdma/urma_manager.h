@@ -402,6 +402,13 @@ public:
     Status RemoveRemoteClient(ClientKey clientEntityId);
 
     /**
+     * @brief Check whether the worker has observed a URMA client handshake for the given client entity.
+     * @param[in] clientEntityId Client entity id.
+     * @return True if a remote client mapping exists.
+     */
+    bool HasRemoteClient(ClientKey clientEntityId);
+
+    /**
      * @brief Retrieve local segment and jfr for receiving remote sender cqe.
      * @param[in] segAddress segment start address.
      * @param[in] segSize segment size.
