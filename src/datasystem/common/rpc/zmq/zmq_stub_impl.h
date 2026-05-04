@@ -33,69 +33,14 @@
 #include "datasystem/common/rpc/zmq/rpc_service_method.h"
 #include "datasystem/common/rpc/zmq/zmq_payload.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
+#include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/metrics/kv_metrics.h"
 
 namespace datasystem {
-
-namespace {
-// Extract tick timestamp from meta by tick name
-inline uint64_t FindTickTs(const MetaPb& meta, const char* tickName)
-{
-    for (int i = 0; i < meta.ticks_size(); i++) {
-        if (meta.ticks(i).tick_name() == tickName) {
-            return meta.ticks(i).ts();
-        }
-    }
-    return 0;
-}
-}  // anonymous namespace
-
-// Record RPC latency metrics after receiving response
-inline void RecordRpcLatencyMetrics(MetaPb& meta)
-{
-    // E2E = CLIENT_RECV - CLIENT_ENQUEUE
-    uint64_t e2eNs = GetTotalTicksTime(meta);
-
-    // Extract SERVER_EXEC_NS from server-side ticks
-    uint64_t serverExecNs = FindTickTs(meta, "SERVER_EXEC_NS");
-
-    // NETWORK = E2E - SERVER_EXEC
-    uint64_t networkNs = (e2eNs > serverExecNs) ? (e2eNs - serverExecNs) : 0;
-
-    // Extract client-side ticks for QUEUING and STUB_SEND
-    uint64_t clientEnqueueTs = FindTickTs(meta, TICK_CLIENT_ENQUEUE);
-    uint64_t clientToStubTs = FindTickTs(meta, TICK_CLIENT_TO_STUB);
-    uint64_t clientSendTs = FindTickTs(meta, TICK_CLIENT_SEND);
-
-    // CLIENT_QUEUING = CLIENT_TO_STUB - CLIENT_ENQUEUE
-    if (clientToStubTs > clientEnqueueTs) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_CLIENT_QUEUING_LATENCY))
-            .Observe(clientToStubTs - clientEnqueueTs);
-    }
-
-    // CLIENT_STUB_SEND = CLIENT_SEND - CLIENT_TO_STUB
-    if (clientSendTs > clientToStubTs) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_CLIENT_STUB_SEND_LATENCY))
-            .Observe(clientSendTs - clientToStubTs);
-    }
-
-    // E2E and NETWORK
-    if (e2eNs > 0) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_E2E_LATENCY)).Observe(e2eNs);
-    }
-    if (networkNs > 0) {
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::ZMQ_RPC_NETWORK_LATENCY)).Observe(networkNs);
-    }
-}
 
 /**
  * @brief A stub provides methods to send/receive rpc service to the server.
@@ -134,6 +79,8 @@ public:
         VLOG(RPC_LOG_LEVEL) << "Client " << clientId << " requesting service " << svcName << " Method "
                             << method->MethodName() << std::endl;
         int64_t payloadIndex = method->HasPayloadSendOption() ? ZMQ_EMBEDDED_PAYLOAD_INX : ZMQ_INVALID_PAYLOAD_INX;
+        // MetaPb.trace_id comes from Trace::GetTraceID() inside CreateMetaData; mint UUID if thread-local is empty.
+        // If a trace already exists (Context::SetTraceId or nested RPC), SetTraceUUID is a no-op.
         MetaPb meta = CreateMetaData(svcName, method->MethodIndex(), payloadIndex, clientId);
         ZmqMsgFrames frames;
         // Set up the frames in order. Protobuf and then payload (if any).
@@ -146,14 +93,18 @@ public:
         }
         // Put the frames onto the outbound queue.
         auto p = std::make_pair(meta, std::move(frames));
+        // Request committed to outbound path; prefetch dequeue adds CLIENT_TO_STUB (Outbound).
         RecordTick(p.first, TICK_CLIENT_ENQUEUE);
+        // Copy p.first before it is moved (SendMsg consumes p.first)
+        MetaPb clientMeta = p.first;
         Status rc = mQue->SendMsg(p);
         if (rc.GetCode() == K_TRY_AGAIN && opt.GetTimeout() > 0) {
             rc = Status(StatusCode::K_RPC_CANCELLED, rc.GetMsg());
         }
         RETURN_IF_NOT_OK(rc);
         // Since this is an async call, we will need to save the socket for call back.
-        tagId = Insert(std::move(mQue), svcName, method->MethodIndex());
+        // Store copy of p.first (with all client ticks) so AsyncRead can merge them into response MetaPb
+        tagId = Insert(std::move(mQue), svcName, method->MethodIndex(), std::move(clientMeta));
         return Status::OK();
     }
 
@@ -209,7 +160,16 @@ public:
         Remove(tagId);
         ZmqMessage replyMsg;
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(rsp.first, "ZMQ_STUB_FRONT_TO_BACK"));
-        // Record CLIENT_RECV tick and calculate RPC latency metrics
+        // Merge request-path client ticks first, then CLIENT_RECV so repeated-field order matches client timeline.
+        // Dedupe tick names vs unary ClientUnaryWriterReader (last writer wins downstream scans).
+        const MetaPb &clientMeta = asyncCall->GetClientMeta();
+        for (int i = 0; i < clientMeta.ticks_size(); ++i) {
+            const TickPb &src = clientMeta.ticks(i);
+            const char *tname = src.tick_name().c_str();
+            if (!MetaHasNamedTick(rsp.first, tname)) {
+                *rsp.first.mutable_ticks()->Add() = src;
+            }
+        }
         RecordTick(rsp.first, TICK_CLIENT_RECV);
         RecordRpcLatencyMetrics(rsp.first);
         rc = AckRequest(rsp.second, replyMsg);
@@ -218,7 +178,7 @@ public:
         VLOG(RPC_LOG_LEVEL) << "Client " << clientId << " received reply "
                             << "from Service " << svcName << " Method " << method->MethodName() << ", msg:\n"
                             << LogHelper::IgnoreSensitive(reply) << std::endl;
-        // If we have a payload to follow.
+        // If there is a payload to follow.
         if (method->HasPayloadRecvOption()) {
             std::unique_ptr<ZmqPayloadEntry> entry;
             RETURN_IF_NOT_OK(ZmqPayload::ProcessEmbeddedPayload(rsp.second, entry));
@@ -319,18 +279,22 @@ private:
     // A structure to store async events.
     class AsyncCallBack {
     public:
-        AsyncCallBack(std::shared_ptr<ZmqMsgQueRef> mQue, std::string svcName, int32_t methodIndex);
+        AsyncCallBack(std::shared_ptr<ZmqMsgQueRef> mQue, std::string svcName, int32_t methodIndex,
+                      MetaPb clientMeta);
 
         ~AsyncCallBack()
         {
             mQue_->Close();
         }
 
+        const MetaPb &GetClientMeta() const { return clientMeta_; }
+
     private:
         friend class ZmqStubImpl;
         std::shared_ptr<ZmqMsgQueRef> mQue_;
         std::string svcName_;
         int32_t methodIndex_;
+        MetaPb clientMeta_;
     };
 
     /**
@@ -351,9 +315,11 @@ private:
      * @param[in] mQue Zmq message queue reference.
      * @param[in] svcName Service name.
      * @param[in] methodIndex Method index.
+     * @param[in] clientMeta Original client MetaPb with ticks.
      * @return tag Tag to identify a request.
      */
-    int64_t Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::string &svcName, int32_t methodIndex);
+    int64_t Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::string &svcName, int32_t methodIndex,
+                   MetaPb clientMeta);
 
     std::map<int64_t, std::shared_ptr<AsyncCallBack>> asyncCallBack_;
     Status proxyRc_;

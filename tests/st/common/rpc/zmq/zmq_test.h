@@ -20,6 +20,11 @@
 #ifndef DATASYSTEM_COMMON_RPC_ZMQ_DEMO_H
 #define DATASYSTEM_COMMON_RPC_ZMQ_DEMO_H
 
+#include <atomic>
+#include <chrono>
+#include <iostream>
+#include <thread>
+
 #include "datasystem/protos/zmq_test.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
@@ -114,7 +119,17 @@ public:
 class DemoServiceImpl final : public DemoService {
 public:
     DemoServiceImpl() = default;
-    ~DemoServiceImpl() override = default;
+    ~DemoServiceImpl() override
+    {
+        const uint64_t n = simpleGreetingTimerCount_.load(std::memory_order_relaxed);
+        if (n == 0U) {
+            return;
+        }
+        const uint64_t sumNs = simpleGreetingTimerSumNs_.load(std::memory_order_relaxed);
+        const double avgUs = static_cast<double>(sumNs) / static_cast<double>(n) / 1000.0;
+        std::cout << "[DemoServiceImpl::~DemoServiceImpl] SimpleGreeting handler wall avg_us=" << avgUs
+                  << " count=" << n << std::endl;
+    }
 
     /**
      * This implement the SimpleGreeting method.
@@ -124,7 +139,7 @@ public:
      */
     datasystem::Status SimpleGreeting(const SayHelloPb &hello, ReplyHelloPb &ReplyHelloPb) override
     {
-        datasystem::Status rc;
+        const auto t0 = std::chrono::steady_clock::now();
         if (hello.msg() == "Hello") {
             ReplyHelloPb.set_reply("World");
         } else if (hello.msg() == "World") {
@@ -134,6 +149,11 @@ public:
         } else {
             ReplyHelloPb.set_reply(hello.msg());
         }
+        const auto t1 = std::chrono::steady_clock::now();
+        const uint64_t dtNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+        simpleGreetingTimerSumNs_.fetch_add(dtNs, std::memory_order_relaxed);
+        simpleGreetingTimerCount_.fetch_add(1, std::memory_order_relaxed);
         return datasystem::Status::OK();
     }
 
@@ -427,6 +447,8 @@ public:
     }
 
 private:
+    std::atomic<uint64_t> simpleGreetingTimerSumNs_{0};
+    std::atomic<uint64_t> simpleGreetingTimerCount_{0};
 };
 }  // namespace workspace
 }  // namespace arbitrary

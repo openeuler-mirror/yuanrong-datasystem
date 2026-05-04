@@ -39,52 +39,6 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 
 namespace datasystem {
-namespace {
-// Extract tick timestamp from meta by tick name
-inline uint64_t FindTickTs(const MetaPb &meta, const char *tickName)
-{
-    for (int i = 0; i < meta.ticks_size(); i++) {
-        if (meta.ticks(i).tick_name() == tickName) {
-            return meta.ticks(i).ts();
-        }
-    }
-    return 0;
-}
-
-// Record server-side latency metrics and append SERVER_EXEC_NS tick
-inline void RecordServerLatencyMetrics(MetaPb &meta)
-{
-    int64_t serverRecvTs = FindTickTs(meta, TICK_SERVER_RECV);
-    int64_t serverDequeuTs = FindTickTs(meta, TICK_SERVER_DEQUEUE);
-    int64_t serverExecEndTs = FindTickTs(meta, TICK_SERVER_EXEC_END);
-    int64_t serverSendTs = FindTickTs(meta, TICK_SERVER_SEND);
-
-    // SERVER_QUEUE_WAIT = SERVER_DEQUEUE - SERVER_RECV
-    if (serverDequeuTs > serverRecvTs) {
-        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_QUEUE_WAIT_LATENCY))
-            .Observe(serverDequeuTs - serverRecvTs);
-    }
-
-    // SERVER_EXEC = SERVER_EXEC_END - SERVER_DEQUEUE
-    if (serverExecEndTs > serverDequeuTs) {
-        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY))
-            .Observe(serverExecEndTs - serverDequeuTs);
-    }
-
-    // SERVER_REPLY = SERVER_SEND - SERVER_EXEC_END
-    if (serverSendTs > serverExecEndTs) {
-        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_REPLY_LATENCY))
-            .Observe(serverSendTs - serverExecEndTs);
-    }
-
-    // Calculate SERVER_EXEC_NS = SERVER_EXEC_END - SERVER_RECV and append as a computed tick
-    uint64_t serverExecNs = (serverExecEndTs > serverRecvTs) ? (serverExecEndTs - serverRecvTs) : 0;
-    TickPb execTick;
-    execTick.set_ts(serverExecNs);
-    execTick.set_tick_name("SERVER_EXEC_NS");
-    meta.mutable_ticks()->Add(std::move(execTick));
-}
-}  // anonymous namespace
 
 static const int MAX_EXCLUSIVE_CONNECTIONS_LIMIT = 128;
 ZmqService::ZmqService()
@@ -108,6 +62,11 @@ ZmqService::ZmqService()
         VLOG(ZMQ_PERF_LOG_LEVEL) << FormatString("Routing reply from %s to reply queue for service %s", sender,
                                                  serviceName_);
         PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
+        // When multiDestinations_ is false we never call ZmqService::ServiceToClient (only Put on replyQueue_).
+        // Mirror the metric + synthetic tick side of ServiceToClient so server histograms and client network math
+        // still see SERVER_SEND / SERVER_RPC_WINDOW_NS.
+        RecordTick(meta, TICK_SERVER_SEND);
+        RecordServerLatencyMetrics(meta);
         RETURN_IF_NOT_OK(replyQueue_->Put(std::move(p)));
         eventfd_write(outfd_, 1);
         return Status::OK();

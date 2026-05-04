@@ -32,6 +32,7 @@
 #include "datasystem/common/rpc/zmq/rpc_service_method.h"
 #include "datasystem/common/rpc/zmq/zmq_msg_decoder.h"
 #include "datasystem/common/rpc/zmq/zmq_msg_queue.h"
+#include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/rpc/zmq/zmq_stream_base.h"
 #include "datasystem/common/rpc/zmq/zmq_stub.h"
 #include "datasystem/common/log/log_helper.h"
@@ -224,8 +225,9 @@ public:
 
     Status SendAll(ZmqSendFlags flags) override
     {
-        // Send metadata first.
+        // Align with AsyncWriteImpl: enqueue then send; outbound adds TICK_CLIENT_TO_STUB on the queued copy.
         StartTheClock(meta_);
+        RecordTick(meta_, TICK_CLIENT_ENQUEUE);
         ZmqMsgFrames frames = std::move(outMsg_);
         RETURN_IF_NOT_OK(SendConnMsg(meta_, frames, flags));
         return Status::OK();
@@ -236,8 +238,10 @@ public:
         inMsg_.clear();
         ZmqMetaMsgFrames reply;
         RETURN_IF_NOT_OK(RecvConnReply(reply, flags, false));
+        // Response MetaPb carries SERVER_* ticks + TICK_SERVER_RPC_WINDOW_NS; unary used to discard it.
+        lastConnReplyMeta_ = std::move(reply.first);
         inMsg_ = std::move(reply.second);
-        payloadId_ = reply.first.payload_index();
+        payloadId_ = lastConnReplyMeta_.payload_index();
         v2Server_ = payloadId_ >= 0;
 
         return Status::OK();
@@ -270,6 +274,9 @@ public:
 
 protected:
     std::shared_ptr<ZmqMsgQueRef> mQue_;
+
+    /** Response MetaPb from last ReadAll(); holds ticks for unary queue-flow histograms */
+    MetaPb lastConnReplyMeta_;
 
 private:
     Status WriteImpl(const W &pb)
@@ -321,6 +328,16 @@ private:
         if (readOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " unary socket reading" << std::endl;
             RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
+            // Response MetaPb may omit request-path ticks copied into Outbound earlier; mirror Async merge.
+            for (int i = 0; i < meta_.ticks_size(); i++) {
+                const auto &t = meta_.ticks(i);
+                if (!MetaHasNamedTick(lastConnReplyMeta_, t.tick_name().c_str())) {
+                    *lastConnReplyMeta_.mutable_ticks()->Add() = t;
+                }
+            }
+            // Align with ZmqStubImpl::AsyncReadImpl: recv tick + queue-flow histograms before AckRequest().
+            RecordTick(lastConnReplyMeta_, TICK_CLIENT_RECV);
+            RecordRpcLatencyMetrics(lastConnReplyMeta_);
             ZmqMessage msg;
             RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
             PerfPoint point(PerfKey::ZMQ_RESPONSE_MSG_TO_PROTO);
@@ -330,7 +347,8 @@ private:
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " got message\n"
                                 << LogHelper::IgnoreSensitive(pb) << std::endl;
             // If we receive payload, check if the payload is banked at the server or come separately.
-            if (HasRecvPayloadOp() && (v2Server_ || meta_.payload_index() == ZMQ_OFFLINE_PAYLOAD_INX)) {
+            if (HasRecvPayloadOp() &&
+                (v2Server_ || lastConnReplyMeta_.payload_index() == ZMQ_OFFLINE_PAYLOAD_INX)) {
                 CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(inMsg_.size() == 1, StatusCode::K_INVALID,
                                                      "Expect a payload size frame only");
                 int64_t sz = 0;
@@ -396,6 +414,12 @@ private:
                              "Error closing exclusive conn during error path");
                 return rc;
             }
+        }
+        // Stub Outbound stamps CLIENT_TO_STUB on the queued MetaPb copy; unary keeps a separate meta_ object.
+        // ReadImpl merges meta_ into reply meta for RecordRpcLatencyMetrics; without this, clientToStubTs is 0
+        // (no queuing / wrong network residual). Avoid double-stamp if caller already set the tick.
+        if (!MetaHasNamedTick(meta, TICK_CLIENT_TO_STUB)) {
+            RecordTick(meta, TICK_CLIENT_TO_STUB);
         }
         return Status::OK();
     }

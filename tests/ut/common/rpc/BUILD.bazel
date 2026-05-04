@@ -7,6 +7,7 @@ ds_cc_test(
     srcs = ["zmq_metrics_test.cpp"],
     deps = [
         "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/rpc/zmq:zmq_constants",
         "//src/datasystem/common/rpc/zmq:zmq_network_errno",
         "//tests/ut:ut_common",
     ],
