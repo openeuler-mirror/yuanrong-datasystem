@@ -629,7 +629,8 @@ void WorkerRequestManager::DeleteObjects(const std::map<std::string, uint64_t> &
         // call will
         // return fail because the object don't exist on objectTable_. So we don't handle the error when
         // delete.
-        LOG_IF_ERROR(deleteFunc_(kv.first, kv.second), FormatString("delete object %s failed", kv.first));
+        LOG_IF_ERROR_EXCEPT(deleteFunc_(kv.first, kv.second),
+                            FormatString("delete object %s failed", kv.first), K_NOT_FOUND);
     }
 }
 }  // namespace object_cache
