@@ -65,9 +65,9 @@ ConnectOptions
         
         如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 ``enable_remote_h2d`` 能力。默认值：false
 
-    .. cpp:member:: uint64_t fastTransportMemSize = 128 * 1024 * 1024;
+    .. cpp:member:: uint64_t fastTransportMemSize = 256 * 1024 * 1024;
 
-        client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：128MB，取值范围为 ``(0, 2GB]``。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。
+        client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：256MB，取值范围为 ``(0, 2GB]``。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。
 
     **公共函数**
  

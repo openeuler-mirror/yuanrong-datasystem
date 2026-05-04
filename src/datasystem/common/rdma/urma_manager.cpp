@@ -51,7 +51,6 @@
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
 DS_DECLARE_bool(urma_event_mode);
-DS_DECLARE_bool(enable_urma_perf);
 
 namespace datasystem {
 namespace {
@@ -110,7 +109,7 @@ std::string BuildLocalJettyKey(const std::string &connectionKey, JettyType jetty
 }  // namespace
 
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
-constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 128UL * 1024UL * 1024UL;
+constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 256UL * 1024UL * 1024UL;
 constexpr uint64_t MAX_TRANSPORT_MEM_SIZE = 2UL * 1024UL * 1024UL * 1024UL;
 
 bool UrmaManager::clientMode_ = false;
@@ -264,9 +263,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         RETURN_IF_NOT_OK(InitMemoryBufferPool());
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(MAX_STUB_CACHE_NUM, hostport));
     }
-    if (FLAGS_enable_urma_perf) {
-        perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
-    }
+    perfThread_ = std::make_unique<std::thread>(&UrmaManager::PerfThreadMain, this);
     needRollback = false;
     return Status::OK();
 }
