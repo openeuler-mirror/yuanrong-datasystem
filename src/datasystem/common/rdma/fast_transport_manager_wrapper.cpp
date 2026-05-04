@@ -111,6 +111,17 @@ Status RemoveRemoteFastTransportClient(const ClientKey &clientId)
     return Status::OK();
 }
 
+bool HasRemoteFastTransportClient(const ClientKey &clientId)
+{
+    (void)clientId;
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        return UrmaManager::Instance().HasRemoteClient(clientId);
+    }
+#endif
+    return false;
+}
+
 void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memoryAddress, uint64_t &segAddress,
                                uint64_t &segSize)
 {
