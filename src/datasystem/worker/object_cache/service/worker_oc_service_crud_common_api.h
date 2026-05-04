@@ -20,6 +20,8 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
+#include <algorithm>
+
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/utils/status.h"
 
@@ -111,8 +113,13 @@ public:
     Status RedirectRetryWhenMetaMoving(Req &req, Rsp &rsp, std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                        std::function<Status(Req &, Rsp &)> fun)
     {
+        CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
+        static const int64_t initSleepTimeMs = 1;
+        static const int64_t maxSleepTimeMs = 128;
+        int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
-            CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
+            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     "Rpc timeout");
             RETURN_IF_NOT_OK(fun(req, rsp));
             if (rsp.info().redirect_meta_address().empty()) {
                 return Status::OK();
@@ -128,9 +135,11 @@ public:
                 RETURN_IF_NOT_OK(status);
                 return Status::OK();
             }
-            static const int sleepTimeMs = 200;
             rsp.Clear();
+            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
 
