@@ -1977,8 +1977,9 @@ Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo>
                                          uint64_t length)
 {
     g_isThroughUb = true;
-    auto api = std::dynamic_pointer_cast<IClientWorkerApi>(workerApi_[LOCAL_WORKER]);
-    RETURN_RUNTIME_ERROR_IF_NULL(api);
+    std::shared_ptr<IClientWorkerApi> api;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
     return api->SendBufferViaUb(bufferInfo, data, length);
 }
 
