@@ -266,6 +266,8 @@ message DeleteAllCopyMetaReqPb {
   // It is more reasonable to use "map" here. However, since the order after "map" serialization is uncertain,
   // it is not applicable in scenarios where ak/sk authentication is used, so currently only "repeated" can be used.
   repeated ObjKeyWithVersionPb ids_with_version = 7;
+  // Return after enqueueing delete into ExpiredObjectManager instead of waiting for worker delete notifications.
+  bool async_delete = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
