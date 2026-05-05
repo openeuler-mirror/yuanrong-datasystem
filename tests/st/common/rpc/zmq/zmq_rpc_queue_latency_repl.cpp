@@ -97,8 +97,28 @@ int DurationSecFromEnv()
 
 json DumpSummaryJson()
 {
-    auto summary = metrics::DumpSummaryForTest(2000);
-    return summary.empty() ? json() : json::parse(summary);
+    auto parts = metrics::DumpSummariesForTest(2000);
+    if (parts.empty()) {
+        return json();
+    }
+    json merged;
+    const size_t n = parts.size();
+    for (size_t i = 0; i < n; ++i) {
+        LOG(INFO) << parts[i];
+        json j = json::parse(parts[i]);
+        if (i == 0) {
+            merged = std::move(j);
+            continue;
+        }
+        if (j.contains("metrics") && j["metrics"].is_array()) {
+            for (const auto &m : j["metrics"]) {
+                merged["metrics"].push_back(m);
+            }
+        }
+    }
+    merged["part_index"] = 1;
+    merged["part_count"] = 1;
+    return merged;
 }
 
 uint64_t MetricTotalCount(const json &root, const char *histName)
