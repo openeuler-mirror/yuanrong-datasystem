@@ -1721,7 +1721,6 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     }
     buffer = std::move(newBuffer);
     createPoint.Record();
-
     VLOG(1) << "Finished creating object, object_key: " << objectKey;
     return Status::OK();
 }

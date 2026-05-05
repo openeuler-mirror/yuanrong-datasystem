@@ -32,6 +32,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -130,7 +131,8 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
                              "hash master get failed, CreateMetadataToMaster failed");
     std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
                                                                                           CreateMetaRspPb &metaResp) {
-        LOG(INFO) << FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort());
+        LOG(INFO) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
+                                        metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->CreateMeta(metaReq, metaResp);
     };
     RETURN_IF_NOT_OK(RedirectRetryWhenMetaMoving(metaReq, metaResp, workerMasterApi, func));
@@ -168,7 +170,8 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
                              "hash master get failed, UpdateMetadataToMaster failed");
     std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
                                                                                           UpdateMetaRspPb &metaRsp) {
-        LOG(INFO) << FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort());
+        LOG(INFO) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
+                                        metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->UpdateMeta(metaReq, metaRsp);
     };
     RETURN_IF_NOT_OK(RedirectRetryWhenMetaMoving(metaReq, metaRsp, workerMasterApi, func));

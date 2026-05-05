@@ -148,5 +148,14 @@ TEST_F(StringsUtilTest, TestFormatStringForLog)
     size_t maxDisplayLength2 = 4;
     EXPECT_EQ(FormatStringForLog(longStr, maxDisplayLength2), expectStr);
 }
+
+TEST_F(StringsUtilTest, TestAppendSrcDstForLog)
+{
+    EXPECT_EQ(AppendSrcDstForLog("10.0.0.1:1234", "10.0.0.2:5678"),
+              ", src=10.0.0.1:1234, dst=10.0.0.2:5678");
+    EXPECT_EQ(AppendSrcDstForLog("", "10.0.0.2:5678"), ", dst=10.0.0.2:5678");
+    EXPECT_EQ(AppendSrcDstForLog("prefix", "10.0.0.1:1234", "10.0.0.2:5678"),
+              "prefix, src=10.0.0.1:1234, dst=10.0.0.2:5678");
+}
 }  // namespace ut
 }  // namespace datasystem

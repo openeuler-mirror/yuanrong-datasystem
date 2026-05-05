@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/util/strings_util.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
@@ -80,8 +81,9 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
                                               const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                               int existence, PublishReqPb &req)
 {
-    LOG(INFO) << FormatString("Begin to publish object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), bufferInfo->objectKey);
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("Begin to publish object, client id: %s, object key: %s", clientId_, bufferInfo->objectKey), "",
+        hostPort_.ToString());
     *req.mutable_nested_keys() = { nestedKeys.begin(), nestedKeys.end() };
     req.set_client_id(clientId_);
     req.set_object_key(bufferInfo->objectKey);
@@ -310,8 +312,9 @@ Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutM
 {
     const std::vector<std::string> &objectKeys = getParam.objectKeys;
     const std::vector<ReadParam> &readParams = getParam.readParams;
-    LOG(INFO) << FormatString("Begin to get object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), VectorToString(objectKeys));
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("Begin to get object, client id: %s, object key: %s", clientId_, VectorToString(objectKeys)), "",
+        hostPort_.ToString());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         Validator::IsInNonNegativeInt32(subTimeoutMs), K_INVALID,
         FormatString("subTimeoutMs %lld is out of range, which should be between[%d, %d]", subTimeoutMs, 0, INT32_MAX));
