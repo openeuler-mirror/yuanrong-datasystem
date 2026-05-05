@@ -150,7 +150,8 @@ public:
     }
 
     Status CreateObject(const std::string &objectKey, uint64_t dataSize, WriteMode writeMode = WriteMode::NONE_L2_CACHE,
-                        bool primaryCopy = true, bool spillState = false, DataFormat dataFormat = DataFormat::BINARY)
+                        bool primaryCopy = true, bool spillState = false, DataFormat dataFormat = DataFormat::BINARY,
+                        uint64_t version = 0)
     {
         CHECK_FAIL_RETURN_STATUS(!objectTable_->Contains(objectKey), StatusCode::K_DUPLICATED, "object exist");
         const uint64_t metaSize = GetMetaSize(dataSize);
@@ -170,7 +171,7 @@ public:
         ptr->SetShmUnit(shmUnit);
         ptr->SetDataSize(dataSize);
         ptr->SetMetadataSize(metaSize);
-        ptr->SetCreateTime(0);
+        ptr->SetCreateTime(version);
         ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
 
         ptr->modeInfo.SetWriteMode(writeMode);
@@ -425,6 +426,53 @@ TEST_F(AsyncSendManagerWriteSpeedTest, TestAsyncWriteBigElement)
     auto status = future.get();
     ASSERT_GT(timer.ElapsedMilliSecond(), 4000);
     asyncMgr.Stop();
+}
+
+TEST_F(EvictionManagerAndMasterTest, TestEndLifeEvictionUsesAsyncDeleteAllCopyMeta)
+{
+    // END_LIFE eviction should delete the local object without waiting for remote DeleteNotification.
+    FLAGS_spill_directory = "";
+    std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+
+    object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
+    DS_ASSERT_OK(evictionManager.Init(std::make_shared<ObjectGlobalRefTable<ClientKey>>(), akSkManager_));
+
+    // Inject to use master address directly for non-distributed master mode
+    datasystem::inject::Set("WorkerOcEvictionManager.GetMetaAddressForObject",
+                            FormatString("return(%s)", metaAddr_.ToString()));
+
+    auto masterClient = CreateClient(0);
+    const std::string objectKey = "end_life_async_delete";
+    const uint64_t dataSize = 10 * 1024 * 1024;
+    const uint64_t objectVersion = 1;
+    DS_ASSERT_OK(CreateObject(objectKey, dataSize, WriteMode::NONE_L2_CACHE_EVICT, true, false, DataFormat::BINARY,
+                              objectVersion));
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    evictionManager.Add(objectKey);
+    DS_ASSERT_OK(CreateMeta(objectKey, 0, masterClient));
+    DS_ASSERT_OK(CreateMeta(objectKey, 1, masterClient, true));
+
+    const int notifyTimeoutMs = 3000;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "MasterWorkerOCServiceImpl.DeleteNotification.retry",
+                                           "return(K_RPC_CANCELLED)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "OCMetadataManager.NotifyWorkerDelete.timeoutMs",
+                                           FormatString("return(%d)", notifyTimeoutMs)));
+
+    const int fastEvictLimitMs = 1000;
+    const int pollIntervalMs = 50;
+    Timer timer;
+    evictionManager.Evict(maxMemorySize, CacheType::MEMORY);
+    bool removedFast = false;
+    while (timer.ElapsedMilliSecond() < fastEvictLimitMs) {
+        if (!objectTable_->Contains(objectKey)) {
+            removedFast = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+    }
+    ASSERT_TRUE(removedFast) << "END_LIFE eviction should not wait for synchronous DeleteNotification timeout.";
+    ASSERT_FALSE(objectTable_->Contains(objectKey));
 }
 
 TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotExistInObjTable)
