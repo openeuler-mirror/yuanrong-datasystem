@@ -1997,7 +1997,7 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
                    [](auto &objectKey) { return std::make_pair(objectKey, true); });
     DeleteObjectMediator deleteMediator(sourceWorker, requestObjKeyMap);
     deleteMediator.SetObjKey2Version(std::move(objKey2Version));
-    if (FLAGS_async_delete && request.need_forward_objs_without_meta()) {
+    if (request.async_delete() || (FLAGS_async_delete && request.need_forward_objs_without_meta())) {
         AsyncDeleteByExpired(deleteMediator);
     } else {
         FindNeedDeleteIds(deleteMediator);
@@ -3976,7 +3976,9 @@ void OCMetadataManager::AsyncDeleteByExpired(DeleteObjectMediator &mediator)
     // For those objs that do not have metadata on this node, we will notify other az masters in the asynchronous queue
     // to delete the metadata.
     for (auto &objectKey : mediator.GetObjKeys()) {
-        uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
+        int64_t versionInRequest = mediator.GetObjectVersionInRequest(objectKey);
+        uint64_t version = versionInRequest > 0 ? static_cast<uint64_t>(versionInRequest)
+                                                : static_cast<uint64_t>(GetSystemClockTimeStampUs());
         Status rc = expiredObjectManager_->InsertObject(objectKey, version, MIN_TTL_SECOND, true);
         // if object is being delete, don't need to insert again.
         if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
