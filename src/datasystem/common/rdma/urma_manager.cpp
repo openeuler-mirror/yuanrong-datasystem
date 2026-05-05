@@ -1293,9 +1293,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         urma_status_t ret;
         Timer t;
         METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
+        auto jettyId = args.jetty->GetJettyId();
         if (useNumaAffinity) {
-            LOG(INFO) << "URMA write numa affinity src=" << static_cast<uint32_t>(args.srcChipId)
-                      << ", dst=" << static_cast<uint32_t>(args.dstChipId);
+            LOG(INFO) << "URMA write numa affinity src:" << static_cast<uint32_t>(args.srcChipId)
+                      << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId;
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
                               remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
@@ -1313,8 +1314,8 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
         auto elapsedUs = t.ElapsedMicroSecond();
         auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
-        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu()
-                        << ", elapsed:" << elapsedUs << " us, request id:" << key;
+        VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << elapsedUs
+                        << " us, request id:" << key << ", jetty id:" << jettyId;
         pointWrite.Record();
         remainSize -= writeSize;
         writtenSize += writeSize;
