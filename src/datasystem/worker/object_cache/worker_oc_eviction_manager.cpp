@@ -96,7 +96,7 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
     akSkManager_ = std::move(akSkManager);
     scheduleEvictThreadPool_->Submit([this]() {
         Timer timer;
-        while (!IsTermSignalReceived()) {
+        while (!IsTermSignalReceived() && !isScheduleEvictThreadExit_) {
             auto evictInterval = 10;
             if (timer.ElapsedSecond() > evictInterval) {
                 EvictWhenMemoryExceedThrehold("", 0, shared_from_this(), ServiceType::OBJECT);
@@ -673,24 +673,39 @@ bool WorkerOcEvictionManager::IsSpilledObjectEvictable(const std::shared_ptr<Saf
            || (entryPtr->IsWriteBackMode() && entryPtr->stateInfo.IsWriteBackDone());
 }
 
+Status WorkerOcEvictionManager::GetMetaAddressForObject(const std::string &objectKey, MetaAddrInfo &metaAddrInfo)
+{
+    INJECT_POINT("WorkerOcEvictionManager.GetMetaAddressForObject", [&metaAddrInfo](const std::string &addrStr) {
+        HostPort addr;
+        addr.ParseString(addrStr);
+        metaAddrInfo.SetAddress(addr);
+        return Status::OK();
+    });
+    if (etcdCM_ == nullptr) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->GetMetaAddress(objectKey, metaAddrInfo), "Get metadata address failed.");
+    return Status::OK();
+}
+
 Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV &objectKV)
 {
     const auto &objectKey = objectKV.GetObjKey();
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject start. ObjectKey: " << objectKey;
     // Get Master address from objectKey
-    if (etcdCM_ == nullptr) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
-    }
     MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->GetMetaAddress(objectKey, metaAddrInfo), "Get metadata address failed.");
+    RETURN_IF_NOT_OK(GetMetaAddressForObject(objectKey, metaAddrInfo));
 
     auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddressAndSaveDbName(),
                                                                               localAddress_, akSkManager_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     master::DeleteAllCopyMetaReqPb req;
-    req.add_object_keys(objectKey);
+    auto *idWithVersion = req.add_ids_with_version();
+    idWithVersion->set_id(objectKey);
+    idWithVersion->set_version(objectKV.GetObjEntry()->GetCreateTime());
     req.set_address(localAddress_.ToString());
     req.set_redirect(true);
+    req.set_async_delete(true);
     master::DeleteAllCopyMetaRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->DeleteAllCopyMeta(req, rsp),
                                      FormatString("DeleteAllCopyMeta failed, objectKey %s.", objectKey));
