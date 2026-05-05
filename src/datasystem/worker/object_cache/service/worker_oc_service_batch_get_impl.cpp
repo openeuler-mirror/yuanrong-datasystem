@@ -24,15 +24,11 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"

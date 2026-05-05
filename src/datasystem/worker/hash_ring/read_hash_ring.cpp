@@ -22,13 +22,8 @@
 #include <google/protobuf/util/message_differencer.h>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/iam/tenant_auth_manager.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/meta_route_tool.h"
-#include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/util/validator.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"

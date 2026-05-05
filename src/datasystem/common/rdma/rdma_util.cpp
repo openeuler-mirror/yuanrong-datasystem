@@ -17,27 +17,21 @@
 #include "datasystem/common/rdma/rdma_util.h"
 
 #include <stdio.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
-#include <sys/ioctl.h>
-#include <netdb.h>
 #include <ifaddrs.h>
-#include <unistd.h>
 #include <net/if.h>
 #include <dirent.h>
 
 #include <fstream>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 static constexpr int RDMA_LOG_LEVEL = 3;

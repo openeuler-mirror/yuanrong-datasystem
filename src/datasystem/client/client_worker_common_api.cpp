@@ -26,9 +26,6 @@
 #include <cstdint>
 #include <ctime>
 #include <mutex>
-#include <sys/types.h>
-#include <arpa/inet.h>
-#include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <string>
 #include <utility>
@@ -42,11 +39,9 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"

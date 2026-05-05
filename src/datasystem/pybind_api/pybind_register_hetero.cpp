@@ -23,16 +23,12 @@
 
 #include <pybind11/detail/common.h>
 
-#include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/device/page_attn_utils.h"
 #include "datasystem/common/log/access_recorder.h"
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/raii.h"
 #include "datasystem/hetero_client.h"
 #include "datasystem/hetero/future.h"
 #include "datasystem/kv_client.h"
-#include "datasystem/object/object_enum.h"
 #include "datasystem/pybind_api/pybind_register.h"
 
 using datasystem::ConnectOptions;

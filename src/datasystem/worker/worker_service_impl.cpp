@@ -21,7 +21,6 @@
 
 #include <cstdint>
 #include <shared_mutex>
-#include "datasystem/c_api/status_definition.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #ifdef __linux__
 #include <linux/memfd.h>
@@ -35,19 +34,14 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"

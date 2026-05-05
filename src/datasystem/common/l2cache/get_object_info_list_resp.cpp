@@ -19,15 +19,10 @@
  */
 #include "datasystem/common/l2cache/get_object_info_list_resp.h"
 
-#include <initializer_list>
 #include <limits.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/util/format.h"
-#include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/uri.h"
 
 DS_DECLARE_string(obs_bucket);
 

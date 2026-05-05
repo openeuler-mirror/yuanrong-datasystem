@@ -22,17 +22,10 @@
 #include <utility>
 #include "datasystem/client/listen_worker.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
-#include "datasystem/client/stream_cache/receive_element.h"
 #include "datasystem/client/stream_cache/stream_client_impl.h"
-#include "datasystem/common/constants.h"
-#include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/queue/circular_queue.h"
-#include "datasystem/common/util/rpc_util.h"
-#include "datasystem/common/util/strings_util.h"
-#include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/common/inject/inject_point.h"
 
 namespace datasystem {

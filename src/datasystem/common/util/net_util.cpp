@@ -19,14 +19,6 @@
  */
 #include "datasystem/common/util/net_util.h"
 
-#include <sstream>
-
-#include <net/if.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
-
-#include <securec.h>
-
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
 

@@ -18,11 +18,7 @@
  * Description: Register function to python.
  */
 #include <cstdint>
-#include <exception>
-#include <future>
-#include <map>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 #include <pybind11/detail/common.h>
@@ -30,7 +26,6 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/format.h"
 #include "datasystem/object/buffer.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"

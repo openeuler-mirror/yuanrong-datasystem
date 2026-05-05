@@ -19,15 +19,11 @@
  */
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
-#include <thread>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/metrics/kv_metrics.h"
-#include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -39,7 +35,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
-#include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
