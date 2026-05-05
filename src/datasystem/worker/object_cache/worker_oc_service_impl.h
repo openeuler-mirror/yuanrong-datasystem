@@ -586,6 +586,13 @@ public:
     void EraseFailedWorkerMasterApi(HostPort &masterAddr);
 
     /**
+     * @brief Warm up the worker to master object-cache RPC connection.
+     * @param[in] masterAddr The target master address.
+     * @return Status of the call.
+     */
+    Status WarmupWorkerMasterRpc(const HostPort &masterAddr);
+
+    /**
      * @brief Get the pointer information for shared memory communication
      * @param[int] lockId Get shm info by lock id.
      * @param[out] fd File descriptor of the allocated shared memory segments.

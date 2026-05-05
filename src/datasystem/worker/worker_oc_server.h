@@ -401,6 +401,36 @@ private:
     bool ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const;
 
     /**
+     * @brief Start async worker-to-master OC RPC connection warmup.
+     */
+    Status MaybeStartWorkerMasterRpcWarmup();
+
+    /**
+     * @brief Stop worker-to-master OC RPC warmup background work.
+     */
+    void StopWorkerMasterRpcWarmup();
+
+    /**
+     * @brief Submit worker-to-master RPC warmup tasks for newly discovered ready nodes.
+     */
+    size_t ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers);
+
+    /**
+     * @brief Submit one worker-to-master RPC warmup task.
+     */
+    bool SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr);
+
+    /**
+     * @brief Warm up RPC to current ready workers/masters once at startup.
+     */
+    void WarmupReadyWorkerMasterRpcOnce();
+
+    /**
+     * @brief Warm up RPC to a newly ready worker/master seen from ETCD cluster events.
+     */
+    void TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event &event);
+
+    /**
      * @brief Notify shutdown message to etcd.
      */
     void NotifyShutdownToEtcd();
@@ -565,6 +595,10 @@ private:
     std::unique_ptr<Thread> warmupControllerThread_{ nullptr };
     std::shared_ptr<ThreadPool> warmupThreadPool_{ nullptr };
     std::atomic<bool> warmupExit_{ false };
+    std::shared_ptr<ThreadPool> masterRpcWarmupThreadPool_{ nullptr };
+    std::atomic<bool> masterRpcWarmupExit_{ false };
+    std::mutex masterRpcWarmupMutex_;
+    std::unordered_set<std::string> warmingMasterRpcAddrs_;
     std::unique_ptr<Thread> clientsExitChecker_{ nullptr };
     std::atomic<bool> allClientsExited_{ false };
     int64_t lastRequestArrivalTime_{ 0 };
