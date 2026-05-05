@@ -39,6 +39,7 @@
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -72,6 +73,18 @@ namespace {
 void MovePayload(std::vector<RpcMessage> &src, std::vector<RpcMessage> &dst)
 {
     dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
+}
+
+std::string GetRemoteAddressForLog(const GetObjectRemoteReqPb &req)
+{
+    if (req.has_urma_info()) {
+        return FormatString("%s:%d", req.urma_info().request_address().host(),
+                            req.urma_info().request_address().port());
+    }
+    if (req.has_ucp_info()) {
+        return FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(), req.ucp_info().remote_ip_addr().port());
+    }
+    return "";
 }
 
 Status GetRemoteAddressFromBatchGetReq(const BatchGetObjectRemoteReqPb &req, HostPort &requestAddress)
@@ -159,17 +172,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    std::string callerAddress;
-    if (req.has_urma_info()) {
-        callerAddress = FormatString("%s:%d", req.urma_info().request_address().host(),
-                                     req.urma_info().request_address().port());
-    } else if (req.has_ucp_info()) {
-        callerAddress = FormatString("%s:%d", req.ucp_info().remote_ip_addr().host(),
-                                     req.ucp_info().remote_ip_addr().port());
-    }
-    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
-                              req.object_key(), FLAGS_worker_address, callerAddress,
-                              req.read_offset(), req.read_size());
+    const std::string callerAddress = GetRemoteAddressForLog(req);
+    LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]", req.object_key(),
+                                                 req.read_offset(), req.read_size()),
+                                    callerAddress, FLAGS_worker_address);
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
     return Status::OK();
@@ -186,17 +192,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     std::vector<RpcMessage> subPayload;
     std::vector<uint64_t> eventKeys;
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
-    std::string callerAddress;
-    if (subReq.has_urma_info()) {
-        callerAddress = FormatString("%s:%d", subReq.urma_info().request_address().host(),
-                                     subReq.urma_info().request_address().port());
-    } else if (subReq.has_ucp_info()) {
-        callerAddress = FormatString("%s:%d", subReq.ucp_info().remote_ip_addr().host(),
-                                     subReq.ucp_info().remote_ip_addr().port());
-    }
-    LOG(INFO) << FormatString("Processing pull object[%s] src[%s] dst[%s] offset[%ld] size[%ld]",
-                              subReq.object_key(), FLAGS_worker_address, callerAddress,
-                              subReq.read_offset(), subReq.read_size());
+    const std::string callerAddress = GetRemoteAddressForLog(subReq);
+    LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]",
+                                                 subReq.object_key(), subReq.read_offset(), subReq.read_size()),
+                                    callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
@@ -688,9 +687,12 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
+    HostPort requestAddress;
+    const std::string callerAddress =
+        GetRemoteAddressFromBatchGetReq(req, requestAddress).IsOk() ? requestAddress.ToString() : "";
     LOG(INFO) << "BatchGetObjectRemote request (objectKey, requestId, readOffset, readSize): "
               << VectorToString(req.requests()) << " remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
-              << "ms";
+              << "ms" << AppendSrcDstForLog(callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));

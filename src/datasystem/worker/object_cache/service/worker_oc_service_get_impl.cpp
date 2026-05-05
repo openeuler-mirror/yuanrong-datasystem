@@ -1149,9 +1149,10 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                              "Remote getting from self address is invalid");
     auto version = objectKV.GetObjEntry()->GetCreateTime();
     const std::string requestId = GetStringUuid();
-    LOG(INFO) << FormatString("Remote get request:[%s] src[%s] --dst(%s)--> object:[%s], offset[%lld] size[%lld]",
-                              requestId, localAddress_.ToString(), address, objectKV.GetObjKey(),
-                              objectKV.GetReadOffset(), objectKV.GetReadSize());
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("Remote get request:[%s] object:[%s], offset[%lld] size[%lld]", requestId, objectKV.GetObjKey(),
+                     objectKV.GetReadOffset(), objectKV.GetReadSize()),
+        localAddress_.ToString(), address);
     INJECT_POINT("worker.remote_get_failed");
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, akSkManager_, workerStub),

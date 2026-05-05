@@ -28,6 +28,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <securec.h>
@@ -205,6 +206,23 @@ inline size_t StringToUniquePtrChar(const char *src, std::unique_ptr<char[]> &de
  * @return Vector of strings.
  */
 std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern);
+
+/**
+ * @brief Append src/dst address fields for RPC-related logs.
+ * @param[in] srcAddr Source address string.
+ * @param[in] dstAddr Destination address string.
+ * @return The formatted suffix string: ", src=<src>, dst=<dst>".
+ */
+std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAddr);
+
+/**
+ * @brief Append src/dst fields with a lightweight prefix for log messages.
+ * @param[in] prefix Existing log prefix or message.
+ * @param[in] srcAddr Source address string.
+ * @param[in] dstAddr Destination address string.
+ * @return prefix + ", src=<src>, dst=<dst>".
+ */
+std::string AppendSrcDstForLog(std::string_view prefix, std::string_view srcAddr, std::string_view dstAddr);
 
 /**
  * @brief Clear the string information in the memory.

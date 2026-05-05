@@ -27,6 +27,29 @@
 #include "re2/re2.h"
 
 namespace datasystem {
+namespace {
+constexpr std::string_view SRC_LOG_PREFIX = ", src=";
+constexpr std::string_view DST_LOG_PREFIX = ", dst=";
+
+void AppendSrcDstFields(std::string &result, std::string_view srcAddr, std::string_view dstAddr)
+{
+    if (!srcAddr.empty()) {
+        result.append(SRC_LOG_PREFIX.data(), SRC_LOG_PREFIX.size());
+        result.append(srcAddr.data(), srcAddr.size());
+    }
+    if (!dstAddr.empty()) {
+        result.append(DST_LOG_PREFIX.data(), DST_LOG_PREFIX.size());
+        result.append(dstAddr.data(), dstAddr.size());
+    }
+}
+
+size_t CalcSrcDstLogSize(std::string_view srcAddr, std::string_view dstAddr)
+{
+    return (srcAddr.empty() ? 0 : SRC_LOG_PREFIX.size() + srcAddr.size())
+        + (dstAddr.empty() ? 0 : DST_LOG_PREFIX.size() + dstAddr.size());
+}
+}  // namespace
+
 std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std::string &pattern)
 {
     if (typeStr.empty()) {
@@ -65,6 +88,23 @@ bool IsValidNumber(const std::string &str)
         return true;
     }
     return false;
+}
+
+std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAddr)
+{
+    std::string result;
+    result.reserve(CalcSrcDstLogSize(srcAddr, dstAddr));
+    AppendSrcDstFields(result, srcAddr, dstAddr);
+    return result;
+}
+
+std::string AppendSrcDstForLog(std::string_view prefix, std::string_view srcAddr, std::string_view dstAddr)
+{
+    std::string result;
+    result.reserve(prefix.size() + CalcSrcDstLogSize(srcAddr, dstAddr));
+    result.append(prefix.data(), prefix.size());
+    AppendSrcDstFields(result, srcAddr, dstAddr);
+    return result;
 }
 }  // namespace datasystem
 #endif
