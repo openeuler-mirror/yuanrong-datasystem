@@ -127,8 +127,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     auto clientId = ClientKey::Intern(req.client_id());
     auto inflightGauge =
         metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-    LOG(INFO) << "Get start from client:" << clientId << " server api read elapsed ms: " << timer.ElapsedMilliSecond()
-              << " inflight remote get request count: " << inflightGauge.Get();
+    LOG(INFO) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
+                              timer.ElapsedMilliSecond(), inflightGauge.Get());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
 
@@ -162,10 +162,11 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     .Observe(qUs);
             }
             auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            LOG(INFO) << "Process Get from client: " << clientId
-                      << ", objects: " << VectorToString(request->GetRawObjectKeys())
-                      << ", get threads Statistics: " << threadPool_->GetStatistics() << ", elapsed ms: " << elapsed
-                      << ", remainingTime: " << timeout;
+            LOG(INFO) << FormatString("[Get] Receive, clientId: %s, objects: %s, "
+                                      "threadPool: %s, elapsed: %.3fms, remainingTime: %.3fms",
+                                      clientId, VectorToString(request->GetRawObjectKeys()),
+                                      threadPool_->GetStatistics(),
+                                      static_cast<double>(elapsed), static_cast<double>(timeout));
             if (elapsed >= timeout) {
                 LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
                            << ", get threads Statistics: " << threadPool_->GetStatistics();
@@ -191,9 +192,9 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 workerOperationTimeCost.Append("ProcessGetObjectRequest",
                                                static_cast<int64_t>(timer.ElapsedMilliSecond()));
                 LOG(INFO) << FormatString(
-                    "Process Get done, clientId: %s, objectKeys: %s, subTimeout: %ld, get threads Statistics: %s."
-                    "The operations of worker Get %s",
-                    clientId, VectorToString(request->GetRawObjectKeys()), newSubTimeout, threadPool_->GetStatistics(),
+                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
+                    clientId, request->GetRawObjectKeys().size(),
+                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
                     workerOperationTimeCost.GetInfo());
             }
         });
@@ -212,8 +213,9 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             }
         }
         workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
-        LOG(INFO) << FormatString("Process Get done, clientId: %s, objectKeys: %s. The operations of worker Get %s",
-                                  clientId, VectorToString(request->GetRawObjectKeys()),
+        LOG(INFO) << FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
+                                  clientId, request->GetRawObjectKeys().size(),
+                                  IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
                                   workerOperationTimeCost.GetInfo());
     }
     return Status::OK();
@@ -775,8 +777,9 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
-    LOG(INFO) << FormatString("Query meta success: target num %d, success num %d, elapsed %.3f ms",
-                              objectsNeedGetRemote.size(), queryMetas.size(), queryMetaTimer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
+                              objectsNeedGetRemote.size(), queryMetas.size(),
+                              queryMetaTimer.ElapsedMilliSecond());
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have

@@ -60,8 +60,8 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
-    LOG(INFO) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
-                              hostPort_.ToString(), objectKey);
+    VLOG(1) << FormatString("Begin to create object, client id: %s, worker address: %s, object key: %s", clientId_,
+                            hostPort_.ToString(), objectKey);
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
     reqTimeoutDuration.Init(connectTimeoutMs_);

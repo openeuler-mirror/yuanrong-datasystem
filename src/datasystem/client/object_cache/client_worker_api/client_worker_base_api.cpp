@@ -81,7 +81,7 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
                                               const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond,
                                               int existence, PublishReqPb &req)
 {
-    LOG(INFO) << AppendSrcDstForLog(
+    VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to publish object, client id: %s, object key: %s", clientId_, bufferInfo->objectKey), "",
         hostPort_.ToString());
     *req.mutable_nested_keys() = { nestedKeys.begin(), nestedKeys.end() };

@@ -2755,7 +2755,7 @@ Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
     for (const auto &objectKey : objectKeys) {
         TbbMetaTable::const_accessor accessor;
         if (metaTable_.find(accessor, objectKey)) {
-            LOG(INFO) << FormatString("[ObjectKey %s] GetObjectLocations: get object location from cache", objectKey);
+            VLOG(1) << FormatString("[ObjectKey %s] GetObjectLocations: get object location from cache", objectKey);
             ObjectLocationInfoPb location;
             location.set_object_key(objectKey);
             if (!accessor->second.locations.empty()) {

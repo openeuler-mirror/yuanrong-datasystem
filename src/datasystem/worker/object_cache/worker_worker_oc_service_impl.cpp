@@ -194,8 +194,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
     const std::string callerAddress = GetRemoteAddressForLog(subReq);
     LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]",
-                                                 subReq.object_key(), subReq.read_offset(), subReq.read_size()),
-                                    callerAddress, FLAGS_worker_address);
+                                                subReq.object_key(), subReq.read_offset(), subReq.read_size()),
+                                   callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
@@ -690,9 +690,10 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     HostPort requestAddress;
     const std::string callerAddress =
         GetRemoteAddressFromBatchGetReq(req, requestAddress).IsOk() ? requestAddress.ToString() : "";
-    LOG(INFO) << "BatchGetObjectRemote request (objectKey, requestId, readOffset, readSize): "
-              << VectorToString(req.requests()) << " remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
-              << "ms" << AppendSrcDstForLog(callerAddress, FLAGS_worker_address);
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %.3fms",
+                     req.requests_size(), reqTimeoutDuration.CalcRealRemainingTime()),
+        callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
