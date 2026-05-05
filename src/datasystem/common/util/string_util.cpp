@@ -28,25 +28,27 @@
 
 namespace datasystem {
 namespace {
-constexpr std::string_view SRC_LOG_PREFIX = ", src=";
-constexpr std::string_view DST_LOG_PREFIX = ", dst=";
+constexpr char SRC_LOG_PREFIX[] = ", src=";
+constexpr char DST_LOG_PREFIX[] = ", dst=";
+constexpr size_t SRC_LOG_PREFIX_SIZE = sizeof(SRC_LOG_PREFIX) - 1;
+constexpr size_t DST_LOG_PREFIX_SIZE = sizeof(DST_LOG_PREFIX) - 1;
 
-void AppendSrcDstFields(std::string &result, std::string_view srcAddr, std::string_view dstAddr)
+void AppendSrcDstFields(std::string &result, const std::string &srcAddr, const std::string &dstAddr)
 {
     if (!srcAddr.empty()) {
-        result.append(SRC_LOG_PREFIX.data(), SRC_LOG_PREFIX.size());
-        result.append(srcAddr.data(), srcAddr.size());
+        result.append(SRC_LOG_PREFIX, SRC_LOG_PREFIX_SIZE);
+        result.append(srcAddr);
     }
     if (!dstAddr.empty()) {
-        result.append(DST_LOG_PREFIX.data(), DST_LOG_PREFIX.size());
-        result.append(dstAddr.data(), dstAddr.size());
+        result.append(DST_LOG_PREFIX, DST_LOG_PREFIX_SIZE);
+        result.append(dstAddr);
     }
 }
 
-size_t CalcSrcDstLogSize(std::string_view srcAddr, std::string_view dstAddr)
+size_t CalcSrcDstLogSize(const std::string &srcAddr, const std::string &dstAddr)
 {
-    return (srcAddr.empty() ? 0 : SRC_LOG_PREFIX.size() + srcAddr.size())
-        + (dstAddr.empty() ? 0 : DST_LOG_PREFIX.size() + dstAddr.size());
+    return (srcAddr.empty() ? 0 : SRC_LOG_PREFIX_SIZE + srcAddr.size())
+        + (dstAddr.empty() ? 0 : DST_LOG_PREFIX_SIZE + dstAddr.size());
 }
 }  // namespace
 
@@ -90,7 +92,7 @@ bool IsValidNumber(const std::string &str)
     return false;
 }
 
-std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAddr)
+std::string AppendSrcDstForLog(const std::string &srcAddr, const std::string &dstAddr)
 {
     std::string result;
     result.reserve(CalcSrcDstLogSize(srcAddr, dstAddr));
@@ -98,11 +100,11 @@ std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAdd
     return result;
 }
 
-std::string AppendSrcDstForLog(std::string_view prefix, std::string_view srcAddr, std::string_view dstAddr)
+std::string AppendSrcDstForLog(const std::string &prefix, const std::string &srcAddr, const std::string &dstAddr)
 {
     std::string result;
     result.reserve(prefix.size() + CalcSrcDstLogSize(srcAddr, dstAddr));
-    result.append(prefix.data(), prefix.size());
+    result.append(prefix);
     AppendSrcDstFields(result, srcAddr, dstAddr);
     return result;
 }

@@ -28,7 +28,6 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <securec.h>
@@ -213,7 +212,7 @@ std::vector<std::string> SplitToUniqueStr(const std::string &typeStr, const std:
  * @param[in] dstAddr Destination address string.
  * @return The formatted suffix string: ", src=<src>, dst=<dst>".
  */
-std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAddr);
+std::string AppendSrcDstForLog(const std::string &srcAddr, const std::string &dstAddr);
 
 /**
  * @brief Append src/dst fields with a lightweight prefix for log messages.
@@ -222,7 +221,7 @@ std::string AppendSrcDstForLog(std::string_view srcAddr, std::string_view dstAdd
  * @param[in] dstAddr Destination address string.
  * @return prefix + ", src=<src>, dst=<dst>".
  */
-std::string AppendSrcDstForLog(std::string_view prefix, std::string_view srcAddr, std::string_view dstAddr);
+std::string AppendSrcDstForLog(const std::string &prefix, const std::string &srcAddr, const std::string &dstAddr);
 
 /**
  * @brief Clear the string information in the memory.
