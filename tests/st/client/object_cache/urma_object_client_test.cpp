@@ -1656,6 +1656,53 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsClientPreRequestFallbackPayload
         << status.ToString();
 }
 
+class UrmaClientHeartbeatReconnectTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.numWorkers = 1;
+        opts.workerConfigs.resize(opts.numWorkers);
+        opts.workerOcDirectPorts.resize(opts.numWorkers);
+        opts.enableDistributedMaster = "true";
+        opts.vLogLevel = 2;
+        opts.workerGflagParams += " -enable_transport_fallback=false -client_dead_timeout_s=3";
+    }
+
+protected:
+    static constexpr uint64_t kClientDeadTimeoutS = 3;
+};
+
+TEST_F(UrmaClientHeartbeatReconnectTest, ClientHeartbeatTimeoutReconnectThenUbSetGetSuccess)
+{
+    DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)"));
+    DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)"));
+    DS_ASSERT_OK(inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)"));
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = 8 * 1024 * 1024UL;
+    const std::string keyBefore = "ub-heartbeat-before";
+    const std::string keyAfter = "ub-heartbeat-after";
+    const std::string valueBefore(dataSize, 'a');
+    const std::string valueAfter(dataSize, 'b');
+
+    DS_ASSERT_OK(client->Set(keyBefore, valueBefore));
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(keyBefore, getValue));
+    ASSERT_EQ(valueBefore, getValue);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Heartbeat.begin", "100*return(K_RPC_UNAVAILABLE)"));
+    std::this_thread::sleep_for(std::chrono::seconds(kClientDeadTimeoutS * 2));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Heartbeat.begin", "off"));
+    std::this_thread::sleep_for(std::chrono::seconds(kClientDeadTimeoutS * 2));
+
+    DS_ASSERT_OK(client->Set(keyAfter, valueAfter));
+    DS_ASSERT_OK(client->Get(keyAfter, getValue));
+    ASSERT_EQ(valueAfter, getValue);
+}
+
 class UrmaAsyncEventTest : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
