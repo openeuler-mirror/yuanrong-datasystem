@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "datasystem/utils/status.h"
 
@@ -112,6 +113,8 @@ private:
     std::chrono::steady_clock::time_point start_;
 };
 
+// Returns every metrics_summary line for this tick (same split as LogSummary).
+std::vector<std::string> DumpSummariesForTest(int intervalMs = 10000);
 std::string DumpSummaryForTest(int intervalMs = 10000);
 void ResetForTest();
 }  // namespace datasystem::metrics
