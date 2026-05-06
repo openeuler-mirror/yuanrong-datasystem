@@ -125,7 +125,10 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     GetReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     auto clientId = ClientKey::Intern(req.client_id());
-    LOG(INFO) << "Get start from client:" << clientId << " server api read elapsed ms: " << timer.ElapsedMilliSecond();
+    auto inflightGauge =
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
+    LOG(INFO) << "Get start from client:" << clientId << " server api read elapsed ms: " << timer.ElapsedMilliSecond()
+              << " inflight remote get request count: " << inflightGauge.Get();
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
 
@@ -153,10 +156,10 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             workerOperationTimeCost = cost;
             const std::chrono::steady_clock::time_point poolThreadStart = std::chrono::steady_clock::now();
             {
-                const uint64_t qUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                    poolThreadStart - submitToPool).count());
-                metrics::GetHistogram(
-                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_QUEUE_LATENCY)).Observe(qUs);
+                const uint64_t qUs = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(poolThreadStart - submitToPool).count());
+                metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_QUEUE_LATENCY))
+                    .Observe(qUs);
             }
             auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             LOG(INFO) << "Process Get from client: " << clientId
@@ -174,13 +177,16 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 LOG_IF_ERROR(ProcessGetObjectRequest(newSubTimeout, request), "Process Get failed");
                 {
                     const uint64_t execUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - processStart).count());
+                                                                      std::chrono::steady_clock::now() - processStart)
+                                                                      .count());
                     const uint64_t e2EUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - submitToPool).count());
+                                                                     std::chrono::steady_clock::now() - submitToPool)
+                                                                     .count());
                     metrics::GetHistogram(
-                        static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY)).Observe(execUs);
-                    metrics::GetHistogram(
-                        static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY)).Observe(e2EUs);
+                        static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY))
+                        .Observe(execUs);
+                    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY))
+                        .Observe(e2EUs);
                 }
                 workerOperationTimeCost.Append("ProcessGetObjectRequest",
                                                static_cast<int64_t>(timer.ElapsedMilliSecond()));
@@ -196,12 +202,13 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
             LOG_IF_ERROR(ProcessGetObjectRequest(subTimeout, request), "Process Get failed");
             {
-                const uint64_t e2EUs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - t0).count());
-                metrics::GetHistogram(
-                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY)).Observe(e2EUs);
-                metrics::GetHistogram(
-                    static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY)).Observe(e2EUs);
+                const uint64_t e2EUs = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0)
+                        .count());
+                metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_THREADPOOL_EXEC_LATENCY))
+                    .Observe(e2EUs);
+                metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY))
+                    .Observe(e2EUs);
             }
         }
         workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
@@ -769,8 +776,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
     LOG(INFO) << FormatString("Query meta success: target num %d, success num %d, elapsed %.3f ms",
-                              objectsNeedGetRemote.size(), queryMetas.size(),
-                              queryMetaTimer.ElapsedMilliSecond());
+                              objectsNeedGetRemote.size(), queryMetas.size(), queryMetaTimer.ElapsedMilliSecond());
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -785,8 +791,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     point.Record();
     {
         const uint64_t us = static_cast<uint64_t>(postQueryMetaPhase.ElapsedMicroSecond());
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY)).Observe(us);
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY))
+            .Observe(us);
     }
 
     VLOG(1) << "Get object data from remote node finish, lastRc:" << lastRc.ToString();
@@ -880,8 +886,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteWorkerWithoutDump(const std::s
     return Status::OK();
 }
 
-Status WorkerOcServiceGetImpl::WarmupGetObjectFromRemoteWorker(const std::string &address,
-                                                               const std::string &objectKey, uint64_t dataSize)
+Status WorkerOcServiceGetImpl::WarmupGetObjectFromRemoteWorker(const std::string &address, const std::string &objectKey,
+                                                               uint64_t dataSize)
 {
     CHECK_FAIL_RETURN_STATUS(!address.empty(), K_INVALID, "URMA warmup remote address is empty.");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "URMA warmup object key is empty.");
@@ -992,9 +998,8 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
     }
     // Fill in urma info and ucp info
     if (IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK(
-            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metaSz, reqPb,
-                                shmUnit->GetNumaId()));
+        RETURN_IF_NOT_OK(FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metaSz, reqPb,
+                                             shmUnit->GetNumaId()));
     } else if (IsUcpEnabled()) {
         RETURN_IF_NOT_OK(FillRequestUcpInfo(localAddress_, srcIpAddr, shmUnit, metaSz, reqPb));
     }
@@ -1017,8 +1022,9 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
-        << ", remoteWorkerId=" << remoteWorkerId << ", realRemainingTimeMs="
-        << reqTimeoutDuration.CalcRealRemainingTime() << ", lastResult=" << lastResult.ToString();
+        << ", remoteWorkerId=" << remoteWorkerId
+        << ", realRemainingTimeMs=" << reqTimeoutDuration.CalcRealRemainingTime()
+        << ", lastResult=" << lastResult.ToString();
 
     HostPort hostAddress;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddress.ParseString(endPoint), "ParseString failed");
@@ -1180,7 +1186,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
 
     bool dataSizeChange;
     Timer remoteGetTimer;
-    const int32_t minRetryOnceRpcMs = 1; // The 1st level of retryIntervalsMs
+    const int32_t minRetryOnceRpcMs = 1;  // The 1st level of retryIntervalsMs
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> clientApi;
     do {
         dataSizeChange = false;
@@ -1203,7 +1209,8 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
             },
             []() { return Status::OK(); },
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-              StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_WAIT_TIMEOUT }, minRetryOnceRpcMs);
+              StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_WAIT_TIMEOUT },
+            minRetryOnceRpcMs);
         // In case of changed size, error will be returned as part of response PB and urma wont be written any data
         if (rspPb.error().error_code() == K_OC_REMOTE_GET_NOT_ENOUGH) {
             // If this error happens, remote worker should also sent the changed data size
@@ -1522,8 +1529,8 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             Timer queryMetaTimer;
             auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, isFromOtherAz, rsp, res.payloads);
             if (rc.IsError()) {
-                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
-                                           masterAddr.ToString(), rc.ToString(), queryMetaTimer.ElapsedMilliSecond());
+                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms", masterAddr.ToString(),
+                                           rc.ToString(), queryMetaTimer.ElapsedMilliSecond());
                 res.failedKeys.insert(currentIds.begin(), currentIds.end());
                 return rc;
             }
@@ -1869,8 +1876,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                           objectKey, remoteElapsed);
                 (void)needRetryIds.emplace(readKey);
             } else if (status.GetCode() == K_OUT_OF_MEMORY) {
-                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort, elapsed %.3f ms.",
-                                          objectKey, remoteElapsed);
+                LOG(INFO) << FormatString("[ObjectKey %s] Out of memory, get remote abort, elapsed %.3f ms.", objectKey,
+                                          remoteElapsed);
                 lastRc = status;
                 abortAllTasks.store(true);
             } else {
