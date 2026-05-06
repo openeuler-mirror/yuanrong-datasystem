@@ -316,10 +316,11 @@ public:
     std::string GetETCDAsyncQueueUsage();
 
     /**
-     * @brief Get the async threadpool usage of master.
-     * @return Usage: "idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage".
+     * @brief Get the async threadpool usage of master (interval-based, resets counters).
+     * @param[in] intervalMs Collection interval in milliseconds.
+     * @return Usage: "maxRunning/total/tasksDelta/maxWaiting/usage".
      */
-    std::string GetMasterAsyncPoolUsage();
+    std::string GetMasterAsyncPoolUsage(int64_t intervalMs);
 
     /**
      * @brief Processing Migration Data Flows

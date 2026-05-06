@@ -81,6 +81,7 @@ void ThreadPool::DoThreadWork()
                 taskLastFinishTime_ = GetSteadyClockTimeStampUs();
             }
             runningThreadsNum_++;
+            UpdateMaxAtomic(maxRunningInPeriod_, runningThreadsNum_.load());
 
             // 2nd: Dequeue Task.
             task = std::move(this->taskQ_.front());
@@ -88,9 +89,14 @@ void ThreadPool::DoThreadWork()
         }
         {
             // 3rd: Execute Task.
+            auto start = std::chrono::steady_clock::now();
             task();
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
             taskLastFinishTime_ = GetSteadyClockTimeStampUs();
             runningThreadsNum_--;
+            tasksCompleted_.fetch_add(1, std::memory_order_relaxed);
+            totalWorkTimeNs_.fetch_add(elapsedNs, std::memory_order_relaxed);
         }
     }
 }
@@ -173,12 +179,42 @@ ThreadPool::ThreadPoolUsage ThreadPool::GetThreadPoolUsage()
     ThreadPoolUsage threadPoolUsage;
     threadPoolUsage.currentTotalNum = GetThreadsNum();
     threadPoolUsage.runningTasksNum = GetRunningTasksNum();
-    threadPoolUsage.idleNum = threadPoolUsage.currentTotalNum - threadPoolUsage.runningTasksNum;
     threadPoolUsage.waitingTaskNum = GetWaitingTasksNum();
     threadPoolUsage.maxThreadNum = maxThreadNum_;
-    threadPoolUsage.threadPoolUsage = threadPoolUsage.runningTasksNum / static_cast<float>(maxThreadNum_);
+    threadPoolUsage.threadPoolUsage =
+        maxThreadNum_ > 0 ? threadPoolUsage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
     threadPoolUsage.taskLastFinishTime = taskLastFinishTime_;
     return threadPoolUsage;
+}
+
+void ThreadPool::UpdateMaxAtomic(std::atomic<uint64_t> &counter, uint64_t value)
+{
+    uint64_t current = counter.load(std::memory_order_relaxed);
+    while (value > current) {
+        if (counter.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+            break;
+        }
+    }
+}
+
+ThreadPool::ThreadPoolUsage ThreadPool::GetAndResetIntervalStats()
+{
+    ThreadPoolUsage usage;
+    usage.currentTotalNum = GetThreadsNum();
+    usage.maxThreadNum = maxThreadNum_;
+    usage.runningTasksNum = GetRunningTasksNum();
+    usage.waitingTaskNum = GetWaitingTasksNum();
+    usage.threadPoolUsage =
+        maxThreadNum_ > 0 ? usage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
+    // Seed next period with current running/waiting to handle cross-interval tasks.
+    auto running = static_cast<uint64_t>(usage.runningTasksNum);
+    auto waiting = static_cast<uint64_t>(usage.waitingTaskNum);
+    usage.maxRunningInPeriod = std::max(maxRunningInPeriod_.exchange(running, std::memory_order_relaxed), running);
+    usage.tasksCompletedDelta = tasksCompleted_.exchange(0, std::memory_order_relaxed);
+    usage.maxWaitingInPeriod = std::max(maxWaitingInPeriod_.exchange(waiting, std::memory_order_relaxed), waiting);
+    usage.totalWorkTimeNs = totalWorkTimeNs_.exchange(0, std::memory_order_relaxed);
+    usage.taskLastFinishTime = taskLastFinishTime_;
+    return usage;
 }
 
 ThreadPool::ThreadPool(size_t minThreadNum, size_t maxThreadNum, std::string name, bool droppable,

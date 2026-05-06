@@ -78,9 +78,14 @@ std::vector<std::string> RpcServer::GetListeningPorts() const
     return std::visit([](auto &pimpl) { return pimpl->GetListeningPorts(); }, pimpl_);
 }
 
-ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesUsage(const std::string &serviceName) const
+ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesUsage(const std::string &serviceName, int64_t intervalMs) const
 {
-    return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesUsage(serviceName); }, pimpl_);
+    return std::visit([&serviceName, intervalMs](auto &pimpl) { return pimpl->GetRpcServicesUsage(serviceName, intervalMs); }, pimpl_);
+}
+
+ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesSnapshot(const std::string &serviceName) const
+{
+    return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesSnapshot(serviceName); }, pimpl_);
 }
 
 Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const

@@ -415,7 +415,18 @@ Status ZmqServerImpl::RegisterService(Token key, ZmqService *svc, const RpcServi
     return Status::OK();
 }
 
-ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesUsage(const std::string &serviceName)
+ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesUsage(const std::string &serviceName, int64_t intervalMs)
+{
+    auto it = svcMap_.find(serviceName);
+    if (it == svcMap_.end()) {
+        ThreadPool::ThreadPoolUsage usage;
+        return usage;
+    }
+    ZmqService *svc = it->second;
+    return svc->thrdPool_->GetAndResetIntervalStats();
+}
+
+ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesSnapshot(const std::string &serviceName)
 {
     auto it = svcMap_.find(serviceName);
     if (it == svcMap_.end()) {

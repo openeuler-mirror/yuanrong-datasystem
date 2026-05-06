@@ -86,6 +86,7 @@ public:
             }
             // Future is set after during (*task)(), a synchronous way to notify others waiting for it.
             taskQ_.emplace([task]() { (*task)(); });
+            UpdateMaxAtomic(maxWaitingInPeriod_, taskQ_.size());
             TryToAddThreadIfNeeded();
         }
         // Here, impossible to be empty; so no dead wait occurs.
@@ -108,6 +109,7 @@ public:
                 throw std::runtime_error("Submit after Shutdown Error.");
             }
             taskQ_.emplace(std::move(task));
+            UpdateMaxAtomic(maxWaitingInPeriod_, taskQ_.size());
             TryToAddThreadIfNeeded();
         }
         // Here, impossible to be empty; so no dead wait occurs.
@@ -133,6 +135,7 @@ public:
                 return false;
             }
             taskQ_.emplace(std::move(task));
+            UpdateMaxAtomic(maxWaitingInPeriod_, taskQ_.size());
             TryToAddThreadIfNeeded();
         }
         proceedCV_.notify_one();
@@ -164,34 +167,52 @@ public:
 
     struct ThreadPoolUsage {
         size_t currentTotalNum = 0;
+        size_t maxThreadNum = 0;
         size_t runningTasksNum = 0;
-        size_t idleNum = 0;
         size_t waitingTaskNum = 0;
         float threadPoolUsage = 0;
-        size_t maxThreadNum = 0;
-        double taskLastFinishTime;
+        size_t maxRunningInPeriod = 0;
+        size_t tasksCompletedDelta = 0;
+        size_t maxWaitingInPeriod = 0;
+        uint64_t totalWorkTimeNs = 0;
+        double taskLastFinishTime = 0;
 
         std::string ToString()
         {
-            // Usage: idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage
+            // maxRunning/total/tasksDelta/maxWaiting/usage
             if (currentTotalNum == 0) {
                 return "";
             }
-            auto threadPoolUsage = runningTasksNum / static_cast<float>(maxThreadNum);
-            return FormatString("%ld/%ld/%ld/%ld/%.3f", idleNum, currentTotalNum, maxThreadNum, waitingTaskNum,
-                                threadPoolUsage);
+            return FormatString("%ld/%ld/%ld/%ld/%.3f", maxRunningInPeriod, currentTotalNum, tasksCompletedDelta,
+                                maxWaitingInPeriod, 0.0f);
+        }
+
+        std::string ToString(int64_t intervalMs)
+        {
+            if (currentTotalNum == 0) {
+                return "";
+            }
+            float usage = 0.0f;
+            uint64_t intervalNs = static_cast<uint64_t>(intervalMs) * 1'000'000ULL;
+            if (currentTotalNum > 0 && intervalNs > 0) {
+                usage = static_cast<float>(totalWorkTimeNs) / static_cast<float>(currentTotalNum * intervalNs);
+            }
+            return FormatString("%ld/%ld/%ld/%ld/%.3f", maxRunningInPeriod, currentTotalNum, tasksCompletedDelta,
+                                maxWaitingInPeriod, usage);
         }
     };
 
     /**
-     * @brief Get the resource usage information of the thread pool.
-     * @note idleNum:Number of idle threads in the thread pool
-     *       currentTotalNum:Number of created threads
-     *       maxThreadNum:Maximum number of threads that can be created in the thread pool.
-     *       waitingTaskNum Number of waiting tasks.
-     * @return Usage: "idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage".
+     * @brief Get snapshot thread pool stats (for liveness check and error logging).
+     * @note runningTasksNum, waitingTaskNum, threadPoolUsage are snapshot values.
      */
     ThreadPoolUsage GetThreadPoolUsage();
+
+    /**
+     * @brief Get interval-based thread pool stats and reset counters.
+     * @return ThreadPoolUsage with interval metrics.
+     */
+    ThreadPoolUsage GetAndResetIntervalStats();
 
     /**
      * @brief Set warnLevel.
@@ -227,6 +248,8 @@ protected:
      */
     void AddThread();
 
+    static void UpdateMaxAtomic(std::atomic<uint64_t> &counter, uint64_t value);
+
     /**
      * @brief Log warning if need.
      */
@@ -261,6 +284,12 @@ private:
 
     // The num of threads which is running task.
     std::atomic<size_t> runningThreadsNum_{ 0 };
+
+    // Interval-based metrics (reset on each collection)
+    std::atomic<uint64_t> tasksCompleted_{ 0 };
+    std::atomic<uint64_t> maxRunningInPeriod_{ 0 };
+    std::atomic<uint64_t> maxWaitingInPeriod_{ 0 };
+    std::atomic<uint64_t> totalWorkTimeNs_{ 0 };
 
     // If a threads wait for threadIdleTimeoutMs_ and no task need to execute, try to destroy it.
     std::chrono::milliseconds threadIdleTimeoutMs_;
