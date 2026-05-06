@@ -39,6 +39,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
+#include "datasystem/common/util/version.h"
 #include "datasystem/worker/worker_cli.h"
 #include "datasystem/worker/worker_oc_server.h"
 #include "datasystem/worker/worker_update_flag_check.h"

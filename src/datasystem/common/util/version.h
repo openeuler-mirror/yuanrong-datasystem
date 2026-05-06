@@ -23,7 +23,12 @@
 
 #include <string>
 
-// Fixme: fix GIT_HASH and FIT_BRANCH define
+#if defined(__has_include)
+#if __has_include("datasystem/common/util/git_version_def.h")
+#include "datasystem/common/util/git_version_def.h"
+#endif
+#endif
+
 #ifndef GIT_HASH
 #define GIT_HASH "NO GIT_HASH FIXME"
 #endif

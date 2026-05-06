@@ -392,15 +392,11 @@ copy_file(
     out = "yr/datasystem/VERSION",
 )
 
-genrule(
+load("//bazel:git_version.bzl", "commit_id_file")
+
+commit_id_file(
     name = "commit_id_file",
-    srcs = [
-        "VERSION",
-        "//bazel:generate_commit_id.sh",
-    ],
-    outs = ["yr/datasystem/.commit_id"],
-    cmd = "bash $(location //bazel:generate_commit_id.sh) $(location VERSION) $@",
-    tags = ["no-sandbox"],
+    out = "yr/datasystem/.commit_id",
 )
 
 copy_file(

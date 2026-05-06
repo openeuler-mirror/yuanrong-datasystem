@@ -276,7 +276,6 @@ ds_cc_library(
     ],
 )
 
-# TODO:git hash && git branch
 ds_cc_library(
     name = "worker",
     srcs = [
@@ -284,10 +283,6 @@ ds_cc_library(
     ],
     hdrs = [
         "worker.h",
-    ],
-    defines = [
-        "GIT_HASH=\\\"{}\\\"".format("git_hash"),
-        "GIT_BRANCH=\\\"{}\\\"".format("git_branch"),
     ],
     deps = [
         "//include/datasystem/utils:utils_headers",
