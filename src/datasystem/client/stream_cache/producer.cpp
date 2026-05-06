@@ -60,7 +60,7 @@ Status Producer::Close()
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Close");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_CLOSE_PRODUCER);
     auto rc = impl_->Close();
     StreamRequestParam reqParam;

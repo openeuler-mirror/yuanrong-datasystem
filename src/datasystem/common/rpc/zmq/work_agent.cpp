@@ -72,7 +72,7 @@ Status WorkAgent::ServiceToClient(ZmqMetaMsgFrames &p)
                              FormatString("Incomplete MetaPb:\n%s", meta.DebugString()));
     PerfPoint::RecordElapsed(PerfKey::ZMQ_APP_WORKLOAD, GetLapTime(meta, "ZMQ_APP_WORKLOAD"));
     ZmqMsgFrames &frames = p.second;
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     // No need to prepend the gateway if it is direct connection
     RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));
     RETURN_IF_NOT_OK(PushFrontStringToFrames(meta.client_id(), frames));

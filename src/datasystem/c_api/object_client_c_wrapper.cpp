@@ -41,7 +41,7 @@ ObjectClient_p OCCreateClient(const char *cWorkerHost, const int workerPort, con
                               const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
                               const char *enableCrossNodeConnection)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     return CreateObjectClient(cWorkerHost, workerPort, timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen,
                               clientPrivateKey, clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey,
                               cAccessKeyLen, secretKey, secretKeyLen, tenantId, cTenantIdLen,
@@ -50,7 +50,7 @@ ObjectClient_p OCCreateClient(const char *cWorkerHost, const int workerPort, con
 
 struct StatusC OCConnectWorker(ObjectClient_p clientPtr)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     return ConnectWorker(clientPtr);
 }
 
@@ -117,7 +117,7 @@ struct StatusC OCPut(ObjectClient_p clientPtr, const char *cObjKey, size_t cObjK
                      const char **cNestedObjectKeys, const size_t *cNestedObjKeyLenArray,
                      const size_t cNestedObjectKeysNum, const char *cConsistencyType)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
     datasystem::RequestParam reqParam;
     StatusC rc = ObjectExecutePut(clientPtr, cObjKey, cObjKeyLen, cVal, cValLen, cNestedObjectKeys,
@@ -129,7 +129,7 @@ struct StatusC OCPut(ObjectClient_p clientPtr, const char *cObjKey, size_t cObjK
 struct StatusC OCGet(ObjectClient_p clientPtr, const char **cObjKeys, const size_t *cObjKeysLen, uint64_t objsNum,
                      uint32_t cTimeoutMs, char **cVals, size_t *valsLen)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GET);
     size_t totalSize = 0;
     datasystem::RequestParam reqParam;
@@ -178,7 +178,7 @@ struct StatusC OCGIncreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, c
                               uint64_t cObjKeysNum, char *cRemoteClientId, size_t cRemoteClientIdLen,
                               char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GINCREASEREF);
     datasystem::RequestParam reqParam;
     StatusC rc = OCExecuteGIncreaseRef(clientPtr, cObjKeys, cObjKeysLen, cObjKeysNum, cRemoteClientId,
@@ -226,7 +226,7 @@ struct StatusC OCDeccreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, c
                               uint64_t cObjKeysNum, char *cRemoteClientId, size_t cRemoteClientIdLen,
                               char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GDECREASEREF);
     datasystem::RequestParam reqParam;
     StatusC rc = OCExecuteGDecreaseRef(clientPtr, cObjKeys, cObjKeysLen, cObjKeysNum, cRemoteClientId,
@@ -256,7 +256,7 @@ struct StatusC OCExecuteReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClie
 
 struct StatusC OCReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClientId, size_t cRemoteClientIdLen)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_RELEASEGREFS);
     datasystem::RequestParam reqParam;
     StatusC rc = OCExecuteReleaseGRefs(clientPtr, cRemoteClientId, cRemoteClientIdLen, &reqParam);

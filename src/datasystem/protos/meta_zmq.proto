@@ -29,6 +29,23 @@ message TickPb {
     string tick_name = 2;
 }
 
+// Request log sampling state carried by RPC metadata.
+// This single state avoids expanding MetaPb with multiple boolean flags.
+enum LogSampleState {
+    // Not an SDK request trace. Background and internal logs are not sampled by log_rate_limit.
+    LOG_SAMPLE_NONE = 0;
+
+    // SDK request trace admitted by log_rate_limit. INFO/WARNING logs should be kept across RPC hops.
+    LOG_SAMPLE_ADMIT = 1;
+
+    // SDK request trace rejected by log_rate_limit. INFO/WARNING logs are dropped, but ERROR/FATAL still print.
+    LOG_SAMPLE_REJECT = 2;
+
+    // SDK request trace without a propagated sampling decision yet.
+    // The receiving side may decide locally based on its own log_rate_limit.
+    LOG_SAMPLE_UNDECIDED = 3;
+}
+
 // This is the header message sent by the client
 message MetaPb {
     string svc_name = 1;
@@ -44,6 +61,7 @@ message MetaPb {
     int64 timeout = 11;
     string db_name = 12;
     int32 route_fd = 13;  // New version of routing_fd
+    LogSampleState log_sample_state = 14;
 
     // ak/sk required.
     string tenant_id = 98;

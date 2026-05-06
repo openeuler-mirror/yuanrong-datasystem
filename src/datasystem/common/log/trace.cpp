@@ -16,8 +16,8 @@
 
 #include "datasystem/common/log/trace.h"
 
-#include <cstring>
 #include <algorithm>
+#include <cstring>
 
 #include <securec.h>
 
@@ -51,7 +51,7 @@ Trace &Trace::Instance()
     return instance;
 }
 
-TraceGuard::~TraceGuard()
+void TraceGuard::Reset()
 {
     switch (type_) {
         case TraceGuardType::CLEAR_TRACE_ID:
@@ -60,11 +60,34 @@ TraceGuard::~TraceGuard()
         case TraceGuardType::CLEAR_SUB_TRACE_ID:
             Trace::Instance().InvalidateSubTraceID();
             break;
+        case TraceGuardType::RESTORE_REQUEST_LOG_CONTEXT:
+            Trace::Instance().SetRequestLogTrace(requestLogTrace_);
+            Trace::Instance().SetRequestSampleDecision(requestSampleDecisionValid_, requestSampleDecisionAdmitted_);
+            break;
         case TraceGuardType::INVALID:
             break;
         default:
             LOG(WARNING) << "Unsupport type: " << static_cast<int>(type_);
     }
+    type_ = TraceGuardType::INVALID;
+}
+
+TraceGuard &TraceGuard::operator=(TraceGuard &&other) noexcept
+{
+    if (this != &other) {
+        Reset();
+        type_ = other.type_;
+        requestLogTrace_ = other.requestLogTrace_;
+        requestSampleDecisionValid_ = other.requestSampleDecisionValid_;
+        requestSampleDecisionAdmitted_ = other.requestSampleDecisionAdmitted_;
+        other.type_ = TraceGuardType::INVALID;
+    }
+    return *this;
+}
+
+TraceGuard::~TraceGuard()
+{
+    Reset();
 }
 
 TraceGuard Trace::SetTraceUUID()
@@ -72,6 +95,8 @@ TraceGuard Trace::SetTraceUUID()
     if (traceID_[0] != '\0') {
         return TraceGuard(TraceGuardType::INVALID);
     }
+    SetRequestLogTrace(false);
+    SetRequestSampleDecision(false, false);
     std::string uuid = GetStringUuid();
     auto prefixLen = std::min<size_t>(strlen(prefix_), TRACEID_PREFIX_SIZE);
     int ret = EOK;
@@ -97,6 +122,23 @@ TraceGuard Trace::SetTraceUUID()
     return TraceGuard(TraceGuardType::CLEAR_TRACE_ID);
 }
 
+TraceGuard Trace::SetRequestTraceUUID()
+{
+    if (traceID_[0] != '\0') {
+        bool oldRequestLogTrace = requestLogTrace_;
+        TraceGuard traceGuard(TraceGuardType::RESTORE_REQUEST_LOG_CONTEXT, requestLogTrace_,
+                              requestSampleDecisionValid_, requestSampleDecisionAdmitted_);
+        SetRequestLogTrace(true);
+        if (!oldRequestLogTrace) {
+            SetRequestSampleDecision(false, false);
+        }
+        return traceGuard;
+    }
+    TraceGuard traceGuard = SetTraceUUID();
+    SetRequestLogTrace(true);
+    return traceGuard;
+}
+
 void Trace::SetPrefix(const std::string &prefix)
 {
     auto copySize = std::min<size_t>(TRACEID_PREFIX_SIZE, prefix.length());
@@ -108,6 +150,8 @@ void Trace::SetPrefix(const std::string &prefix)
 
 TraceGuard Trace::SetTraceNewID(const std::string &traceID, bool keep)
 {
+    SetRequestLogTrace(false);
+    SetRequestSampleDecision(false, false);
     auto copySize = traceID.size();
     if (traceID.size() > TRACEID_MAX_SIZE) {
         LOG(WARNING) << FormatString("The traceID length %zu exceeds the maximum length %d.", traceID.size(),
@@ -122,6 +166,31 @@ TraceGuard Trace::SetTraceNewID(const std::string &traceID, bool keep)
     return TraceGuard(keep ? TraceGuardType::INVALID : TraceGuardType::CLEAR_TRACE_ID);
 }
 
+TraceGuard Trace::SetTraceContext(const TraceContext &context, bool keep)
+{
+    bool oldRequestLogTrace = requestLogTrace_;
+    bool oldRequestSampleDecisionValid = requestSampleDecisionValid_;
+    bool oldRequestSampleDecisionAdmitted = requestSampleDecisionAdmitted_;
+    TraceGuard traceGuard = SetTraceNewID(context.traceID, keep);
+    SetRequestLogTrace(context.requestLogTrace);
+    SetRequestSampleDecision(context.requestSampleDecisionValid, context.requestSampleDecisionAdmitted);
+    if (keep) {
+        return TraceGuard(TraceGuardType::RESTORE_REQUEST_LOG_CONTEXT, oldRequestLogTrace,
+                          oldRequestSampleDecisionValid, oldRequestSampleDecisionAdmitted);
+    }
+    return traceGuard;
+}
+
+TraceContext Trace::GetContext() const
+{
+    TraceContext context;
+    context.traceID = traceID_;
+    context.requestLogTrace = requestLogTrace_;
+    context.requestSampleDecisionValid = requestSampleDecisionValid_;
+    context.requestSampleDecisionAdmitted = requestSampleDecisionAdmitted_;
+    return context;
+}
+
 std::string Trace::GetTraceID()
 {
     return traceID_;
@@ -131,6 +200,8 @@ void Trace::Invalidate()
 {
     traceID_[0] = '\0';
     cachedHash_ = 0;
+    SetRequestLogTrace(false);
+    SetRequestSampleDecision(false, false);
 }
 
 TraceGuard Trace::SetSubTraceID(const std::string &subTraceID)

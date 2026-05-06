@@ -87,8 +87,7 @@ private:
     LogStreamBuf streamBuf_;
     std::ostream logStream_;
     size_t msgSize_;
-    bool skip_ = false;    // Log rate sampling: dropped by limiter
-    bool sampled_ = false; // Log rate sampling: kept through uniform-interval sampling fallback
+    bool skip_ = false;  // Request-level log sampling: dropped by limiter
 };
 
 }  // namespace datasystem

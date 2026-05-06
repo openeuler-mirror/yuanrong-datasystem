@@ -110,7 +110,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ProducerImpl_sendDire
 
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ProducerImpl_close(JNIEnv *env, jclass, jlong handle)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ProducerImpl.close";
     auto producer = reinterpret_cast<std::shared_ptr<Producer> *>(handle);
     JNI_CHECK_RESULT(env, (*producer)->Close(), (void)0);

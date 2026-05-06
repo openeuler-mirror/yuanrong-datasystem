@@ -35,7 +35,7 @@ using datasystem::object_cache::ObjectClientImpl;
 
 JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_init(JNIEnv *env, jclass, jobject jConnectOpts)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.init";
     ConnectOptions connectOpts = ToCppConnectOptions(env, jConnectOpts);
     if (env->ExceptionOccurred()) {
@@ -54,7 +54,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_createN
                                                                                   jstring objectKeyJO, jint size,
                                                                                   jobject CreateParamJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.create";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string objectKey = ToString(env, objectKeyJO);
@@ -76,7 +76,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_putDirec
     JNIEnv *env, jclass, jlong handle, jstring objectKeyJO, jobject bufferJO, jobject CreateParamJO,
     jobject nestedObjectKeysJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.put";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string objectKey = ToString(env, objectKeyJO);
@@ -106,7 +106,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_putHeapB
     JNIEnv *env, jclass, jlong handle, jstring objectKeyJO, jbyteArray byteArray, jlong size, jobject CreateParamJO,
     jobject nestedObjectKeysJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.putHeapBufferNative";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string objectKey = ToString(env, objectKeyJO);
@@ -144,7 +144,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_putHeapB
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_getNative(JNIEnv *env, jclass, jlong handle,
                                                                                  jobject objectKeysJO, jint timeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.get";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     // get objectKeys passed from java
@@ -186,7 +186,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_gIncr
                                                                                           jlong handle,
                                                                                           jobject objectKeysJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.gIncreaseRef";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     // get objectKeys passed from java
@@ -202,7 +202,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_gDecr
                                                                                           jlong handle,
                                                                                           jobject objectKeysJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.gDecreaseRef";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     // get objectKeys passed from java
@@ -218,7 +218,7 @@ JNIEXPORT jint JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_queryGlo
                                                                                             jlong handle,
                                                                                             jstring objectKeyJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.queryGlobalRefNum";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string objectKey = ToString(env, objectKeyJO);
@@ -235,7 +235,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_object_ObjectClient_freeObje
 JNIEXPORT void JNICALL Java_com_datasystem_object_ObjectClient_updateTokenNative(JNIEnv *env, jclass,
     jlong handle, jbyteArray tokenBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateToken";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     SensitiveValue token = ToSensitiveValue(env, tokenBytes);
@@ -245,7 +245,7 @@ JNIEXPORT void JNICALL Java_com_datasystem_object_ObjectClient_updateTokenNative
 JNIEXPORT void JNICALL Java_com_datasystem_object_ObjectClient_updateAkSkNative(JNIEnv *env, jclass,
     jlong handle, jstring accessKeyJO, jbyteArray secretKeyBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateAkSk";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string accessKey = ToString(env, accessKeyJO);

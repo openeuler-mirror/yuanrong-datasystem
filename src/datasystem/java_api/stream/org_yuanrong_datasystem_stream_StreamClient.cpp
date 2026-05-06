@@ -42,7 +42,7 @@ using datasystem::SubscriptionType;
 JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_init(JNIEnv *env, jclass, jobject jConnectOpts,
                                                                           jboolean shouldReportWorkerLost)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.init";
     ConnectOptions connectOpts = ToCppConnectOptions(env, jConnectOpts);
     if (env->ExceptionOccurred()) {
@@ -69,7 +69,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_createP
                                                                                     jboolean encryptStream = false,
                                                                                     jlong reserveSize = 0)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.createProducer";
     std::string streamName = ToString(env, stream);
     StreamClient *client = reinterpret_cast<StreamClient *>(handle);
@@ -90,7 +90,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_subscri
                                                                                jobject subscription,
                                                                                jboolean shouldAutoAck)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.subscribe";
     // get the value of subscription
     jclass jniSubscription = env->GetObjectClass(subscription);
@@ -120,7 +120,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_queryGl
                                                                                             jlong clientPtr,
                                                                                             jstring streamName)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.queryGlobalProducerNum";
     // get the structure of the number of global producer stored in producerDistribution
     StreamClient *client = reinterpret_cast<StreamClient *>(clientPtr);
@@ -135,7 +135,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_queryGl
                                                                                             jlong clientPtr,
                                                                                             jstring streamName)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.queryGlobalConsumerNum";
     // get the structure of the number of global consumer stored in consumerDistribution
     StreamClient *client = reinterpret_cast<StreamClient *>(clientPtr);
@@ -149,7 +149,7 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_queryGl
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_deleteStream(JNIEnv *env, jclass,
                                                                                 jlong clientPtr, jstring streamName)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.deleteStream";
     // convert jni type to c++ type
     StreamClient *client = reinterpret_cast<StreamClient *>(clientPtr);
@@ -168,7 +168,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_StreamClient_freeJNIP
 JNIEXPORT void JNICALL Java_com_datasystem_stream_StreamClient_updateTokenNative(JNIEnv *env, jclass,
     jlong handle, jbyteArray tokenBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.updateToken";
     auto client = reinterpret_cast<StreamClient *>(handle);
     SensitiveValue token = ToSensitiveValue(env, tokenBytes);
@@ -178,7 +178,7 @@ JNIEXPORT void JNICALL Java_com_datasystem_stream_StreamClient_updateTokenNative
 JNIEXPORT void JNICALL Java_com_datasystem_stream_StreamClient_updateAkSkNative(JNIEnv *env, jclass,
     jlong handle, jstring accessKeyJO, jbyteArray secretKeyBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StreamClient.updateAkSk";
     auto client = reinterpret_cast<std::shared_ptr<StreamClient> *>(handle);
     std::string accessKey = ToString(env, accessKeyJO);

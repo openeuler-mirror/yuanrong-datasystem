@@ -147,10 +147,10 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     timer.Reset();
     if (serverApi->EnableMsgQ()) {
         const std::chrono::steady_clock::time_point submitToPool = std::chrono::steady_clock::now();
-        std::string traceID = Trace::Instance().GetTraceID();
+        auto traceContext = Trace::Instance().GetContext();
         auto cost = workerOperationTimeCost;
         threadPool_->Execute([=]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             workerOperationTimeCost = cost;
             const std::chrono::steady_clock::time_point poolThreadStart = std::chrono::steady_clock::now();
             {
@@ -330,14 +330,14 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
 
     point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_ADD_TIMER);
     auto timer = std::make_unique<TimerQueue::TimerImpl>();
-    auto traceID = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     auto weakThis = weak_from_this();
     // For exclusive connections: inform parent that an async child is deployed
     request->GetServerApi()->SetRequestInProgress();
     RETURN_IF_NOT_OK(TimerQueue::GetInstance()->AddTimer(
         std::min<int64_t>(subTimeout, remainingTimeMs),
-        [weakThis, subTimeout, request, traceID, remainingTimeMs]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        [weakThis, subTimeout, request, traceContext, remainingTimeMs]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             LOG(ERROR) << "The get request times out, the sub timeout: " << subTimeout
                        << ", remainingTimeMs: " << remainingTimeMs << ", clientId: " << request->GetClientId()
                        << ", satisfied num: " << request->GetReadyCount()
@@ -1500,7 +1500,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
     std::vector<std::future<Status>> futures;
-    std::string traceID = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     std::vector<BatchQueryMetaResult> batchQueryResults;
@@ -1509,8 +1509,8 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
     for (auto &item : objKeysGrpByMaster) {
         BatchQueryMetaResult &res = batchQueryResults[idx++];
-        auto func = [&res, realTimeoutMs, subTimeout, item, &traceID, &timer, this]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
+        auto func = [&res, realTimeoutMs, subTimeout, item, traceContext, &timer, this]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             HostPort masterAddr = item.first.GetAddressAndSaveDbName();
@@ -1803,7 +1803,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
     std::vector<std::future<Status>> futures;
     std::atomic<bool> abortAllTasks{ false };
     std::mutex commonMutex;
-    auto traceId = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     for (size_t i = 0; i < queryMetas.size(); ++i) {
         if (abortAllTasks.load()) {
             break;
@@ -1824,8 +1824,8 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
         int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
         futures.emplace_back(remoteGetThreadPool_->Submit([=, &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
                                                            &request, &payloads, &lastRc, &successIds, &needRetryIds,
-                                                           &failedIds, &traceId]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+                                                           &failedIds]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             if (abortAllTasks.load()) {
@@ -2817,7 +2817,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
     size_t index = 0;
-    auto traceId = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     std::shared_ptr<GetRequest> fakeRequest = nullptr;
@@ -2825,10 +2825,10 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
         auto func = [this, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceId, realTimeoutMs, &timer] {
+                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer] {
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             Status lastRc;
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;

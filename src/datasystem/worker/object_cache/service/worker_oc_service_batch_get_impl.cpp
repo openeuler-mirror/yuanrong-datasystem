@@ -160,7 +160,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
     size_t index = 0;
-    auto traceId = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
     std::mutex lastRcMutex;
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
@@ -168,11 +168,11 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         auto &infoList = queryMeta->second;
 
         auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceId, &lastRcMutex] {
+                     &tempFailedMetas, index, traceContext, &lastRcMutex] {
             Status tmpRc = Status::OK();
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+                TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
                 tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
                                                        tempNeedRetryIds[index], tempFailedIds[index],
                                                        tempFailedMetas[index]);

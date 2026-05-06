@@ -66,7 +66,7 @@ HeteroClient::~HeteroClient()
 
 Status HeteroClient::ShutDown()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
         AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_SHUTDOWN);
@@ -80,7 +80,7 @@ Status HeteroClient::ShutDown()
 
 Status HeteroClient::Init()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_INIT);
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
@@ -94,7 +94,7 @@ Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::ve
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MGET_H2D_ALL);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->MGetH2D(keys, devBlobList, failedKeys, subTimeoutMs);
 }
 
@@ -103,14 +103,14 @@ Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::ve
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint point(PerfKey::CLIENT_MSET_D2H_ALL);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->MSetD2H(keys, devBlobList, setParam);
 }
 
 Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DELETE);
     auto rc = impl_->Delete(keys, failedKeys);
     accessPoint.Record(
@@ -133,7 +133,7 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMSetD2H(const std::vector<std
         promise.set_value({ rc, keys });
         return future;
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->AsyncMSetD2H(keys, devBlobList, setParam);
 }
 
@@ -148,14 +148,14 @@ std::shared_future<AsyncResult> HeteroClient::AsyncMGetH2D(const std::vector<std
         promise.set_value({ rc, keys });
         return future;
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->AsyncMGetH2D(keys, devBlobList, subTimeoutMs);
 }
 
 Status HeteroClient::GenerateKey(const std::string &prefix, std::string &key)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_GENERATEKEY);
     auto ret = impl_->GenerateKey(key, prefix);
     accessPoint.Record(ret.GetCode(), "0", RequestParam{ .objectKey = key }, ret.GetMsg());
@@ -166,7 +166,7 @@ Status HeteroClient::DevPublish(const std::vector<std::string> &keys, const std:
                                 std::vector<Future> &futureVec)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVPUBLISH);
     auto ret = impl_->DevPublish(keys, devBlobList, futureVec);
     accessPoint.Record(
@@ -182,7 +182,7 @@ Status HeteroClient::DevSubscribe(const std::vector<std::string> &keys, const st
                                   std::vector<Future> &futureVec)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVSUBSCRIBE);
     auto ret = impl_->DevSubscribe(keys, devBlobList, futureVec);
     accessPoint.Record(
@@ -198,7 +198,7 @@ Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVDELETE);
     auto ret = impl_->DeleteDevObjects(keys, failedKeys);
     accessPoint.Record(
@@ -213,7 +213,7 @@ Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector
 Status HeteroClient::DevLocalDelete(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVLOCALDELETE);
     auto ret = impl_->DevLocalDelete(keys, failedKeys);
     accessPoint.Record(
@@ -228,7 +228,7 @@ Status HeteroClient::DevLocalDelete(const std::vector<std::string> &keys, std::v
 std::shared_future<AsyncResult> HeteroClient::AsyncDevDelete(const std::vector<std::string> &keys)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     std::shared_future<AsyncResult> future = impl_->AsyncDeleteDevObjects(keys);
     return future;
 }
@@ -237,7 +237,7 @@ Status HeteroClient::DevMSet(const std::vector<std::string> &keys, const std::ve
                              std::vector<std::string> &failedKeys)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVMSET);
     auto ret = impl_->DevMSet(keys, devBlobList, failedKeys);
     accessPoint.Record(
@@ -253,7 +253,7 @@ Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<D
                              std::vector<std::string> &failedKeys, int32_t subTimeoutMs)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVMGET);
     auto ret = impl_->DevMGet(keys, devBlobList, failedKeys, subTimeoutMs);
     accessPoint.Record(
@@ -267,7 +267,7 @@ Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<D
 
 Status HeteroClient::HealthCheck(ServerState &state)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     auto rc = impl_->HealthCheck(state);
     return rc;
 }
@@ -276,7 +276,7 @@ Status HeteroClient::Exist(const std::vector<std::string> &keys, std::vector<boo
 {
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_EXIST);
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     auto rc = impl_->Exist(keys, exists, false, false);
     accessPoint.Record(
         rc.GetCode(), "0",
@@ -292,7 +292,7 @@ Status HeteroClient::GetMetaInfo(const std::vector<std::string> &keys, bool isDe
 {
     AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_GETMETAINFO);
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_GET_META_INFO);
     auto rc = impl_->GetMetaInfo(keys, isDevKey, metaInfos, failKeys);
     accessPoint.Record(
