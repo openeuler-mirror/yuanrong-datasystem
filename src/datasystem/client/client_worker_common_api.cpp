@@ -66,9 +66,9 @@ static constexpr int64_t MIN_WAIT_MS = 1;
 
 int32_t CalculateSingleRpcTimeout(int32_t totalTimeoutMs)
 {
-    constexpr int32_t rpcMaxTimeout = 600000;  // 10min
-    constexpr int32_t shorterSplitTime = 30000; // 30s
-    constexpr int32_t longerSplitTime = 90000;  // 90s
+    constexpr int32_t rpcMaxTimeout = 600000;    // 10min
+    constexpr int32_t shorterSplitTime = 30000;  // 30s
+    constexpr int32_t longerSplitTime = 90000;   // 90s
     constexpr int32_t retryTimes = 3;
 
     if (totalTimeoutMs <= shorterSplitTime) {
@@ -902,6 +902,7 @@ Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersi
 #ifdef WITH_TESTS
     INJECT_POINT("client.urma_first_handshake_delay");
 #endif
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
     Status status = TryUrmaHandshake();
     uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
@@ -943,6 +944,7 @@ Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
 void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVersion)
 {
     urmaHandshakeRetryPool_->Execute([this, workerVersion]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
         constexpr int maxRetryIntervalMs = 8000;
         constexpr int retryCheckIntervalMs = 100;
         constexpr int64_t rpcTimeout = 15000;
@@ -962,7 +964,6 @@ void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVers
                 continue;
             }
             timer.Reset();
-
             reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
             Status status = TryUrmaHandshake();
             currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
