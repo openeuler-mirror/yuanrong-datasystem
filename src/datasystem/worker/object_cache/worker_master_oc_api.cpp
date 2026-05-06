@@ -843,12 +843,17 @@ Status WorkerRemoteMasterOCApi::RemoveP2PLocation(RemoveP2PLocationReqPb &req, R
 Status WorkerRemoteMasterOCApi::GetObjectLocations(master::GetObjectLocationsReqPb &req,
                                                    master::GetObjectLocationsRspPb &resp)
 {
-    int64_t reqRemainTime = reqTimeoutDuration.CalcRealRemainingTime();
-    CHECK_FAIL_RETURN_STATUS(reqRemainTime > 0, K_RPC_DEADLINE_EXCEEDED,
-                             FormatString("Request timeout (%ld ms).", -reqRemainTime));
+    return GetObjectLocations(req, resp, reqTimeoutDuration.CalcRealRemainingTime());
+}
+
+Status WorkerRemoteMasterOCApi::GetObjectLocations(master::GetObjectLocationsReqPb &req,
+                                                   master::GetObjectLocationsRspPb &resp, int64_t timeoutMs)
+{
+    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Request timeout (%ld ms).", -timeoutMs));
     RpcOptions opts;
     return RetryOnErrorRepent(
-        reqRemainTime,
+        timeoutMs,
         [this, &opts, &req, &resp](int32_t onceRpcRemainTime) {
             opts.SetTimeout(onceRpcRemainTime);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
@@ -1402,6 +1407,13 @@ Status WorkerLocalMasterOCApi::GetObjectLocations(master::GetObjectLocationsReqP
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterOC_->GetObjectLocations(req, resp);
+}
+
+Status WorkerLocalMasterOCApi::GetObjectLocations(master::GetObjectLocationsReqPb &req,
+                                                  master::GetObjectLocationsRspPb &resp, int64_t timeoutMs)
+{
+    (void)timeoutMs;
+    return GetObjectLocations(req, resp);
 }
 
 Status WorkerLocalMasterOCApi::ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp)

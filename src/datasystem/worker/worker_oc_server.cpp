@@ -200,6 +200,7 @@ constexpr int64_t WARMUP_SCAN_INTERVAL_MS = 1'000;
 constexpr int64_t WARMUP_MIN_SCAN_MS = 30'000;
 constexpr int64_t WARMUP_MAX_SCAN_MS = 110'000;
 constexpr uint32_t WARMUP_STABLE_ROUNDS = 3;
+constexpr int32_t MASTER_RPC_WARMUP_THREAD_NUM = 4;
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 
@@ -242,6 +243,7 @@ static bool ValidateEtcdOrMetastoreAddress()
 WorkerOCServer::~WorkerOCServer()
 {
     StopConnectionWarmup();
+    StopWorkerMasterRpcWarmup();
     if (replicaManager_ != nullptr) {
         replicaManager_->Shutdown();
     }
@@ -692,6 +694,7 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
         return;
     }
     LOG_IF_ERROR(clusterStore_->Put(tableName, key, event.kv().value()), "UpdateClusterInfoInRocksDb failed");
+    TryWarmupWorkerMasterRpcOnClusterEvent(event);
 }
 
 Status WorkerOCServer::ConstructClusterStore()
@@ -1291,6 +1294,163 @@ void WorkerOCServer::RunUrmaWarmupController()
                               successCount, futures.size(), elapsedMs, scheduledPeers.size());
 }
 
+Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
+{
+    if (!EnableOCService()) {
+        LOG(INFO) << "[MASTER_RPC_WARMUP] object cache service is disabled, skip warmup.";
+        return Status::OK();
+    }
+    if (etcdStore_ == nullptr) {
+        LOG(WARNING) << "[MASTER_RPC_WARMUP] etcd store is null, skip warmup.";
+        return Status::OK();
+    }
+    if (objCacheClientWorkerSvc_ == nullptr) {
+        LOG(WARNING) << "[MASTER_RPC_WARMUP] object cache service is not ready, skip warmup.";
+        return Status::OK();
+    }
+    masterRpcWarmupExit_ = false;
+    std::shared_ptr<ThreadPool> warmupThreadPool;
+    try {
+        warmupThreadPool =
+            std::make_shared<ThreadPool>(MASTER_RPC_WARMUP_THREAD_NUM, MASTER_RPC_WARMUP_THREAD_NUM, "MasterRpcWarmup");
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "[MASTER_RPC_WARMUP] create thread pool failed, skip warmup, error=" << e.what();
+        return Status::OK();
+    }
+    std::shared_ptr<ThreadPool> warmupThreadPoolForSubmit;
+    {
+        std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+        warmingMasterRpcAddrs_.clear();
+        masterRpcWarmupThreadPool_ = warmupThreadPool;
+        warmupThreadPoolForSubmit = masterRpcWarmupThreadPool_;
+    }
+    try {
+        (void)warmupThreadPoolForSubmit->Submit([this]() { WarmupReadyWorkerMasterRpcOnce(); });
+    } catch (const std::exception &e) {
+        LOG(WARNING) << "[MASTER_RPC_WARMUP] submit startup warmup failed, error=" << e.what();
+    }
+    return Status::OK();
+}
+
+void WorkerOCServer::StopWorkerMasterRpcWarmup()
+{
+    masterRpcWarmupExit_ = true;
+    std::shared_ptr<ThreadPool> warmupThreadPool;
+    {
+        std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+        warmupThreadPool.swap(masterRpcWarmupThreadPool_);
+        warmingMasterRpcAddrs_.clear();
+    }
+    warmupThreadPool.reset();
+}
+
+bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr)
+{
+    if (masterAddr.empty() || masterAddr == hostPort_.ToString()) {
+        return false;
+    }
+    std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc;
+    std::shared_ptr<ThreadPool> warmupThreadPool;
+    {
+        std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+        if (masterRpcWarmupExit_ || masterRpcWarmupThreadPool_ == nullptr || objCacheClientWorkerSvc_ == nullptr) {
+            return false;
+        }
+        if (!warmingMasterRpcAddrs_.emplace(masterAddr).second) {
+            return false;
+        }
+        objCacheClientWorkerSvc = objCacheClientWorkerSvc_;
+        warmupThreadPool = masterRpcWarmupThreadPool_;
+    }
+    auto warmupTask = [this, masterAddr, objCacheClientWorkerSvc]() {
+        Raii eraseWarmupAddr([this, masterAddr]() {
+            std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+            warmingMasterRpcAddrs_.erase(masterAddr);
+        });
+        if (masterRpcWarmupExit_) {
+            return false;
+        }
+        HostPort hostPort;
+        auto rc = hostPort.ParseString(masterAddr);
+        if (rc.IsOk()) {
+            rc = objCacheClientWorkerSvc->WarmupWorkerMasterRpc(hostPort);
+        }
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("[MASTER_RPC_WARMUP] task failed, master=%s, status=%s", masterAddr,
+                                         rc.ToString());
+            return false;
+        }
+        return true;
+    };
+    try {
+        (void)warmupThreadPool->Submit(std::move(warmupTask));
+    } catch (const std::exception &e) {
+        {
+            std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+            warmingMasterRpcAddrs_.erase(masterAddr);
+        }
+        LOG(WARNING) << FormatString("[MASTER_RPC_WARMUP] submit failed, master=%s, error=%s", masterAddr, e.what());
+        return false;
+    }
+    return true;
+}
+
+size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers)
+{
+    size_t scheduledCount = 0;
+    for (const auto &worker : workers) {
+        if (masterRpcWarmupExit_) {
+            break;
+        }
+        KeepAliveValue keepAliveValue;
+        auto parseRc = KeepAliveValue::FromString(worker.second, keepAliveValue);
+        if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+            continue;
+        }
+        if (SubmitWorkerMasterRpcWarmupTask(worker.first)) {
+            ++scheduledCount;
+        }
+    }
+    return scheduledCount;
+}
+
+void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event &event)
+{
+    if (!EnableOCService() || event.type() != mvccpb::Event_EventType::Event_EventType_PUT) {
+        return;
+    }
+    const auto &key = event.kv().key();
+    if (key.find(ETCD_CLUSTER_TABLE) == std::string::npos) {
+        return;
+    }
+    KeepAliveValue keepAliveValue;
+    auto parseRc = KeepAliveValue::FromString(event.kv().value(), keepAliveValue);
+    if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+        return;
+    }
+    auto masterAddr = GetSubStringAfterField(key, std::string(ETCD_CLUSTER_TABLE) + "/");
+    if (SubmitWorkerMasterRpcWarmupTask(masterAddr)) {
+        LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] scheduled by cluster event, master=%s", masterAddr);
+    }
+}
+
+void WorkerOCServer::WarmupReadyWorkerMasterRpcOnce()
+{
+    if (etcdStore_ == nullptr || masterRpcWarmupExit_) {
+        return;
+    }
+    std::vector<std::pair<std::string, std::string>> workers;
+    int64_t revision = 0;
+    auto rc = etcdStore_->GetAll(ETCD_CLUSTER_TABLE, workers, revision);
+    if (rc.IsError()) {
+        LOG(WARNING) << "[MASTER_RPC_WARMUP] get ready workers failed, status=" << rc.ToString();
+        return;
+    }
+    auto scheduledCount = ScheduleWorkerMasterRpcWarmupTasks(workers);
+    LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] startup scheduled_count=%zu, discovered_worker_count=%zu",
+                              scheduledCount, workers.size());
+}
+
 Status WorkerOCServer::ReadinessProbe()
 {
     // delete health check flag for worker service
@@ -1339,6 +1499,7 @@ Status WorkerOCServer::Start()
         }
     }
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartConnectionWarmup(), "\nWorker Start failed.");
+    RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartWorkerMasterRpcWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK(metrics::InitKvMetrics());
     RETURN_IF_NOT_OK(ResMetricCollector::Instance().Init());
@@ -1495,6 +1656,7 @@ Status WorkerOCServer::Shutdown()
     INJECT_POINT("worker.BeforeShutdown");
     LOG(INFO) << "Worker process executing a shutdown.";
     StopConnectionWarmup();
+    StopWorkerMasterRpcWarmup();
     StopLivenessCheck();
     // Stop the background resource collector to prevent the background resource collector from invoking the background
     // resource collector when some objects of the worker exit.
