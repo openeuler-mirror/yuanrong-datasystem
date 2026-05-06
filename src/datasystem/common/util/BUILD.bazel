@@ -1,7 +1,13 @@
 # BUILD file for src/datasystem/common/util
 load("//bazel:build_defs.bzl", "ds_cc_library")
+load("//bazel:git_version.bzl", "git_version_header")
 
 package(default_visibility = ["//visibility:public"])
+
+git_version_header(
+    name = "git_version_def",
+    out = "git_version_def.h",
+)
 
 # Base target: format (kept separate to break cycle with common_log_header)
 ds_cc_library(
@@ -45,7 +51,7 @@ ds_cc_library(
             "format.h",
             "strings_util.h",
         ],
-    ),
+    ) + [":git_version_def"],
     deps = [
         ":format",
         ":strings_util",
