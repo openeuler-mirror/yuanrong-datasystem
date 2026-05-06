@@ -194,8 +194,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
     const std::string callerAddress = GetRemoteAddressForLog(subReq);
     LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]",
-                                                subReq.object_key(), subReq.read_offset(), subReq.read_size()),
-                                   callerAddress, FLAGS_worker_address);
+                                                 subReq.object_key(), subReq.read_offset(), subReq.read_size()),
+                                    callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
@@ -690,10 +690,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     HostPort requestAddress;
     const std::string callerAddress =
         GetRemoteAddressFromBatchGetReq(req, requestAddress).IsOk() ? requestAddress.ToString() : "";
-    LOG(INFO) << AppendSrcDstForLog(
-        FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %.3fms",
-                     req.requests_size(), reqTimeoutDuration.CalcRealRemainingTime()),
-        callerAddress, FLAGS_worker_address);
+    LOG(INFO) << AppendSrcDstForLog(FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %.3fms",
+                                                 req.requests_size(), reqTimeoutDuration.CalcRealRemainingTime()),
+                                    callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
@@ -820,9 +819,11 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
                     "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
                     "wait rc = %s, fallback rc = %s",
                     srcAddress, targetAddress, status.ToString(), fallbackStatus.ToString());
-                rsp.mutable_responses()->at(index).mutable_error()->set_error_code(fallbackStatus.GetCode());
-                rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(fallbackStatus.GetMsg());
-                return fallbackStatus;
+                auto newStatus = fallbackStatus;
+                newStatus.AppendMsg(status.GetMsg());
+                rsp.mutable_responses()->at(index).mutable_error()->set_error_code(newStatus.GetCode());
+                rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(newStatus.GetMsg());
+                return newStatus;
             }
             const bool batchWaitFailed = kp.second.second.empty();
             if (batchWaitFailed) {
