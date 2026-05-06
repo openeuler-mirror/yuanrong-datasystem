@@ -33,33 +33,44 @@ namespace object_cache {
 Status WorkerWorkerTransportApi::ExecOnceParrallelExchange(UrmaHandshakeRspPb &rsp)
 {
     std::unique_lock<std::mutex> lock(mtx_);
-    if (connectionState_ == ConnectionState::CONNECTED) {
-        return Status::OK();
+
+    if (globalStopFlag_) {
+        cv_.wait(lock, [this]() { return !isExecuting_; });
+        // reset flag for new thread
+        globalStopFlag_ = false;
     }
-    while (connectionState_ == ConnectionState::CONNECTING) {
+
+    while (isExecuting_) {
         cv_.wait(lock);
-        RETURN_IF_NOT_OK(lastExchangeRc_);
-        return Status::OK();
+        // wakeup until one thread succeed
+        if (globalStopFlag_) {
+            return Status::OK();
+        }
     }
-    connectionState_ = ConnectionState::CONNECTING;
+
+    // set executing flag
+    isExecuting_ = true;
     lock.unlock();
 
     Timer timer;
     auto result = ExchangeUrmaConnectInfo(rsp);
 
     lock.lock();
-    lastExchangeRc_ = result;
+    isExecuting_ = false;
+
     if (result.IsOk()) {
-        connectionState_ = ConnectionState::CONNECTED;
+        // set all finish flag
+        globalStopFlag_ = true;
         LOG(INFO) << "[URMA_NEED_CONNECT] Worker-worker transport connection exchange success, elapsed ms: "
                   << timer.ElapsedMilliSecond();
         cv_.notify_all();
     } else {
-        connectionState_ = ConnectionState::DISCONNECTED;
+        // wake up one thread to retry
         LOG(WARNING) << "[URMA_NEED_CONNECT] Worker-worker transport connection exchange failed, elapsed ms: "
                      << timer.ElapsedMilliSecond() << ", status: " << result.ToString();
-        cv_.notify_all();
+        cv_.notify_one();
     }
+
     return result;
 }
 

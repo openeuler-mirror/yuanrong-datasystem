@@ -55,16 +55,10 @@ public:
     Status ExecOnceParrallelExchange(UrmaHandshakeRspPb &rsp);
 
 private:
-    enum class ConnectionState {
-        DISCONNECTED,
-        CONNECTING,
-        CONNECTED,
-    };
-
     std::mutex mtx_;
     std::condition_variable cv_;
-    ConnectionState connectionState_{ ConnectionState::DISCONNECTED };
-    Status lastExchangeRc_;
+    std::atomic<bool> isExecuting_{ false };
+    std::atomic<bool> globalStopFlag_{ false };
 };
 
 class WorkerRemoteWorkerTransApi : public WorkerWorkerTransportApi {
