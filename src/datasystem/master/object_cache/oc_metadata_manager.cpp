@@ -4512,12 +4512,12 @@ std::string OCMetadataManager::GetETCDAsyncQueueUsage()
     return objectStore_->GetETCDAsyncQueueUsage();
 }
 
-std::string OCMetadataManager::GetMasterAsyncPoolUsage()
+std::string OCMetadataManager::GetMasterAsyncPoolUsage(int64_t intervalMs)
 {
     if (asyncPool_ == nullptr) {
         return "";
     }
-    return asyncPool_->GetThreadPoolUsage().ToString();
+    return asyncPool_->GetAndResetIntervalStats().ToString(intervalMs);
 }
 
 Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const std::string &address)

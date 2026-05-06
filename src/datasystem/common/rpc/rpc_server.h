@@ -203,11 +203,19 @@ public:
     std::vector<std::string> GetListeningPorts() const;
 
     /**
-     * @brief Obtains the threadpool usage of RpcServoce.
+     * @brief Obtains the threadpool usage of RpcService (interval-based, resets counters).
      * @param[in] serviceName The name of rpc service.
-     * @return Usage: "idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage".
+     * @param[in] intervalMs Collection interval in milliseconds.
+     * @return Usage: "maxRunning/total/tasksDelta/maxWaiting/usage".
      */
-    ThreadPool::ThreadPoolUsage GetRpcServicesUsage(const std::string &serviceName) const;
+    ThreadPool::ThreadPoolUsage GetRpcServicesUsage(const std::string &serviceName, int64_t intervalMs) const;
+
+    /**
+     * @brief Obtains the threadpool snapshot of RpcService (no reset, for liveness check).
+     * @param[in] serviceName The name of rpc service.
+     * @return Snapshot ThreadPoolUsage.
+     */
+    ThreadPool::ThreadPoolUsage GetRpcServicesSnapshot(const std::string &serviceName) const;
 
 private:
     friend class RpcServer::Builder;

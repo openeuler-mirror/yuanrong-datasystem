@@ -75,8 +75,13 @@ Status CommonServer::Shutdown()
     return Status::OK();
 }
 
-ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesUsage(const std::string &serviceName)
+ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesUsage(const std::string &serviceName, int64_t intervalMs)
 {
-    return rpcServer_->GetRpcServicesUsage(serviceName);
+    return rpcServer_->GetRpcServicesUsage(serviceName, intervalMs);
+}
+
+ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesSnapshot(const std::string &serviceName)
+{
+    return rpcServer_->GetRpcServicesSnapshot(serviceName);
 }
 }  // namespace datasystem
