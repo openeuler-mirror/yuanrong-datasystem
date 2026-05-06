@@ -1294,9 +1294,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         Timer t;
         METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
         auto jettyId = args.jetty->GetJettyId();
+        LOG(INFO) << "URMA write useNumaAffinity:" << useNumaAffinity << "src:" << static_cast<uint32_t>(args.srcChipId)
+                  << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
+                  << ", urma_inflight_wr_count:" << tbbEventMap_.size();
         if (useNumaAffinity) {
-            LOG(INFO) << "URMA write numa affinity src:" << static_cast<uint32_t>(args.srcChipId)
-                      << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId;
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
                               remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
