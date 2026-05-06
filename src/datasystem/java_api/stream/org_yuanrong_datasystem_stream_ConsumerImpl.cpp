@@ -39,7 +39,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_recei
                                                                                jlong expectNum, jint timeoutMs,
                                                                                jboolean hasExpectedNum)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ConsumerImpl.receive";
     auto consumer = reinterpret_cast<std::shared_ptr<Consumer> *>(consumerPtr);
     std::vector<Element> elements;
@@ -72,7 +72,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_recei
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_ack(JNIEnv *env, jclass, jlong consumerPtr,
                                                                         jlong elementId)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ConsumerImpl.ack";
     auto consumer = reinterpret_cast<std::shared_ptr<Consumer> *>(consumerPtr);
     JNI_CHECK_RESULT(env, (*consumer)->Ack(elementId), (void)0);
@@ -80,7 +80,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_ack(JNIE
 
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_close(JNIEnv *env, jclass, jlong consumerPtr)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ConsumerImpl.close";
     auto consumer = reinterpret_cast<std::shared_ptr<Consumer> *>(consumerPtr);
     JNI_CHECK_RESULT(env, (*consumer)->Close(), (void)0);
@@ -97,7 +97,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_freeJNIP
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_stream_ConsumerImpl_getStatisticsMessage(
     JNIEnv *env, jclass callerClass, jlong consumerPtr)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ConsumerImpl.getStatisticsMessage";
     auto consumer = reinterpret_cast<std::shared_ptr<Consumer> *>(consumerPtr);
     uint64_t totalElements = 0;

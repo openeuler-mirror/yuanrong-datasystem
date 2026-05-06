@@ -21,9 +21,13 @@
 - Verified:
   - `Trace::Instance()` is `thread_local`.
   - `SetTraceUUID()` generates a new UUID-based trace ID unless the current thread already has one.
+  - `SetRequestTraceUUID()` creates a root trace and marks it as a request-log-sampling trace for public SDK request APIs.
   - `SetPrefix()` stores a trace prefix, currently set from `Context::SetTraceId`.
   - `SetTraceNewID()` is for propagating an existing trace ID across threads.
+  - `GetContext()` / `SetTraceContext()` capture and restore trace ID, request marker, and request sampling decision together.
   - `SetSubTraceID()` appends sub-trace information inside the same thread-local buffer.
+  - `SetRequestLogTrace()` / `IsRequestLogTrace()` explicitly mark whether current trace participates in request-log sampling.
+  - `SetRequestSampleDecision()` and `GetRequestSampleDecision()` store and read request-log sampling decision in the same thread-local trace context.
   - `TraceGuard` clears trace or sub-trace state on scope exit unless the guard was created with `keep=true`.
 
 ## Main Types And APIs
@@ -31,17 +35,24 @@
 | Type or API | Verified role | Notes |
 | --- | --- | --- |
 | `Trace::Instance()` | access current thread trace state | singleton is per-thread, not process-global |
-| `SetTraceUUID()` | create root trace ID | common at public entrypoints |
-| `SetTraceNewID()` | import existing trace ID | used for cross-thread propagation |
+| `SetTraceUUID()` | create root trace ID | use for non-request/internal scopes |
+| `SetRequestTraceUUID()` | create request root trace ID | use at public SDK request entrypoints that should participate in request-log sampling |
+| `SetTraceNewID()` | import existing trace ID | used for trace-only cross-thread propagation |
+| `GetContext()` / `SetTraceContext()` | capture and restore full trace context | use when request-log marker and sampling decision must follow async work |
 | `SetSubTraceID()` | derive nested trace context | keeps same root context with appended suffix |
 | `SetPrefix()` | store trace prefix string | currently used by `Context::SetTraceId` |
+| `SetRequestLogTrace()` / `IsRequestLogTrace()` | explicit request-log-sampling marker | avoids treating every trace-bearing background thread log as a sampled request log |
+| `SetRequestSampleDecision()` | bind request sampling admit/reject decision to current trace context | used together with RPC metadata propagation for consistent request-log sampling across hops |
+| `GetRequestSampleDecision()` | read existing request sampling admit/reject decision | returns false when decision is not carried in current trace context |
 | `TraceGuard` | scoped cleanup helper | can preserve state when `keep=true` |
 
 ## Propagation Model
 
 - Practical effect:
-  - most public API entrypoints call `Trace::Instance().SetTraceUUID()`;
-  - asynchronous or cross-thread flows often capture and reapply trace IDs explicitly;
+  - public SDK request API entrypoints call `Trace::Instance().SetRequestTraceUUID()`;
+  - non-request/background work uses `Trace::Instance().SetTraceUUID()` or imported trace IDs without request markers;
+  - asynchronous or cross-thread request flows capture and reapply full `TraceContext` explicitly;
+  - ZMQ `MetaPb` carries one request-log sampling state (`NONE`, `UNDECIDED`, `ADMIT`, `REJECT`) and callsites restore both `trace_id` and request-sampling context when importing request context;
   - sub-operations can append sub-trace state without replacing the root trace.
 - Review implication:
   - any new async boundary that forgets to capture and restore trace state can make observability look randomly broken even when business logic still works.

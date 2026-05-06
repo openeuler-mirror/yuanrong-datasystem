@@ -1259,11 +1259,11 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector
     std::shared_future<AsyncResult> future = asyncState->promise.get_future().share();
     UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
-    auto traceID = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     auto asyncStateForRpc = asyncState;
     asyncState->rpcFuture =
-        asyncGetRPCPool_->Submit([this, traceID, timeoutMs, asyncState = std::move(asyncStateForRpc)]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        asyncGetRPCPool_->Submit([this, traceContext, timeoutMs, asyncState = std::move(asyncStateForRpc)]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             PerfPoint point(PerfKey::CLIENT_MGET_FROM_WORKER);
             // MGetH2D supports RH2D transfer, so if RH2D feature is enabled, it can trigger RH2D.
             bool isRH2DSupported = true;
@@ -1289,8 +1289,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector
         });
 
     asyncGetCopyPool_->Execute(
-        [this, traceID, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        [this, traceContext, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             auto rc = asyncState->rpcFuture.get();
             if (rc.IsOk()) {
                 rc = HostDataCopy2Device(asyncState->devBlobList, asyncState->existBufferList);
@@ -1565,10 +1565,10 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
     auto asyncState = std::make_shared<AsyncMSetD2HState>(objectKeys, devBlobList, setParam);
     UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
-    auto traceID = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     return asyncSetRPCPool_->Submit(
-        [this, traceID, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        [this, traceContext, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam);
             AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
             return AsyncResult{ rc, {} };
@@ -2204,9 +2204,9 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
         .devInfos = std::move(devInfos),
     };
 
-    auto traceID = Trace::Instance().GetTraceID();
-    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceID, workerApi]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    auto traceContext = Trace::Instance().GetContext();
+    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceContext, workerApi]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
         std::unique_ptr<Raii> raii = std::make_unique<Raii>([workerApi]() { workerApi->DecreaseInvokeCount(); });
 
         // do H2D
@@ -3541,11 +3541,11 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
 
 std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const std::vector<std::string> &objKeys)
 {
-    auto traceID = Trace::Instance().GetTraceID();
+    auto traceContext = Trace::Instance().GetContext();
     auto accessPoint = std::make_shared<AccessRecorder>(AccessRecorderKey::DS_HETERO_CLIENT_ASYNC_DEVDELETE);
-    return asyncDevDeletePool_->Submit([this, traceID, objKeys, accessPoint]() {
+    return asyncDevDeletePool_->Submit([this, traceContext, objKeys, accessPoint]() {
         PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE_IMPL);
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
         AsyncResult result;
         std::vector<std::string> failList;
         result.status = DeleteDevObjects(objKeys, failList);

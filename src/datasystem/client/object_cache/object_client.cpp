@@ -40,7 +40,7 @@ ObjectClient::~ObjectClient()
 
 Status ObjectClient::ShutDown()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
         auto rc = impl_->ShutDown(needRollbackState);
@@ -52,7 +52,7 @@ Status ObjectClient::ShutDown()
 
 Status ObjectClient::Init()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
@@ -63,7 +63,7 @@ Status ObjectClient::Init()
 Status ObjectClient::Create(const std::string &objectKey, uint64_t size, const CreateParam &param,
                             std::shared_ptr<Buffer> &buffer)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_CREATE);
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
@@ -82,7 +82,7 @@ Status ObjectClient::Create(const std::string &objectKey, uint64_t size, const C
 Status ObjectClient::GIncreaseRef(const std::vector<std::string> &objectKeys,
                                   std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_GINCREASEREF);
     Status rc = impl_->GIncreaseRef(objectKeys, failedObjectKeys, remoteClientId);
     RequestParam reqParam;
@@ -94,7 +94,7 @@ Status ObjectClient::GIncreaseRef(const std::vector<std::string> &objectKeys,
 
 Status ObjectClient::ReleaseGRefs(const std::string &remoteClientId)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_RELEASEGREFS);
     Status rc = impl_->ReleaseGRefs(remoteClientId);
     RequestParam reqParam;
@@ -106,7 +106,7 @@ Status ObjectClient::ReleaseGRefs(const std::string &remoteClientId)
 Status ObjectClient::GDecreaseRef(const std::vector<std::string> &objectKeys,
                                   std::vector<std::string> &failedObjectKeys, const std::string &remoteClientId)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_GDECREASEREF);
     Status rc = impl_->GDecreaseRef(objectKeys, failedObjectKeys, remoteClientId);
     RequestParam reqParam;
@@ -118,19 +118,19 @@ Status ObjectClient::GDecreaseRef(const std::vector<std::string> &objectKeys,
 
 Status ObjectClient::UpdateToken(SensitiveValue token)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateToken(token);
 }
 
 Status ObjectClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretkey)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateAkSk(accesskey, secretkey);
 }
 
 int ObjectClient::QueryGlobalRefNum(const std::string &objectKey)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_QUERY_GLOBAL_REF_NUM);
     int num = impl_->QueryGlobalRefNum(objectKey);
     RequestParam reqParam;
@@ -142,7 +142,7 @@ int ObjectClient::QueryGlobalRefNum(const std::string &objectKey)
 Status ObjectClient::Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const CreateParam &param,
                          const std::unordered_set<std::string> &nestedObjectKeys)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
     object_cache::FullParam innerParam;
     innerParam.writeMode = WriteMode::NONE_L2_CACHE;
@@ -161,7 +161,7 @@ Status ObjectClient::Put(const std::string &objectKey, const uint8_t *data, uint
 Status ObjectClient::Get(const std::vector<std::string> &objectKeys, int32_t subTimeoutMs,
                          std::vector<Optional<Buffer>> &buffers)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_OBJECT_CLIENT_GET);
     Status rc = impl_->Get(objectKeys, subTimeoutMs, buffers);
     RequestParam reqParam;
@@ -174,25 +174,25 @@ Status ObjectClient::Get(const std::vector<std::string> &objectKeys, int32_t sub
 Status ObjectClient::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
                                     std::vector<ObjMetaInfo> &objMetas)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GetObjMetaInfo(tenantId, objectKeys, objMetas);
 }
 
 Status ObjectClient::GenerateKey(const std::string &prefix, std::string &key)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GenerateKey(key, prefix);
 }
 
 Status ObjectClient::GenerateObjectKey(const std::string &prefix, std::string &key)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GenerateKey(key, prefix);
 }
 
 Status ObjectClient::GetPrefix(const std::string &key, std::string &prefix)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GetPrefix(key, prefix);
 }
 

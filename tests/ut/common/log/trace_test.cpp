@@ -19,8 +19,11 @@
  */
 #include "datasystem/common/log/trace.h"
 
+#include <atomic>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "ut/common.h"
 #include "datasystem/context/context.h"
@@ -40,6 +43,113 @@ TEST_F(TraceTest, TestTraceGuardDestructor)
     TraceGuardDestructor(traceID);
     auto traceID1 = Trace::Instance().GetTraceID();
     EXPECT_NE(traceID1, traceID);
+}
+
+TEST_F(TraceTest, TestTraceGuardMoveDestructor)
+{
+    std::string traceID = "move-trace";
+    {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        TraceGuard movedTraceGuard = std::move(traceGuard);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), traceID);
+    }
+    EXPECT_NE(Trace::Instance().GetTraceID(), traceID);
+}
+
+TEST_F(TraceTest, TestRequestTraceRestoresExistingNonRequestContext)
+{
+    std::string traceID = "background-trace";
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    ASSERT_FALSE(Trace::Instance().IsRequestLogTrace());
+
+    {
+        TraceGuard requestTraceGuard = Trace::Instance().SetRequestTraceUUID();
+        EXPECT_EQ(Trace::Instance().GetTraceID(), traceID);
+        EXPECT_TRUE(Trace::Instance().IsRequestLogTrace());
+    }
+    EXPECT_EQ(Trace::Instance().GetTraceID(), traceID);
+    EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
+}
+
+TEST_F(TraceTest, TestTraceContextPropagatesRequestDecision)
+{
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    Trace::Instance().SetRequestSampleDecision(true, false);
+    auto context = Trace::Instance().GetContext();
+
+    std::thread t([context]() {
+        TraceGuard childTraceGuard = Trace::Instance().SetTraceContext(context);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), context.traceID);
+        EXPECT_TRUE(Trace::Instance().IsRequestLogTrace());
+
+        bool admitted = true;
+        EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+        EXPECT_FALSE(admitted);
+    });
+    t.join();
+}
+
+TEST_F(TraceTest, TestSetTraceContextKeepTrueRestoreRequestContext)
+{
+    Trace::Instance().Invalidate();
+    TraceGuard oldGuard = Trace::Instance().SetTraceNewID("old-trace");
+    Trace::Instance().SetRequestLogTrace(false);
+    Trace::Instance().SetRequestSampleDecision(true, true);
+
+    TraceContext incoming;
+    incoming.traceID = "new-trace";
+    incoming.requestLogTrace = true;
+    incoming.requestSampleDecisionValid = true;
+    incoming.requestSampleDecisionAdmitted = false;
+
+    {
+        TraceGuard guard = Trace::Instance().SetTraceContext(incoming, true);
+        EXPECT_EQ(Trace::Instance().GetTraceID(), "new-trace");
+        EXPECT_TRUE(Trace::Instance().IsRequestLogTrace());
+        bool admitted = true;
+        EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+        EXPECT_FALSE(admitted);
+    }
+
+    EXPECT_EQ(Trace::Instance().GetTraceID(), "new-trace");
+    EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
+    bool admitted = false;
+    EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+    EXPECT_TRUE(admitted);
+}
+
+TEST_F(TraceTest, LEVEL1_ConcurrentSetTraceContextKeepsRequestFields)
+{
+    Trace::Instance().Invalidate();
+    TraceGuard rootGuard = Trace::Instance().SetRequestTraceUUID();
+    Trace::Instance().SetRequestSampleDecision(true, false);
+    TraceContext context = Trace::Instance().GetContext();
+
+    constexpr int kThreads = 32;
+    constexpr int kRounds = 4000;
+    std::atomic<int> mismatch{ 0 };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&]() {
+            for (int i = 0; i < kRounds; ++i) {
+                TraceGuard guard = Trace::Instance().SetTraceContext(context);
+                bool admitted = true;
+                bool valid = Trace::Instance().GetRequestSampleDecision(admitted);
+                if (Trace::Instance().GetTraceID() != context.traceID || !Trace::Instance().IsRequestLogTrace()
+                    || !valid || admitted) {
+                    mismatch.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(mismatch.load(std::memory_order_relaxed), 0);
 }
 
 TEST_F(TraceTest, TestMultiThreadsIsolation)

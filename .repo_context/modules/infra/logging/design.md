@@ -34,7 +34,7 @@
   - `tests/ut/common/log/BUILD.bazel`
   - `tests/st/common/log/BUILD.bazel`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-05-06`
 - Related context docs:
   - `.repo_context/modules/infra/logging/README.md`
   - `.repo_context/modules/infra/logging/trace-and-context.md`
@@ -219,6 +219,7 @@
     - `minloglevel`
     - `log_async`
     - `log_async_queue_size`
+    - `log_rate_limit` (request-level sampling quota by trace ID, not per-log throttling; per-trace decision cache uses TTL-based hash map entries with periodic expired-entry cleanup, no fixed 1024-slot overwrite path)
     - `log_dir`
     - `log_filename`
   - client environment overrides:
@@ -237,6 +238,7 @@
     - `DATASYSTEM_LOG_V`
     - `DATASYSTEM_MIN_LOG_LEVEL`
     - `DATASYSTEM_LOG_MONITOR_ENABLE`
+    - `DATASYSTEM_LOG_RATE_LIMIT`
 - Background jobs, threads, or callbacks:
   - `LogManager` background thread started by `LogManager::Start()`;
   - exporter flush threads under `HardDiskExporter`;
@@ -244,7 +246,12 @@
 - Cross-module integration points:
   - `HardDiskExporter` from metrics is used underneath `AccessRecorderManager`;
   - `include/datasystem/context/context.h` and `src/datasystem/client/context/context.cpp` feed trace prefixes into `Trace`;
-  - worker, master, and language-binding callsites create or restore trace IDs at request boundaries.
+  - `src/datasystem/common/rpc/zmq/zmq_common.h` propagates one `log_sample_state` in `MetaPb` so
+    client/worker keep a consistent request marker, and can propagate either unresolved request state
+    (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops;
+  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it to client-side `LogRateLimiter` once at connect/register time;
+  - public SDK entrypoints and language bindings explicitly create request traces with `Trace::SetRequestTraceUUID()`;
+  - worker, master, and async callsites restore trace IDs or full `TraceContext` snapshots at request boundaries.
 - Upstream and downstream dependencies:
   - upstream callers include public C/C++/Java wrappers and runtime code that emits logs or sets trace state;
   - downstream dependencies include the local filesystem, `ds_spdlog`, absl failure handling, RE2 log-name validation, and any operators or tooling that parse the resulting files.
@@ -258,7 +265,7 @@
 | `log.h` | repository-wide macro surface for logs and checks | `src/datasystem/common/log/log.h` | main entrypoint seen by most callers |
 | `Logging` | provider init, env override, singleton lifecycle, startup ordering | `src/datasystem/common/log/logging.h/.cpp` | creates `LogManager` and `AccessRecorderManager` |
 | `LogManager` | background rolling, compression, pruning, and monitor flush | `src/datasystem/common/log/log_manager.h/.cpp` | one local background thread |
-| `Trace` | thread-local correlation state | `src/datasystem/common/log/trace.h/.cpp` | supports generated and imported trace IDs |
+| `Trace` | thread-local correlation state | `src/datasystem/common/log/trace.h/.cpp` | supports generated/imported trace IDs, request-log markers, and sampling-decision snapshots |
 | `Context` | public API surface for setting trace prefix on current thread | `include/datasystem/context/context.h`, `src/datasystem/client/context/context.cpp` | validates format before feeding `Trace` |
 | `AccessRecorder` | scoped request latency recording | `src/datasystem/common/log/access_recorder.h/.cpp`, `src/datasystem/common/log/access_point.def` | destructor logs if `Record()` was skipped |
 | `AccessRecorderManager` | exporter ownership and record serialization | `src/datasystem/common/log/access_recorder.h/.cpp` | routes by `AccessKeyType` |
@@ -287,8 +294,8 @@ Failure-sensitive steps:
 
 ### Trace Propagation And Scoped Correlation
 
-1. Public entrypoints create a new root trace with `Trace::SetTraceUUID()` or import a trace with `Context::SetTraceId(...)`.
-2. Async boundaries capture `Trace::GetTraceID()` and restore it with `Trace::SetTraceNewID(...)` on worker threads.
+1. Public SDK request entrypoints create a new root trace with `Trace::SetRequestTraceUUID()`; non-request/internal work uses `Trace::SetTraceUUID()` or imports a trace with `Context::SetTraceId(...)`.
+2. Async boundaries capture `Trace::GetContext()` and restore it with `Trace::SetTraceContext(...)` when request-log sampling state must follow the work; trace-only handoff can still use `Trace::GetTraceID()` and `Trace::SetTraceNewID(...)`.
 3. `TraceGuard` clears trace or sub-trace state on scope exit unless created with `keep=true`.
 
 Key files:

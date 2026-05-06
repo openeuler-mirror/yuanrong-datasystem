@@ -34,6 +34,7 @@
 #include <zmq.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -367,13 +368,59 @@ inline uint64_t GetTotalTime(MetaPb &meta)
     return 0;
 }
 
+inline LogSampleState GetOrCreateLogSampleState()
+{
+    if (!Trace::Instance().IsRequestLogTrace()) {
+        return LOG_SAMPLE_NONE;
+    }
+    bool admitted = false;
+    if (!LogRateLimiter::Instance().GetOrCreateRequestDecision(Trace::Instance().GetCachedHash(), admitted)) {
+        // Keep request marker but do not force ADMIT when no local decision exists.
+        Trace::Instance().SetRequestSampleDecision(false, false);
+        return LOG_SAMPLE_UNDECIDED;
+    }
+    return admitted ? LOG_SAMPLE_ADMIT : LOG_SAMPLE_REJECT;
+}
+
+inline void ApplyLogSampleState(LogSampleState state)
+{
+    switch (state) {
+        case LOG_SAMPLE_UNDECIDED:
+            Trace::Instance().SetRequestLogTrace(true);
+            Trace::Instance().SetRequestSampleDecision(false, false);
+            break;
+        case LOG_SAMPLE_ADMIT:
+            Trace::Instance().SetRequestLogTrace(true);
+            Trace::Instance().SetRequestSampleDecision(true, true);
+            break;
+        case LOG_SAMPLE_REJECT:
+            Trace::Instance().SetRequestLogTrace(true);
+            Trace::Instance().SetRequestSampleDecision(true, false);
+            break;
+        case LOG_SAMPLE_NONE:
+        default:
+            Trace::Instance().SetRequestLogTrace(false);
+            Trace::Instance().SetRequestSampleDecision(false, false);
+            break;
+    }
+}
+
 inline void UpdateMetaByThreadLocalValue(MetaPb &meta)
 {
     meta.set_trace_id(Trace::Instance().GetTraceID());
+    meta.set_log_sample_state(GetOrCreateLogSampleState());
+
     meta.set_timeout(reqTimeoutDuration.CalcRealRemainingTime());
     meta.set_db_name(g_MetaRocksDbName);
     VLOG(RPC_LOG_LEVEL) << FormatString("Send message with timeout %zu and db name %s", meta.timeout(),
                                         g_MetaRocksDbName);
+}
+
+inline TraceGuard SetTraceContextFromMeta(const MetaPb &meta, bool keep = false)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id(), keep);
+    ApplyLogSampleState(meta.log_sample_state());
+    return traceGuard;
 }
 
 inline MetaPb CreateMetaData(const std::string &svcName, int32_t methodIndex, int64_t payloadIndex,

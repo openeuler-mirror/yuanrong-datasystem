@@ -36,7 +36,7 @@ using datasystem::object_cache::ObjectClientImpl;
 
 JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_kv_KVClient_init(JNIEnv *env, jclass, jobject jConnectOpts)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StateClient.init";
     ConnectOptions connectOpts = ToCppConnectOptions(env, jConnectOpts);
     if (env->ExceptionOccurred()) {
@@ -58,7 +58,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_setDirectBufferN
                                                                                         jobject valueJO,
                                                                                         jobject paramJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.setDirectBufferNative";
     Status rc = SetDirectBufferNativeImpl(env, handle, keyJO, valueJO, paramJO);
@@ -75,7 +75,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_setHeapBufferNat
                                                                                       jbyteArray byteArray, jlong size,
                                                                                       jobject paramJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.setDirectBufferNative";
     Status rc = SetHeapBufferNativeImpl(env, handle, keyJO, byteArray, size, paramJO);
@@ -90,7 +90,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_setHeapBufferNat
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeyNative(JNIEnv *env, jclass, jlong handle,
                                                                                   jstring keyJO, jint timeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.getKeyNative";
     int totalSize = 0;
@@ -108,7 +108,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeyNative(
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeysNative(JNIEnv *env, jclass, jlong handle,
                                                                                    jobject keysJO, jint timeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.getKeysNative";
     int totalSize = 0;
@@ -128,7 +128,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeysNative
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeyNative(JNIEnv *env, jclass, jlong handle,
                                                                                jstring keyJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.delKeyNative";
     std::vector<std::string> failedKeys;
@@ -142,7 +142,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeyNative(JNI
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeysNative(JNIEnv *env, jclass, jlong handle,
                                                                                    jobject keysJO)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.delKeysNative";
     std::vector<std::string> failedKeys;
@@ -159,7 +159,7 @@ JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeysNative
 JNIEXPORT jstring JNICALL Java_org_yuanrong_datasystem_kv_KVClient_generateKeyNative(JNIEnv *env, jclass,
                                                                                        jlong handle)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL StateClient.generateKey";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string key;
@@ -176,7 +176,7 @@ JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_freeKVClientPtr(
 JNIEXPORT void JNICALL Java_com_datasystem_kv_KVClient_updateTokenNative(JNIEnv *env, jclass,
     jlong handle, jbyteArray tokenBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateToken";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     SensitiveValue token = ToSensitiveValue(env, tokenBytes);
@@ -186,7 +186,7 @@ JNIEXPORT void JNICALL Java_com_datasystem_kv_KVClient_updateTokenNative(JNIEnv 
 JNIEXPORT void JNICALL Java_com_datasystem_kv_KVClient_updateAkSkNative(JNIEnv *env, jclass,
     jlong handle, jstring accessKeyJO, jbyteArray secretKeyBytes)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     VLOG(LOG_LEVEL) << "JNICALL ObjectClient.updateAkSk";
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string accessKey = ToString(env, accessKeyJO);

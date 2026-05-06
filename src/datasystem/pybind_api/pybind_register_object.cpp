@@ -149,13 +149,13 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("init",
              [](ObjectClient &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.Init();
              })
 
         .def("create",
              [](ObjectClient &client, const std::string &objectKey, uint64_t size, ConsistencyType consistency) {
-                    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                     std::shared_ptr<Buffer> buffer;
                     CreateParam param{ .consistencyType = consistency };
                     datasystem::Status status = client.Create(objectKey, size, param, buffer);
@@ -165,7 +165,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
         .def("put",
              [](ObjectClient &client, const std::string &objectKey, py::buffer value, ConsistencyType consistency,
                 const std::vector<std::string> &refIds) {
-                    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                     CreateParam param{ .consistencyType = consistency };
                     py::buffer_info info(value.request());
                     std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
@@ -175,7 +175,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("get",
              [](ObjectClient &client, const std::vector<std::string> &objectKeys, int64_t timeoutMs) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Optional<Buffer>> buffers;
                  Status rc = client.Get(objectKeys, timeoutMs, buffers);
                  py::list rspBuffers;
@@ -191,7 +191,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("g_increase_ref",
              [](ObjectClient &client, const std::vector<std::string> &objectKeys) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedObjectKeys;
                  Status rc = client.GIncreaseRef(objectKeys, failedObjectKeys);
                  return std::make_pair(rc, std::move(failedObjectKeys));
@@ -199,7 +199,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("g_decrease_ref",
              [](ObjectClient &client, const std::vector<std::string> &objectKeys) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedObjectKeys;
                  Status rc = client.GDecreaseRef(objectKeys, failedObjectKeys);
                  return std::make_pair(rc, std::move(failedObjectKeys));
@@ -207,12 +207,12 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
 
         .def("query_global_ref_num",
              [](ObjectClient &client, const std::string &objectKey) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.QueryGlobalRefNum(objectKey);
              })
 
         .def("generate_object_id", [](ObjectClient &client, const std::string &prefix) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             std::string objectKey;
             Status rc = client.GenerateObjectKey(prefix, objectKey);
             return std::make_pair(rc, std::move(objectKey));
@@ -223,7 +223,7 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
     py::class_<Buffer, std::shared_ptr<Buffer>>(*m, "Buffer")
         .def("wlatch",
              [](Buffer &buffer, int64_t timeoutSec) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  auto rc = buffer.WLatch(timeoutSec);
                  if (rc.IsError()) {
                      LOG(ERROR) << "Acquire write latch error: " << rc.GetMsg();
@@ -233,7 +233,7 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
 
         .def("rlatch",
              [](Buffer &buffer, int64_t timeoutSec) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  auto rc = buffer.RLatch(timeoutSec);
                  if (rc.IsError()) {
                      LOG(ERROR) << "Acquire read latch error: " << rc.GetMsg();
@@ -243,7 +243,7 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
 
         .def("unwlatch",
              [](Buffer &buffer) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  auto rc = buffer.UnWLatch();
                  if (rc.IsError()) {
                      LOG(ERROR) << "Release write latch error: " << rc.GetMsg();
@@ -253,7 +253,7 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
 
         .def("unrlatch",
              [](Buffer &buffer) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  auto rc = buffer.UnRLatch();
                  if (rc.IsError()) {
                      LOG(ERROR) << "Release read latch error: " << rc.GetMsg();
@@ -269,28 +269,28 @@ PybindDefineRegisterer g_pybind_define_f_Buffer("Buffer", PRIORITY_LOW, [](const
 
         .def("memory_copy",
              [](Buffer &buffer, py::buffer value) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  py::buffer_info info(value.request());
                  return buffer.MemoryCopy(info.ptr, info.size);
              })
 
         .def("publish",
              [](Buffer &buffer, const std::vector<std::string> &refIds) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
                  return buffer.Publish(nestedObjectKeys);
              })
 
         .def("seal",
              [](Buffer &buffer, const std::vector<std::string> &refIds) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::unordered_set<std::string> nestedObjectKeys = { refIds.begin(), refIds.end() };
                  return buffer.Seal(nestedObjectKeys);
              })
 
         .def("invalidate_buffer",
              [](Buffer &buffer) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return buffer.InvalidateBuffer();
              })
 
