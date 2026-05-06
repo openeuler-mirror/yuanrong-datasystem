@@ -19,6 +19,8 @@
  */
 #include "datasystem/common/log/spdlog/provider.h"
 
+#include <cstdlib>
+
 namespace datasystem {
 
 static Provider g_ProviderInstance;

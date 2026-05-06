@@ -29,6 +29,7 @@
 #include <ios>
 #include <ostream>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -39,6 +40,7 @@
 #include <fcntl.h>
 #include <glob.h>
 #include <linux/limits.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 
@@ -73,6 +75,57 @@ std::string DirName(const std::string &path)
         return "/";
     }
     return path.substr(0, pos);
+}
+
+bool IsValidWorkerEnvKey(const std::string &key)
+{
+    return !key.empty() && key.find('=') == std::string::npos && key.find('\n') == std::string::npos;
+}
+
+void ParseWorkerEnvFile(const std::string &content, std::map<std::string, std::string> &kv)
+{
+    std::istringstream in(content);
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        auto pos = line.find('=');
+        if (pos == std::string::npos) {
+            continue;
+        }
+        auto key = line.substr(0, pos);
+        if (IsValidWorkerEnvKey(key)) {
+            kv[key] = line.substr(pos + 1);
+        }
+    }
+}
+
+void ReadWorkerEnvFile(const std::string &path, std::map<std::string, std::string> &kv)
+{
+    if (!FileExist(path)) {
+        return;
+    }
+    std::string content;
+    auto rc = ReadWholeFile(path, content);
+    if (rc.IsError()) {
+        return;
+    }
+    ParseWorkerEnvFile(content, kv);
+}
+
+std::string BuildWorkerEnvFileContent(const std::map<std::string, std::string> &kv)
+{
+    std::ostringstream out;
+    auto podIt = kv.find(WORKER_ENV_POD_IP_KEY);
+    if (podIt != kv.end() && !podIt->second.empty()) {
+        out << WORKER_ENV_POD_IP_KEY << "=" << podIt->second << "\n";
+    }
+    for (const auto &entry : kv) {
+        if (entry.first != WORKER_ENV_POD_IP_KEY && !entry.second.empty()) {
+            out << entry.first << "=" << entry.second << "\n";
+        }
+    }
+    return out.str();
 }
 }  // namespace
 
@@ -408,7 +461,7 @@ Status AtomicWriteTextFile(const std::string &path, const std::string &content)
             close(fd);
         }
     });
-    constexpr mode_t permission = 0600;
+    constexpr mode_t permission = S_IRUSR | S_IWUSR;
     if (fchmod(fd, permission) != 0) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_IO_ERROR,
                                 FormatString("Change temp file mode failed: %s, errno=%d, errmsg=%s", tmpPath, errno,
@@ -424,6 +477,59 @@ Status AtomicWriteTextFile(const std::string &path, const std::string &content)
     renamed = true;
     RETURN_IF_NOT_OK(FsyncDir(dirPath));
     return Status::OK();
+}
+
+std::string GetWorkerEnvFilePath(const std::string &logDir)
+{
+    return logDir.empty() ? "" : JoinPath(logDir, WORKER_ENV_FILE_NAME);
+}
+
+std::string GetStringFromEnvOrFile(const char *env, const std::string &filePath, const std::string &key,
+                                   const std::string &defValue)
+{
+    if (!IsValidWorkerEnvKey(key)) {
+        return defValue;
+    }
+    const char *envValue = env == nullptr ? nullptr : ::getenv(env);
+    std::string value = envValue == nullptr ? "" : std::string(envValue);
+    if (filePath.empty()) {
+        return value.empty() ? defValue : value;
+    }
+    if (value.empty() && !FileExist(filePath)) {
+        return defValue;
+    }
+
+    auto dirPath = DirName(filePath);
+    if (CreateDir(dirPath, true).IsError()) {
+        return value.empty() ? defValue : value;
+    }
+
+    int lockFd = -1;
+    auto lockRc = OpenFile(dirPath, O_RDONLY | O_DIRECTORY, &lockFd);
+    if (lockRc.IsError()) {
+        LOG(WARNING) << "Open worker env dir failed: " << lockRc.ToString();
+        return value.empty() ? defValue : value;
+    }
+    Raii closeFd([lockFd]() { close(lockFd); });
+    if (flock(lockFd, LOCK_EX) != 0) {
+        LOG(WARNING) << "Lock worker env file failed, path: " << filePath << ", errno: " << errno
+                     << ", errmsg: " << StrErr(errno);
+        return value.empty() ? defValue : value;
+    }
+    Raii unlockFd([lockFd]() { (void)flock(lockFd, LOCK_UN); });
+
+    std::map<std::string, std::string> kv;
+    ReadWorkerEnvFile(filePath, kv);
+    if (!value.empty()) {
+        kv[key] = value;
+        auto rc = AtomicWriteTextFile(filePath, BuildWorkerEnvFileContent(kv));
+        if (rc.IsError()) {
+            LOG(WARNING) << "Write worker env file failed: " << rc.ToString();
+        }
+        return value;
+    }
+    auto it = kv.find(key);
+    return it != kv.end() && !it->second.empty() ? it->second : defValue;
 }
 
 Status IsDirectory(const std::string &path, bool &isDir)
