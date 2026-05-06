@@ -85,6 +85,7 @@ message RegisterClientRspPb {
     string exclusive_conn_sockpath = 21;
     bool support_multi_shm_ref_count = 22;
     FastTransportMode fast_transport_mode = 23;
+    int32 log_rate_limit = 24;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

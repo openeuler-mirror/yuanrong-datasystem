@@ -60,14 +60,14 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
         }))
         .def("init",
              [](StreamClient &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.Init();
              })
         .def("CreateProducer",
              [](StreamClient &client, const std::string &streamName, int64_t delayFlushTime, int64_t pageSize,
                 int64_t maxStreamSize, bool autoCleanup, int64_t retainForNumConsumers, bool encryptStream,
                 int64_t reserveSize) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::shared_ptr<Producer> outProducer;
                  ProducerConf producerConf = { .delayFlushTime = delayFlushTime,
                                                .pageSize = pageSize,
@@ -86,7 +86,7 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
         .def("Subscribe",
              [](StreamClient &client, const std::string &streamName, const std::string &subName,
                 const int subscriptionType) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::shared_ptr<Consumer> outConsumer;
                  const struct SubscriptionConfig config =
                      SubscriptionConfig(subName, (SubscriptionType)subscriptionType);
@@ -99,7 +99,7 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
              })
         .def("DeleteStream",
              [](StreamClient &client, const std::string &streamName) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  auto status = client.DeleteStream(streamName);
                  if (status.IsError()) {
                      LOG(ERROR) << FormatString("DeleteStream failed for stream %s with error %s", streamName,
@@ -109,7 +109,7 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
              })
         .def("QueryGlobalProducersNum",
              [](StreamClient &client, const std::string &streamName) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  uint64_t globalProducerNum = 0;
                  auto status = client.QueryGlobalProducersNum(streamName, globalProducerNum);
                  if (status.IsError()) {
@@ -118,7 +118,7 @@ PybindDefineRegisterer g_pybind_define_f_StreamClient("StreamClient", PRIORITY_L
                  return std::make_pair(status, globalProducerNum);
              })
         .def("QueryGlobalConsumersNum", [](StreamClient &client, const std::string &streamName) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             uint64_t globalConsumerNum = 0;
             auto status = client.QueryGlobalConsumersNum(streamName, globalConsumerNum);
             if (status.IsError()) {
@@ -132,20 +132,20 @@ PybindDefineRegisterer g_pybind_define_f_Producer("Producer", PRIORITY_LOW, [](c
     py::class_<Producer, std::shared_ptr<Producer>>(*m, "Producer")
         .def("Send",
              [](Producer &producer, const py::buffer &buf, const int timeoutMs) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  py::buffer_info info = buf.request();
                  Element element(static_cast<uint8_t *>(info.ptr), info.size);
                  return producer.Send(element, timeoutMs);
              })
         .def("Send",
              [](Producer &producer, const py::buffer &buf) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  py::buffer_info info = buf.request();
                  Element element(static_cast<uint8_t *>(info.ptr), info.size);
                  return producer.Send(element);
              })
         .def("Close", [](Producer &producer) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             return producer.Close();
         });
 });
@@ -154,25 +154,25 @@ PybindDefineRegisterer g_pybind_define_f_Consumer("Consumer", PRIORITY_LOW, [](c
     py::class_<Consumer, std::shared_ptr<Consumer>>(*m, "Consumer")
         .def("Receive",
              [](Consumer &consumer, const int expectNum, const int timeoutMs) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Element> outElement;
                  auto status = consumer.Receive(expectNum, timeoutMs, outElement);
                  return std::make_pair(status, outElement);
              })
         .def("ReceiveAny",
              [](Consumer &consumer, const int timeoutMs) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Element> outElement;
                  auto status = consumer.Receive(timeoutMs, outElement);
                  return std::make_pair(status, outElement);
              })
         .def("Ack",
              [](Consumer &consumer, const int element_id) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return consumer.Ack(element_id);
              })
         .def("Close", [](Consumer &consumer) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             return consumer.Close();
         });
 });

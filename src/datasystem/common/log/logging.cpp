@@ -84,9 +84,9 @@ DS_DEFINE_uint32(stderrthreshold, 2,
 DS_DEFINE_int32(minloglevel, 0, "Messages logged at a lower level than this don't actually get logged anywhere.");
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
 DS_DEFINE_int32(log_rate_limit, 0,
-    "Maximum log entries per second (0 = unlimited). "
-    "When exceeded, INFO and WARNING logs are sampled at uniform intervals. "
-    "ERROR and FATAL are never sampled.");
+    "Maximum sampled request traces per second (0 = unlimited). "
+    "Sampling applies only to request logs with trace IDs. "
+    "Sampled traces print complete log chains. ERROR and FATAL are never sampled.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(cluster_name);

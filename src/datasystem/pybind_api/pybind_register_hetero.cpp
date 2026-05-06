@@ -129,14 +129,14 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("init",
              [](HeteroClient &client) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.Init();
              })
 
         .def("delete",
              [](HeteroClient &client, const std::vector<std::string> &objectKeys) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedObjectKeys;
                  auto status = client.Delete(objectKeys, failedObjectKeys);
                  return std::make_pair(status, std::move(failedObjectKeys));
@@ -146,7 +146,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &objectKeys,
                 const std::vector<DeviceBlobList> &devBlobList, uint64_t subTimeoutMs) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedKeys;
                  auto status = client.MGetH2D(objectKeys, devBlobList, failedKeys, subTimeoutMs);
                  return std::make_pair(status, std::move(failedKeys));
@@ -156,14 +156,14 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &objectKeys,
                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.MSetD2H(objectKeys, devBlobList, setParam);
              })
 
         .def("async_mset_d2h",
              [](HeteroClient &client, const std::vector<std::string> &objectKeys,
                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncMSetD2H(objectKeys, devBlobList, setParam);
                  return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
@@ -171,7 +171,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("async_mget_h2d",
              [](HeteroClient &client, const std::vector<std::string> &objectKeys,
                 const std::vector<DeviceBlobList> &devBlobList, uint64_t subTimeoutMs) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncMGetH2D(objectKeys, devBlobList, subTimeoutMs);
                  return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
@@ -180,7 +180,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &keys,
                 const std::vector<DeviceBlobList> &blob2dList) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Future> futureVec;
                  Status rc = client.DevPublish(keys, blob2dList, futureVec);
                  return std::make_pair(rc, std::move(futureVec));
@@ -190,7 +190,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &keys,
                 const std::vector<DeviceBlobList> &blob2dList) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Future> futureVec;
                  Status rc = client.DevSubscribe(keys, blob2dList, futureVec);
                  return std::make_pair(rc, std::move(futureVec));
@@ -200,7 +200,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &keys,
                 const std::vector<DeviceBlobList> &blob2dList) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedKeys;
                  auto status = client.DevMSet(keys, blob2dList, failedKeys);
                  return std::make_pair(status, std::move(failedKeys));
@@ -210,7 +210,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
              [](HeteroClient &client, const std::vector<std::string> &keys, std::vector<DeviceBlobList> &blob2dList,
                 uint64_t subTimeoutMs) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedKeys;
                  auto status = client.DevMGet(keys, blob2dList, failedKeys, subTimeoutMs);
                  return std::make_pair(status, std::move(failedKeys));
@@ -219,7 +219,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("dev_delete",
              [](HeteroClient &client, const std::vector<std::string> &objectKeys) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedObjectKeys;
                  auto status = client.DevDelete(objectKeys, failedObjectKeys);
                  return std::make_pair(status, std::move(failedObjectKeys));
@@ -228,7 +228,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("async_dev_delete",
              [](HeteroClient &client, const std::vector<std::string> &objectIds) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::shared_future<AsyncResult> future = client.AsyncDevDelete(objectIds);
                  return AsyncResultFuture(std::move(future), Trace::Instance().GetTraceID());
              })
@@ -236,7 +236,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("dev_local_delete",
              [](HeteroClient &client, const std::vector<std::string> &keys) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedKeys;
                  auto status = client.DevLocalDelete(keys, failedKeys);
                  return std::make_pair(status, std::move(failedKeys));
@@ -245,7 +245,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("generate_key",
              [](HeteroClient &client, const std::string &prefix) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::string key;
                  Status rc = client.GenerateKey(prefix, key);
                  return std::make_pair(rc, std::move(key));
@@ -254,7 +254,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
         .def("exist",
              [](HeteroClient &client, const std::vector<std::string> &keys) {
                  py::gil_scoped_release release;
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<bool> exists;
                  Status rc = client.Exist(keys, exists);
                  return std::make_pair(rc, std::move(exists));
@@ -262,7 +262,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
 
         .def("get_meta_info", [](HeteroClient &client, const std::vector<std::string> &keys, bool isDevKey) {
             py::gil_scoped_release release;
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             std::vector<std::string> failedKeys;
             std::vector<MetaInfo> metaInfos;
             Status rc = client.GetMetaInfo(keys, isDevKey, metaInfos, failedKeys);

@@ -124,14 +124,13 @@ void LogMessageImpl::Init()
     PerfPoint point(PerfKey::LOG_MESSAGE_INIT);
     logger_ = GetMessageLogger();
     if (logger_) {
-        // Log rate sampling: check before formatting to avoid wasted work on dropped logs
-        bool wasSampled = false;
-        uint64_t traceHash = Trace::Instance().GetCachedHash();
-        if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash, &wasSampled)) {
+        // Request-level log sampling: check before formatting to avoid wasted work on dropped logs
+        auto &trace = Trace::Instance();
+        uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
+        if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash)) {
             skip_ = true;
             return;
         }
-        sampled_ = wasSampled;
         AppendLogMessageImplPrefix(podName_, logStream_);
     }
 }
@@ -171,12 +170,6 @@ void LogMessageImpl::Flush()
     PerfPoint point(PerfKey::LOG_MESSAGE_FLUSH);
     msgSize_ = streamBuf_.pcount();
     if (logger_) {
-        // Append sampling rate annotation only for logs kept through uniform-interval sampling fallback
-        if (sampled_) {
-            auto sampleRate = LogRateLimiter::Instance().GetSamplingRate();
-            logStream_ << " [sampled 1/" << sampleRate << "]";
-            msgSize_ = streamBuf_.pcount();
-        }
         ToSpdlog();
     } else {
         ToStderr();

@@ -97,7 +97,7 @@ void DeviceBuffer::Release()
     if (clientImpl_ == nullptr) {
         return;
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     LOG_IF_ERROR(clientImpl_->RemoveP2PLocation(bufferInfo_->devObjKey, bufferInfo_->deviceIdx),
                  "Remove P2P Location failed");
 }
@@ -138,7 +138,7 @@ int32_t DeviceBuffer::GetDeviceIdx() const
 
 Status DeviceBuffer::Publish()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isPublished, K_OC_ALREADY_SEALED, "Device object is already published");
     CHECK_FAIL_RETURN_STATUS(!deviceMemUnit_->GetBlobsStorage().empty(), K_INVALID,
                              "The blobs can't be empty in device buffer");

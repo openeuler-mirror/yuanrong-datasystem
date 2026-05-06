@@ -55,7 +55,7 @@ KVClient::~KVClient()
 
 Status KVClient::ShutDown()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
         auto rc = impl_->ShutDown(needRollbackState);
@@ -67,7 +67,7 @@ Status KVClient::ShutDown()
 
 Status KVClient::Init()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
@@ -85,7 +85,7 @@ KVClient &KVClient::EmbeddedInstance()
 
 Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
     auto &instance = KVClient::EmbeddedInstance();
@@ -96,7 +96,7 @@ Status KVClient::InitEmbedded(const EmbeddedConfig &config)
 
 Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_CREATE_BUFFER);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_CREATE);
     object_cache::FullParam creatParam;
@@ -121,7 +121,7 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
 Status KVClient::MCreate(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
 const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MCREATE_BUFFERS);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
     object_cache::FullParam creatParam;
@@ -147,7 +147,7 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
 {
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "Buffer must not be null.");
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_BUFFER);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(buffer);
@@ -161,7 +161,7 @@ Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
 Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "Buffer list should not be empty.");
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_BUFFERS);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSET);
     Status rc = impl_->MSet(buffers);
@@ -176,7 +176,7 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 
 Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
@@ -198,7 +198,7 @@ Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t s
 Status KVClient::Get(const std::vector<std::string> &keys,
                      std::vector<Optional<Buffer>> &buffers, int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> tmpBuffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
@@ -216,7 +216,7 @@ Status KVClient::Get(const std::vector<std::string> &keys,
 
 Status KVClient::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(key, val, setParam);
@@ -233,7 +233,7 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
 
 std::string KVClient::Set(const StringView &val, const SetParam &setParam)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
     std::string key;
@@ -250,20 +250,20 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
 
 Status KVClient::UpdateToken(SensitiveValue token)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateToken(token);
 }
 
 Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretkey)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateAkSk(accesskey, secretkey);
 }
 
 Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                            const MSetParam &param)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param);
@@ -297,13 +297,13 @@ std::shared_future<AsyncResult> KVClient::AsyncMGetH2D(const std::vector<std::st
                                                        const std::vector<std::pair<void *, size_t>> &devShmChunk,
                                                        int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GetWithOsTransportPipeline(keys, devShmChunk, subTimeoutMs);
 }
 
 Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_OBJECT);
     std::vector<Optional<Buffer>> buffers;
     std::vector<std::string> vals;
@@ -326,7 +326,7 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
 
 Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_OBJECTS);
     std::vector<Optional<Buffer>> buffers;
     size_t dataSize = 0;
@@ -345,7 +345,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
 
 Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyBuffer, int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
@@ -368,7 +368,7 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
 Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                          std::vector<std::string> &outFailedKeys, const MSetParam &param)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param, outFailedKeys);
@@ -389,7 +389,7 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
 Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers,
                      int32_t subTimeoutMs)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> buffers;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
@@ -442,7 +442,7 @@ static std::string ReadParamToString(const std::vector<ReadParam> &params)
 
 Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(readParams.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -489,7 +489,7 @@ Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Opti
 
 Status KVClient::Del(const std::string &key)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_OBJECT);
     std::vector<std::string> failedKeys;
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
@@ -502,7 +502,7 @@ Status KVClient::Del(const std::string &key)
 
 Status KVClient::Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_MUL_OBJECTS);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     Status rc = impl_->Delete(keys, failedKeys);
@@ -514,7 +514,7 @@ Status KVClient::Del(const std::vector<std::string> &keys, std::vector<std::stri
 
 std::string KVClient::GenerateKey(const std::string &prefixKey)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     std::string key;
     (void)impl_->GenerateKey(key, prefixKey);
     return key;
@@ -522,7 +522,7 @@ std::string KVClient::GenerateKey(const std::string &prefixKey)
 
 Status KVClient::GenerateKey(const std::string &prefixKey, std::string &key)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->GenerateKey(key, prefixKey);
 }
 
@@ -539,7 +539,7 @@ Status KVClient::HealthCheck()
 
 Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
     Status rc = impl_->Exist(keys, exists, true, false);
     RequestParam reqParam;
@@ -550,7 +550,7 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
 
 Status KVClient::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds, std::vector<std::string> &failedKeys)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXPIRE_OBJECT);
     AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXPIRE);
     auto rc = impl_->Expire(keys, ttlSeconds, failedKeys);

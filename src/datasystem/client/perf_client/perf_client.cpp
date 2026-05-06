@@ -41,7 +41,7 @@ Status PerfClient::Init()
 Status PerfClient::GetPerfLog(const std::string &type,
                               std::unordered_map<std::string, std::unordered_map<std::string, uint64_t>> &perfLog)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckTypeParam(type));
     LOG(INFO) << "Start to get perf log, type is " << type;
     perfLog.clear();
@@ -66,7 +66,7 @@ Status PerfClient::GetPerfLog(const std::string &type,
 
 Status PerfClient::ResetPerfLog(const std::string &type)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckTypeParam(type));
     LOG(INFO) << "Start to reset perf log, type is " <<  type;
     if (type == WORKER) {

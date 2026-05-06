@@ -110,22 +110,25 @@ openYuanrong datasystem 的日志分为以下类型：
 
 ## 日志采样
 
-大流量场景下，可通过 `log_rate_limit` 参数限制每秒最大日志条数，避免高频路径上的 INFO/WARNING/ERROR 日志产生过多磁盘 I/O。
+大流量场景下，可通过 `log_rate_limit` 参数控制每秒采样请求数，避免高频请求日志产生过多磁盘 I/O。
 
 ### 工作原理
 
-- 采用令牌桶算法 + 等间隔采样策略
-- 当日志速率超出设定值时，INFO、WARNING 和 ERROR 日志会被等间隔采样，被保留的日志末尾会追加 `[sampled 1/N]` 标注，表示当前采样率
-- **FATAL 始终全量输出，不受限速影响**
-- **同一请求（trace）的日志保证链路完整性**：首条日志通过限速后，后续同 trace 日志优先通过独立小桶（上限 20 条/秒），小桶耗尽后降级为全局等间隔采样
+- 采样粒度是“请求（traceId）”，不是“单条日志”
+- `log_rate_limit=N` 表示每秒最多采样 `N` 个新请求（trace）
+- 对采样到的请求：链路日志完整打印（INFO/WARNING/ERROR/FATAL）
+- 对未采样请求：仅保留 ERROR/FATAL，非ERROR日志丢弃
+- 仅 SDK 请求 trace 参与采样；后台线程日志即使带 traceId 也不参与采样
+- 采样决策会随 RPC 元数据传播，跨 client/worker 保持同一 trace 的一致采样结果
+- 不带 traceId 的后台日志（例如 worker/client 后台线程日志）不参与该采样逻辑
 
 ### 配置方式
 
 | 场景 | 配置方式 | 示例 |
 |------|----------|------|
-| Worker 命令行 | `--log_rate_limit=N` 启动参数 | `./datasystem_worker --log_rate_limit=1000` |
-| Embedded Worker | `EmbeddedConfig::LogRateLimit(N)` | `config.LogRateLimit(1000)` |
-| Standalone Client | 环境变量 `DATASYSTEM_LOG_RATE_LIMIT` | `export DATASYSTEM_LOG_RATE_LIMIT=500` |
+| Worker 命令行 | `--log_rate_limit=N` 启动参数 | `./datasystem_worker --log_rate_limit=20` |
+| Embedded Worker | `EmbeddedConfig::LogRateLimit(N)` | `config.LogRateLimit(20)` |
+| Standalone Client | 环境变量 `DATASYSTEM_LOG_RATE_LIMIT` | `export DATASYSTEM_LOG_RATE_LIMIT=20` |
 | 运行时动态修改 | 修改 `datasystem.config` 中 `log_rate_limit` 值 | — |
 
 默认值为 `0`（不限速），完全向后兼容。

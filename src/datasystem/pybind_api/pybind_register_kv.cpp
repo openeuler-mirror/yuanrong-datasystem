@@ -217,7 +217,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         }))
         .def("Init",
              [](ObjectClientImpl &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  bool needRollbackState;
                  auto rc = client.Init(needRollbackState, true);
                  client.CompleteHandler(rc.IsError(), needRollbackState);
@@ -226,7 +226,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("Set",
              [](ObjectClientImpl &client, const std::string &key, const py::buffer &val, WriteMode writeMode,
                 uint32_t ttlSecond) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  py::buffer_info info(val.request());
                  StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
                  SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
@@ -241,7 +241,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              })
         .def("SetValue",
              [](ObjectClientImpl &client, const py::buffer &val, WriteMode writeMode, uint32_t ttlSecond) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  py::buffer_info info(val.request());
                  StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
                  SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
@@ -258,7 +258,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("MSet",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, const std::vector<py::buffer> &vals,
                 WriteMode writeMode, uint32_t ttlSecond, ExistenceOpt existenceOpt) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<StringView> values;
                  MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
                  uint64_t totalSize = 0;
@@ -281,7 +281,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("MSetTx",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, const std::vector<py::buffer> &vals,
                 WriteMode writeMode, uint32_t ttlSecond, ExistenceOpt existenceOpt) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<StringView> values;
                  MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
                  uint64_t totalSize = 0;
@@ -303,7 +303,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("MCreate",
             [](ObjectClientImpl &client, const std::vector<std::string> &keys,
             const std::vector<uint64_t> &sizes, WriteMode writeMode, uint32_t ttlSecond) {
-                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 FullParam param;
                 param.writeMode = writeMode;
                 param.ttlSecond = ttlSecond;
@@ -334,7 +334,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
             })
         .def("MSetBuffer",
         [](ObjectClientImpl &client, const std::vector<std::shared_ptr<StateValueBuffer>> &sv_buffers) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             std::vector<std::shared_ptr<Buffer>> buffers;
             for (const auto &svb : sv_buffers) {
                 if (svb) {
@@ -346,7 +346,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         })
         .def("MGetBuffer",
             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
-                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 std::vector<Optional<Buffer>> buffers;
                 py::list vals;
                 uint64_t totalSize = 0;
@@ -386,7 +386,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
             })
         .def("GetReadOnlyBuffers",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Optional<Buffer>> buffers;
                  py::list pyList;
                  uint64_t totalSize = 0;
@@ -419,7 +419,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              })
         .def("Get",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Optional<Buffer>> buffers;
                  py::list vals;
                  uint64_t totalSize = 0;
@@ -460,7 +460,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              })
         .def("ReadSpecifyOffsetData",
              [](ObjectClientImpl &client, const std::vector<ReadParam> &readParams) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<Optional<Buffer>> buffers;
                  py::list vals;
                  uint64_t totalSize = 0;
@@ -497,7 +497,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              })
         .def("Del",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<std::string> failedKeys;
                  AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
                  auto status = client.Delete(keys, failedKeys);
@@ -508,14 +508,14 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
              })
         .def("generate_key",
              [](ObjectClientImpl &client, const std::string &prefix) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::string key;
                  Status rc = client.GenerateKey(key, prefix);
                  return std::make_pair(rc, std::move(key));
              })
         .def("exist",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  std::vector<bool> exists;
                  AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
                  Status rc = client.Exist(keys, exists, true, false);
@@ -525,14 +525,14 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                  return std::make_pair(rc, std::move(exists));
              })
         .def("expire", [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t ttlSecond) {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
             std::vector<std::string> failedKeys;
             Status rc = client.Expire(keys, ttlSecond, failedKeys);
             return std::make_pair(rc, std::move(failedKeys));
         })
         .def("HealthCheck",
              [](ObjectClientImpl &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  ServerState state;
                  Status healthState = client.HealthCheck(state);
                  return healthState;

@@ -203,7 +203,7 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
     }
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     uint64_t dataSize = GetSize();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data != nullptr, K_INVALID, "Can't put null pointer.");
@@ -234,7 +234,7 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
 
@@ -266,7 +266,7 @@ Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
     Status status = clientImpl->Seal(bufferInfo_, nestedKeys, isShm_);
@@ -282,7 +282,7 @@ Status Buffer::Seal(const std::unordered_set<std::string> &nestedKeys)
 Status Buffer::WLatch(uint64_t timeoutSec)
 {
     VLOG(DEBUG_LOG_LEVEL) << "Begin to WLatch, clientId: " << clientId_ << ", isShm: " << isShm_;
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(CheckVisible());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
@@ -293,7 +293,7 @@ Status Buffer::WLatch(uint64_t timeoutSec)
 Status Buffer::RLatch(uint64_t timeoutSec)
 {
     VLOG(DEBUG_LOG_LEVEL) << "Begin to RLatch, clientId: " << clientId_ << ", isShm: " << isShm_;
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(CheckVisible());
     CHECK_FAIL_RETURN_STATUS(timeoutSec > 0, K_INVALID, "timeout value should be positive.");
@@ -303,7 +303,7 @@ Status Buffer::RLatch(uint64_t timeoutSec)
 Status Buffer::UnRLatch()
 {
     VLOG(DEBUG_LOG_LEVEL) << "Begin to UnRLatch, clientId: " << clientId_ << ", isShm: " << isShm_;
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     latch_->UnRLatch();
     return Status::OK();
@@ -312,7 +312,7 @@ Status Buffer::UnRLatch()
 Status Buffer::UnWLatch()
 {
     VLOG(DEBUG_LOG_LEVEL) << "Begin to UnWLatch, clientId: " << clientId_ << ", isShm: " << isShm_;
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     latch_->UnWLatch();
     return Status::OK();
@@ -344,7 +344,7 @@ Status Buffer::InvalidateBuffer()
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     RETURN_IF_NOT_OK(CheckDeprecated());
     RETURN_IF_NOT_OK(clientImpl->InvalidateBuffer(bufferInfo_->objectKey));
     return Status::OK();

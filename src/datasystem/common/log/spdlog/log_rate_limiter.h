@@ -15,27 +15,25 @@
  */
 
 /**
- * Description: Log rate limiter using token bucket + uniform-interval sampling.
+ * Description: Request-level log sampler by trace ID.
  */
 #ifndef DATASYSTEM_COMMON_LOG_SPDLOG_LOG_RATE_LIMITER_H
 #define DATASYSTEM_COMMON_LOG_SPDLOG_LOG_RATE_LIMITER_H
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
+#include <unordered_map>
 
 #include <spdlog/common.h>
 
 namespace datasystem {
 
-static constexpr int TRACE_WHITELIST_SIZE = 1024;    // 2^10, for bitwise modulo
-static constexpr int TRACE_WHITELIST_PROBE = 4;      // Open addressing max probes
-static constexpr int TRACE_MINI_BUCKET_RATE = 20;    // Per-trace mini-bucket cap (logs/sec)
-static constexpr int CACHE_LINE_SIZE = 64;           // Cache line size for false-sharing avoidance
-
-struct alignas(CACHE_LINE_SIZE) TraceSlot {
-    std::atomic<uint64_t> hash{ 0 };           // FNV-1a hash of trace ID, 0 = empty
-    std::atomic<int64_t> miniTokens{ 0 };      // Mini-bucket tokens
-    std::atomic<int64_t> lastMiniRefillMs{ 0 }; // Mini-bucket last refill timestamp
+static constexpr int64_t TRACE_DECISION_TTL_MS = 5 * 60 * 1000;  // 5 minutes.
+static constexpr int64_t TRACE_DECISION_CLEANUP_INTERVAL_MS = 1000;
+struct TraceDecisionEntry {
+    bool admitted{ false };
+    int64_t expireAtMs{ 0 };
 };
 
 class LogRateLimiter {
@@ -48,36 +46,38 @@ public:
      * @return true to allow, false to drop.
      *
      * Rules:
-     * - When rate_ == 0, no rate limiting, always returns true.
-     * - ERROR(level=4) and FATAL(level=5) always return true.
-     * - Other levels use token bucket + uniform-interval sampling.
+     * - This overload is treated as non-request log and always returns true.
      */
-    bool ShouldLog(ds_spdlog::level::level_enum level, bool *wasSampled = nullptr);
+    bool ShouldLog(ds_spdlog::level::level_enum level);
 
     /**
      * @brief Trace-aware version of ShouldLog.
      * @param level spdlog log level.
-     * @param traceHash FNV-1a hash of the current trace ID (0 = no trace).
-     * @param wasSampled Output: true if log was kept through sampling fallback.
+     * @param traceHash FNV-1a hash of the current request trace ID (0 = non-request log).
      * @return true to allow, false to drop.
      *
-     * Rules (in addition to non-trace version):
-     * - When traceHash != 0 and trace is in whitelist, consume from mini-bucket.
-     * - Mini-bucket rate = min(rate_, 20) tokens/sec per trace.
-     * - When mini-bucket exhausted, fall through to global sampling.
+     * Rules:
+     * - ERROR(level>=4) and FATAL(level=5) always return true.
+     * - When rate_ == 0, no request sampling, always returns true.
+     * - When traceHash == 0 (non-request log), always returns true.
+     * - For request logs (traceHash != 0), sampling is request-level:
+     *   the first decision for a trace in a window is admitted/rejected,
+     *   and later logs of the same trace follow the same decision until TTL expires.
      */
-    bool ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash, bool *wasSampled = nullptr);
+    bool ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash);
 
     /**
-     * @brief Update the per-second log rate limit. 0 = unlimited.
+     * @brief Update per-second request sampling limit. 0 = unlimited.
      */
     void SetRate(int32_t ratePerSecond);
 
     /**
-     * @brief Get the current sampling rate (1 out of N logs are kept).
-     * @return 1 means full output, >1 means 1 out of N is kept.
+     * @brief Get or create request sampling decision for a trace.
+     * @param[in] traceHash FNV-1a hash of trace ID.
+     * @param[out] admitted Whether trace is admitted when return is true.
+     * @return true if decision is valid (sampling enabled and traceHash != 0), else false.
      */
-    int64_t GetSamplingRate() const;
+    bool GetOrCreateRequestDecision(uint64_t traceHash, bool &admitted);
 
     /**
      * @brief Reset all internal state. For testing only.
@@ -93,37 +93,21 @@ private:
     LogRateLimiter() = default;
     ~LogRateLimiter() = default;
 
-    /**
-     * @brief Refill tokens based on elapsed time.
-     */
-    void Refill();
+    int64_t NowMs() const;
+    bool ShouldAdmitRequest(uint64_t traceHash);
+    void RefreshRequestWindow(int64_t nowMs);
+    bool TryAdmitInCurrentSecond(int64_t nowMs);
+    bool GetDecisionFromTable(uint64_t traceHash, int64_t nowMs, bool &admitted);
+    void UpsertDecision(uint64_t traceHash, bool admitted, int64_t nowMs);
+    void CleanupExpiredDecisions(int64_t nowMs);
+    void ClearDecisionTable();
 
-    bool WhitelistContains(uint64_t h) const;
-
-    void WhitelistAdd(uint64_t h);
-
-    void MiniBucketRefill(TraceSlot &slot);
-
-    bool MiniBucketConsume(TraceSlot &slot);
-
-    /**
-     * @brief Probe whitelist for traceHash. Returns slot index if found, -1 if not found.
-     */
-    int FindWhitelistSlot(uint64_t traceHash) const;
-
-    /**
-     * @brief Uniform-interval sampling fallback when tokens exhausted.
-     * @return true if this log is the sampled survivor.
-     */
-    bool SamplingFallback(int32_t rate, bool *wasSampled);
-
-    std::atomic<int64_t> tokens_{ 0 };
-    std::atomic<int64_t> lastRefillMs_{ 0 };
     std::atomic<int32_t> rate_{ 0 };          // 0 = no rate limiting
-    std::atomic<int64_t> totalLogged_{ 0 };   // Total allowed (including sampled)
-    std::atomic<int64_t> totalDropped_{ 0 };  // Total dropped
-
-    TraceSlot whitelist_[TRACE_WHITELIST_SIZE];
+    std::atomic<int64_t> windowSec_{ 0 };
+    std::atomic<int32_t> admittedInWindow_{ 0 };
+    std::mutex decisionTableMutex_;
+    std::unordered_map<uint64_t, TraceDecisionEntry> traceDecisions_;
+    int64_t lastCleanupMs_{ 0 };
 };
 
 }  // namespace datasystem

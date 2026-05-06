@@ -58,7 +58,7 @@ ZmqService::ZmqService()
     // is enabled.
     routingFn_ = [this](const std::string &sender, ZmqMetaMsgFrames &&p) {
         MetaPb &meta = p.first;
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+        TraceGuard traceGuard = SetTraceContextFromMeta(meta);
         VLOG(ZMQ_PERF_LOG_LEVEL) << FormatString("Routing reply from %s to reply queue for service %s", sender,
                                                  serviceName_);
         PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
@@ -516,8 +516,10 @@ Status ZmqService::GetAvailStreamWorker(MetaPb meta, std::string &workerId)
     streamWA.meta_ = meta;
     streamWA.state_ = WorkerCB::StreamState::CREATE;
     auto traceID = meta.trace_id();
+    auto logSampleState = meta.log_sample_state();
     thrdPool_->Execute([=]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        ApplyLogSampleState(logSampleState);
         auto status = streamWorker->StreamWorkerEntry();
         if (status.IsError()) {
             LOG(ERROR) << status.ToString();
@@ -982,7 +984,7 @@ Status ZmqService::ParkPayloadIfNeeded(ZmqMetaMsgFrames &p, ZmqMsgFrames &payloa
 Status ZmqService::ServiceToClient(ZmqMetaMsgFrames &p)
 {
     MetaPb &meta = p.first;
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
 
     // Record SERVER_SEND tick and calculate server-side metrics
@@ -1043,18 +1045,20 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
     meta.set_worker_id(workerId);
 
     auto traceID = meta.trace_id();
+    auto logSampleState = meta.log_sample_state();
     auto timeout = meta.timeout();
     auto dbName = meta.db_name();
 
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout) << ", dbName:" << dbName;
     Timer timer;
-    auto func = [=]() {
+    auto func = [=]() mutable {
         const int64_t US_TO_NS = 1000;
         const int64_t MS_TO_US = 1000;
         int64_t elapsedUs = timer.ElapsedMicroSecond();
         PerfPoint::RecordElapsed(PerfKey::ZMQ_SERVER_TASK_DELAY, elapsedUs * US_TO_NS);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        ApplyLogSampleState(logSampleState);
         if (timeout > 0) {
             int64_t elapsed = elapsedUs / MS_TO_US;
             INJECT_POINT_NO_RETURN("ZmqService::RouteToRegBackend",
@@ -1282,12 +1286,11 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
     auto workerId = worker->GetWorkerId();
     meta.set_worker_id(workerId);
 
-    auto traceID = meta.trace_id();
     auto timeout = meta.timeout();
     auto dbName = meta.db_name();
 
     Timer timer;
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     if (timeout > 0) {
         int64_t elapsed = timer.ElapsedMilliSecond();
         reqTimeoutDuration.Init(timeout - elapsed);

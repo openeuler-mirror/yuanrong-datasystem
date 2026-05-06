@@ -77,6 +77,7 @@ DS_DEFINE_uint64(oc_shm_transfer_threshold_kb, 500u,
                  "The data threshold to transfer obj data between client and worker via shm, unit is KB");
 DS_DECLARE_bool(enable_p2p_transfer);
 DS_DECLARE_uint32(client_reconnect_wait_s);
+DS_DECLARE_int32(log_rate_limit);
 
 namespace datasystem {
 namespace worker {
@@ -322,6 +323,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_client_reconnect_wait_s(FLAGS_client_reconnect_wait_s);
     rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
+    rsp.set_log_rate_limit(FLAGS_log_rate_limit);
 #ifdef USE_URMA
     if (IsUrmaEnabled() && GetUrmaMode() == UrmaMode::UB) {
         rsp.set_fast_transport_mode(FastTransportMode::UB);
