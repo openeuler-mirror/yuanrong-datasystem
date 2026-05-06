@@ -90,8 +90,10 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     // Check whether the object is sealed.
     std::shared_ptr<SafeObjType> entry;
     bool isExist = objectTable_->Get(objectKey, entry).IsOk();
-    CHECK_FAIL_RETURN_STATUS(!(isExist && entry->Get() != nullptr && (*entry)->IsSealed()),
-        K_OC_ALREADY_SEALED, "Cannot create sealed object.");
+    if (isExist && entry != nullptr && entry->RLock(false).IsOk()) {
+        Raii unlock([&entry]() { entry->RUnlock(); });
+        CHECK_FAIL_RETURN_STATUS(!(*entry)->IsSealed(), K_OC_ALREADY_SEALED, "Cannot create sealed object.");
+    }
     // Given size, construct shmUnit, generate shm uuid and add client's reference on shmUnit.
     auto shmUnit = std::make_shared<ShmUnit>();
     auto metadataSize = GetMetadataSize();
