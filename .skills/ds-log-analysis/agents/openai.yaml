@@ -1,0 +1,4 @@
+interface:
+  display_name: "KVCache日志分析"
+  short_description: "分析KVCache access log和worker resource log，生成交互式HTML报告"
+  default_prompt: "Use $ds-log-analysis to analyze KVCache logs and generate an HTML report."
