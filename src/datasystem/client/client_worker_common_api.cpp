@@ -838,6 +838,8 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     SetHeartbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
     ConstructDecShmUnit(rsp);
+    LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode();
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
 }
 
@@ -848,6 +850,8 @@ Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
     }
     auto ctx = std::move(*pendingFtHandshake_);
     pendingFtHandshake_.reset();
+    LOG(INFO) << "[URMA_INIT] try_ft addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << ctx.workerVersion << " shm=" << IsShmEnable() << " ft=" << ctx.rsp.fast_transport_mode();
     auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion, ctx.rsp);
     if (rc.IsError()) {
         FLAGS_enable_urma = false;
@@ -876,9 +880,11 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, ui
 
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
-        auto future =
-            urmaHandshakePool_->Submit([this, workerVersion]() { return AsyncFirstUrmaHandshake(workerVersion); });
-
+        auto traceId = Trace::Instance().GetTraceID();
+        auto future = urmaHandshakePool_->Submit([this, workerVersion, traceId]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            return AsyncFirstUrmaHandshake(workerVersion);
+        });
         int64_t waitMs = std::max<int64_t>(timeoutMs, MIN_WAIT_MS);
 
         if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
@@ -902,7 +908,8 @@ Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersi
 #ifdef WITH_TESTS
     INJECT_POINT("client.urma_first_handshake_delay");
 #endif
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    LOG(INFO) << "[URMA_INIT] first_hs addr=" << hostPort_.ToString() << " clientId=" << clientId_
+              << " ver=" << workerVersion;
     reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
     Status status = TryUrmaHandshake();
     uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
@@ -921,6 +928,7 @@ Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersi
 Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
 {
     PerfPoint perfPoint(PerfKey::CLIENT_URMA_HANDSHAKE);
+    LOG(INFO) << "[URMA_INIT] try_hs addr=" << hostPort_.ToString() << " clientId=" << clientId_;
     // Perform handshake to set up jfr and segments.
     using TbbTransportStubTable =
         tbb::concurrent_hash_map<std::string, std::shared_ptr<datasystem::object_cache::WorkerRemoteWorkerTransApi>>;
@@ -943,8 +951,9 @@ Status ClientWorkerRemoteCommonApi::TryUrmaHandshake()
 
 void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVersion)
 {
-    urmaHandshakeRetryPool_->Execute([this, workerVersion]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    auto traceId = Trace::Instance().GetTraceID();
+    urmaHandshakeRetryPool_->Execute([this, workerVersion, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         constexpr int maxRetryIntervalMs = 8000;
         constexpr int retryCheckIntervalMs = 100;
         constexpr int64_t rpcTimeout = 15000;
