@@ -249,7 +249,7 @@ Status WorkerLivenessCheck::CheckWorkerServices()
 {
     INJECT_POINT("WorkerLivenessCheck.GetServicesName.failed");
     for (auto &name : servicesNames_) {
-        auto threadPoolUsage = workerOcServer_->GetRpcServicesUsage(name);
+        auto threadPoolUsage = workerOcServer_->GetRpcServicesSnapshot(name);
         auto usageRate = threadPoolUsage.threadPoolUsage;
         auto lastTime = threadPoolUsage.taskLastFinishTime;
         std::time_t currentTime = GetSteadyClockTimeStampUs();

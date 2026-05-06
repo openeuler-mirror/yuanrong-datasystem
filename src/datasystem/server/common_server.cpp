@@ -79,4 +79,9 @@ ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesUsage(const std::string 
 {
     return rpcServer_->GetRpcServicesUsage(serviceName);
 }
+
+ThreadPool::ThreadPoolUsage CommonServer::GetRpcServicesSnapshot(const std::string &serviceName)
+{
+    return rpcServer_->GetRpcServicesSnapshot(serviceName);
+}
 }  // namespace datasystem

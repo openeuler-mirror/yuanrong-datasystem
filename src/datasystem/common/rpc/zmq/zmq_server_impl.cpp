@@ -423,6 +423,17 @@ ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesUsage(const std::string
         return usage;
     }
     ZmqService *svc = it->second;
+    return svc->thrdPool_->GetAndResetIntervalStats();
+}
+
+ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesSnapshot(const std::string &serviceName)
+{
+    auto it = svcMap_.find(serviceName);
+    if (it == svcMap_.end()) {
+        ThreadPool::ThreadPoolUsage usage;
+        return usage;
+    }
+    ZmqService *svc = it->second;
     return svc->thrdPool_->GetThreadPoolUsage();
 }
 
