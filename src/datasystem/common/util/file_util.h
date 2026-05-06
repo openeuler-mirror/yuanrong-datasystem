@@ -164,6 +164,28 @@ Status ReadWholeFile(const std::string &path, std::string &content);
  */
 Status AtomicWriteTextFile(const std::string &path, const std::string &content);
 
+constexpr const char *WORKER_ENV_FILE_NAME = "env";
+constexpr const char *WORKER_ENV_POD_IP_KEY = "pod_ip";
+
+/**
+ * @brief Get the persisted worker environment file path from log directory.
+ * @param[in] logDir Worker/client log directory.
+ * @return Empty if logDir is empty, otherwise <logDir>/env.
+ */
+std::string GetWorkerEnvFilePath(const std::string &logDir);
+
+/**
+ * @brief Get string value from environment variable or the persisted worker environment file.
+ * @param[in] env Environment variable.
+ * @param[in] filePath Persisted worker env file path. Empty means file recovery is disabled.
+ * @param[in] key Persisted key to read or update. For host affinity this is the actual value of
+ * `FLAGS_host_id_env_name`, such as `JDOS_HOST_IP`.
+ * @param[in] defValue Default value if environment variable and persisted file are unavailable.
+ * @return Environment value first, then persisted value, otherwise default value.
+ */
+std::string GetStringFromEnvOrFile(const char *env, const std::string &filePath, const std::string &key,
+                                   const std::string &defValue);
+
 /**
  * @brief Check whether the file is directory.
  * @param[in] path File path.

@@ -109,6 +109,9 @@
   - there is no standalone warmup selector; when `enable_urma=true`, workers use URMA warmup
   - DaemonSet Helm deployment uses `global.performance.enableUrma`, rendered as `-enable_urma`
   - Deployment image mode uses `k8s_deployment/helm_chart/worker.config` because `worker_entry.sh` starts the worker with `dscli start -f ${CONFIG_FILE}`
+  - worker process restarts recover selected Kubernetes env-derived values from `<log_dir>/env`; the file stores
+    `pod_ip=<POD_IP>` plus the host-affinity environment variable selected by `FLAGS_host_id_env_name`, for example
+    `JDOS_HOST_IP=<JDOS_HOST_IP>`, with no separate deployment flag.
 
 ## Common Questions And First Places To Look
 

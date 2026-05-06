@@ -54,6 +54,11 @@ public:
      */
     std::ostream &Stream();
 
+    static void SetPodName(const std::string &podName)
+    {
+        podName_ = podName;
+    }
+
 private:
     /**
      * @brief Initialize the logger and log prefix.

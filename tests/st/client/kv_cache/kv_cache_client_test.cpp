@@ -40,7 +40,11 @@
 #include "common_distributed_ext.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -68,12 +72,24 @@
     } while (0)
 
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_string(log_filename);
 
 namespace datasystem {
 namespace st {
 constexpr int WAIT_ASYNC_NOTIFY_WORKER = 300;
 constexpr int64_t NON_SHM_SIZE = 50 * 1024;
 constexpr int64_t SHM_SIZE = 500 * 1024;
+constexpr int ENV_RECOVERY_WORKER_NUM = 2;
+constexpr int ENV_RECOVERY_MASTER_IDX = 1;
+constexpr int ENV_RECOVERY_SHARED_MEMORY_SIZE_MB = 25;
+constexpr int ENV_RECOVERY_MAX_CLIENT_NUM = 2000;
+constexpr int ENV_RECOVERY_WAIT_SECS = 10;
+constexpr char ENV_RECOVERY_POD_IP_ENV[] = "POD_IP";
+constexpr char ENV_RECOVERY_POD_IP_VALUE[] = "10.1.2.3";
+constexpr char ENV_RECOVERY_HOST_ID_ENV0[] = "host_id_env0";
+constexpr char ENV_RECOVERY_HOST_ID_VALUE0[] = "host_id0";
+constexpr char ENV_RECOVERY_CLIENT_LOG_MESSAGE[] = "env_recovery_client_pod_ip_log";
+constexpr char ENV_RECOVERY_LOCK_FILE_SUFFIX[] = ".lock";
 class KVCacheClientTest : public OCClientCommon {
 public:
     std::vector<std::string> workerAddress_;
@@ -2554,10 +2570,13 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numOBS = 1;
-        opts.numWorkers = 2;
+        opts.numWorkers = ENV_RECOVERY_WORKER_NUM;
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000";
+        opts.masterIdx = ENV_RECOVERY_MASTER_IDX;
+        opts.workerGflagParams =
+            FormatString("-shared_memory_size_mb=%d -v=1 -log_monitor=true -max_client_num=%d",
+                         ENV_RECOVERY_SHARED_MEMORY_SIZE_MB, ENV_RECOVERY_MAX_CLIENT_NUM);
 
         std::string hostIp = "127.0.0.1";
         for (size_t i = 0; i < opts.numWorkers; i++) {
@@ -2571,6 +2590,7 @@ public:
             opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
         }
         ASSERT_EQ(setenv("host_id_env_n", "host_id_n", 1), 0);
+        ASSERT_EQ(setenv(ENV_RECOVERY_POD_IP_ENV, ENV_RECOVERY_POD_IP_VALUE, 1), 0);
     }
 
     void SetUp() override
@@ -2640,6 +2660,34 @@ protected:
     std::vector<HostPort> workerAddress_;
 };
 
+std::string GetWorkerEnvFileForSt(BaseCluster *cluster, int workerIndex)
+{
+    return GetWorkerEnvFilePath(JoinPath(JoinPath(cluster->GetRootDir(), FormatString("worker%d", workerIndex)),
+                                         "log"));
+}
+
+std::string GetWorkerEnvLockFileForSt(BaseCluster *cluster, int workerIndex)
+{
+    return GetWorkerEnvFileForSt(cluster, workerIndex) + ENV_RECOVERY_LOCK_FILE_SUFFIX;
+}
+
+Status GetWorkerHostIdFromEtcd(BaseCluster *cluster, int workerIndex, std::string &hostId)
+{
+    std::string etcdAddress = cluster->GetEtcdAddrs();
+    EtcdStore etcdStore(etcdAddress);
+    RETURN_IF_NOT_OK(etcdStore.Init());
+    (void)etcdStore.CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE));
+
+    HostPort workerAddress;
+    RETURN_IF_NOT_OK(cluster->GetWorkerAddr(workerIndex, workerAddress));
+    std::string valueStr;
+    RETURN_IF_NOT_OK(etcdStore.Get(ETCD_CLUSTER_TABLE, workerAddress.ToString(), valueStr));
+    KeepAliveValue value;
+    RETURN_IF_NOT_OK(KeepAliveValue::FromString(valueStr, value));
+    hostId = value.hostId;
+    return Status::OK();
+}
+
 TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGetForRandom)
 {
     std::shared_ptr<KVClient> client;
@@ -2650,6 +2698,59 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGetForRandom)
     std::string valueGet;
     ASSERT_EQ(client->Get(key, valueGet), Status::OK());
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
+}
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromLogDirFile)
+{
+    auto envFile = GetWorkerEnvFileForSt(cluster_.get(), 0);
+    std::string content;
+    DS_ASSERT_OK(ReadWholeFile(envFile, content));
+    ASSERT_NE(content.find(std::string("pod_ip=") + ENV_RECOVERY_POD_IP_VALUE), std::string::npos);
+    ASSERT_NE(content.find(std::string(ENV_RECOVERY_HOST_ID_ENV0) + "=" + ENV_RECOVERY_HOST_ID_VALUE0),
+              std::string::npos);
+    ASSERT_FALSE(FileExist(GetWorkerEnvLockFileForSt(cluster_.get(), 0)));
+    ASSERT_FALSE(FileExist(GetWorkerEnvLockFileForSt(cluster_.get(), 1)));
+
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    ASSERT_EQ(unsetenv(ENV_RECOVERY_POD_IP_ENV), 0);
+    ASSERT_EQ(unsetenv(ENV_RECOVERY_HOST_ID_ENV0), 0);
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, " -client_reconnect_wait_s=1"));
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0, ENV_RECOVERY_WAIT_SECS));
+
+    std::string hostId;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&hostId, this]() {
+            RETURN_IF_NOT_OK(GetWorkerHostIdFromEtcd(cluster_.get(), 0, hostId));
+            CHECK_FAIL_RETURN_STATUS(hostId == ENV_RECOVERY_HOST_ID_VALUE0, K_RUNTIME_ERROR,
+                                     FormatString("Unexpected hostId: %s", hostId));
+            return Status::OK();
+        },
+        ENV_RECOVERY_WAIT_SECS, K_OK));
+
+    ASSERT_EQ(setenv(ENV_RECOVERY_HOST_ID_ENV0, ENV_RECOVERY_HOST_ID_VALUE0, 1), 0);
+    ASSERT_EQ(setenv(ENV_RECOVERY_POD_IP_ENV, ENV_RECOVERY_POD_IP_VALUE, 1), 0);
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(client, ServiceAffinityPolicy::REQUIRED_SAME_NODE, ENV_RECOVERY_HOST_ID_ENV0);
+    ASSERT_EQ(Logging::PodName(), ENV_RECOVERY_POD_IP_VALUE);
+
+    auto clientEnvFile = GetWorkerEnvFilePath(FLAGS_log_dir);
+    DS_ASSERT_OK(ReadWholeFile(clientEnvFile, content));
+    ASSERT_NE(content.find(std::string(WORKER_ENV_POD_IP_KEY) + "=" + ENV_RECOVERY_POD_IP_VALUE), std::string::npos);
+    ASSERT_FALSE(FileExist(clientEnvFile + ENV_RECOVERY_LOCK_FILE_SUFFIX));
+
+    LOG(INFO) << ENV_RECOVERY_CLIENT_LOG_MESSAGE;
+    Provider::Instance().FlushLogs();
+    auto clientInfoLog = JoinPath(FLAGS_log_dir, FLAGS_log_filename + ".INFO.log");
+    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, content));
+    ASSERT_NE(content.find(std::string(" | ") + ENV_RECOVERY_POD_IP_VALUE + " | "), std::string::npos);
+    ASSERT_NE(content.find(ENV_RECOVERY_CLIENT_LOG_MESSAGE), std::string::npos);
+
+    std::string key = "env_recovery_e2e_key";
+    std::string value = "env_recovery_e2e_value";
+    DS_ASSERT_OK(client->Set(key, value));
+    std::string valueGet;
+    DS_ASSERT_OK(client->Get(key, valueGet));
+    ASSERT_EQ(value, valueGet);
 }
 
 TEST_F(KVCacheClientServiceDiscoveryTest, TestRandom)
