@@ -1216,6 +1216,7 @@ void WorkerOCServer::ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::st
                 if (warmupExit_) {
                     return false;
                 }
+                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
                 auto rc = objCacheClientWorkerSvc_->WarmupUrmaConnectionToPeer(peerAddr, BuildWarmupKey(peerAddr));
                 if (rc.IsError()) {
                     LOG(WARNING) << FormatString("[URMA_WARMUP] peer warmup failed, peer=%s, status=%s", peerAddr,
