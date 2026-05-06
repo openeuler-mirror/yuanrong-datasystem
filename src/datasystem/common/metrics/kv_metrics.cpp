@@ -96,6 +96,7 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 67, "worker_get_threadpool_exec_latency", MetricType::HISTOGRAM, "us" },
     { 68, "worker_get_meta_addr_hashring_latency", MetricType::HISTOGRAM, "us" },
     { 69, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
+    { 70, "worker_inflight_remote_get_request", MetricType::GAUGE, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
