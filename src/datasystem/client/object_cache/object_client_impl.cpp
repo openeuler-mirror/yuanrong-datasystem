@@ -2109,21 +2109,26 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
 
-    LOG(INFO) << "Begin to put and seal object, object_key: " << objectKey;
+    Timer setTimer;
+    LOG(INFO) << FormatString("[Set] Begin, objectKey: %s, clientId: %s, worker: %s, path: %s", objectKey,
+                              workerApi->clientId_, workerApi->hostPort_.ToString(),
+                              workerApi->ShmCreateable(size) ? "SHM" : "UB");
     bool isShm = workerApi->ShmCreateable(size);
     // Process UB case and shm case together since they share the same Create + MemoryCopy + Publish flow.
+    Status rc;
     if (isShm || IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK(
-            ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence));
+        rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence);
     } else {
         // Construct info to put.
         auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
-            FormatString("Put object %s", objectKey));
+        rc = workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Put object %s failed: %s", objectKey, rc.ToString());
+        }
     }
-    LOG(INFO) << "Finished putting and sealing object, object_key: " << objectKey;
-    return Status::OK();
+    LOG(INFO) << FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
+                              setTimer.ElapsedMilliSecond(), rc.ToString());
+    return rc;
 }
 
 #define COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(func_ret)                         \

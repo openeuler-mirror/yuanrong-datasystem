@@ -53,9 +53,8 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     Timer timer;
     PerfPoint point(PerfKey::WORKER_CREATE_OBJECT);
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_CREATE);
-    LOG(INFO) << FormatString(
-        "[Create] Receive create meta request, clientId: %s, objectKey: %s, cacheType: %u, size: %zu", req.client_id(),
-        req.object_key(), req.cache_type(), req.data_size());
+    LOG(INFO) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
+        req.object_key(), req.data_size());
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });

@@ -605,7 +605,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
             LOG(INFO) << AppendSrcDstForLog(
-                FormatString("Remote get request:[batch] objects count[%d]", reqPb.requests_size()),
+                FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
                 localAddress_.ToString(), address);
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
