@@ -97,8 +97,8 @@ public:
             return defaultDuration_;
         }
         auto currTime = std::chrono::steady_clock::now();
-        int64_t remainingTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(deadLine_ - currTime).count();
-        return remainingTimeMs;
+        int64_t remainingTimeUs = std::chrono::duration_cast<std::chrono::microseconds>(deadLine_ - currTime).count();
+        return ConvertRemainingTimeUsToMs(remainingTimeUs);
     }
 
     /**
@@ -108,6 +108,23 @@ public:
     int64_t CalcRemainingTime()
     {
         return ScaleTimeoutMs(CalcRealRemainingTime(), OP_USE_TIME_FACTOR);
+    }
+
+    /**
+     * @brief Convert remaining duration from microseconds to milliseconds.
+     * @param[in] remainingTimeUs Remaining duration, in microseconds.
+     * @return Remaining duration, in milliseconds.
+     */
+    static int64_t ConvertRemainingTimeUsToMs(int64_t remainingTimeUs)
+    {
+        if (remainingTimeUs <= 0) {
+            return remainingTimeUs / MS_TO_US;
+        }
+        if (remainingTimeUs > SMALL_TIMEOUT_ROUND_THRESHOLD_MS * MS_TO_US) {
+            return remainingTimeUs / MS_TO_US;
+        }
+        int64_t roundedTimeMs = (remainingTimeUs + ROUND_UP_US) / MS_TO_US;
+        return roundedTimeMs > 0 ? roundedTimeMs : 1;
     }
 
     static int64_t ScaleTimeoutMs(int64_t timeoutMs, double scaleFactor)
@@ -130,7 +147,7 @@ private:
     static constexpr int DEFAULT_TIMEOUT = RPC_TIMEOUT;
     static constexpr int64_t MS_TO_US = 1'000;
     static constexpr int64_t ROUND_UP_US = 500;
-    static constexpr int64_t SMALL_TIMEOUT_ROUND_THRESHOLD_MS = 5;
+    static constexpr int64_t SMALL_TIMEOUT_ROUND_THRESHOLD_MS = 10;
     static constexpr double OP_USE_TIME_FACTOR = 0.8;
 
     bool initialized_ = false;
