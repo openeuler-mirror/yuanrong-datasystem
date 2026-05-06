@@ -52,7 +52,9 @@ public:
     static bool IsAlive();
 
     /**
-     * @brief Retrieve the pod name from environment variables.
+     * @brief Retrieve the pod identifier from environment variables.
+     *
+     * The priority is POD_IP, POD_NAME, HOSTNAME, then a blank placeholder.
      */
     static std::string GetPodName();
 

@@ -51,12 +51,15 @@ bool Provider::IsAlive()
 
 std::string Provider::GetPodName()
 {
-    const char *podName = (std::getenv("POD_NAME") == nullptr) ? std::getenv("HOSTNAME") : std::getenv("POD_NAME");
-    if (podName == nullptr) {
-        podName = " ";
+    constexpr const char *envPriority[] = { "POD_IP", "POD_NAME", "HOSTNAME" };
+    for (const auto &envName : envPriority) {
+        const char *envValue = std::getenv(envName);
+        if (envValue != nullptr && envValue[0] != '\0') {
+            return envValue;
+        }
     }
 
-    return podName;
+    return " ";
 }
 
 void Provider::FlushLogs()
