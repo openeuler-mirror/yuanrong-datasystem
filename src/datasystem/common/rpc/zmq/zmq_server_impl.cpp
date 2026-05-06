@@ -415,7 +415,7 @@ Status ZmqServerImpl::RegisterService(Token key, ZmqService *svc, const RpcServi
     return Status::OK();
 }
 
-ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesUsage(const std::string &serviceName, int64_t intervalMs)
+ThreadPool::ThreadPoolUsage ZmqServerImpl::GetRpcServicesUsage(const std::string &serviceName)
 {
     auto it = svcMap_.find(serviceName);
     if (it == svcMap_.end()) {
