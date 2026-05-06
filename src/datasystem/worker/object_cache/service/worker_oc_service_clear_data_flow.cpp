@@ -35,6 +35,7 @@
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -51,6 +52,7 @@ namespace {
 constexpr uint64_t CLEAR_OBJECT_RETRY_INTERVAL_MS = 200;
 constexpr int CLEAR_DATA_THREAD_NUM = 1;
 constexpr size_t CHECK_OBJECT_DATA_LOCATION_BATCH = 500;
+constexpr size_t GET_MASTER_ERROR_SAMPLE_LIMIT = 3;
 const std::string WORKER_OC_SERVICE_CLEAR_DATA_FLOW = "WorkerOcServiceClearDataFlow";
 
 void InsertFailedIds(const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
@@ -80,10 +82,26 @@ void HandleCheckObjectDataLocationRsp(const Status &rc, const master::CheckObjec
 void HandleGroupObjKeysByMasterErrors(const std::optional<std::unordered_map<std::string, Status>> &errInfos,
                                       std::unordered_set<std::string> &failedIds)
 {
+    if (!errInfos || errInfos->empty()) {
+        return;
+    }
+    struct GetMasterErrorSummary {
+        size_t count = 0;
+        std::vector<std::string> sampleObjectKeys;
+    };
+    std::unordered_map<std::string, GetMasterErrorSummary> summaries;
     for (const auto &kv : *errInfos) {
         failedIds.emplace(kv.first);
-        LOG(ERROR) << FormatString("[ObjectKey %s] Get master for ClearObject failed, status: %s", kv.first,
-                                   kv.second.ToString());
+        auto &summary = summaries[kv.second.ToString()];
+        summary.count++;
+        if (summary.sampleObjectKeys.size() < GET_MASTER_ERROR_SAMPLE_LIMIT) {
+            summary.sampleObjectKeys.emplace_back(kv.first);
+        }
+    }
+    for (const auto &kv : summaries) {
+        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count
+                  << ", status: " << kv.first
+                  << ", sample object keys: " << VectorToString(kv.second.sampleObjectKeys);
     }
 }
 
@@ -96,7 +114,7 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     HostPort masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
     if (masterAddr.Empty()) {
         InsertFailedIds(objectKeys, failedIds);
-        LOG(ERROR) << "ClearObject master address is empty";
+        LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();
         return nullptr;
     }
     auto rc = etcdCM->CheckConnection(masterAddr);
@@ -341,6 +359,10 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
     HandleGroupObjKeysByMasterErrors(errInfos, failedIds);
 
     for (auto &item : objKeysGrpByMasterId) {
+        if (item.first.Empty()) {
+            InsertFailedIds(item.second, failedIds);
+            continue;
+        }
         auto workerMasterApi =
             GetWorkerMasterApiForClear(etcdCM_, workerMasterApiManager_, item.first, item.second, failedIds);
         if (workerMasterApi == nullptr) {
