@@ -15,17 +15,18 @@
  */
 #include "datasystem/utils/service_discovery.h"
 
-#include <cstdlib>
-
 #include "datasystem/common/constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
+
+DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace {
@@ -76,10 +77,20 @@ Status ServiceDiscovery::Init()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Authenticate(username_, password_, tokenRefreshInterval_),
                                      "Failed to connect to etcd.");
     if (!hostIdEnvName_.empty()) {
-        const char *hostId = std::getenv(hostIdEnvName_.c_str());
-        if (hostId != nullptr) {
-            hostId_ = hostId;
-            LOG(INFO) << "Host ID from environment: " << hostId_;
+        auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
+        auto envHostId = GetStringFromEnv(hostIdEnvName_.c_str(), "");
+        // Use the actual env variable name as the persisted file key, same as worker FLAGS_host_id_env_name.
+        hostId_ = GetStringFromEnvOrFile(hostIdEnvName_.c_str(), envFilePath, hostIdEnvName_, "");
+        if (!hostId_.empty()) {
+            if (envHostId.empty()) {
+                LOG(INFO) << "Host ID is " << hostId_ << " from persisted SDK env file " << envFilePath;
+            } else {
+                LOG(INFO) << "Host ID is " << hostId_ << " from env " << hostIdEnvName_;
+            }
+        } else {
+            VLOG(1) << FormatString("hostId not found in env [%s] or file [%s], affinity policy may not work as "
+                                    "expected",
+                                    hostIdEnvName_, envFilePath);
         }
     }
 

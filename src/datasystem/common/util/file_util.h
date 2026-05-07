@@ -178,8 +178,8 @@ std::string GetWorkerEnvFilePath(const std::string &logDir);
  * @brief Get string value from environment variable or the persisted worker environment file.
  * @param[in] env Environment variable.
  * @param[in] filePath Persisted worker env file path. Empty means file recovery is disabled.
- * @param[in] key Persisted key to read or update. For host affinity this is the actual value of
- * `FLAGS_host_id_env_name`, such as `JDOS_HOST_IP`.
+ * @param[in] key Persisted key to read or update. For host affinity this is the actual env variable name from
+ * `FLAGS_host_id_env_name` or `ServiceDiscoveryOptions::hostIdEnvName`, such as `JDOS_HOST_IP`.
  * @param[in] defValue Default value if environment variable and persisted file are unavailable.
  * @return Environment value first, then persisted value, otherwise default value.
  */
