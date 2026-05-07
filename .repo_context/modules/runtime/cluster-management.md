@@ -65,6 +65,13 @@
   - when both `etcd_address` and `metastore_address` are empty, ring init effectively short-circuits
   - hash ring chooses backend address from `metastore_address` first, otherwise `etcd_address`
   - hash ring also interacts with master address initialization and restart/scaling restoration
+- Verified from `worker_cli.cpp`:
+  - hash-ring import/export CLI operations use `metastore_address` first, otherwise `etcd_address`
+  - when `etcd_username` and `etcd_password` are provided, CLI operations authenticate through `EtcdStore` before
+    reading or writing the hash-ring table
+- Verified from `worker.cpp`:
+  - process-mode hash-ring CLI operations request worker-main shutdown after the one-shot CLI action completes, so the
+    `datasystem_worker --get_hash_ring` and `--set_hash_ring` commands return without starting the runtime loop
 - Review caution:
   - cluster mode changes are rarely “just config changes”; they often affect hash-ring init, master address selection, and recovery behavior together
 
