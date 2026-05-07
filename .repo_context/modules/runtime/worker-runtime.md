@@ -85,8 +85,8 @@
     `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
     without delaying readiness
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
-    `GetAll(ETCD_CLUSTER_TABLE)` warms this worker's outbound RPC stubs to existing ready workers/masters, while later
-    ETCD cluster ready PUT events trigger old workers to warm outbound RPC stubs to a newly ready worker/master
+    task scans `GetAll(ETCD_CLUSTER_TABLE)` until the discovered ready worker/master set is stable or the startup
+    warmup window expires, and later ETCD cluster ready PUT events trigger warmup for newly ready workers/masters
 - Steady state:
   - accept/register clients
   - manage shared-memory or socket-based FD passing for client-worker IPC
@@ -121,8 +121,9 @@
     delaying `Worker::InitWorker()` completion.
   - URMA connection warmup must not add client/KVClient dependencies; worker-side discovery uses existing `EtcdStore`
     state and worker-side remote-get helpers.
-  - Worker-master RPC warmup is one-way per initiating worker. Startup `GetAll` only warms new-node to old-node paths,
-    so old-node to new-node paths need the cluster ready event hook in `WorkerOCServer::UpdateClusterInfoInRocksDb`.
+  - Worker-master RPC warmup is one-way per initiating worker. Startup scans warm each worker's outbound paths, and the
+    cluster ready event hook in `WorkerOCServer::UpdateClusterInfoInRocksDb` remains necessary for old-node to new-node
+    paths during scale-out.
 - Useful files during debugging:
   - `src/datasystem/worker/worker_main.cpp`
   - `src/datasystem/worker/worker.cpp`
