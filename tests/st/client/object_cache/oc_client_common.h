@@ -20,9 +20,12 @@
 #ifndef DATASYSTEM_TEST_ST_CLIENT_OBJECT_CACHE_OC_CLIENT_COMMON_H
 #define DATASYSTEM_TEST_ST_CLIENT_OBJECT_CACHE_OC_CLIENT_COMMON_H
 
+#include <algorithm>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
@@ -31,16 +34,15 @@
 #include "datasystem/datasystem.h"
 #include "datasystem/hetero_client.h"
 #include "datasystem/object_client.h"
-#include "datasystem/protos/hash_ring.pb.h"
-#include "datasystem/protos/master_object.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/connection.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
+class EtcdStore;
+
 namespace st {
 class OCClientCommon : public ExternalClusterTest {
 public:
@@ -294,33 +296,9 @@ public:
         return !ExistsNone(buffers);
     }
 
-    void GetWorkerUuids(EtcdStore *db, std::unordered_map<HostPort, std::string> &uuidMap)
-    {
-        std::string value;
-        DS_ASSERT_OK(db->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ring.ParseFromString(value);
-        for (auto worker : ring.workers()) {
-            HostPort workerAddr;
-            DS_ASSERT_OK(workerAddr.ParseString(worker.first));
-            uuidMap.emplace(std::move(workerAddr), worker.second.worker_uuid());
-        }
-    }
+    void GetWorkerUuids(EtcdStore *db, std::unordered_map<HostPort, std::string> &uuidMap);
 
-    std::unique_ptr<EtcdStore> InitTestEtcdInstance(std::string azName = "")
-    {
-        std::string etcdAddress = cluster_->GetEtcdAddrs();
-        FLAGS_etcd_address = etcdAddress;
-        LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
-        auto db = std::make_unique<EtcdStore>(etcdAddress);
-        if ((db != nullptr) && (db->Init().IsOk())) {
-            auto prefix = azName.empty() ? "" : "/" + azName;
-            // We don't check rc here. If table to drop does not exist, it's fine.
-            (void)db->CreateTable(ETCD_RING_PREFIX, prefix + ETCD_RING_PREFIX);
-            (void)db->CreateTable(ETCD_CLUSTER_TABLE, prefix + "/" + ETCD_CLUSTER_TABLE);
-        }
-        return db;
-    }
+    std::unique_ptr<EtcdStore> InitTestEtcdInstance(std::string azName = "");
 };
 
 #define ASSERT_BUF_EQ(buffer_, expected_)                                                                       \

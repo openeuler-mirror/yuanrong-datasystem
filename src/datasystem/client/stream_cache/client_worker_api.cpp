@@ -20,15 +20,10 @@
 #include "datasystem/client/stream_cache/client_worker_api.h"
 #include <cstdint>
 
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
-#include "datasystem/common/rpc/rpc_unary_client_impl.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
-#include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/rpc_option.pb.h"
 #include "datasystem/protos/stream_posix.pb.h"
 #include "datasystem/stream/stream_config.h"

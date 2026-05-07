@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 #include <numeric>
 #include <random>
+#include <thread>
 #include <unordered_map>
 
 #include "ut/common.h"

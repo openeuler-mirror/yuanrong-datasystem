@@ -19,8 +19,6 @@
  */
 #include "datasystem/client/stream_cache/producer_impl.h"
 
-#include <securec.h>
-
 #include <utility>
 
 #include "datasystem/client/mmap_manager.h"
@@ -34,12 +32,8 @@
 #include "datasystem/common/stream_cache/stream_data_page.h"
 #include "datasystem/common/util/bitmask_enum.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/raii.h"
-#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {

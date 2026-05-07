@@ -22,6 +22,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/stream_cache/stream_data_page.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/worker/stream_cache/buffer_pool.h"
 

@@ -90,6 +90,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── overview.repository-overview.json
 │   │   ├── overview.repository-skills.json
 │   │   ├── quality.build-test-debug.json
+│   │   ├── quality.cmake-build.json
 │   │   ├── quality.tests-and-reproduction.json
 │   │   ├── runtime.cluster-management.json
 │   │   └── runtime.worker-runtime.json
@@ -128,6 +129,9 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   └── quality/
 │       ├── README.md
 │       ├── build-test-debug.md
+│       ├── cmake-build/
+│       │   ├── README.md
+│       │   └── design.md
 │       ├── tests-and-reproduction.md
 │       └── test-suite-design.md
 ├── playbooks/
@@ -144,6 +148,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │       ├── README.md
 │       ├── quality/
 │       │   ├── README.md
+│       │   ├── cmake-build-optimization.md
 │       │   └── test-implementation.md
 │       └── infra/
 │           ├── README.md
@@ -181,6 +186,8 @@ The first pass is intentionally coarse. It currently covers:
 - navigation for moving from broad repository orientation to domain documents;
 - coarse module boundaries across source, SDK, CLI, docs, and tests;
 - build, test, and debug entrypoints already used by this repository;
+- CMake build-system context covering the supported source-build platform boundary, third-party dependency rules,
+  compiler flags, install/package outputs, and target graph for compile-speed optimization;
 - current `tests/` layout, CMake/gtest-to-CTest registration, CTest labels, Python unittest orchestration, example
   smoke-test flow, and test implementation workflow guidance;
 - a generated file-tree index to support fast orientation;

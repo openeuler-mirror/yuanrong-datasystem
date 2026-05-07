@@ -26,6 +26,7 @@
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/kv/read_only_buffer.h"

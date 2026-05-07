@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include <securec.h>
+
 #include "datasystem/common/object_cache/lock.h"
 #include "ut/common.h"
 

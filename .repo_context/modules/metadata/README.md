@@ -30,6 +30,7 @@ Current canonical records:
 - `infra.metrics.json`
 - `infra.observability.json`
 - `quality.build-test-debug.json`
+- `quality.cmake-build.json`
 - `quality.tests-and-reproduction.json`
 
 Validation:

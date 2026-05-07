@@ -23,6 +23,8 @@
 #include <fstream>
 #include <glob.h>
 
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/util/random_data.h"
 

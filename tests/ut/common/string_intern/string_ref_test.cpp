@@ -27,6 +27,7 @@
 #include "ut/common.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/string_intern/string_pool.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/uuid_generator.h"
 

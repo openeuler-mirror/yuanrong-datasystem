@@ -18,10 +18,13 @@
  * Description: hetero d2h test.
  */
 #include "device/dev_test_helper.h"
+#include "datasystem/common/util/raii.h"
 
 namespace datasystem {
 using namespace acl;
 namespace st {
+constexpr int HETERO_MGET_TIMEOUT_MS = 5000;
+
 class HeteroD2HTest : public DevTestHelper {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -181,7 +184,7 @@ TEST_F(HeteroD2HTest, TestNoExist)
         }
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, 0);
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
@@ -208,7 +211,7 @@ TEST_F(HeteroD2HTest, TestAllExist)
         if (numOfObjs == 450) {
             // First iteration: set 450 keys with 'b' data
             DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
             DS_ASSERT_TRUE(failedKeys.empty(), true);
             DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
         } else {
@@ -228,7 +231,7 @@ TEST_F(HeteroD2HTest, TestAllExist)
             DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
 
             // Verify the results
-            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
             DS_ASSERT_TRUE(failedKeys.empty(), true);
 
             // Keys 0-449 should still be 'b' (from first iteration, not updated)
@@ -267,7 +270,7 @@ TEST_F(HeteroD2HTest, TestPartExist)
         }
         DS_ASSERT_OK(client->MSetD2H(partKeys, partDevBlobList));
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }

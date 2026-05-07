@@ -23,6 +23,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/timer.h"
 #include "oc_client_common.h"
 #include "zmq_curve_test_common.h"
 

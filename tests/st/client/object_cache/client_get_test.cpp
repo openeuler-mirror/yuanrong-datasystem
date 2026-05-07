@@ -30,6 +30,7 @@
 
 #include "common.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"

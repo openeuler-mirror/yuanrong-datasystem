@@ -23,6 +23,8 @@
 #include <string>
 #include <thread>
 
+#include <securec.h>
+
 #include "datasystem/common/util/queue/circular_queue.h"
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/random_data.h"

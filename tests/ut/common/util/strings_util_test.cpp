@@ -17,6 +17,8 @@
 /**
  * Description: test strings util function
  */
+#include <securec.h>
+
 #include "ut/common.h"
 #include "datasystem/common/util/strings_util.h"
 

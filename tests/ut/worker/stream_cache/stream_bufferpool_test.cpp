@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "datasystem/worker/stream_cache/buffer_pool.h"
+#include "datasystem/common/util/random_data.h"
 #include "ut/common.h"
 
 using namespace datasystem::worker::stream_cache;

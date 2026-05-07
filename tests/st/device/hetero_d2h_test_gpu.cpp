@@ -18,10 +18,13 @@
  * Description: hetero d2h gpu test.
  */
 #include "device/dev_test_helper.h"
+#include "datasystem/common/util/raii.h"
 
 namespace datasystem {
 using namespace cuda;
 namespace st {
+constexpr int HETERO_MGET_TIMEOUT_MS = 5000;
+
 class HeteroD2HGpuTest : public DevTestHelper {
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -173,7 +176,7 @@ TEST_F(HeteroD2HGpuTest, TestNoExist)
         }
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, deviceId);
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }
@@ -200,7 +203,7 @@ TEST_F(HeteroD2HGpuTest, TestAllExist)
         if (numOfObjs == 450) {
             // First iteration: set 450 keys with 'b' data
             DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
             DS_ASSERT_TRUE(failedKeys.empty(), true);
             DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
         } else {
@@ -220,7 +223,7 @@ TEST_F(HeteroD2HGpuTest, TestAllExist)
             DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
 
             // Verify the results
-            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+            DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
             DS_ASSERT_TRUE(failedKeys.empty(), true);
 
             // Keys 0-449 should still be 'b' (from first iteration, not updated)
@@ -259,7 +262,7 @@ TEST_F(HeteroD2HGpuTest, TestPartExist)
         }
         DS_ASSERT_OK(client->MSetD2H(partKeys, partDevBlobList));
         DS_ASSERT_OK(client->MSetD2H(inObjectKeys, devSetBlobList));
-        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, MIN_RPC_TIMEOUT_MS));
+        DS_ASSERT_OK(client->MGetH2D(inObjectKeys, devGetBlobList, failedKeys, HETERO_MGET_TIMEOUT_MS));
         DS_ASSERT_TRUE(failedKeys.empty(), true);
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
     }

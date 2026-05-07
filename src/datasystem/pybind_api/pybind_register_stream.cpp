@@ -19,13 +19,8 @@
  */
 #include <memory>
 
-#include <pybind11/numpy.h>
-#include <securec.h>
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/pybind_api/pybind_register.h"
 #include "datasystem/stream/consumer.h"

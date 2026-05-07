@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "oc_client_common.h"
 
 namespace datasystem {

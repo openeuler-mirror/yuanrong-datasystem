@@ -18,12 +18,6 @@
  * Description: Client access token request
  */
 #include "datasystem/common/token/client_access_token.h"
-#include "datasystem/common/util/random_data.h"
-#include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/log/log.h"
-
-#include <iostream>
-#include <sstream>
 
 namespace datasystem {
 ClientAccessToken::ClientAccessToken(SensitiveValue token) : token_(std::move(token))

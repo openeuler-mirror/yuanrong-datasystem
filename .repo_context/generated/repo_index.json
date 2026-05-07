@@ -1,6 +1,6 @@
 {
   "repo_root": "/Users/marck/workspace/yuanrong-datasystem",
-  "generated_at_utc": "2026-04-18T06:29:32+00:00",
+  "generated_at_utc": "2026-05-04T09:45:10+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -421,10 +421,13 @@
         "  - cluster-management-etcd.png",
         "  - cluster-management-metastore.png",
         "  - deployment.png",
+        "  - deployment_en.png",
         "  - favicon.png",
         "  - images_deployment.png",
         "  - introduction.png",
+        "  - introduction_en.png",
         "  - logical_architecture.png",
+        "  - logical_architecture_en.png",
         "  - logo-large.png",
         "  - logo-small.png",
         "- installation/",
@@ -461,6 +464,10 @@
         "    - refresh_online_docs.py",
         "  - tests/",
         "    - test_refresh_online_docs.py",
+        "  - SKILL.md",
+        "- rdma-ucx-perf-debug/",
+        "  - agents/",
+        "    - openai.yaml",
         "  - SKILL.md"
       ]
     },

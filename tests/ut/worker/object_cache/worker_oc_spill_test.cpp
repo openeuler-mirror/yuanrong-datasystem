@@ -24,6 +24,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
