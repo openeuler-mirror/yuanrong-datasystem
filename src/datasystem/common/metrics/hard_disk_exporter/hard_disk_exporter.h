@@ -90,7 +90,7 @@ private:
     int fd_ = K_INVALID_FD;
     std::string filePath_;
     size_t fileSize_ = 0;
-    const char *podName_;
+    std::string podName_;
 };
 }  // namespace datasystem
 #endif

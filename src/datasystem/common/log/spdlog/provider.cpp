@@ -18,6 +18,7 @@
  * Description: Provider.
  */
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/log/pod_identifier.h"
 
 namespace datasystem {
 
@@ -51,15 +52,7 @@ bool Provider::IsAlive()
 
 std::string Provider::GetPodName()
 {
-    constexpr const char *envPriority[] = { "POD_IP", "POD_NAME", "HOSTNAME" };
-    for (const auto &envName : envPriority) {
-        const char *envValue = std::getenv(envName);
-        if (envValue != nullptr && envValue[0] != '\0') {
-            return envValue;
-        }
-    }
-
-    return " ";
+    return GetPodIdentifier();
 }
 
 void Provider::FlushLogs()
