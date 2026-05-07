@@ -351,14 +351,7 @@ public:
     {
         PerfPoint::RecordElapsed(PerfKey::ZMQ_APP_WORKLOAD, GetLapTime(meta_, "ZMQ_APP_WORKLOAD"));
         RETURN_OK_IF_TRUE(mQue_ == nullptr);
-        // Unary path can return early from Write() when recv_payload is pending; payload is appended
-        // afterward and queued here — ensure SERVER_EXEC_END exists before backend handoff so
-        // RecordServerLatencyMetrics never treats SERVER_REPLY as (SEND − 0).
-        // When HasRecvPayloadOp(), Write returns before EXEC_END; SendPayload → SendAll must still stamp it —
-        // this guard is not redundant with Write's EXEC_END even when enableMsgQ_ is true.
-        if (!MetaHasNamedTick(meta_, TICK_SERVER_EXEC_END)) {
-            RecordTick(meta_, TICK_SERVER_EXEC_END);
-        }
+        RecordTick(meta_, TICK_SERVER_EXEC_END);
         return ZmqService::SendAll(outMsg_, meta_,
                                    [this, &flags](ZmqMetaMsgFrames &e) { return mQue_->SendMsg(e, flags); });
     }
@@ -378,11 +371,6 @@ public:
             PerfPoint::RecordElapsed(PerfKey::ZMQ_RESPONSE_SIZE_AFTER_SERIALIZE, outMsg_.back().Size());
             RETURN_OK_IF_TRUE(HasRecvPayloadOp());
             if (enableMsgQ_) {
-                // SERVER_SEND wall tick + histograms are recorded once in ZmqService::ServiceToClient
-                // after the backend dequeues this frame (avoid duplicate TICK_SERVER_SEND and bogus reply span).
-                if (!MetaHasNamedTick(meta_, TICK_SERVER_EXEC_END)) {
-                    RecordTick(meta_, TICK_SERVER_EXEC_END);
-                }
                 return SendAll(ZmqSendFlags::NONE);
             }
             return Status::OK();

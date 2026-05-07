@@ -119,6 +119,8 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
         ZmqMetaMsgFrames rsp;
         RETURN_IF_NOT_OK(sock->ReceiveMsg(rsp));
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(rsp.first, "ZMQ_STUB_FRONT_TO_BACK"));
+        RecordTick(rsp.first, TICK_CLIENT_END);
+        RecordRpcLatencyMetrics(rsp.first);
         RETURN_IF_NOT_OK(AckRequest(rsp.second, reply));
         return Status::OK();
     };
@@ -213,6 +215,8 @@ Status ZmqStubImpl::PayloadTick(const std::string &svcName, MetaPb &perfRun, con
     ZmqMetaMsgFrames reply;
     RETURN_IF_NOT_OK(mQue->ReceiveMsg(reply));
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
+    RecordTick(reply.first, TICK_CLIENT_END);
+    RecordRpcLatencyMetrics(reply.first);
     ZmqMessage replyMsg;
     RETURN_IF_NOT_OK(AckRequest(reply.second, replyMsg));
     perfRun = reply.first;
