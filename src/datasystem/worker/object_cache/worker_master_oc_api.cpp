@@ -79,16 +79,24 @@ std::shared_ptr<WorkerMasterOCApi> WorkerMasterOCApi::CreateWorkerMasterOCApi(
     datasystem::master::MasterOCServiceImpl *service)
 {
     if (hostPort != localHostPort) {
-        VLOG(1) << "Worker and master are not collocated. Creating a WorkerMasterOCApi as RPC-based api.";
+        VLOG(1) << FormatString(
+            "Worker and master are not collocated. Creating a WorkerMasterOCApi as RPC-based api. worker=%s, "
+            "master=%s",
+            localHostPort.ToString(), hostPort.ToString());
         return std::make_shared<WorkerRemoteMasterOCApi>(hostPort, localHostPort, akSkManager);
     }
 
     if (service == nullptr) {
-        LOG(INFO) << "Worker and master are collocated but the master service is not provided. Local bypass disabled.";
+        LOG(INFO) << FormatString("Worker and master are collocated but the master service is not provided. Local "
+                                  "bypass disabled. worker=%s, master=%s",
+                                  localHostPort.ToString(), hostPort.ToString());
         return std::make_shared<WorkerRemoteMasterOCApi>(hostPort, localHostPort, akSkManager);
     }
 
-    VLOG(1) << "Worker and master are collocated. Creating a WorkerMasterOCApi with local bypass optimization.";
+    VLOG(1) << FormatString(
+        "Worker and master are collocated. Creating a WorkerMasterOCApi with local bypass optimization. worker=%s, "
+        "master=%s",
+        localHostPort.ToString(), hostPort.ToString());
     return std::make_shared<WorkerLocalMasterOCApi>(service, localHostPort, akSkManager);
 }
 

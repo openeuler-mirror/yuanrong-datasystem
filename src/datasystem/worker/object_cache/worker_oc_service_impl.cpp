@@ -1282,7 +1282,7 @@ void WorkerOCServiceImpl::EraseFailedWorkerMasterApi(HostPort &masterAddr)
 
 Status WorkerOCServiceImpl::WarmupWorkerMasterRpc(const HostPort &masterAddr)
 {
-    static constexpr int64_t MASTER_RPC_WARMUP_TIMEOUT_MS = 5'000;
+    static constexpr int64_t MASTER_RPC_WARMUP_TIMEOUT_MS = 500;
     CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_INVALID, "Master address is empty.");
     Timer timer;
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);

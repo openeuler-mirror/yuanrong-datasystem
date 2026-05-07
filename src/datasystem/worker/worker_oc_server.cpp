@@ -229,6 +229,14 @@ std::string BuildWarmupKey(const std::string &workerAddr)
     }, '_');
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
+
+void SleepForWarmupScanInterval(const std::atomic<bool> &exitFlag, std::condition_variable &exitCv,
+                                std::mutex &exitMutex)
+{
+    std::unique_lock<std::mutex> lock(exitMutex);
+    exitCv.wait_for(lock, std::chrono::milliseconds(WARMUP_SCAN_INTERVAL_MS),
+                    [&exitFlag]() { return exitFlag.load(); });
+}
 }  // namespace
 
 static bool ValidateEtcdOrMetastoreAddress()
@@ -1189,6 +1197,7 @@ Status WorkerOCServer::MaybeStartConnectionWarmup()
 void WorkerOCServer::StopConnectionWarmup()
 {
     warmupExit_ = true;
+    warmupScanCv_.notify_all();
     if (warmupControllerThread_ != nullptr) {
         warmupControllerThread_->join();
         warmupControllerThread_.reset();
@@ -1287,7 +1296,7 @@ void WorkerOCServer::RunUrmaWarmupController()
         if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
             break;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(WARMUP_SCAN_INTERVAL_MS));
+        SleepForWarmupScanInterval(warmupExit_, warmupScanCv_, warmupScanMutex_);
     }
 
     auto successCount = GetUrmaWarmupSuccessCount(futures);
@@ -1329,7 +1338,7 @@ Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
         warmupThreadPoolForSubmit = masterRpcWarmupThreadPool_;
     }
     try {
-        (void)warmupThreadPoolForSubmit->Submit([this]() { WarmupReadyWorkerMasterRpcOnce(); });
+        (void)warmupThreadPoolForSubmit->Submit([this]() { WarmupReadyWorkerMasterRpcOnStartup(); });
     } catch (const std::exception &e) {
         LOG(WARNING) << "[MASTER_RPC_WARMUP] submit startup warmup failed, error=" << e.what();
     }
@@ -1339,6 +1348,7 @@ Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
 void WorkerOCServer::StopWorkerMasterRpcWarmup()
 {
     masterRpcWarmupExit_ = true;
+    masterRpcWarmupScanCv_.notify_all();
     std::shared_ptr<ThreadPool> warmupThreadPool;
     {
         std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
@@ -1348,7 +1358,8 @@ void WorkerOCServer::StopWorkerMasterRpcWarmup()
     warmupThreadPool.reset();
 }
 
-bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr)
+bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(
+    const std::string &masterAddr, const std::function<void(const std::string &)> &onSuccess)
 {
     if (masterAddr.empty() || masterAddr == hostPort_.ToString()) {
         return false;
@@ -1366,7 +1377,9 @@ bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAd
         objCacheClientWorkerSvc = objCacheClientWorkerSvc_;
         warmupThreadPool = masterRpcWarmupThreadPool_;
     }
-    auto warmupTask = [this, masterAddr, objCacheClientWorkerSvc]() {
+    auto warmupTask = [this, masterAddr, objCacheClientWorkerSvc, onSuccess]() {
+        auto traceGuard =
+            Trace::Instance().SetTraceNewID(GetStringUuid().substr(0, SHORT_TRACEID_SIZE) + "-wm-rpc-warmup");
         Raii eraseWarmupAddr([this, masterAddr]() {
             std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
             warmingMasterRpcAddrs_.erase(masterAddr);
@@ -1384,6 +1397,9 @@ bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAd
                                          rc.ToString());
             return false;
         }
+        if (onSuccess) {
+            onSuccess(masterAddr);
+        }
         return true;
     };
     try {
@@ -1399,7 +1415,9 @@ bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAd
     return true;
 }
 
-size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers)
+size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(
+    const std::vector<std::pair<std::string, std::string>> &workers,
+    const std::unordered_set<std::string> *warmedAddrs, const std::function<void(const std::string &)> &onSuccess)
 {
     size_t scheduledCount = 0;
     for (const auto &worker : workers) {
@@ -1411,11 +1429,76 @@ size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std:
         if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
             continue;
         }
-        if (SubmitWorkerMasterRpcWarmupTask(worker.first)) {
+        if (warmedAddrs != nullptr && warmedAddrs->count(worker.first) > 0) {
+            continue;
+        }
+        if (SubmitWorkerMasterRpcWarmupTask(worker.first, onSuccess)) {
             ++scheduledCount;
         }
     }
     return scheduledCount;
+}
+
+void WorkerOCServer::WarmupReadyWorkerMasterRpcOnStartup()
+{
+    if (etcdStore_ == nullptr) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    auto warmedAddrs = std::make_shared<std::unordered_set<std::string>>();
+    auto warmedAddrsMutex = std::make_shared<std::mutex>();
+    auto markWarmupSucceeded = [warmedAddrs, warmedAddrsMutex](const std::string &masterAddr) {
+        std::lock_guard<std::mutex> lock(*warmedAddrsMutex);
+        warmedAddrs->emplace(masterAddr);
+    };
+    uint32_t stableRounds = 0;
+    size_t totalScheduledCount = 0;
+    size_t lastDiscoveredCount = 0;
+    size_t lastWarmedCount = 0;
+    for (; !masterRpcWarmupExit_;) {
+        std::vector<std::pair<std::string, std::string>> workers;
+        int64_t revision = 0;
+        auto rc = etcdStore_->GetAll(ETCD_CLUSTER_TABLE, workers, revision);
+        if (rc.IsError()) {
+            LOG(WARNING) << "[MASTER_RPC_WARMUP] get ready workers failed, status=" << rc.ToString();
+        } else {
+            size_t oldWarmedCount;
+            std::unordered_set<std::string> warmedSnapshot;
+            {
+                std::lock_guard<std::mutex> lock(*warmedAddrsMutex);
+                oldWarmedCount = warmedAddrs->size();
+                warmedSnapshot = *warmedAddrs;
+            }
+            auto scheduledCount =
+                ScheduleWorkerMasterRpcWarmupTasks(workers, &warmedSnapshot, markWarmupSucceeded);
+            totalScheduledCount += scheduledCount;
+            {
+                std::lock_guard<std::mutex> lock(*warmedAddrsMutex);
+                lastWarmedCount = warmedAddrs->size();
+            }
+            size_t pendingCount;
+            {
+                std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
+                pendingCount = warmingMasterRpcAddrs_.size();
+            }
+            stableRounds = (scheduledCount == 0 && pendingCount == 0 && lastWarmedCount == oldWarmedCount)
+                               ? stableRounds + 1
+                               : 0;
+            lastDiscoveredCount = workers.size();
+        }
+
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
+            break;
+        }
+        SleepForWarmupScanInterval(masterRpcWarmupExit_, masterRpcWarmupScanCv_, masterRpcWarmupScanMutex_);
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] startup finished, scheduled_count=%zu, warmup_target_count=%zu, "
+                              "discovered_worker_count=%zu, elapsed_ms=%lld",
+                              totalScheduledCount, lastWarmedCount, lastDiscoveredCount, elapsedMs);
 }
 
 void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event &event)
@@ -1436,23 +1519,6 @@ void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event 
     if (SubmitWorkerMasterRpcWarmupTask(masterAddr)) {
         LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] scheduled by cluster event, master=%s", masterAddr);
     }
-}
-
-void WorkerOCServer::WarmupReadyWorkerMasterRpcOnce()
-{
-    if (etcdStore_ == nullptr || masterRpcWarmupExit_) {
-        return;
-    }
-    std::vector<std::pair<std::string, std::string>> workers;
-    int64_t revision = 0;
-    auto rc = etcdStore_->GetAll(ETCD_CLUSTER_TABLE, workers, revision);
-    if (rc.IsError()) {
-        LOG(WARNING) << "[MASTER_RPC_WARMUP] get ready workers failed, status=" << rc.ToString();
-        return;
-    }
-    auto scheduledCount = ScheduleWorkerMasterRpcWarmupTasks(workers);
-    LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] startup scheduled_count=%zu, discovered_worker_count=%zu",
-                              scheduledCount, workers.size());
 }
 
 Status WorkerOCServer::ReadinessProbe()
