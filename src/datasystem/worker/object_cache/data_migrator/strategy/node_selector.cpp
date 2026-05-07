@@ -76,17 +76,12 @@ void NodeSelector::Shutdown()
         std::lock_guard<std::mutex> lock(taskMutex_);
         running_.store(false);
     }
+    token_->alive.store(false);
     taskCv_.notify_all();
     subReadyPost_.Set();
-    token_->alive.store(false);
 
     if (workerThread_.joinable()) {
-        std::lock_guard<std::mutex> lck(token_->mutex_);
-        if (!token_->working) {
-            workerThread_.join();
-        } else {
-            workerThread_.detach();
-        }
+        workerThread_.join();
     }
     etcdCM_  = nullptr;
     apiManager_.reset();
@@ -253,7 +248,12 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
         }
         token_->working = true;
     }
-    return workerMasterApi->ReportResource(req, rsp);
+    auto rc = workerMasterApi->ReportResource(req, rsp);
+    {
+        std::lock_guard<std::mutex> lck(token_->mutex_);
+        token_->working = false;
+    }
+    return rc;
 }
 
 Status NodeSelector::CollectClusterInfo()
