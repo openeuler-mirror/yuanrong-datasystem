@@ -517,6 +517,93 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXPartialNullBuffers)
     ASSERT_EQ(val, existVal2);
 }
 
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXMSetWithPlaceholder)
+{
+    // Regression test for Issue #494: concurrent MCreate NX + MSet with unfiltered
+    // placeholder buffers should not produce "Object already sealed" error.
+    // Before fix: MCreate NX placeholder had isSeal=true, MSet rejected it with
+    // K_OC_ALREADY_SEALED. After fix: placeholder has isSeal=false, MSet skips
+    // dataSize==0 buffers.
+    std::shared_ptr<KVClient> testClient;
+    InitTestKVClient(0, testClient);
+
+    std::string existingKey = "issue494_exist_" + testClient->GenerateKey();
+    std::string newKey = "issue494_new_" + testClient->GenerateKey();
+    std::string existVal = "existing_value";
+    std::string newVal = "new_value";
+
+    // Pre-create one key so NX will reject it
+    DS_ASSERT_OK(testClient->Set(existingKey, existVal));
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::string> keys{ existingKey, newKey };
+    std::vector<uint64_t> sizes{ existVal.size(), newVal.size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(testClient->MCreate(keys, sizes, param, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    ASSERT_EQ(buffers[0]->GetSize(), 0) << "Existing key buffer should be NX placeholder";
+    ASSERT_GT(buffers[1]->GetSize(), 0) << "New key buffer should have valid size";
+
+    // MemoryCopy only to valid buffer
+    DS_ASSERT_OK(buffers[1]->MemoryCopy(newVal.data(), newVal.size()));
+
+    // Core assertion: MSet with ALL buffers (including placeholder) must succeed.
+    // Before fix this would fail with K_OC_ALREADY_SEALED.
+    DS_ASSERT_OK(testClient->MSet(buffers));
+
+    // Verify new key was published correctly
+    std::string val;
+    DS_ASSERT_OK(testClient->Get(newKey, val));
+    ASSERT_EQ(val, newVal);
+
+    // Verify existing key is unchanged
+    DS_ASSERT_OK(testClient->Get(existingKey, val));
+    ASSERT_EQ(val, existVal);
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXMSetAllPlaceholders)
+{
+    // Edge case: MSet called with ALL placeholder buffers (all keys already exist).
+    // Should return OK without publishing anything.
+    std::shared_ptr<KVClient> testClient;
+    InitTestKVClient(0, testClient);
+
+    std::string key1 = "issue494_allph_1_" + testClient->GenerateKey();
+    std::string key2 = "issue494_allph_2_" + testClient->GenerateKey();
+    std::string val1 = "val1";
+    std::string val2 = "val2";
+
+    // Pre-create all keys
+    DS_ASSERT_OK(testClient->Set(key1, val1));
+    DS_ASSERT_OK(testClient->Set(key2, val2));
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    std::vector<std::string> keys{ key1, key2 };
+    std::vector<uint64_t> sizes{ val1.size(), val2.size() };
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    DS_ASSERT_OK(testClient->MCreate(keys, sizes, param, buffers));
+
+    ASSERT_EQ(buffers[0]->GetSize(), 0);
+    ASSERT_EQ(buffers[1]->GetSize(), 0);
+
+    // MSet with all placeholders should succeed (nothing to publish)
+    DS_ASSERT_OK(testClient->MSet(buffers));
+
+    // Verify original values unchanged
+    std::string val;
+    DS_ASSERT_OK(testClient->Get(key1, val));
+    ASSERT_EQ(val, val1);
+    DS_ASSERT_OK(testClient->Get(key2, val));
+    ASSERT_EQ(val, val2);
+}
+
 TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadRace)
 {
     // Test: multiple threads race to MCreate NX the same key.
@@ -583,6 +670,129 @@ TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadRace)
     std::string val;
     DS_ASSERT_OK(raceClient->Get(key, val));
     ASSERT_EQ(val, value);
+}
+
+TEST_F(KVCacheExistenceOptTest, TestMCreateNXMultiThreadBatchOverlap)
+{
+    // Reproduce Issue #494: Concurrent MSet with NX existence on overlapping key
+    // batches, shared KVClient. Pre-existing keys create placeholder buffers that
+    // were incorrectly marked isSeal=true before the fix, causing MSet to fail with
+    // K_OC_ALREADY_SEALED ("Object already sealed error" at object_client_impl.cpp).
+    //
+    // Scenario (per issue #494):
+    //   2 nodes, 3 workers/node, 1 client/worker
+    //   Each client randomly picks keys, checks existence (NX), MSet on miss
+    //   20 ops/sec, keys 1-150000, multi-threaded shared KVClient
+    //
+    // This test simulates: 4 threads sharing one KVClient, each with its own
+    // batch of keys where some overlap across threads and some keys pre-exist.
+    std::shared_ptr<KVClient> sharedClient;
+    InitTestKVClient(0, sharedClient);
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE;
+    param.existence = ExistenceOpt::NX;
+
+    // Pre-create overlapping keys that some threads will hit as "already exist"
+    std::vector<std::string> preExistingKeys;
+    constexpr int numPreExisting = 4;
+    for (int i = 0; i < numPreExisting; i++) {
+        preExistingKeys.push_back(
+            "issue494_preexist_" + sharedClient->GenerateKey() + "_" + std::to_string(i));
+        DS_ASSERT_OK(sharedClient->Set(preExistingKeys[i], "pre_existing_value_" + std::to_string(i)));
+    }
+
+    constexpr int numThreads = 4;
+    constexpr int keysPerThread = 6;
+    constexpr int sharedKeyPoolSize = 8;
+    constexpr int kTestDataSize = 64;
+    constexpr int kKeyStride = 2;
+    // Shared key pool: some new, some from preExistingKeys
+    std::vector<std::string> sharedKeyPool;
+    for (int i = 0; i < sharedKeyPoolSize; i++) {
+        if (i < numPreExisting) {
+            sharedKeyPool.push_back(preExistingKeys[i]);
+        } else {
+            sharedKeyPool.push_back(
+                "issue494_new_" + sharedClient->GenerateKey() + "_" + std::to_string(i));
+        }
+    }
+
+    std::atomic<int> msetOkCount(0);
+    std::atomic<int> sealedErrorCount(0);
+    std::atomic<int> totalOps(0);
+
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(numThreads);
+
+    std::vector<std::future<void>> futures;
+    futures.reserve(numThreads);
+    for (int t = 0; t < numThreads; t++) {
+        futures.emplace_back(pool.Submit([&, t]() {
+            start.wait();
+            // Each thread picks keysPerThread keys, rotated by thread index
+            // to create overlapping access patterns
+            std::vector<std::string> keys;
+            std::vector<uint64_t> sizes;
+            for (int j = 0; j < keysPerThread; j++) {
+                int poolIdx = (t * kKeyStride + j) % sharedKeyPoolSize;
+                keys.push_back(sharedKeyPool[poolIdx]);
+                sizes.push_back(kTestDataSize);
+            }
+
+            std::vector<std::shared_ptr<Buffer>> buffers;
+            Status rc = sharedClient->MCreate(keys, sizes, param, buffers);
+            if (!rc.IsOk()) {
+                if (rc.GetCode() == StatusCode::K_OC_ALREADY_SEALED) {
+                    sealedErrorCount++;
+                }
+                totalOps++;
+                return;
+            }
+
+            // MemoryCopy data into non-placeholder buffers, then MSet all
+            for (size_t i = 0; i < keys.size(); i++) {
+                if (buffers[i]->GetSize() > 0) {
+                    std::string data = "data_" + std::to_string(t) + "_" + std::to_string(i);
+                    data.resize(kTestDataSize);
+                    buffers[i]->MemoryCopy(data.data(), data.size());
+                }
+            }
+            rc = sharedClient->MSet(buffers);
+            if (!rc.IsOk()) {
+                if (rc.GetCode() == StatusCode::K_OC_ALREADY_SEALED) {
+                    sealedErrorCount++;
+                }
+            } else {
+                msetOkCount++;
+            }
+            totalOps++;
+        }));
+    }
+
+    ready.set_value();
+    for (auto &f : futures) {
+        f.get();
+    }
+
+    // Core assertion: zero K_OC_ALREADY_SEALED errors.
+    // Before fix: placeholder buffers from NX-rejected keys had isSeal=true,
+    // causing MSet to reject them with K_OC_ALREADY_SEALED.
+    ASSERT_EQ(sealedErrorCount.load(), 0)
+        << "K_OC_ALREADY_SEALED should not occur. Placeholder buffers must have isSeal=false";
+
+    // All threads should have completed operations
+    ASSERT_EQ(totalOps.load(), numThreads);
+
+    // Verify keys can be read back
+    for (size_t i = numPreExisting; i < sharedKeyPool.size(); i++) {
+        std::string val;
+        Status rc = sharedClient->Get(sharedKeyPool[i], val);
+        if (rc.IsOk()) {
+            ASSERT_FALSE(val.empty());
+        }
+    }
 }
 
 }  // namespace st
