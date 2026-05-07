@@ -90,6 +90,8 @@ Status ClientStreamBase::ReadAll(ZmqRecvFlags flags)
     RETURN_IF_NOT_OK(mQue_->ClientReceiveMsg(reply, flags));
     inMsg_ = std::move(reply.second);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
+    RecordTick(reply.first, TICK_CLIENT_END);
+    RecordRpcLatencyMetrics(reply.first);
     return Status::OK();
 }
 }  // namespace datasystem

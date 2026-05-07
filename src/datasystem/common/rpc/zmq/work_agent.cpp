@@ -59,7 +59,7 @@ Status WorkAgent::ClientToService(ZmqMetaMsgFrames &p)
     EventType type = uds_ ? EventType::V1MTP : (decoder_->V2Client() ? EventType::V2MTP : EventType::V1MTP);
     RETURN_IF_NOT_OK(
         ParseMsgFrames(frames, p.first, sockFd_.GetFd(), type, userId, PerfKey::ZMQ_NETWORK_TRANSFER_SERVER_UDS));
-
+    RecordTick(p.first, TICK_SERVER_EXEC_START);
     // The meta has been extracted into p.first. Remaining frames will be moved into p.second
     p.second = std::move(frames);
     return Status::OK();
@@ -71,6 +71,9 @@ Status WorkAgent::ServiceToClient(ZmqMetaMsgFrames &p)
     CHECK_FAIL_RETURN_STATUS(meta.ticks_size() > 0, K_RUNTIME_ERROR,
                              FormatString("Incomplete MetaPb:\n%s", meta.DebugString()));
     PerfPoint::RecordElapsed(PerfKey::ZMQ_APP_WORKLOAD, GetLapTime(meta, "ZMQ_APP_WORKLOAD"));
+    RecordTick(meta, TICK_SERVER_EXEC_END);
+    RecordTick(meta, TICK_SERVER_SEND);
+    RecordServerLatencyMetrics(meta);
     ZmqMsgFrames &frames = p.second;
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     // No need to prepend the gateway if it is direct connection

@@ -280,11 +280,11 @@ TEST_F(ZmqRpcQueueLatencyTest, QueueFlowSmoke)
     LOG(INFO) << "=== METRICS DUMP ===\n" << dump.dump();
     LOG(INFO) << "[zmq_queue_latency] metrics_summary (same as dump above)";
 
-    const uint64_t qCnt = MetricTotalCount(dump, "zmq_client_queuing_latency");
+    const uint64_t qCnt = MetricTotalCount(dump, "zmq_client_req_queuing_latency");
     const uint64_t e2eCnt = MetricTotalCount(dump, "zmq_rpc_e2e_latency");
     LOG(INFO) << "[zmq_queue_latency] histogram_counts queuing=" << qCnt << " e2e=" << e2eCnt;
 
-    EXPECT_GT(qCnt, 0u) << "expect zmq_client_queuing_latency samples after load";
+    EXPECT_GT(qCnt, 0u) << "expect zmq_client_req_queuing_latency samples after load";
     EXPECT_GT(e2eCnt, 0u) << "expect zmq_rpc_e2e_latency samples after load";
 
     stub.reset();
