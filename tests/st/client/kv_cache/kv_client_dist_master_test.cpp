@@ -618,7 +618,7 @@ TEST_F(STCClientDistMasterTest, TestRemoteGetSameSubscribeObjectsConcurrently)
     GetWorkerUuids();
     std::vector<std::string> objectKeys{ "Zed",  "Vi",      "Morgana",  "AShe",   "Aatrox", "Annie",     "Akali",
                                         "Bard", "Camille", "Darius",   "Ekko",   "Garen",  "Gangplank", "Jax",
-                                        "Jinx", "Jax",     "Kassadin", "Kennen", "Lillia", "Lucian",    "Pyke" };
+                                        "Jinx", "KaiSa",   "Kassadin", "Kennen", "Lillia", "Lucian",    "Pyke" };
     std::string val = "Welcome to Wild Rift";
     DS_ASSERT_OK(client_->Set(objectKeys.back(), val));
 

@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
+#include <algorithm>
 #include <climits>
 #include <cstdint>
 #include <memory>
@@ -49,6 +50,7 @@ static constexpr int64_t WORKER_ADD_MILLISECOND = 5 * 1000;
 static constexpr int64_t WORKER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
 static constexpr double WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
 static constexpr int64_t RETRY_WAIT_MAX_TIME_MS = 2;
+static constexpr int64_t RESOURCE_REPORT_RPC_TIMEOUT_MS = 3 * 1000;
 
 #define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                               \
     do {                                                                                       \
@@ -146,14 +148,15 @@ Status WorkerRemoteMasterOCApi::ReportResource(master::ResourceReportReqPb &requ
 {
     reqTimeoutDuration.Init();
     RpcOptions opts;
-    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    int64_t timeoutMs =
+        std::min(WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()), RESOURCE_REPORT_RPC_TIMEOUT_MS);
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
             int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                                      FormatString("Request timeout (%ld ms).", -remainingTime));
-            opts.SetTimeout(remainingTime);
+            opts.SetTimeout(std::min(remainingTime, RESOURCE_REPORT_RPC_TIMEOUT_MS));
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             Timer timer;
             return rpcSession_->ReportResource(opts, request, response);
