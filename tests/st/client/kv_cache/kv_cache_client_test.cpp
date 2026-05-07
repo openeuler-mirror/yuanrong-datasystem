@@ -2737,6 +2737,8 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
     auto clientEnvFile = GetWorkerEnvFilePath(FLAGS_log_dir);
     DS_ASSERT_OK(ReadWholeFile(clientEnvFile, content));
     ASSERT_NE(content.find(std::string(WORKER_ENV_POD_IP_KEY) + "=" + ENV_RECOVERY_POD_IP_VALUE), std::string::npos);
+    ASSERT_NE(content.find(std::string(ENV_RECOVERY_HOST_ID_ENV0) + "=" + ENV_RECOVERY_HOST_ID_VALUE0),
+              std::string::npos);
     ASSERT_FALSE(FileExist(clientEnvFile + ENV_RECOVERY_LOCK_FILE_SUFFIX));
 
     LOG(INFO) << ENV_RECOVERY_CLIENT_LOG_MESSAGE;
@@ -2752,6 +2754,21 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
     std::string valueGet;
     DS_ASSERT_OK(client->Get(key, valueGet));
     ASSERT_EQ(value, valueGet);
+
+    ASSERT_EQ(unsetenv(ENV_RECOVERY_HOST_ID_ENV0), 0);
+    std::shared_ptr<KVClient> recoveredClient;
+    InitTestKVClient(recoveredClient, ServiceAffinityPolicy::REQUIRED_SAME_NODE, ENV_RECOVERY_HOST_ID_ENV0);
+    Provider::Instance().FlushLogs();
+    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, content));
+    ASSERT_NE(content.find(std::string("Host ID is ") + ENV_RECOVERY_HOST_ID_VALUE0
+                           + " from persisted SDK env file " + clientEnvFile),
+              std::string::npos);
+    std::string recoveredKey = "env_recovery_sdk_host_id_key";
+    std::string recoveredValue = "env_recovery_sdk_host_id_value";
+    DS_ASSERT_OK(recoveredClient->Set(recoveredKey, recoveredValue));
+    std::string recoveredValueGet;
+    DS_ASSERT_OK(recoveredClient->Get(recoveredKey, recoveredValueGet));
+    ASSERT_EQ(recoveredValue, recoveredValueGet);
 }
 
 TEST_F(KVCacheClientServiceDiscoveryTest, TestRandom)
