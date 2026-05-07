@@ -410,6 +410,7 @@ ds_cc_library(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common:common_constants",
+        "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/protos:utils_cc_proto",
         "//src/datasystem/protos:master_object_cc_proto",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
