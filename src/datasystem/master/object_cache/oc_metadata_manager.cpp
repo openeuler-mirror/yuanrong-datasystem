@@ -2747,29 +2747,26 @@ void OCMetadataManager::RemoveSubscribeCache(const std::string &requestId)
     }
 }
 
-Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
-                                             std::vector<ObjectLocationInfoPb> &locations)
+Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp)
 {
+    std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
+    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-    std::list<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     for (const auto &objectKey : objectKeys) {
         TbbMetaTable::const_accessor accessor;
+        ObjectLocationInfoPb *location = rsp.add_location_infos();
+        location->set_object_key(objectKey);
         if (metaTable_.find(accessor, objectKey)) {
             VLOG(1) << FormatString("[ObjectKey %s] GetObjectLocations: get object location from cache", objectKey);
-            ObjectLocationInfoPb location;
-            location.set_object_key(objectKey);
             if (!accessor->second.locations.empty()) {
                 for (const auto &address : accessor->second.locations) {
-                    location.mutable_object_locations()->Add()->assign(address.first);
+                    location->mutable_object_locations()->Add()->assign(address.first);
                 }
             }
-            location.set_object_size(accessor->second.meta.data_size());
-            locations.emplace_back(std::move(location));
+            location->set_object_size(accessor->second.meta.data_size());
         } else {
-            ObjectLocationInfoPb location;
-            location.set_object_key(objectKey);
-            location.set_object_size(0);
-            locations.emplace_back(std::move(location));
+            location->set_object_size(0);
         }
     }
     return Status::OK();

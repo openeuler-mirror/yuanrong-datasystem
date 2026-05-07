@@ -355,11 +355,8 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    std::vector<ObjectLocationInfoPb> locations;
-    locations.reserve(req.object_keys().size());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->GetObjectLocations(req, locations),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->GetObjectLocations(req, resp),
                                      "Master get object locations failed");
-    *resp.mutable_location_infos() = { locations.begin(), locations.end() };
     return Status::OK();
 }
 

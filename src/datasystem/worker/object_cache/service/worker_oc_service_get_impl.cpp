@@ -2583,6 +2583,51 @@ Status AuthenticateGetMetaUser(AkSkManager *akSkManager, const GetObjMetaInfoReq
     return Status::OK();
 }
 
+static void MergeObjectLocations(master::GetObjectLocationsRspPb &masterRsp,
+                                 std::unordered_map<std::string, ObjectLocationInfoPb> &result)
+{
+    for (auto &item : *masterRsp.mutable_location_infos()) {
+        // Use operator[] to ensure redirect data (authoritative source) overwrites main query result
+        result[item.object_key()] = std::move(item);
+    }
+}
+
+Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
+    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+    std::unordered_map<std::string, ObjectLocationInfoPb> &result,
+    Status &lastRc)
+{
+    for (const auto &redirectInfo : infos) {
+        HostPort redirectMasterAddr;
+        Status rc = GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Get redirect master address failed: %s", rc.ToString());
+            lastRc = rc;
+            continue;
+        }
+        auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
+        if (redirectWorkerMasterApi == nullptr) {
+            LOG(ERROR) << FormatString("Get redirect master api failed, address: %s", redirectMasterAddr.ToString());
+            lastRc = Status(K_RUNTIME_ERROR, "redirect master get failed");
+            continue;
+        }
+        master::GetObjectLocationsReqPb redirectReq;
+        master::GetObjectLocationsRspPb redirectRsp;
+        *redirectReq.mutable_object_keys() = { redirectInfo.change_meta_ids().begin(),
+                                               redirectInfo.change_meta_ids().end() };
+        redirectReq.set_redirect(false);
+        rc = redirectWorkerMasterApi->GetObjectLocations(redirectReq, redirectRsp);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Query locations from redirect master %s failed: %s",
+                                       redirectMasterAddr.ToString(), rc.ToString());
+            lastRc = rc;
+            continue;
+        }
+        MergeObjectLocations(redirectRsp, result);
+    }
+    return Status::OK();
+}
+
 Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_string<char>> &objectKeys,
                                                   std::unordered_map<std::string, ObjectLocationInfoPb> &result,
                                                   Status &lastRc)
@@ -2595,20 +2640,23 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         master::GetObjectLocationsReqPb masterReq;
         master::GetObjectLocationsRspPb masterRsp;
         *masterReq.mutable_object_keys() = { objs.begin(), objs.end() };
-        // redirect
+        masterReq.set_redirect(true);
         auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(workerAddr);
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, GetObjMetaInfo failed");
-        auto status = workerMasterApi->GetObjectLocations(masterReq, masterRsp);
+        std::function<Status(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)> func =
+            [&workerMasterApi](master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &rsp) {
+                return workerMasterApi->GetObjectLocations(req, rsp);
+            };
+        auto status = RedirectRetryWhenMetasMoving(masterReq, masterRsp, func);
         if (status.IsError()) {
             LOG(ERROR) << FormatString("Query locations from %s of %s failed. %s", workerAddr.ToString(),
                                        VectorToString(objs), status.ToString());
             lastRc = status;
             continue;
         }
-        for (auto &item : *masterRsp.mutable_location_infos()) {
-            result.emplace(item.object_key(), std::move(item));
-        }
+        MergeObjectLocations(masterRsp, result);
+        QueryObjectLocationsFromRedirectMaster(masterRsp.info(), result, lastRc);
     }
     if (result.empty()) {
         return lastRc;
