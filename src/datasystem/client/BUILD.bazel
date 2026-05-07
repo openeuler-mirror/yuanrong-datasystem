@@ -234,6 +234,7 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:validator",

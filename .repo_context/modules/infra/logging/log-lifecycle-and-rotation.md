@@ -89,6 +89,8 @@
   - after `log_dir` is resolved, logging refreshes the pod identifier through `<log_dir>/env`;
   - if `POD_IP` exists, it is written to `pod_ip` in that file; if not, the persisted `pod_ip` is used before falling
     back to the provider value;
+  - SDK `ServiceDiscoveryOptions::hostIdEnvName` and worker `FLAGS_host_id_env_name` use the same persisted env file
+    pattern, storing the actual configured environment variable name as the key;
   - the persisted env file is guarded by a directory `flock` and atomic replace so multiple SDK/client processes can
     share the same log directory without dropping either tracked key or leaving a companion lock file.
 - Useful runtime flags defined in `logging.cpp`:
