@@ -24,9 +24,10 @@
 #include <iterator>
 #include <map>
 
+#include "datasystem/common/log/pod_identifier.h"
+#include "datasystem/common/log/log_time.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uri.h"
-#include "datasystem/common/log/log_time.h"
 
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
@@ -92,10 +93,7 @@ void HardDiskExporter::PruneOldLogFiles(const std::vector<std::string> &files)
 Status HardDiskExporter::Init(const std::string &filePath)
 {
     RETURN_IF_NOT_OK(CreateFileByPath(filePath));
-    podName_ = (std::getenv("POD_NAME") == nullptr) ? std::getenv("HOSTNAME") : std::getenv("POD_NAME");
-    if (podName_ == nullptr) {
-        podName_ = " ";
-    }
+    podName_ = GetPodIdentifier();
     MetricsExporter::Init();
     return Status::OK();
 }
@@ -104,7 +102,8 @@ void HardDiskExporter::Send(const std::string &message, Uri &uri, int line)
 {
     std::ostringstream constructStr;
     LogTime logTime;
-    ConstructLogPrefix(constructStr, logTime.getTm(), logTime.getUsec(), uri.GetFileName().c_str(), line, podName_,
+    ConstructLogPrefix(constructStr, logTime.getTm(), logTime.getUsec(), uri.GetFileName().c_str(), line,
+                       podName_.c_str(),
                        'I', FLAGS_cluster_name);
     constructStr << std::string(message);
     WriteMessage(constructStr.str());
