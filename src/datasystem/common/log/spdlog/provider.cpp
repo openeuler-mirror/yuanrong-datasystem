@@ -20,7 +20,7 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/pod_identifier.h"
 
-#include <cstdlib>
+#include "datasystem/common/log/pod_identifier.h"
 
 namespace datasystem {
 
