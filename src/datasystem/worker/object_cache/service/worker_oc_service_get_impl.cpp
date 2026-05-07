@@ -87,6 +87,7 @@ namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
@@ -2667,7 +2668,7 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
 bool WorkerOcServiceGetImpl::IsLocalObject(const std::string &key)
 {
     std::shared_ptr<SafeObjType> entry;
-    if (objectTable_->Get(key, entry).IsOk() && entry->RLock(false).IsOk()) {
+    if (objectTable_->Get(key, entry).IsOk() && entry->TryRLock(false).IsOk()) {
         Raii unlock([&entry]() { entry->RUnlock(); });
         return (*entry)->IsBinary() && !(*entry)->IsInvalid();
     }
@@ -2689,13 +2690,22 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     auto keys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     std::unordered_set<std::string> existKeys;
     std::vector<std::string> nonLocalKeys;
-    for (const auto &key : keys) {
+    existKeys.reserve(keys.size());
+    nonLocalKeys.reserve(keys.size());
+    Timer localCheckTimer;
+    for (auto it = keys.begin(); it != keys.end(); ++it) {
+        if (localCheckTimer.ElapsedMicroSecond() >= EXIST_LOCAL_CHECK_TIMEOUT_US) {
+            nonLocalKeys.insert(nonLocalKeys.end(), it, keys.end());
+            break;
+        }
+        const auto &key = *it;
         if (!IsLocalObject(key)) {
             nonLocalKeys.emplace_back(key);
             continue;
         }
         evictionManager_->Add(key);
         existKeys.emplace(key);
+        INJECT_POINT("worker.Exist.after_local_check");
     }
 
     Status rc;
@@ -2704,7 +2714,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
         std::vector<RpcMessage> payloads;
         std::map<std::string, uint64_t> absentObjectKeys;
-        rc = QueryMetadataFromMaster(keys, 0, queryResult, req.query_l2cache());
+        rc = QueryMetadataFromMaster(nonLocalKeys, 0, queryResult, req.query_l2cache());
         for (const auto &meta : queryMetas) {
             existKeys.emplace(meta.meta().object_key());
         }

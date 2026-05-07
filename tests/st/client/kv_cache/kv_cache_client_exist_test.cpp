@@ -145,6 +145,33 @@ TEST_F(KVCacheClientExistTest, TestExistKeys)
     ASSERT_EQ(exists[2], true); // check object 2
 }
 
+TEST_F(KVCacheClientExistTest, TestRemoteQueryAfterLocalCheckTimeout)
+{
+    std::string key0 = "key0";
+    std::string key1 = "key1";
+    std::string value0 = "value0";
+    std::string value1 = "value1";
+    ASSERT_EQ(client_->Set(key0, value0), Status::OK());
+    ASSERT_EQ(client_->Set(key1, value1), Status::OK());
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Exist.after_local_check", "1*sleep(1)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_query_meta", "call(K_OK)"));
+
+    std::vector<bool> exists;
+    ASSERT_EQ(client_->Exist({ key0, key1 }, exists).GetCode(), StatusCode::K_OK);
+    ASSERT_EQ(exists.size(), 2ul);
+    ASSERT_TRUE(exists[0]);
+    ASSERT_TRUE(exists[1]);
+
+    uint64_t localCheckInjectCount = 0;
+    uint64_t queryMetaInjectCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Exist.after_local_check",
+                                                       localCheckInjectCount));
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.before_query_meta", queryMetaInjectCount));
+    ASSERT_EQ(localCheckInjectCount, 1ul);
+    ASSERT_GE(queryMetaInjectCount, 1ul);
+}
+
 TEST_F(KVCacheClientExistTest, TestRetryExistKeys)
 {
     std::string key0 = "key0";
