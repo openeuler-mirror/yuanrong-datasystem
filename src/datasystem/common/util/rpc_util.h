@@ -40,8 +40,7 @@ namespace datasystem {
 inline bool IsRpcTimeout(const Status &status)
 {
     return status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-           || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
-           || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT;
+           || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT;
 }
 
 inline bool IsRpcTimeoutOrTryAgain(const Status &status)
@@ -129,7 +128,7 @@ template <class Function, class Handler>
 Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
                     const std::unordered_set<StatusCode> &retryCode, int32_t maxRpcTimeoutMs = MAX_RPC_TIMEOUT_MS,
                     const std::unordered_set<StatusCode> &exceptionCode = {}, bool logError = false,
-                    int32_t minOnceRpcTimeoutMs = 50)
+                    int32_t minOnceRpcTimeoutMs = 2)
 {
     if (timeoutMs < 0) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
