@@ -62,6 +62,8 @@ message MetaPb {
     string db_name = 12;
     int32 route_fd = 13;  // New version of routing_fd
     LogSampleState log_sample_state = 14;
+    // RPC latency metric timestamps. This is separate from ticks because ticks is the GetLapTime perf timeline.
+    repeated TickPb latency_ticks = 15;
 
     // ak/sk required.
     string tenant_id = 98;

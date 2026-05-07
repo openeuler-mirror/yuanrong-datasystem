@@ -93,8 +93,6 @@ public:
         }
         // Put the frames onto the outbound queue.
         auto p = std::make_pair(meta, std::move(frames));
-        // Request committed to outbound path; prefetch dequeue adds CLIENT_TO_STUB (Outbound).
-        RecordTick(p.first, TICK_CLIENT_ENQUEUE);
         // Copy p.first before it is moved (SendMsg consumes p.first)
         MetaPb clientMeta = p.first;
         Status rc = mQue->SendMsg(p);
@@ -160,17 +158,7 @@ public:
         Remove(tagId);
         ZmqMessage replyMsg;
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(rsp.first, "ZMQ_STUB_FRONT_TO_BACK"));
-        // Merge request-path client ticks first, then CLIENT_RECV so repeated-field order matches client timeline.
-        // Dedupe tick names vs unary ClientUnaryWriterReader (last writer wins downstream scans).
-        const MetaPb &clientMeta = asyncCall->GetClientMeta();
-        for (int i = 0; i < clientMeta.ticks_size(); ++i) {
-            const TickPb &src = clientMeta.ticks(i);
-            const char *tname = src.tick_name().c_str();
-            if (!MetaHasNamedTick(rsp.first, tname)) {
-                *rsp.first.mutable_ticks()->Add() = src;
-            }
-        }
-        RecordTick(rsp.first, TICK_CLIENT_RECV);
+        RecordTick(rsp.first, TICK_CLIENT_END);
         RecordRpcLatencyMetrics(rsp.first);
         rc = AckRequest(rsp.second, replyMsg);
         RETURN_IF_NOT_OK(rc);

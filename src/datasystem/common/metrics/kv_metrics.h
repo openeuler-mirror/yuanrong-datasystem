@@ -64,10 +64,11 @@ enum class KvMetricId : uint16_t {
     ZMQ_RPC_DESERIALIZE_LATENCY,
     ZMQ_SERVER_TASK_DELAY,
     // RPC Queue Flow Latency
-    ZMQ_CLIENT_QUEUING_LATENCY,
-    ZMQ_SERVER_QUEUE_WAIT_LATENCY,
+    ZMQ_CLIENT_REQ_QUEUING_LATENCY,
+    ZMQ_CLIENT_RSP_QUEUING_LATENCY,
+    ZMQ_SERVER_REQ_QUEUING_LATENCY,
     ZMQ_SERVER_EXEC_LATENCY,
-    ZMQ_SERVER_REPLY_LATENCY,
+    ZMQ_SERVER_RSP_QUEUING_LATENCY,
     ZMQ_RPC_E2E_LATENCY,
     ZMQ_RPC_NETWORK_LATENCY,
     // Memory Allocator Metrics
@@ -105,6 +106,8 @@ enum class KvMetricId : uint16_t {
     WORKER_GET_POST_QUERY_META_PHASE_LATENCY,
     /** Worker outbound BatchGetObjectRemote requests currently in progress */
     WORKER_INFLIGHT_REMOTE_GET_REQUEST,
+    /** ZMQ server poll handle latency */
+    ZMQ_SERVER_POLL_HANDLE_LATENCY,
     KV_METRIC_END
 };
 

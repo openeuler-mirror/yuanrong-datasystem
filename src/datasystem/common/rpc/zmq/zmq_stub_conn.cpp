@@ -181,6 +181,7 @@ Status ZmqFrontend::BackendToFrontend()
         Status rc;
         TraceGuard traceGuard = SetTraceContextFromMeta(meta);
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_BACK_TO_FRONT, GetLapTime(meta, "ZMQ_STUB_BACK_TO_FRONT"));
+        RecordTick(meta, TICK_CLIENT_SEND);
         // First take care of the easy one that must go through the zmq dealer socket.
         // Few internal methods (for uds/tcp handshake) must go through this code path.
         // Heartbeat method doesn't send out from here. Also, we can't support ZMQ_PAYLOAD_HANDSHAKE_METHOD
@@ -250,6 +251,7 @@ Status ZmqFrontend::ZmqSocketToBackend()
                                  FormatString("Incomplete MetaPb for receiver %s:\n%s", receiver, meta.DebugString()));
         PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_TCP,
                                  GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (ZMQ)"));
+        RecordTick(meta, TICK_CLIENT_RECV);
         auto p = std::make_pair(meta, std::move(frames));
         VLOG(RPC_LOG_LEVEL) << FormatString("Receiving reply for sender %s gateway %s client %s service '%s' method %d",
                                             receiver, meta.gateway_id(), meta.client_id(), meta.svc_name(),
@@ -574,6 +576,8 @@ Status ZmqSockConnHelper::GetEndPoint(const ReconnectInfo &cInfo, std::string &p
     }
     RETURN_IF_NOT_OK(rc);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
+    RecordTick(reply.first, TICK_CLIENT_END);
+    RecordRpcLatencyMetrics(reply.first);
     ZmqMessage replyMsg;
     RETURN_IF_NOT_OK(AckRequest(reply.second, replyMsg));
     auto curPath = ZmqMessageToString(replyMsg);
@@ -1275,8 +1279,6 @@ Status ZmqStubConnMgrImpl::GetZmqFrontendFromPtr(int64_t stubId, ZmqFrontend *ra
 
 Status ZmqStubConnMgrImpl::Outbound(const std::string &sender, ZmqMetaMsgFrames &&p)
 {
-    // CLIENT_TO_STUB: MsgQueMgr prefetcher dequeued (outbound queue); not zmq_msg_send.
-    RecordTick(p.first, TICK_CLIENT_TO_STUB);
     ZmqFrontend *fePtr = nullptr;
     SockConnEntry *connInfo = nullptr;
     int64_t stubId = 0;
@@ -1462,6 +1464,7 @@ Status SockConnEntry::FrontendToBackend(int fd, std::shared_ptr<SockConnEntry::F
     RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
+    RecordTick(meta, TICK_CLIENT_RECV);
     auto p = std::make_pair(meta, std::move(frames));
     VLOG(RPC_LOG_LEVEL) << FormatString("Receiving reply for sender %s gateway %s client %s service '%s' method %d",
                                         receiver, meta.gateway_id(), meta.client_id(), meta.svc_name(),

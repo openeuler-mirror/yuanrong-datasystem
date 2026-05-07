@@ -225,9 +225,8 @@ public:
 
     Status SendAll(ZmqSendFlags flags) override
     {
-        // Align with AsyncWriteImpl: enqueue then send; outbound adds TICK_CLIENT_TO_STUB on the queued copy.
+        // Align with AsyncWriteImpl: start then send; outbound adds TICK_CLIENT_SEND on the queued copy.
         StartTheClock(meta_);
-        RecordTick(meta_, TICK_CLIENT_ENQUEUE);
         ZmqMsgFrames frames = std::move(outMsg_);
         RETURN_IF_NOT_OK(SendConnMsg(meta_, frames, flags));
         return Status::OK();
@@ -238,7 +237,7 @@ public:
         inMsg_.clear();
         ZmqMetaMsgFrames reply;
         RETURN_IF_NOT_OK(RecvConnReply(reply, flags, false));
-        // Response MetaPb carries SERVER_* ticks + TICK_SERVER_RPC_WINDOW_NS; unary used to discard it.
+        // Response MetaPb carries SERVER_* latency ticks; unary used to discard it.
         lastConnReplyMeta_ = std::move(reply.first);
         inMsg_ = std::move(reply.second);
         payloadId_ = lastConnReplyMeta_.payload_index();
@@ -328,16 +327,6 @@ private:
         if (readOnce_.compare_exchange_strong(expected, true)) {
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " unary socket reading" << std::endl;
             RETURN_IF_NOT_OK(ReadAll(ZmqRecvFlags::NONE));
-            // Response MetaPb may omit request-path ticks copied into Outbound earlier; mirror Async merge.
-            for (int i = 0; i < meta_.ticks_size(); i++) {
-                const auto &t = meta_.ticks(i);
-                if (!MetaHasNamedTick(lastConnReplyMeta_, t.tick_name().c_str())) {
-                    *lastConnReplyMeta_.mutable_ticks()->Add() = t;
-                }
-            }
-            // Align with ZmqStubImpl::AsyncReadImpl: recv tick + queue-flow histograms before AckRequest().
-            RecordTick(lastConnReplyMeta_, TICK_CLIENT_RECV);
-            RecordRpcLatencyMetrics(lastConnReplyMeta_);
             ZmqMessage msg;
             RETURN_IF_NOT_OK(AckRequest(inMsg_, msg));
             PerfPoint point(PerfKey::ZMQ_RESPONSE_MSG_TO_PROTO);
@@ -347,8 +336,7 @@ private:
             VLOG(RPC_LOG_LEVEL) << "Client " << meta_.client_id() << " got message\n"
                                 << LogHelper::IgnoreSensitive(pb) << std::endl;
             // If we receive payload, check if the payload is banked at the server or come separately.
-            if (HasRecvPayloadOp() &&
-                (v2Server_ || lastConnReplyMeta_.payload_index() == ZMQ_OFFLINE_PAYLOAD_INX)) {
+            if (HasRecvPayloadOp() && (v2Server_ || lastConnReplyMeta_.payload_index() == ZMQ_OFFLINE_PAYLOAD_INX)) {
                 CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(inMsg_.size() == 1, StatusCode::K_INVALID,
                                                      "Expect a payload size frame only");
                 int64_t sz = 0;
@@ -393,7 +381,7 @@ private:
             // accurately show the transfer time.
             TraceGuard traceGuard = SetTraceContextFromMeta(meta);
             PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_TO_EXCL_CONN, GetLapTime(meta, "ZMQ_STUB_TO_EXCL_CONN"));
-
+            RecordTick(meta, TICK_CLIENT_SEND);
             // Add the meta to the frames
             RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));
 
@@ -415,12 +403,6 @@ private:
                 return rc;
             }
         }
-        // Stub Outbound stamps CLIENT_TO_STUB on the queued MetaPb copy; unary keeps a separate meta_ object.
-        // ReadImpl merges meta_ into reply meta for RecordRpcLatencyMetrics; without this, clientToStubTs is 0
-        // (no queuing / wrong network residual). Avoid double-stamp if caller already set the tick.
-        if (!MetaHasNamedTick(meta, TICK_CLIENT_TO_STUB)) {
-            RecordTick(meta, TICK_CLIENT_TO_STUB);
-        }
         return Status::OK();
     }
 
@@ -436,6 +418,8 @@ private:
             } else {
                 PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK,
                                          GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
+                RecordTick(reply.first, TICK_CLIENT_END);
+                RecordRpcLatencyMetrics(reply.first);
             }
         } else {
             ZmqMsgDecoder *decoder;
@@ -472,6 +456,9 @@ private:
             TraceGuard traceGuard = SetTraceContextFromMeta(meta, true);
             PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS,
                                      GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
+            RecordTick(meta, TICK_CLIENT_RECV);
+            RecordTick(meta, TICK_CLIENT_END);
+            RecordRpcLatencyMetrics(reply.first);
             reply = std::make_pair(meta, std::move(replyFrames));
         }
         return Status::OK();
