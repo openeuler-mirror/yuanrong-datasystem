@@ -57,7 +57,7 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
-constexpr uint32_t URMA_LOG_LIMIT_US = 100;
+constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr const char *RECV_JETTY_KEY_PREFIX = "recv:";
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
