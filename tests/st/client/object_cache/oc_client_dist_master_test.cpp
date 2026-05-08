@@ -1023,6 +1023,28 @@ TEST_F(OCClientDistMasterTest, GDecreaseWithRedirect)
     DS_ASSERT_OK(client->GDecreaseRef(objectKeys, failObjects));
 }
 
+TEST_F(OCClientDistMasterTest, GetObjMetaInfoRedirectToMetadataMaster)
+{
+    std::shared_ptr<ObjectClient> client0;
+    InitTestClient(0, client0);
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(1, client1);
+    std::string objectKey = ObjectKeyWithOwner(0, uuidMap_);
+    std::string data = "get object locations redirect data";
+    HostPort redirectAddr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, redirectAddr));
+    std::string redirectCall = FormatString("1*call(%s)", redirectAddr.ToString());
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "redirect.create.update.copy.meta", redirectCall));
+    DS_ASSERT_OK(client0->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.size(), CreateParam{}));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "redirect.query.delete", redirectCall));
+    std::vector<ObjMetaInfo> objMetas;
+    DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey }, objMetas));
+    ASSERT_EQ(objMetas.size(), size_t(1));
+    ASSERT_EQ(objMetas[0].objSize, data.size());
+    ASSERT_EQ(objMetas[0].locations, std::vector<std::string>{ GetWorkerUuid(0, uuidMap_) });
+}
+
 class OCClientDistMasterDfxTest : public OCClientDistMasterTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

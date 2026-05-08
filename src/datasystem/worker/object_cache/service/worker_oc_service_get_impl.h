@@ -289,6 +289,17 @@ private:
                               std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
 
     /**
+     * @brief Query object locations from redirect master.
+     * @param[in] infos Redirect metadata infos.
+     * @param[out] result The object location result.
+     * @param[out] lastRc The last error status if any redirect query failed.
+     * @return Status of the call.
+     */
+    Status QueryObjectLocationsFromRedirectMaster(
+        const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+        std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
+
+    /**
      * @brief Process a get request from client.
      * @param[in] objectKeys The object keys of the get request.
      * @param[in] offsetInfos The offest info for get request.

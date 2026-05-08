@@ -592,6 +592,7 @@ message ClientIdRefsForMigrationPb {
 
 message GetObjectLocationsReqPb {
   repeated string object_keys = 1;
+  bool redirect = 2;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -607,6 +608,8 @@ message ObjectLocationInfoPb {
 
 message GetObjectLocationsRspPb {
   repeated ObjectLocationInfoPb location_infos = 1;
+  repeated RedirectMetaInfo info = 2;
+  bool meta_is_moving = 3;
 }
 
 message ReplacePrimaryReqPb {
