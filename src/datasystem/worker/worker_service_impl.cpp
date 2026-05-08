@@ -55,6 +55,9 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/rdma_util.h"
+#endif
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
