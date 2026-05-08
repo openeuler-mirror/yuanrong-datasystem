@@ -1129,7 +1129,6 @@ Status WorkerOCServiceImpl::ReconciliationDecrRef(
 
 Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
