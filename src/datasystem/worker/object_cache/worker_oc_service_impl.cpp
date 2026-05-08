@@ -1281,6 +1281,28 @@ void WorkerOCServiceImpl::EraseFailedWorkerMasterApi(HostPort &masterAddr)
     workerMasterApiManager_->EraseFailedWorkerMasterApi(masterAddr, StubType::WORKER_MASTER_OC_SVC);
 }
 
+Status WorkerOCServiceImpl::WarmupWorkerMasterRpc(const HostPort &masterAddr)
+{
+    static constexpr int64_t MASTER_RPC_WARMUP_TIMEOUT_MS = 5'000;
+    CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_INVALID, "Master address is empty.");
+    Timer timer;
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "GetWorkerMasterApi failed.");
+
+    master::GetObjectLocationsReqPb req;
+    master::GetObjectLocationsRspPb rsp;
+    auto rc = workerMasterApi->GetObjectLocations(req, rsp, MASTER_RPC_WARMUP_TIMEOUT_MS);
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    if (rc.IsOk()) {
+        LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] success, master=%s, elapsed=%.3f ms", masterAddr.ToString(),
+                                  elapsedMs);
+    } else {
+        LOG(WARNING) << FormatString("[MASTER_RPC_WARMUP] failed, master=%s, elapsed=%.3f ms, status=%s",
+                                     masterAddr.ToString(), elapsedMs, rc.ToString());
+    }
+    return rc;
+}
+
 Status WorkerOCServiceImpl::GetShmQueueUnit(uint32_t lockId, int &fd, uint64_t &mmapSize, ptrdiff_t &offset, ShmKey &id)
 {
     size_t index = lockId / SHM_QUEUE_SLOT_NUM;

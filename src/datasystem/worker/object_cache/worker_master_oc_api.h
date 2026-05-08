@@ -344,6 +344,16 @@ public:
     virtual Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp) = 0;
 
     /**
+     * @brief Get data location from master with the specified rpc timeout.
+     * @param[in] req The rpc req protobuf.
+     * @param[out] resp The rpc rsp protobuf.
+     * @param[in] timeoutMs The timeout for this rpc request.
+     * @return K_OK on success; the error code otherwise.
+     */
+    virtual Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp,
+                                      int64_t timeoutMs) = 0;
+
+    /**
      * @brief Send root info to master.
      * @param[in] req The rpc req protobuf.
      * @param[out] resp The rpc rsp protobuf.
@@ -453,6 +463,8 @@ public:
         const int64_t subTimeoutMs, std::shared_ptr<AsyncRpcRequestManager> &asyncRpcManager) override;
     Status RemoveP2PLocation(RemoveP2PLocationReqPb &req, RemoveP2PLocationRspPb &resp) override;
     Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp) override;
+    Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp,
+                              int64_t timeoutMs) override;
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
@@ -535,6 +547,8 @@ public:
         const int64_t subTimeoutMs, std::shared_ptr<AsyncRpcRequestManager> &asyncRpcManager) override;
     Status RemoveP2PLocation(RemoveP2PLocationReqPb &req, RemoveP2PLocationRspPb &resp) override;
     Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp) override;
+    Status GetObjectLocations(master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &resp,
+                              int64_t timeoutMs) override;
     Status ReleaseMetaData(ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp) override;
     Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override;
     Status PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp) override;
