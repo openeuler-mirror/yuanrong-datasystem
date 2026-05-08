@@ -81,13 +81,6 @@ Status RemoveRemoteFastTransportNode(const HostPort &remoteAddress);
 Status RemoveRemoteFastTransportClient(const ClientKey &clientId);
 
 /**
- * @brief Check whether worker side has observed fast transport client handshake state.
- * @param[in] clientId The client id.
- * @return True if remote fast transport client state exists.
- */
-bool HasRemoteFastTransportClient(const ClientKey &clientId);
-
-/**
  * @brief Calculate the segment info (address and size) from shared memory unit.
  * @param[in] shmUnit The shared memory unit.
  * @param[in] memoryAddress The actual address of the memory.
