@@ -532,25 +532,29 @@ TEST_F(StreamDfxMultiTest, TestMultiCloseConsumer)
 
     int NUM_CONFIGS = 3;
     for (int config = 0; config < NUM_CONFIGS; config++) {
+        std::vector<Element> received;
         // Consumer C1 is closed during data transmission and receiving
         std::vector<std::shared_ptr<Producer>> producers;
         std::vector<std::shared_ptr<Consumer>> consumers;
         SetupMulti(config, producers, consumers, client1, client2, client3, client4, streamName);
         DS_ASSERT_OK(producers[0]->Send(element));
-        DS_ASSERT_OK(consumers[1]->Receive(1, timeoutMs, out));
-        DS_ASSERT_TRUE(out.size(), 1);
+        DS_ASSERT_OK(consumers[1]->Receive(1, DEFAULT_TIMEOUT_MS, received));
+        ASSERT_EQ(received.size(), size_t(1));
         DS_ASSERT_OK(producers[1]->Send(element));
 
-        consumers[0]->Close();
+        DS_ASSERT_OK(consumers[0]->Close());
 
         // Assert normal functions
-        DS_ASSERT_OK(consumers[1]->Receive(1, timeoutMs, out));
-        DS_ASSERT_TRUE(out.size(), 1);
+        DS_ASSERT_OK(consumers[1]->Receive(1, DEFAULT_TIMEOUT_MS, received));
+        ASSERT_EQ(received.size(), size_t(1));
 
         DS_ASSERT_OK(producers[0]->Send(element));
-        DS_ASSERT_OK(consumers[1]->Receive(1, timeoutMs, out));
-        DS_ASSERT_TRUE(out.size(), 1);
-        // Close producers/consumers due to out of scope
+        DS_ASSERT_OK(consumers[1]->Receive(1, DEFAULT_TIMEOUT_MS, received));
+        ASSERT_EQ(received.size(), size_t(1));
+
+        DS_ASSERT_OK(producers[0]->Close());
+        DS_ASSERT_OK(producers[1]->Close());
+        DS_ASSERT_OK(consumers[1]->Close());
     }
 }
 

@@ -18,7 +18,10 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/stream_client.h"
 
+#include <chrono>
+#include <csignal>
 #include <cstdint>
+#include <sys/wait.h>
 #include <thread>
 
 #include "common.h"
@@ -172,6 +175,24 @@ Status ClientSC1::QueryTotalProducerNum(uint64_t &totalProducerNum)
 Status ClientSC1::QueryTotalConsumerNum(uint64_t &totalConsumerNum)
 {
     return client_->QueryGlobalConsumersNum(streamName_, totalConsumerNum);
+}
+
+void WaitForTotalProducerNum(ClientSC1 &client, uint64_t expected)
+{
+    const uint64_t timeoutMs = 10'000;
+    const uint64_t intervalMs = 100;
+    Timer timer;
+    uint64_t totalProducerNum = 0;
+    Status rc = Status::OK();
+    while (timer.ElapsedMilliSecond() < timeoutMs) {
+        rc = client.QueryTotalProducerNum(totalProducerNum);
+        if (rc.IsOk() && totalProducerNum == expected) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+    }
+    DS_ASSERT_OK(rc);
+    ASSERT_EQ(totalProducerNum, expected);
 }
 
 TEST_F(ClientCrashTest, DISABLED_TestProdClientCloseWhileReceiveSameHost)
@@ -627,7 +648,9 @@ TEST_F(ClientCrashTest, TestProducerCrash5)
     // This should just discard all data from the producer and remote worker should get ntg
     std::string data = "Hello World";
     Element element(reinterpret_cast<uint8_t *>(&data.front()), data.size());
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "StreamDataPool.SendElementsToRemote.wait", "sleep(16000)"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "ClientManager.IsClientLost.heartbeatThreshold", "call(1)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "StreamDataPool.SendElementsToRemote.wait", "pause()"));
     auto pid = fork();
     if (pid == 0) {
         // make scan eval thread wait for client timeout and clearAllRemoteConsumer
@@ -644,16 +667,16 @@ TEST_F(ClientCrashTest, TestProducerCrash5)
         ASSERT_TRUE(pid > 0);
         // Wait for producer to end
         int status;
-        waitpid(pid, &status, 0);
+        ASSERT_EQ(waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFSIGNALED(status));
+        ASSERT_EQ(WTERMSIG(status), SIGABRT);
 
-        // wait for client timeout
-        DS_ASSERT_OK(
-            cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "ClientManager.Init.heartbeatInterval", "call(500)"));
-        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
-                                               "ClientManager.IsClientLost.heartbeatThreshold", "call(1)"));
+        // Wait for worker to observe the crashed producer client and clear the producer metadata.
+        WaitForTotalProducerNum(*client2, 0);
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "StreamDataPool.SendElementsToRemote.wait"));
         // Remote consumer should not get any data as producer crashed
         std::vector<Element> out;
-        const uint32_t timeoutMs = 100;
+        const uint32_t timeoutMs = 1000;
         DS_ASSERT_OK(consumer2->Receive(timeoutMs, out));
         DS_ASSERT_TRUE(out.size(), 0);
         DS_ASSERT_OK(consumer2->Close());
