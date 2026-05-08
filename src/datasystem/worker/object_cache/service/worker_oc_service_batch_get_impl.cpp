@@ -37,6 +37,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -180,16 +181,21 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     auto traceContext = Trace::Instance().GetContext();
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
     std::mutex lastRcMutex;
+    Timer timer;
+    int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
 
         auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceContext, &lastRcMutex] {
+                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer, &lastRcMutex] {
+            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+            CHECK_FAIL_RETURN_STATUS(realTimeoutMs > elapsed, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             Status tmpRc = Status::OK();
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
                 tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
                                                        tempNeedRetryIds[index], tempFailedIds[index],
                                                        tempFailedMetas[index]);
@@ -203,8 +209,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         if (index + 1 == groupedQueryMetas.size()) {
             LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
         } else {
-            // Fixme: reqTimeoutDuration is not initialized when this function is called, so the timeout set in
-            // RpcOptions inside BatchGetObjectFromRemoteOnLock may not work as expected.
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
