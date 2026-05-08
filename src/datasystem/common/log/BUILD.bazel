@@ -41,6 +41,7 @@ ds_cc_library(
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
         "//src/datasystem/common/metrics/hard_disk_exporter",
+        "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:locks",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:thread",

@@ -33,6 +33,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -50,6 +51,7 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DECLARE_string(cluster_name);
+DS_DECLARE_string(log_dir);
 DS_DEFINE_string(host_id_env_name, "", "Environment variable name used to obtain the current host_id.");
 
 DS_DEFINE_string(etcd_username, "", "Username for etcd authentication");
@@ -501,10 +503,14 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
     keepAliveKey_ = key;
     std::string hostId;
     if (!FLAGS_host_id_env_name.empty()) {
-        hostId = GetStringFromEnv(FLAGS_host_id_env_name.c_str(), "");
+        auto envHostId = GetStringFromEnv(FLAGS_host_id_env_name.c_str(), "");
+        auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
+        hostId = GetStringFromEnvOrFile(FLAGS_host_id_env_name.c_str(), envFilePath, FLAGS_host_id_env_name, "");
         if (hostId.empty()) {
             LOG(WARNING) << FormatString("host_id env [%s] is empty when worker registers to etcd.",
                                          FLAGS_host_id_env_name);
+        } else if (envHostId.empty()) {
+            LOG(INFO) << "Host id is " << hostId << " from persisted worker env file " << envFilePath;
         } else {
             LOG(INFO) << "Host id is " << hostId << " from env " << FLAGS_host_id_env_name;
         }

@@ -19,9 +19,12 @@
  */
 #include "datasystem/common/util/file_util.h"
 
+#include <cstdlib>
 #include <fcntl.h>
 #include <fstream>
 #include <glob.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <securec.h>
 
@@ -32,6 +35,22 @@ DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace ut {
+namespace {
+constexpr const char *TEST_POD_IP_ENV = "DS_TEST_POD_IP";
+constexpr const char *TEST_HOST_ID_ENV = "JDOS_HOST_IP";
+constexpr const char *TEST_POD_IP_VALUE = "pod-a";
+constexpr const char *TEST_HOST_ID_VALUE = "node-a";
+constexpr const char *TEST_POD_IP_CRLF_VALUE = "pod-crlf";
+constexpr const char *TEST_HOST_ID_CRLF_VALUE = "node-crlf";
+constexpr const char *TEST_WORKER_ENV_LOCK_SUFFIX = ".lock";
+
+struct WorkerEnvCase {
+    const char *env;
+    const char *key;
+    const char *value;
+};
+}  // namespace
+
 class FileUtilTest : public CommonTest {
 public:
     FileUtilTest()
@@ -58,6 +77,13 @@ public:
 protected:
     RandomData rand_;
 };
+
+void RemoveIfExists(const std::string &path)
+{
+    if (FileExist(path)) {
+        DS_ASSERT_OK(RemoveAll(path));
+    }
+}
 
 TEST_F(FileUtilTest, JoinPathTest)
 {
@@ -122,6 +148,91 @@ TEST_F(FileUtilTest, TestDeleteNotExistFile)
     LOG(INFO) << "Test delete not exist file.";
     std::string filename = "/xxx/yyy/test.txt";
     DS_ASSERT_NOT_OK(DeleteFile(filename));
+}
+
+TEST_F(FileUtilTest, TestGetStringEnvOrFile)
+{
+    auto dir = JoinPath(FLAGS_log_dir, "WorkerEnvFileTest");
+    RemoveIfExists(dir);
+    auto filePath = GetWorkerEnvFilePath(dir);
+    ASSERT_EQ(GetWorkerEnvFilePath(""), "");
+    ASSERT_EQ(unsetenv(TEST_POD_IP_ENV), 0);
+    ASSERT_EQ(unsetenv(TEST_HOST_ID_ENV), 0);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_POD_IP_ENV, "", WORKER_ENV_POD_IP_KEY, "default"), "default");
+
+    ASSERT_EQ(setenv(TEST_POD_IP_ENV, TEST_POD_IP_VALUE, 1), 0);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_POD_IP_ENV, filePath, WORKER_ENV_POD_IP_KEY, "default"),
+              TEST_POD_IP_VALUE);
+    ASSERT_EQ(setenv(TEST_HOST_ID_ENV, TEST_HOST_ID_VALUE, 1), 0);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_HOST_ID_ENV, filePath, TEST_HOST_ID_ENV, ""), TEST_HOST_ID_VALUE);
+
+    ASSERT_EQ(unsetenv(TEST_POD_IP_ENV), 0);
+    ASSERT_EQ(unsetenv(TEST_HOST_ID_ENV), 0);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_POD_IP_ENV, filePath, WORKER_ENV_POD_IP_KEY, "default"),
+              TEST_POD_IP_VALUE);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_HOST_ID_ENV, filePath, TEST_HOST_ID_ENV, ""), TEST_HOST_ID_VALUE);
+    ASSERT_EQ(setenv(TEST_POD_IP_ENV, "", 1), 0);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_POD_IP_ENV, filePath, WORKER_ENV_POD_IP_KEY, "default"),
+              TEST_POD_IP_VALUE);
+
+    std::string content;
+    DS_ASSERT_OK(ReadWholeFile(filePath, content));
+    ASSERT_EQ(content, "pod_ip=pod-a\nJDOS_HOST_IP=node-a\n");
+    DS_ASSERT_OK(AtomicWriteTextFile(filePath, std::string(WORKER_ENV_POD_IP_KEY) + "=" + TEST_POD_IP_CRLF_VALUE
+                                                   + "\r\n" + TEST_HOST_ID_ENV + "=" + TEST_HOST_ID_CRLF_VALUE
+                                                   + "\r\n"));
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_POD_IP_ENV, filePath, WORKER_ENV_POD_IP_KEY, "default"),
+              TEST_POD_IP_CRLF_VALUE);
+    ASSERT_EQ(GetStringFromEnvOrFile(TEST_HOST_ID_ENV, filePath, TEST_HOST_ID_ENV, ""), TEST_HOST_ID_CRLF_VALUE);
+    ASSERT_FALSE(FileExist(filePath + TEST_WORKER_ENV_LOCK_SUFFIX));
+    RemoveIfExists(dir);
+}
+
+TEST_F(FileUtilTest, TestGetStringEnvOrFileConcurrentProcesses)
+{
+    auto dir = JoinPath(FLAGS_log_dir, "WorkerEnvFileConcurrentTest");
+    RemoveIfExists(dir);
+    auto filePath = GetWorkerEnvFilePath(dir);
+    const std::vector<WorkerEnvCase> workerEnvCases = {
+        { TEST_POD_IP_ENV, WORKER_ENV_POD_IP_KEY, "pod-a" },
+        { TEST_HOST_ID_ENV, TEST_HOST_ID_ENV, "node-a" },
+        { TEST_POD_IP_ENV, WORKER_ENV_POD_IP_KEY, "pod-b" },
+        { TEST_HOST_ID_ENV, TEST_HOST_ID_ENV, "node-b" },
+        { TEST_POD_IP_ENV, WORKER_ENV_POD_IP_KEY, "pod-c" },
+        { TEST_HOST_ID_ENV, TEST_HOST_ID_ENV, "node-c" },
+    };
+    std::vector<pid_t> children;
+    children.reserve(workerEnvCases.size());
+    for (const auto &testCase : workerEnvCases) {
+        auto pid = fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            (void)setenv(testCase.env, testCase.value, 1);
+            auto value = GetStringFromEnvOrFile(testCase.env, filePath, testCase.key, "");
+            _exit(value.empty() ? 1 : 0);
+        }
+        children.emplace_back(pid);
+    }
+
+    for (auto pid : children) {
+        int status = 0;
+        ASSERT_EQ(waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFEXITED(status));
+        ASSERT_EQ(WEXITSTATUS(status), 0);
+    }
+    ASSERT_EQ(unsetenv(TEST_POD_IP_ENV), 0);
+    ASSERT_EQ(unsetenv(TEST_HOST_ID_ENV), 0);
+    auto podIp = GetStringFromEnvOrFile(TEST_POD_IP_ENV, filePath, WORKER_ENV_POD_IP_KEY, "");
+    auto hostId = GetStringFromEnvOrFile(TEST_HOST_ID_ENV, filePath, TEST_HOST_ID_ENV, "");
+    ASSERT_FALSE(podIp.empty());
+    ASSERT_FALSE(hostId.empty());
+
+    std::string content;
+    DS_ASSERT_OK(ReadWholeFile(filePath, content));
+    ASSERT_NE(content.find("pod_ip="), std::string::npos);
+    ASSERT_NE(content.find("JDOS_HOST_IP="), std::string::npos);
+    ASSERT_FALSE(FileExist(filePath + TEST_WORKER_ENV_LOCK_SUFFIX));
+    RemoveIfExists(dir);
 }
 
 TEST_F(FileUtilTest, FileLimitReachedException)

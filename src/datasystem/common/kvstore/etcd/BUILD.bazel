@@ -55,6 +55,7 @@ ds_cc_library(
         ":etcd_constants",
         ":grpc_session",
         "//src/datasystem/common/util:event_subscribers",
+        "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:locks",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:timer",

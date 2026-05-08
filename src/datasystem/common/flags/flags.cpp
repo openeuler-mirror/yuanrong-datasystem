@@ -24,6 +24,7 @@ DS_DEFINE_bool(help, false, "show help on all flags");
 DS_DEFINE_bool(version, false, "show version and build info and exit");
 
 namespace datasystem {
+
 void ParseCommandLineFlags(int argc, char **argv)
 {
     FlagManager::GetInstance()->ParseCommandLineFlags(argc, argv);

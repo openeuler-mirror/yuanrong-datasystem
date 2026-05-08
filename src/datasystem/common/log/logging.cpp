@@ -32,6 +32,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_time.h"
+#include "datasystem/common/log/spdlog/log_message_impl.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
@@ -357,6 +358,9 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     if (GetInstance()->InitLoggingWrapper(logProcessInterval)) {
         GetInstance()->init_ = true;
         SetLoggingInitialized(true);
+        podName_ = GetStringFromEnvOrFile("POD_IP", GetWorkerEnvFilePath(FLAGS_log_dir), WORKER_ENV_POD_IP_KEY,
+                                          Provider::GetPodName());
+        LogMessageImpl::SetPodName(podName_);
         LOG(INFO) << "InitLoggingWrapper success.";
         if (isClient_) {
             LOG(INFO) << "The client log config is: log_dir: " << FLAGS_log_dir

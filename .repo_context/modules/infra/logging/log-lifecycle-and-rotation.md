@@ -14,7 +14,7 @@
   - `src/datasystem/common/log/failure_handler.h`
   - `src/datasystem/common/log/failure_handler.cpp`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-05-06`
 - Related design docs:
   - `.repo_context/modules/infra/logging/design.md`
   - `.repo_context/modules/infra/logging/access-recorder.md`
@@ -83,6 +83,14 @@
   - `DATASYSTEM_LOG_V`
   - `DATASYSTEM_MIN_LOG_LEVEL`
   - `DATASYSTEM_LOG_MONITOR_ENABLE`
+- Verified in `provider.cpp`:
+  - the early worker log prefix resolves the pod identifier from `POD_IP`, then `POD_NAME`, then `HOSTNAME`
+- Verified in `logging.cpp` and `file_util.cpp`:
+  - after `log_dir` is resolved, logging refreshes the pod identifier through `<log_dir>/env`;
+  - if `POD_IP` exists, it is written to `pod_ip` in that file; if not, the persisted `pod_ip` is used before falling
+    back to the provider value;
+  - the persisted env file is guarded by a directory `flock` and atomic replace so multiple SDK/client processes can
+    share the same log directory without dropping either tracked key or leaving a companion lock file.
 - Useful runtime flags defined in `logging.cpp`:
   - `max_log_file_num`
   - `log_compress`
