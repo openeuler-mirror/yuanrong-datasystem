@@ -1,0 +1,65 @@
+{
+  "id": "runtime.hash-ring",
+  "title": "Hash Ring",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/hash-ring/README.md",
+    "design": ".repo_context/modules/runtime/hash-ring/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/hash-ring/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker/hash_ring",
+    "src/datasystem/protos/hash_ring.proto"
+  ],
+  "key_tests": [
+    "tests/ut/worker/object_cache/hash_ring_allocator_test.cpp",
+    "tests/ut/worker/object_cache/hash_ring_health_check_test.cpp",
+    "tests/st/worker/object_cache/hash_ring_test.cpp",
+    "tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.cluster-management",
+      "runtime.etcd-metadata",
+      "runtime.worker-runtime",
+      "infra.slot"
+    ],
+    "split_signals": [
+      "persisted_schema",
+      "distributed_lifecycle",
+      "recovery_lifecycle",
+      "operator_config_surface",
+      "cross_module_event_bus"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "hash ring",
+      "HashRingPb",
+      "add_node_info",
+      "del_node_info",
+      "consistent hash",
+      "scale up",
+      "scale down",
+      "voluntary scale down",
+      "ReadHashRing"
+    ],
+    "intent_examples": [
+      "understand hash ring initialization and token allocation",
+      "debug stuck add_node_info or del_node_info",
+      "change worker scale-up or scale-down routing behavior",
+      "review hash-ring CAS pressure or self-healing behavior"
+    ]
+  }
+}

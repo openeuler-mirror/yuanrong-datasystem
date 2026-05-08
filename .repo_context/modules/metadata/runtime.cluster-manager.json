@@ -1,0 +1,74 @@
+{
+  "id": "runtime.cluster-manager",
+  "title": "Cluster Manager",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/cluster-manager/README.md",
+    "design": ".repo_context/modules/runtime/cluster-manager/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/cluster-manager/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker/cluster_manager",
+    "src/datasystem/worker/cluster_event_type.h",
+    "src/datasystem/worker/worker_oc_server.cpp",
+    "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp"
+  ],
+  "key_tests": [
+    "tests/st/worker/object_cache/etcd_cluster_manager_test.cpp",
+    "tests/st/client/kv_cache/kv_client_scale_test.cpp",
+    "tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp",
+    "tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.cluster-management",
+      "runtime.hash-ring",
+      "runtime.etcd-metadata",
+      "runtime.worker-runtime",
+      "infra.slot"
+    ],
+    "split_signals": [
+      "distributed_lifecycle",
+      "operator_config_surface",
+      "recovery_lifecycle",
+      "cross_module_event_bus",
+      "routing_surface",
+      "multi_az_state"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "EtcdClusterManager",
+      "ClusterNode",
+      "cluster manager",
+      "node timeout",
+      "node restart",
+      "reconciliation",
+      "voluntary scale down",
+      "passive scale down",
+      "CompleteNodeTableWithFakeNode",
+      "CheckWaitNodeTableComplete",
+      "KeepAliveValue",
+      "health probe"
+    ],
+    "intent_examples": [
+      "understand cluster initialization and node table completion",
+      "debug worker restart reconciliation or ready state",
+      "change passive failed-node scale-down behavior",
+      "change voluntary scale-down exiting handling",
+      "review route lookup through hash ring and replica manager",
+      "review ETCD cluster event handling and fake-node repair"
+    ]
+  }
+}

@@ -18,5 +18,12 @@ Rules:
 
 Current docs:
 
+- `runtime/README.md`
+- `runtime/cluster-manager/README.md`
+- `runtime/cluster-manager/implementation.md`
+- `runtime/etcd-metadata/README.md`
+- `runtime/etcd-metadata/implementation.md`
+- `runtime/hash-ring/README.md`
+- `runtime/hash-ring/implementation.md`
 - `infra/README.md`
 - `quality/README.md`
