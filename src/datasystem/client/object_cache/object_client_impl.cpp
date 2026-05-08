@@ -1776,7 +1776,7 @@ Status ObjectClientImpl::MultiCreate(const std::vector<std::string> &objectKeyLi
     if (!useShmTransfer) {
         for (size_t i = 0; i < objectKeyList.size(); i++) {
             if (!skipCheckExistence && exists[i]) {
-                auto bufferInfo = MakeObjectBufferInfo(objectKeyList[i], nullptr, 0, 0, param, true, 0);
+                auto bufferInfo = MakeObjectBufferInfo(objectKeyList[i], nullptr, 0, 0, param, false, 0);
                 std::shared_ptr<Buffer> placeholder;
                 RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), placeholder));
                 bufferList[i] = std::move(placeholder);
@@ -3032,15 +3032,23 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     const size_t bufferCnt = buffers.size();
-    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList(bufferCnt);
+    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfoList;
+    bufferInfoList.reserve(bufferCnt);
     for (size_t i = 0; i < bufferCnt; i++) {
         auto &buffer = buffers[i];
         CHECK_FAIL_RETURN_STATUS(buffers[i] != nullptr, K_INVALID, "The buffer should not be empty.");
         RETURN_IF_NOT_OK(buffer->CheckDeprecated());
+        // MCreate NX placeholder: key already exists, dataSize=0, skip publishing
+        if (buffer->bufferInfo_->dataSize == 0) {
+            continue;
+        }
         CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
-        bufferInfoList[i] = buffer->bufferInfo_;
+        bufferInfoList.push_back(buffer->bufferInfo_);
     }
-    const uint32_t ttl = buffers.front()->bufferInfo_->ttlSecond;
+    if (bufferInfoList.empty()) {
+        return Status::OK();
+    }
+    const uint32_t ttl = bufferInfoList.front()->ttlSecond;
     // MSet(buffers) is the publish step after MCreate. The existence check was already done
     // during MCreate, so the publish step should always use NONE to avoid the worker-side
     // NTX+NX restriction in distributed master mode.
@@ -3215,7 +3223,7 @@ Status ObjectClientImpl::CreateBufferForMultiCreateParamAtIndex(size_t index, bo
     Status injectRC = Status::OK();
     auto &createParam = multiCreateParamList[index];
     if (!skipCheckExistence && exists[createParam.index]) {
-        auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, 0, 0, param, true, 0);
+        auto bufferInfo = MakeObjectBufferInfo(createParam.objectKey, nullptr, 0, 0, param, false, 0);
         std::shared_ptr<Buffer> placeholder;
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(bufferInfo, shared_from_this(), placeholder));
         bufferList[createParam.index] = std::move(placeholder);
