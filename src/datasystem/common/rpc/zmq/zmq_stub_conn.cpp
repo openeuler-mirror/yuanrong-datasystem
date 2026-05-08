@@ -804,6 +804,7 @@ void ZmqSockConnHelper::InterruptAll()
 
 Status ZmqBaseStubConn::WaitForConnect(const std::shared_ptr<StubInfo> &info, int64_t timeout)
 {
+    static constexpr int64_t SLOW_WAIT_FOR_CONNECT_THRESHOLD_MS = 10;
     CHECK_FAIL_RETURN_STATUS(!interrupt_, K_SHUTTING_DOWN, "Shutting down");
     RETURN_OK_IF_TRUE(!(info->uds_ || info->tcpDirect_));
     auto connInfo = info->connInfo_.lock();
@@ -815,11 +816,21 @@ Status ZmqBaseStubConn::WaitForConnect(const std::shared_ptr<StubInfo> &info, in
     do {
         rc = connInfo->WaitForConnected(remaining);
         // Check for the case we fall back to zmq
-        RETURN_OK_IF_TRUE(rc.GetCode() == K_NOT_FOUND);
+        if (rc.GetCode() == K_NOT_FOUND) {
+            auto elapsedMs = static_cast<int64_t>(t.ElapsedMilliSecond());
+            LOG_IF(INFO, elapsedMs > SLOW_WAIT_FOR_CONNECT_THRESHOLD_MS)
+                << FormatString("[SLOW_WAIT_FOR_CONNECT] ep=%s elapsed=%ldms trace=%s", key_.channelEndPoint_,
+                                elapsedMs, Trace::Instance().GetTraceID());
+            return Status::OK();
+        }
         remaining = timeout - static_cast<int64_t>(t.ElapsedMilliSecond());
         INJECT_POINT("ZmqBaseStubConn.WaitForConnect");
     } while (rc.IsError() && remaining > 0);
-    workerOperationTimeCost.Append("wait for connected", static_cast<uint64_t>(t.ElapsedMilliSecond()));
+    auto elapsedMs = static_cast<int64_t>(t.ElapsedMilliSecond());
+    workerOperationTimeCost.Append("wait for connected", static_cast<uint64_t>(elapsedMs));
+    LOG_IF(INFO, elapsedMs > SLOW_WAIT_FOR_CONNECT_THRESHOLD_MS || rc.IsError())
+        << FormatString("[WAIT_FOR_CONNECT_FAIL] ep=%s status=%s trace=%s", key_.channelEndPoint_, rc.ToString(),
+                        Trace::Instance().GetTraceID());
     return rc;
 }
 
