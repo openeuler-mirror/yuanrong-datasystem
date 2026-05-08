@@ -51,6 +51,8 @@ public:
      * @return Shared slot client instance for the root path.
      */
     static std::shared_ptr<SlotClient> GetProcessSingleton(const std::string &sfsPath);
+    static std::shared_ptr<SlotClient> GetProcessSingleton(const std::string &sfsPath, const std::string &clusterName,
+                                                           const std::string &workerNamespace);
 
     /**
      * @brief Construct a slot client on top of the given shared filesystem root.
@@ -185,7 +187,7 @@ private:
     std::thread compactThread_;
     std::atomic<bool> cleanupRequested_{ false };
     mutable std::mutex initMu_;
-    bool initialized_{ false };
+    std::atomic<bool> initialized_{ false };
 };
 }  // namespace datasystem
 

@@ -1266,6 +1266,55 @@ TEST_F(UrmaClientWorkerDisableUDS, UrmaConnectionFailedBase)
     ASSERT_EQ(inject::GetExecuteCount("client.set.urma_write_ok"), 1);
 }
 
+class UrmaTestWorkerDisconnect : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.numWorkers -= 1;
+        opts.enableDistributedMaster = "true";
+        opts.workerGflagParams +=
+            " -urma_mode=UB -ipc_through_shared_memory=true --enable_data_replication=false"
+            " --enable_transport_fallback=false"
+            " -inject_actions=worker.bind_unix_path:return(K_OK) ";
+    }
+};
+
+TEST_F(UrmaTestWorkerDisconnect, StopWorkerForUbDisconnect)
+{
+    FLAGS_v = 1;
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    const int numKV = 32;
+    const int dataSize = 8 * 1024 * 1024;
+    std::string value(dataSize, 'a');
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<std::pair<std::string, std::string>> kvPairs;
+    for (int i = 0; i < numKV; i++) {
+        keys.emplace_back("keys_" + std::to_string(i));
+        values.emplace_back(value);
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        DS_ASSERT_OK(client2->Set(keys[i], values[i]));
+    }
+
+    for (size_t i = 0; i < keys.size(); i++) {
+        std::string getValue;
+        DS_ASSERT_OK(client1->Get(keys[i], getValue));
+        ASSERT_EQ(value, getValue);
+    }
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "urma.ModifyJettyToError", "call()"));
+    kill(cluster_->GetWorkerPid(1), SIGTERM);
+    WaitForWorkerInjectExecuteCount(0, "urma.ModifyJettyToError", 1);
+    LOG(INFO) << "Success";
+}
+
 class UrmaObjectClientTestMismatch : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

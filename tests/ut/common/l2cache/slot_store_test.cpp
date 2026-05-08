@@ -83,14 +83,6 @@ std::string MakeTempDir()
     return dir == nullptr ? "" : std::string(dir);
 }
 
-std::string GetCurrentWorkingDir()
-{
-    std::array<char, 4096> buffer{};
-    auto *cwd = getcwd(buffer.data(), buffer.size());
-    EXPECT_NE(cwd, nullptr);
-    return cwd == nullptr ? "" : std::string(cwd);
-}
-
 std::string GetSlotRootPath(const std::string &baseDir, const std::string &workerAddress = {})
 {
     if (workerAddress.empty()) {
@@ -765,18 +757,11 @@ TEST_F(SlotStoreTest, SlotClientInitSlotNumInjectReturnStillInitializesClient)
 
 TEST_F(SlotStoreTest, SlotClientSaveBeforeInitMustFail)
 {
-    const auto oldCwd = GetCurrentWorkingDir();
-    const auto tempCwd = MakeTempDir() + "/cwd";
-    ASSERT_TRUE(CreateDir(tempCwd, true).IsOk());
-    ASSERT_TRUE(chdir(tempCwd.c_str()) == 0);
-
     SlotClient client(baseDir_);
     auto saveRc = client.Save("save_before_init", 1, 0, MakeBody("payload"));
 
-    ASSERT_TRUE(chdir(oldCwd.c_str()) == 0);
     ASSERT_EQ(saveRc.GetCode(), StatusCode::K_RUNTIME_ERROR) << saveRc.ToString();
-    ASSERT_FALSE(FileExist(JoinPath(tempCwd, "slot_0000")));
-    ASSERT_TRUE(RemoveAll(tempCwd.substr(0, tempCwd.find("/cwd"))).IsOk());
+    ASSERT_FALSE(FileExist(JoinPath(BuildSlotStoreRoot(baseDir_, FLAGS_cluster_name), "slot_0000")));
 }
 
 TEST_F(SlotStoreTest, DistributedDiskRejectsEmptyRootPath)
