@@ -22,6 +22,7 @@
 #include <securec.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -31,12 +32,24 @@ namespace datasystem {
 namespace {
 uint64_t FNV1aHash(const std::string &s)
 {
+    if (s.empty()) {
+        return 0;
+    }
     uint64_t h = 14695981039346656037ULL;
     for (char c : s) {
         h ^= static_cast<uint8_t>(c);
         h *= 1099511628211ULL;
     }
     return h;
+}
+
+void EnsureRequestSampleDecision(Trace &trace)
+{
+    if (!trace.IsRequestLogTrace() || trace.GetCachedHash() == 0) {
+        return;
+    }
+    bool admitted = false;
+    (void)LogRateLimiter::Instance().GetOrCreateRequestDecision(trace.GetCachedHash(), admitted);
 }
 }  // namespace
 
@@ -132,10 +145,12 @@ TraceGuard Trace::SetRequestTraceUUID()
         if (!oldRequestLogTrace) {
             SetRequestSampleDecision(false, false);
         }
+        EnsureRequestSampleDecision(*this);
         return traceGuard;
     }
     TraceGuard traceGuard = SetTraceUUID();
     SetRequestLogTrace(true);
+    EnsureRequestSampleDecision(*this);
     return traceGuard;
 }
 
@@ -174,6 +189,7 @@ TraceGuard Trace::SetTraceContext(const TraceContext &context, bool keep)
     TraceGuard traceGuard = SetTraceNewID(context.traceID, keep);
     SetRequestLogTrace(context.requestLogTrace);
     SetRequestSampleDecision(context.requestSampleDecisionValid, context.requestSampleDecisionAdmitted);
+    EnsureRequestSampleDecision(*this);
     if (keep) {
         return TraceGuard(TraceGuardType::RESTORE_REQUEST_LOG_CONTEXT, oldRequestLogTrace,
                           oldRequestSampleDecisionValid, oldRequestSampleDecisionAdmitted);

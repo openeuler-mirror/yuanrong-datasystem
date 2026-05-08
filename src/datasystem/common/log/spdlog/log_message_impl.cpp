@@ -124,7 +124,7 @@ void LogMessageImpl::Init()
     PerfPoint point(PerfKey::LOG_MESSAGE_INIT);
     logger_ = GetMessageLogger();
     if (logger_) {
-        // Request-level log sampling: check before formatting to avoid wasted work on dropped logs
+        // Backstop for direct LogMessage construction that bypasses LOG macros.
         auto &trace = Trace::Instance();
         uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
         if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash)) {

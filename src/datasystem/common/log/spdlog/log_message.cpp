@@ -19,8 +19,33 @@
  */
 #include "datasystem/common/log/spdlog/log_message.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+#include "datasystem/common/log/spdlog/log_severity.h"
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem {
+bool ShouldCreateLogMessage(LogSeverity logSeverity)
+{
+    auto level = ToSpdlogLevel(logSeverity);
+    if (level >= ds_spdlog::level::err) {
+        return true;
+    }
+
+    auto &trace = Trace::Instance();
+    bool admitted = false;
+    if (trace.GetRequestSampleDecision(admitted)) {
+        return admitted;
+    }
+
+    auto &limiter = LogRateLimiter::Instance();
+    if (!limiter.IsEnabled()) {
+        return true;
+    }
+
+    uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
+    return limiter.ShouldLog(level, traceHash);
+}
+
 LogMessage::LogMessage(LogSeverity logSeverity, const char *file, int line)
 {
     impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line);
