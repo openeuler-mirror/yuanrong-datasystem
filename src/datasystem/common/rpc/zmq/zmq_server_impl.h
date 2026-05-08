@@ -208,11 +208,12 @@ public:
     Status InitAuthHandler();
 
     /**
-     * @brief Obtains the threadpool usage of RpcServoce.
+     * @brief Obtains the threadpool usage of RpcService (interval-based, resets counters).
      * @param[in] serviceName The name of rpc service.
-     * @return Usage: "idleNum/currentTotalNum/maxThreadNum/waitingTaskNum/threadPoolUsage".
      */
     ThreadPool::ThreadPoolUsage GetRpcServicesUsage(const std::string &serviceName);
+
+    ThreadPool::ThreadPoolUsage GetRpcServicesSnapshot(const std::string &serviceName);
 
     /**
      * @brief Report the list of end points this proxy is listen to

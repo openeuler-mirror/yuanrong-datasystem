@@ -18,19 +18,19 @@ Resource.log Format (pipe-separated, 7 header fields + 22 metric groups):
   $10 ACTIVE_CLIENT_COUNT          integer
   $11 OBJECT_COUNT                 integer
   $12 OBJECT_SIZE                  bytes
-  $13 WORKER_OC_SERVICE_THREAD     idle/total/max/waiting/usage
-  $14 WORKER_WORKER_OC_THREAD      idle/total/max/waiting/usage
-  $15 MASTER_WORKER_OC_THREAD      idle/total/max/waiting/usage
-  $16 MASTER_OC_SERVICE_THREAD     idle/total/max/waiting/usage
+  $13 WORKER_OC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
+  $14 WORKER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $15 MASTER_WORKER_OC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $16 MASTER_OC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
   $17 ETCD_QUEUE                   currentSize/limit/usage
   $18 ETCD_REQUEST_SUCCESS_RATE    float 0-1
   $19 OBS_REQUEST_SUCCESS_RATE     float 0-1
-  $20 MASTER_ASYNC_TASKS_THREAD    idle/total/max/waiting/usage
+  $20 MASTER_ASYNC_TASKS_THREAD    maxRunning/total/tasksDelta/maxWaiting/usage
   $21 STREAM_COUNT                 integer
-  $22 WORKER_SC_SERVICE_THREAD     idle/total/max/waiting/usage
-  $23 WORKER_WORKER_SC_THREAD      idle/total/max/waiting/usage
-  $24 MASTER_WORKER_SC_THREAD      idle/total/max/waiting/usage
-  $25 MASTER_SC_SERVICE_THREAD     idle/total/max/waiting/usage
+  $22 WORKER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
+  $23 WORKER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $24 MASTER_WORKER_SC_THREAD      maxRunning/total/tasksDelta/maxWaiting/usage
+  $25 MASTER_SC_SERVICE_THREAD     maxRunning/total/tasksDelta/maxWaiting/usage
   $26 STREAM_REMOTE_SEND_RATE      float 0-1
   $27 SHARED_DISK                  usage/physicalUsage/limit/usageRate
   $28 SC_LOCAL_CACHE               usage/reserved/limit/usageRate
@@ -74,7 +74,7 @@ HTML Report Sections (10 charts + 1 detail table):
   2. Memory Usage Ratio        - Per-hour usage ratio + per-host distribution
   3. Object Cache              - Object count and size trends
   4. Cache Hit Rate            - Hit rate trend + hit/miss stacked distribution
-  5. Thread Pool Utilization   - 5 thread pools (Active/Total/Max/Waiting)
+  5. Thread Pool Utilization   - 5 thread pools (Peak Concurrency/Total/Tasks/Queue/Utilization)
   6. ETCD Queue                - Queue depth with limit reference line
   7. Active Clients            - Connected client count trend
   8. ETCD Success Rate         - ETCD request success rate
@@ -84,7 +84,7 @@ HTML Report Sections (10 charts + 1 detail table):
 Notes:
   - Requires internet access to load ECharts from CDN (jsdelivr.net)
   - OC_HIT_NUM is a cumulative counter; the script computes per-bin deltas
-  - Thread pool charts show Active = Total - Idle (not usage%)
+  - Thread pool charts show interval-based metrics: Peak Concurrency, Tasks/Interval, Peak Queue, Utilization
 """
 
 import argparse
@@ -110,7 +110,7 @@ _GAUGE_KEYS = [
 
 # Thread pool prefixes and their sub-fields
 _TP_PREFIXES = ["worker_oc", "worker_worker_oc", "master_worker_oc", "master_oc", "async"]
-_TP_SUB_FIELDS = ["idle", "total", "max", "waiting", "usage"]
+_TP_SUB_FIELDS = ["maxRunning", "total", "tasksDelta", "maxWaiting", "usage"]
 
 # Cumulative counter keys (OC_HIT_NUM)
 _OC_HIT_KEYS = ["oc_mem_hit", "oc_disk_hit", "oc_l2_hit", "oc_remote_hit", "oc_miss"]
@@ -125,7 +125,7 @@ def _find_log_files(log_dir, pattern="resource"):
                 host = None
                 parts = root.replace(log_dir, "").strip("/").split("/")
                 for p in parts:
-                    if re.match(r"\d+\.\d+\.\d+\.\d+", p):
+                    if re.match(r"\d+\.\d+\.\d+\.\d+", p) or re.match(r"worker_\d+_\d+", p):
                         host = p
                         break
                 if host is None:
@@ -444,11 +444,14 @@ def compute_per_host_stats(all_data, interval_minutes=60):
     return result
 
 
-def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, until):
+def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, until, prefix=""):
     """Generate self-contained HTML report with ECharts."""
     if not cluster_stats:
         print("No data to report")
         return
+
+    report_title = f"{prefix} " if prefix else ""
+    report_title += "Worker Resource Analysis Report"
 
     first_ts = cluster_stats[0]["time"]
     last_ts = cluster_stats[-1]["time"]
@@ -477,17 +480,18 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     oc_remote_hit = [round(s["oc_remote_hit_sum"]) for s in cluster_stats]
 
     def tp_series(prefix):
-        active = [round(max(0, s.get(f"tp_{prefix}_total_avg", 0) - s.get(f"tp_{prefix}_idle_avg", 0))) for s in cluster_stats]
+        maxRunning = [round(s.get(f"tp_{prefix}_maxRunning_avg", 0)) for s in cluster_stats]
         total = [round(s.get(f"tp_{prefix}_total_avg", 0)) for s in cluster_stats]
-        mx = [round(s.get(f"tp_{prefix}_max_avg", 0)) for s in cluster_stats]
-        waiting = [round(s.get(f"tp_{prefix}_waiting_avg", 0)) for s in cluster_stats]
-        return active, total, mx, waiting
+        tasksDelta = [round(s.get(f"tp_{prefix}_tasksDelta_avg", 0)) for s in cluster_stats]
+        maxWaiting = [round(s.get(f"tp_{prefix}_maxWaiting_avg", 0)) for s in cluster_stats]
+        usage = [round(s.get(f"tp_{prefix}_usage_avg", 0), 4) for s in cluster_stats]
+        return maxRunning, total, tasksDelta, maxWaiting, usage
 
-    tp_oc_active, tp_oc_total, tp_oc_max, tp_oc_waiting = tp_series("worker_oc")
-    tp_ww_oc_active, tp_ww_oc_total, tp_ww_oc_max, tp_ww_oc_waiting = tp_series("worker_worker_oc")
-    tp_mw_oc_active, tp_mw_oc_total, tp_mw_oc_max, tp_mw_oc_waiting = tp_series("master_worker_oc")
-    tp_m_oc_active, tp_m_oc_total, tp_m_oc_max, tp_m_oc_waiting = tp_series("master_oc")
-    tp_async_active, tp_async_total, tp_async_max, tp_async_waiting = tp_series("async")
+    tp_oc_mr, tp_oc_total, tp_oc_td, tp_oc_mw, tp_oc_usage = tp_series("worker_oc")
+    tp_ww_oc_mr, tp_ww_oc_total, tp_ww_oc_td, tp_ww_oc_mw, tp_ww_oc_usage = tp_series("worker_worker_oc")
+    tp_mw_oc_mr, tp_mw_oc_total, tp_mw_oc_td, tp_mw_oc_mw, tp_mw_oc_usage = tp_series("master_worker_oc")
+    tp_m_oc_mr, tp_m_oc_total, tp_m_oc_td, tp_m_oc_mw, tp_m_oc_usage = tp_series("master_oc")
+    tp_async_mr, tp_async_total, tp_async_td, tp_async_mw, tp_async_usage = tp_series("async")
 
     etcd_q_size = [round(s["etcd_queue_size_avg"]) for s in cluster_stats]
     etcd_q_max = [round(s["etcd_queue_size_max"]) for s in cluster_stats]
@@ -556,7 +560,7 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Worker Resource Analysis Report</title>
+<title>{html.escape(report_title)}</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #f5f7fa; }}
@@ -579,7 +583,7 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
 </head>
 <body>
 <div class="container">
-<h1>Worker Resource Analysis Report</h1>
+<h1>{html.escape(report_title)}</h1>
 <div class="info">
   Time: {first_ts.strftime('%Y-%m-%d %H:%M')} ~ {last_ts.strftime('%Y-%m-%d %H:%M')} |
   Hosts: {host_count} | Records: {total_records:,}
@@ -642,11 +646,11 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
 
 <h2>5. Thread Pool Utilization (线程池使用)</h2>
 <div class="info">
-<b>指标说明</b>：各线程池的线程数统计。Active = 活跃线程数（Total - Idle），Total = 当前线程数，Max = 线程池上限，Waiting = 排队等待的任务数。<br>
+<b>指标说明</b>：各线程池的区间累计统计（每个采集间隔内的汇总数据）。Peak Concurrency = 区间内峰值并发线程数，Total = 当前线程数，Tasks/Interval = 区间完成任务数，Peak Queue = 区间峰值排队数，Utilization = 区间真实利用率（线程工作时间占比）。<br>
 <b>5 个线程池</b>：客户端服务（处理客户端读写请求）、Worker 间通信（跨节点对象传输）、Master 下发（管理指令下发到 Worker）、Master 服务（Master 端对象管理）、Master 异步任务（后台异步操作如元数据清理、异步持久化等）。<br>
-<b>正常值</b>：Active &lt; Total &lt; Max，Waiting = 0。线程池有一定余量。<br>
-<b>异常特征</b>：Waiting &gt; 0（任务排队，处理能力不足）；Active 持续等于 Total（线程池满载）；Total 频繁伸缩（请求波动大）。<br>
-<b>排查建议</b>：① Waiting &gt; 0：检查下游依赖（如磁盘 IO、网络、ETCD）是否变慢；② 线程池满载：评估是否需要调大 Max 参数；③ 客户端服务线程池满时，客户端请求会超时，检查 access.log 中 latency 是否升高。
+<b>正常值</b>：Peak Concurrency &lt; Total，Peak Queue = 0，Utilization &lt; 0.8。<br>
+<b>异常特征</b>：Peak Queue &gt; 0（任务排队，处理能力不足）；Peak Concurrency 持续等于 Total（线程池满载）；Utilization &gt; 0.8（持续高压，需扩容）。<br>
+<b>排查建议</b>：① Peak Queue &gt; 0：检查下游依赖（如磁盘 IO、网络、ETCD）是否变慢；② 线程池满载：评估是否需要调大线程池参数；③ 客户端服务线程池满时，客户端请求会超时，检查 access.log 中 latency 是否升高。
 </div>
 <div id="tp_oc_chart" class="chart" style="height:380px"></div>
 <div id="tp_ww_oc_chart" class="chart" style="height:380px"></div>
@@ -722,26 +726,32 @@ var ocMemHit = __OC_MEM_HIT__;
 var ocDiskHit = __OC_DISK_HIT__;
 var ocL2Hit = __OC_L2_HIT__;
 var ocRemoteHit = __OC_REMOTE_HIT__;
-var tpOcActive = __TP_OC_ACTIVE__;
+var tpOcMR = __TP_OC_MR__;
 var tpOcTotal = __TP_OC_TOTAL__;
-var tpOcMax = __TP_OC_MAX__;
-var tpOcWaiting = __TP_OC_WAITING__;
-var tpWwOcActive = __TP_WW_OC_ACTIVE__;
+var tpOcMR = __TP_OC_MR__;
+var tpOcTD = __TP_OC_TD__;
+var tpOcMW = __TP_OC_MW__;
+var tpOcUsage = __TP_OC_USAGE__;
+var tpWwOcMR = __TP_WW_OC_MR__;
 var tpWwOcTotal = __TP_WW_OC_TOTAL__;
-var tpWwOcMax = __TP_WW_OC_MAX__;
-var tpWwOcWaiting = __TP_WW_OC_WAITING__;
-var tpMwOcActive = __TP_MW_OC_ACTIVE__;
+var tpWwOcTD = __TP_WW_OC_TD__;
+var tpWwOcMW = __TP_WW_OC_MW__;
+var tpWwOcUsage = __TP_WW_OC_USAGE__;
+var tpMwOcMR = __TP_MW_OC_MR__;
 var tpMwOcTotal = __TP_MW_OC_TOTAL__;
-var tpMwOcMax = __TP_MW_OC_MAX__;
-var tpMwOcWaiting = __TP_MW_OC_WAITING__;
-var tpMOcActive = __TP_M_OC_ACTIVE__;
+var tpMwOcTD = __TP_MW_OC_TD__;
+var tpMwOcMW = __TP_MW_OC_MW__;
+var tpMwOcUsage = __TP_MW_OC_USAGE__;
+var tpMOcMR = __TP_M_OC_MR__;
 var tpMOcTotal = __TP_M_OC_TOTAL__;
-var tpMOcMax = __TP_M_OC_MAX__;
-var tpMOcWaiting = __TP_M_OC_WAITING__;
-var tpAsyncActive = __TP_ASYNC_ACTIVE__;
+var tpMOcTD = __TP_M_OC_TD__;
+var tpMOcMW = __TP_M_OC_MW__;
+var tpMOcUsage = __TP_M_OC_USAGE__;
+var tpAsyncMR = __TP_ASYNC_MR__;
 var tpAsyncTotal = __TP_ASYNC_TOTAL__;
-var tpAsyncMax = __TP_ASYNC_MAX__;
-var tpAsyncWaiting = __TP_ASYNC_WAITING__;
+var tpAsyncTD = __TP_ASYNC_TD__;
+var tpAsyncMW = __TP_ASYNC_MW__;
+var tpAsyncUsage = __TP_ASYNC_USAGE__;
 var etcdQSize = __ETCD_Q_SIZE__;
 var etcdQMax = __ETCD_Q_MAX__;
 var etcdQLimit = __ETCD_Q_LIMIT__;
@@ -875,30 +885,34 @@ c4b.setOption({{
 }});
 
 // 5. Thread pools
-function tpChart(domId, title, active, total, max, waiting) {{
+function tpChart(domId, title, maxRunning, total, tasksDelta, maxWaiting, usage) {{
   var c = echarts.init(document.getElementById(domId));
   c.setOption({{
     title: {{ text: title, left: 'center' }},
     tooltip: {{ trigger: 'axis' }},
-    legend: {{ data: ['Active','Total','Max','Waiting'], bottom: 0 }},
-    grid: {{ left: 60, right: 20, top: 50, bottom: 80 }},
+    legend: {{ data: ['Peak Concurrency','Total Threads','Tasks/Interval','Peak Queue','Utilization'], bottom: 0 }},
+    grid: {{ left: 60, right: 60, top: 50, bottom: 80 }},
     xAxis: {{ type: 'category', data: timeLabels, axisLabel: {{ rotate: 45 }} }},
-    yAxis: {{ type: 'value', name: 'Threads' }},
+    yAxis: [
+      {{ type: 'value', name: 'Threads / Tasks' }},
+      {{ type: 'value', name: 'Utilization', min: 0, max: 1, position: 'right', axisLabel: {{ formatter: function(v){{ return (v*100).toFixed(0)+'%'; }} }} }}
+    ],
     series: [
-      {{ name: 'Active', type: 'bar', data: active, itemStyle: {{ color: '#5470c6' }} }},
-      {{ name: 'Total', type: 'line', data: total, lineStyle: {{ type: 'dashed' }}, itemStyle: {{ color: '#91cc75' }} }},
-      {{ name: 'Max', type: 'line', data: max, lineStyle: {{ type: 'dotted' }}, itemStyle: {{ color: '#999' }} }},
-      {{ name: 'Waiting', type: 'line', data: waiting, itemStyle: {{ color: '#ee6666' }} }}
+      {{ name: 'Peak Concurrency', type: 'bar', data: maxRunning, itemStyle: {{ color: '#5470c6' }} }},
+      {{ name: 'Total Threads', type: 'line', data: total, lineStyle: {{ type: 'dashed' }}, itemStyle: {{ color: '#91cc75' }} }},
+      {{ name: 'Tasks/Interval', type: 'line', data: tasksDelta, itemStyle: {{ color: '#fac858' }} }},
+      {{ name: 'Peak Queue', type: 'line', data: maxWaiting, itemStyle: {{ color: '#ee6666' }} }},
+      {{ name: 'Utilization', type: 'line', yAxisIndex: 1, data: usage, itemStyle: {{ color: '#73c0de' }}, lineStyle: {{ width: 2 }} }}
     ]
   }});
   return c;
 }}
 
-var c5a = tpChart('tp_oc_chart', '对象缓存-客户端服务（处理客户端读写请求）', tpOcActive, tpOcTotal, tpOcMax, tpOcWaiting);
-var c5b = tpChart('tp_ww_oc_chart', '对象缓存-Worker间通信（跨节点对象传输）', tpWwOcActive, tpWwOcTotal, tpWwOcMax, tpWwOcWaiting);
-var c5c = tpChart('tp_mw_oc_chart', '对象缓存-Master下发（管理指令下发到Worker）', tpMwOcActive, tpMwOcTotal, tpMwOcMax, tpMwOcWaiting);
-var c5d = tpChart('tp_m_oc_chart', '对象缓存-Master服务（Master端对象管理）', tpMOcActive, tpMOcTotal, tpMOcMax, tpMOcWaiting);
-var c5e = tpChart('tp_async_chart', 'Master异步任务（后台异步操作）', tpAsyncActive, tpAsyncTotal, tpAsyncMax, tpAsyncWaiting);
+var c5a = tpChart('tp_oc_chart', '对象缓存-客户端服务（处理客户端读写请求）', tpOcMR, tpOcTotal, tpOcTD, tpOcMW, tpOcUsage);
+var c5b = tpChart('tp_ww_oc_chart', '对象缓存-Worker间通信（跨节点对象传输）', tpWwOcMR, tpWwOcTotal, tpWwOcTD, tpWwOcMW, tpWwOcUsage);
+var c5c = tpChart('tp_mw_oc_chart', '对象缓存-Master下发（管理指令下发到Worker）', tpMwOcMR, tpMwOcTotal, tpMwOcTD, tpMwOcMW, tpMwOcUsage);
+var c5d = tpChart('tp_m_oc_chart', '对象缓存-Master服务（Master端对象管理）', tpMOcMR, tpMOcTotal, tpMOcTD, tpMOcMW, tpMOcUsage);
+var c5e = tpChart('tp_async_chart', 'Master异步任务（后台异步操作）', tpAsyncMR, tpAsyncTotal, tpAsyncTD, tpAsyncMW, tpAsyncUsage);
 
 // 6. ETCD Queue
 var c6 = echarts.init(document.getElementById('etcd_chart'));
@@ -1013,24 +1027,31 @@ window.addEventListener('resize', function() {{
         "__OC_REMOTE_HIT__": js_arr(oc_remote_hit),
         "__TP_OC_ACTIVE__": js_arr(tp_oc_active),
         "__TP_OC_TOTAL__": js_arr(tp_oc_total),
-        "__TP_OC_MAX__": js_arr(tp_oc_max),
-        "__TP_OC_WAITING__": js_arr(tp_oc_waiting),
-        "__TP_WW_OC_ACTIVE__": js_arr(tp_ww_oc_active),
+        "__TP_OC_MR__": js_arr(tp_oc_mr),
+        "__TP_OC_TOTAL__": js_arr(tp_oc_total),
+        "__TP_OC_TD__": js_arr(tp_oc_td),
+        "__TP_OC_MW__": js_arr(tp_oc_mw),
+        "__TP_OC_USAGE__": js_arr(tp_oc_usage),
+        "__TP_WW_OC_MR__": js_arr(tp_ww_oc_mr),
         "__TP_WW_OC_TOTAL__": js_arr(tp_ww_oc_total),
-        "__TP_WW_OC_MAX__": js_arr(tp_ww_oc_max),
-        "__TP_WW_OC_WAITING__": js_arr(tp_ww_oc_waiting),
-        "__TP_MW_OC_ACTIVE__": js_arr(tp_mw_oc_active),
+        "__TP_WW_OC_TD__": js_arr(tp_ww_oc_td),
+        "__TP_WW_OC_MW__": js_arr(tp_ww_oc_mw),
+        "__TP_WW_OC_USAGE__": js_arr(tp_ww_oc_usage),
+        "__TP_MW_OC_MR__": js_arr(tp_mw_oc_mr),
         "__TP_MW_OC_TOTAL__": js_arr(tp_mw_oc_total),
-        "__TP_MW_OC_MAX__": js_arr(tp_mw_oc_max),
-        "__TP_MW_OC_WAITING__": js_arr(tp_mw_oc_waiting),
-        "__TP_M_OC_ACTIVE__": js_arr(tp_m_oc_active),
+        "__TP_MW_OC_TD__": js_arr(tp_mw_oc_td),
+        "__TP_MW_OC_MW__": js_arr(tp_mw_oc_mw),
+        "__TP_MW_OC_USAGE__": js_arr(tp_mw_oc_usage),
+        "__TP_M_OC_MR__": js_arr(tp_m_oc_mr),
         "__TP_M_OC_TOTAL__": js_arr(tp_m_oc_total),
-        "__TP_M_OC_MAX__": js_arr(tp_m_oc_max),
-        "__TP_M_OC_WAITING__": js_arr(tp_m_oc_waiting),
-        "__TP_ASYNC_ACTIVE__": js_arr(tp_async_active),
+        "__TP_M_OC_TD__": js_arr(tp_m_oc_td),
+        "__TP_M_OC_MW__": js_arr(tp_m_oc_mw),
+        "__TP_M_OC_USAGE__": js_arr(tp_m_oc_usage),
+        "__TP_ASYNC_MR__": js_arr(tp_async_mr),
         "__TP_ASYNC_TOTAL__": js_arr(tp_async_total),
-        "__TP_ASYNC_MAX__": js_arr(tp_async_max),
-        "__TP_ASYNC_WAITING__": js_arr(tp_async_waiting),
+        "__TP_ASYNC_TD__": js_arr(tp_async_td),
+        "__TP_ASYNC_MW__": js_arr(tp_async_mw),
+        "__TP_ASYNC_USAGE__": js_arr(tp_async_usage),
         "__ETCD_Q_SIZE__": js_arr(etcd_q_size),
         "__ETCD_Q_MAX__": js_arr(etcd_q_max),
         "__ETCD_Q_LIMIT__": js_arr(etcd_q_limit),
@@ -1094,7 +1115,7 @@ def main():
               2. Memory Usage Ratio        (usage% + per-host distribution)
               3. Object Cache              (object count & size)
               4. Cache Hit Rate            (hit rate trend + hit/miss breakdown)
-              5. Thread Pool Utilization   (5 pools: Active/Total/Max/Waiting)
+              5. Thread Pool Utilization   (5 pools: Peak Concurrency/Total/Tasks/Queue/Utilization)
               6. ETCD Queue                (queue depth vs limit)
               7. Active Clients            (connected client count)
               8. ETCD Success Rate         (ETCD request success rate)
@@ -1104,7 +1125,7 @@ def main():
             notes:
               - ECharts is loaded from CDN (jsdelivr.net); report needs internet.
               - OC_HIT_NUM is a cumulative counter; per-bin deltas are computed.
-              - Thread pool "Active" = Total - Idle (actual working threads).
+              - Thread pool metrics are interval-based: peak concurrency, tasks completed, peak queue, utilization.
         """)
     )
     parser.add_argument(
@@ -1135,7 +1156,15 @@ def main():
         "--open", action="store_true",
         help="open report in browser after generation (WSL: opens Edge via file:///)"
     )
+    parser.add_argument(
+        "--prefix", default="",
+        help="prefix for report title and default output filename (e.g. 'cluster-A')"
+    )
     args = parser.parse_args()
+
+    if args.prefix and args.output == parser.get_default("output"):
+        safe_prefix = re.sub(r'[^\w\-.]', '_', args.prefix)
+        args.output = f"{safe_prefix}_resource_report.html"
 
     print(f"Scanning {args.log_dir} for {args.log_pattern}*.log...")
     log_files = _find_log_files(args.log_dir, args.log_pattern)
@@ -1156,7 +1185,7 @@ def main():
     per_host_stats = compute_per_host_stats(all_data, args.interval)
 
     print("Generating HTML report...")
-    generate_html(cluster_stats, per_host_stats, all_data, args.output, args.since, args.until)
+    generate_html(cluster_stats, per_host_stats, all_data, args.output, args.since, args.until, args.prefix)
 
     if args.open:
         out_path = os.path.abspath(args.output)

@@ -83,6 +83,11 @@ ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesUsage(const std::string &se
     return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesUsage(serviceName); }, pimpl_);
 }
 
+ThreadPool::ThreadPoolUsage RpcServer::GetRpcServicesSnapshot(const std::string &serviceName) const
+{
+    return std::visit([&serviceName](auto &pimpl) { return pimpl->GetRpcServicesSnapshot(serviceName); }, pimpl_);
+}
+
 Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 {
     auto key = Token();

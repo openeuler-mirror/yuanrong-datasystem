@@ -686,14 +686,14 @@ std::string MasterOCServiceImpl::GetETCDAsyncQueueUsage()
     return ocMetadataManager->GetETCDAsyncQueueUsage();
 }
 
-std::string MasterOCServiceImpl::GetMasterAsyncPoolUsage()
+std::string MasterOCServiceImpl::GetMasterAsyncPoolUsage(int64_t intervalMs)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     Status rc = replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager);
     if (rc.IsError()) {
         return "";
     }
-    return ocMetadataManager->GetMasterAsyncPoolUsage();
+    return ocMetadataManager->GetMasterAsyncPoolUsage(intervalMs);
 }
 
 Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)

@@ -1037,10 +1037,10 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
                                     []() { return memory::Allocator::Instance()->GetSharedDiskStatistics(); });
     // The usage of WorkerOCService
     instance.RegisterCollectHandler(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("WorkerOCService").ToString(); });
+                                    [this]() { return GetRpcServicesUsage("WorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
     // The usage of WorkerWorkerOCService
     instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("WorkerWorkerOCService").ToString(); });
+                                    [this]() { return GetRpcServicesUsage("WorkerWorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
     // The total number of clients
     instance.RegisterCollectHandler(ResMetricName::ACTIVE_CLIENT_COUNT,
                                     [] { return std::to_string(ClientManager::Instance().GetClientCount()); });
@@ -1064,11 +1064,11 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
 
         // The usage of WorkerSCService
         instance.RegisterCollectHandler(ResMetricName::WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("ClientWorkerSCService").ToString(); });
+                                        [this]() { return GetRpcServicesUsage("ClientWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
 
         // The usage of WorkerSCService
         instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("WorkerWorkerSCService").ToString(); });
+                                        [this]() { return GetRpcServicesUsage("WorkerWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
 
         instance.RegisterCollectHandler(ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE,
                                         [this]() { return streamCacheClientWorkerSvc_->GetSCRemoteSendSuccessRate(); });
@@ -1084,10 +1084,10 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
     auto &instance = ResMetricCollector::Instance();
     // The usage of MasterWorkerOCService
     instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("MasterWorkerOCService").ToString(); });
+                                    [this]() { return GetRpcServicesUsage("MasterWorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
     // The usage of MasterOcService
     instance.RegisterCollectHandler(ResMetricName::MASTER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("MasterOCService").ToString(); });
+                                    [this]() { return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms); });
 
     if (EnableOCService()) {
         if (etcdCM_->IsCurrentNodeMaster()) {
@@ -1098,7 +1098,7 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
             });
             // The usage of master asyncPool_
             instance.RegisterCollectHandler(ResMetricName::MASTER_ASYNC_TASKS_THREAD_POOL, [this]() {
-                auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage();
+                auto usage = objCacheMasterSvc_->GetMasterAsyncPoolUsage(FLAGS_log_monitor_interval_ms);
                 return usage.empty() ? RES_THREAD_POOL_DEFAULT_USAGE : usage;
             });
         } else {
@@ -1111,10 +1111,10 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
     if (EnableSCService()) {
         // The usage of MasterWorkerOCService
         instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("MasterWorkerSCService").ToString(); });
+                                        [this]() { return GetRpcServicesUsage("MasterWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
         // The usage of MasterOcService
         instance.RegisterCollectHandler(ResMetricName::MASTER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("MasterSCService").ToString(); });
+                                        [this]() { return GetRpcServicesUsage("MasterSCService").ToString(FLAGS_log_monitor_interval_ms); });
     }
 }
 
