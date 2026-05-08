@@ -84,6 +84,9 @@
   - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
     `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
     without delaying readiness
+  - URMA warmup treats `K_WORKER_PULL_OBJECT_NOT_FOUND` for internal `_urma_` URMA warmup requests as a silent
+    best-effort miss because ready-state discovery can race peer warmup-object creation; ordinary RemoteGet failures
+    still use normal error logs
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task scans `GetAll(ETCD_CLUSTER_TABLE)` until the discovered ready worker/master set is stable or the startup
     warmup window expires, and later ETCD cluster ready PUT events trigger warmup for newly ready workers/masters
@@ -121,6 +124,8 @@
     delaying `Worker::InitWorker()` completion.
   - URMA connection warmup must not add client/KVClient dependencies; worker-side discovery uses existing `EtcdStore`
     state and worker-side remote-get helpers.
+  - URMA warmup object races should stay out of normal warning/error logs so operators do not confuse internal best-effort
+    warmup misses with user request failures.
   - Worker-master RPC warmup is one-way per initiating worker. Startup scans warm each worker's outbound paths, and the
     cluster ready event hook in `WorkerOCServer::UpdateClusterInfoInRocksDb` remains necessary for old-node to new-node
     paths during scale-out.
