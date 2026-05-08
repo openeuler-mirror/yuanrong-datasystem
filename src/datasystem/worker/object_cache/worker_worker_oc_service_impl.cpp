@@ -56,6 +56,15 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
+constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
+constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
+
+bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
+{
+    return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && !req.try_lock()
+           && req.version() == 0 && req.read_offset() == 0 && req.read_size() == URMA_WARMUP_OBJECT_SIZE
+           && req.data_size() == URMA_WARMUP_OBJECT_SIZE && req.comm_id().empty();
+}
 }
 
 inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &req)
@@ -340,6 +349,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
         GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo, fallbackStatus);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
+    }
+    if (status.GetCode() == K_WORKER_PULL_OBJECT_NOT_FOUND && IsUrmaWarmupRequest(req)) {
+        rsp.mutable_error()->set_error_code(K_OK);
+        rsp.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        return Status::OK();
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         status, FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
