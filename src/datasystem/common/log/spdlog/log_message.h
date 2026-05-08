@@ -28,6 +28,9 @@
 
 namespace datasystem {
 class LogMessageImpl;
+
+bool ShouldCreateLogMessage(LogSeverity logSeverity);
+
 class LogMessage {
 public:
     LogMessage(LogSeverity logSeverity, const char *file, int line);

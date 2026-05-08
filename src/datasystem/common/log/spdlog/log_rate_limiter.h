@@ -22,19 +22,10 @@
 
 #include <atomic>
 #include <cstdint>
-#include <mutex>
-#include <unordered_map>
 
 #include <spdlog/common.h>
 
 namespace datasystem {
-
-static constexpr int64_t TRACE_DECISION_TTL_MS = 5 * 60 * 1000;  // 5 minutes.
-static constexpr int64_t TRACE_DECISION_CLEANUP_INTERVAL_MS = 1000;
-struct TraceDecisionEntry {
-    bool admitted{ false };
-    int64_t expireAtMs{ 0 };
-};
 
 class LogRateLimiter {
 public:
@@ -61,8 +52,8 @@ public:
      * - When rate_ == 0, no request sampling, always returns true.
      * - When traceHash == 0 (non-request log), always returns true.
      * - For request logs (traceHash != 0), sampling is request-level:
-     *   the first decision for a trace in a window is admitted/rejected,
-     *   and later logs of the same trace follow the same decision until TTL expires.
+     *   the first decision is stored in current Trace context, and later logs
+     *   in the same propagated request context follow the same decision.
      */
     bool ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash);
 
@@ -79,6 +70,11 @@ public:
      */
     bool GetOrCreateRequestDecision(uint64_t traceHash, bool &admitted);
 
+    bool IsEnabled() const
+    {
+        return rate_.load(std::memory_order_relaxed) > 0;
+    }
+
     /**
      * @brief Reset all internal state. For testing only.
      */
@@ -94,20 +90,12 @@ private:
     ~LogRateLimiter() = default;
 
     int64_t NowMs() const;
-    bool ShouldAdmitRequest(uint64_t traceHash);
     void RefreshRequestWindow(int64_t nowMs);
     bool TryAdmitInCurrentSecond(int64_t nowMs);
-    bool GetDecisionFromTable(uint64_t traceHash, int64_t nowMs, bool &admitted);
-    void UpsertDecision(uint64_t traceHash, bool admitted, int64_t nowMs);
-    void CleanupExpiredDecisions(int64_t nowMs);
-    void ClearDecisionTable();
 
     std::atomic<int32_t> rate_{ 0 };          // 0 = no rate limiting
     std::atomic<int64_t> windowSec_{ 0 };
     std::atomic<int32_t> admittedInWindow_{ 0 };
-    std::mutex decisionTableMutex_;
-    std::unordered_map<uint64_t, TraceDecisionEntry> traceDecisions_;
-    int64_t lastCleanupMs_{ 0 };
 };
 
 }  // namespace datasystem
