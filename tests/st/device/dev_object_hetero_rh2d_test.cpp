@@ -321,6 +321,22 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTest1)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestFFTSContextLimit)
+{
+    // Test that it splits ScatterBatch to avoid FFTS context limit issue.
+    InitAcl(deviceId_);
+
+    std::vector<size_t> numObjChoices = { 64 };
+    std::vector<size_t> blkSzChoices = { 16 * 1024 };
+
+    std::shared_ptr<DsClient> client1;
+    std::shared_ptr<DsClient> client2;
+    InitTestDsClientForRemoteH2D(0, client1);
+    InitTestDsClientForRemoteH2D(1, client2);
+
+    RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_, 1000, 1);
+}
+
 TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestShmDisabled)
 {
     // Test that Remote H2D works for get client and its corresponding worker not on the same node.
