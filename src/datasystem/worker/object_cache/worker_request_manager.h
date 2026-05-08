@@ -201,7 +201,7 @@ private:
                              std::map<std::string, uint64_t> &needDeleteObjects);
 
     Status AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t index, bool shmEnable,
-                               bool useUbGet, bool ubFastTransportEnabled, uint64_t &ubWriteOffset, GetRspPb &resp,
+                               bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
                                std::vector<RpcMessage> &outPayloads);
 
     Status UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSize, uint64_t readSize, uint64_t readOffset,
