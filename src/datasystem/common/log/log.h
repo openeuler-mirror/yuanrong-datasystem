@@ -93,8 +93,8 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 #define LOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__).Stream()
 
 // Conditional Logging Macros
-#define LOG_IF(severity, condition) \
-    if (condition)                  \
+#define LOG_IF(severity, condition)                                                         \
+    if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))         \
     LOG_IMPL(severity)
 
 // Basic Logging Macros

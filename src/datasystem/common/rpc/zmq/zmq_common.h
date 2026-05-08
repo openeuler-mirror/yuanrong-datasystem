@@ -386,10 +386,14 @@ inline LogSampleState GetOrCreateLogSampleState()
 inline void ApplyLogSampleState(LogSampleState state)
 {
     switch (state) {
-        case LOG_SAMPLE_UNDECIDED:
+        case LOG_SAMPLE_UNDECIDED: {
             Trace::Instance().SetRequestLogTrace(true);
             Trace::Instance().SetRequestSampleDecision(false, false);
+            bool admitted = false;
+            // Create a local request decision when rate limiting is enabled; the decision is stored in Trace.
+            (void)LogRateLimiter::Instance().GetOrCreateRequestDecision(Trace::Instance().GetCachedHash(), admitted);
             break;
+        }
         case LOG_SAMPLE_ADMIT:
             Trace::Instance().SetRequestLogTrace(true);
             Trace::Instance().SetRequestSampleDecision(true, true);

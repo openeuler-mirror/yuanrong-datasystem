@@ -28,18 +28,31 @@
 
 #include "ut/common.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/logger_provider.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace ut {
+namespace {
+int BuildSideEffectPayload(int &counter)
+{
+    ++counter;
+    return counter;
+}
+}  // namespace
+
 class LogMessageTest : public CommonTest {
 public:
     void SetUp() override
     {
+        Trace::Instance().Invalidate();
+        LogRateLimiter::Instance().Reset();
+
         GlobalLogParam globalLogParam;
         auto lp = std::make_shared<LoggerProvider>(globalLogParam);
         Provider::Instance().SetLoggerProvider(lp);
@@ -52,6 +65,8 @@ public:
         DropDsLogger();
 
         Provider::Instance().SetLoggerProvider(nullptr);
+        Trace::Instance().Invalidate();
+        LogRateLimiter::Instance().Reset();
     }
 
     void CreateDsLogger()
@@ -174,6 +189,72 @@ TEST_F(LogMessageTest, ConditionalLogging)
             }
         }
     }
+}
+
+TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
+{
+    int evaluations = 0;
+
+    LOG_IF(INFO, false) << "condition false " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 0);
+
+    LogRateLimiter::Instance().SetRate(0);
+    LOG(INFO) << "non request info " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 1);
+
+    LogRateLimiter::Instance().SetRate(1);
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    bool admitted = false;
+    ASSERT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+    ASSERT_TRUE(admitted);
+
+    LOG(INFO) << "admitted request info " << BuildSideEffectPayload(evaluations);
+    LOG(WARNING) << "admitted request warning " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 3);
+}
+
+TEST_F(LogMessageTest, RejectedRequestInfoWarningSkipStreamExpression)
+{
+    LogRateLimiter::Instance().SetRate(1);
+
+    int evaluations = 0;
+    bool rejectedFound = false;
+    constexpr int kAttempts = 1000;
+    for (int i = 0; i < kAttempts; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+        bool admitted = true;
+        ASSERT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+        if (admitted) {
+            continue;
+        }
+
+        rejectedFound = true;
+        LOG(INFO) << "rejected request info " << BuildSideEffectPayload(evaluations);
+        LOG(WARNING) << "rejected request warning " << BuildSideEffectPayload(evaluations);
+        EXPECT_EQ(evaluations, 0);
+
+        LOG(ERROR) << "rejected request error " << BuildSideEffectPayload(evaluations);
+        EXPECT_EQ(evaluations, 1);
+        break;
+    }
+    EXPECT_TRUE(rejectedFound);
+}
+
+TEST_F(LogMessageTest, PropagatedRejectSkipsStreamExpressionWhenLocalRateIsZero)
+{
+    LogRateLimiter::Instance().SetRate(0);
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("propagated-rejected-request");
+    Trace::Instance().SetRequestLogTrace(true);
+    Trace::Instance().SetRequestSampleDecision(true, false);
+
+    int evaluations = 0;
+    LOG(INFO) << "propagated rejected info " << BuildSideEffectPayload(evaluations);
+    LOG(WARNING) << "propagated rejected warning " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 0);
+
+    LOG(ERROR) << "propagated rejected error " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 1);
 }
 
 TEST_F(LogMessageTest, VerboseLogging)

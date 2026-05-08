@@ -20,8 +20,10 @@
 #include "datasystem/common/log/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <dirent.h>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -33,12 +35,18 @@
 #include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/logging.h"
 
 DS_DECLARE_bool(alsologtostderr);
+DS_DECLARE_bool(logtostderr);
 DS_DECLARE_bool(log_async);
+DS_DECLARE_int32(log_rate_limit);
+DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_uint32(stderrthreshold);
 
 namespace datasystem {
 namespace ut {
@@ -49,6 +57,11 @@ constexpr double MICROSEC_TO_MILLISEC = 1e3;
 constexpr double MICROSEC_TO_SEC = 1e6;
 constexpr int WARMUP_ITERATIONS = 1000;
 constexpr int OUTPUT_PRECISION = 2;
+constexpr int PURE_LOG_THREAD_COUNT = 32;
+constexpr int PURE_LOG_PER_THREAD_QPS = 100;
+constexpr int PURE_LOG_TARGET_QPS = PURE_LOG_THREAD_COUNT * PURE_LOG_PER_THREAD_QPS;
+constexpr int PURE_LOG_DURATION_SEC = 10;
+constexpr int PURE_LOG_RATE_LIMIT = 100;
 
 /**
  * Test log asynchronous mode performance testing
@@ -59,10 +72,23 @@ public:
     void StartLogging()
     {
         FLAGS_alsologtostderr = false;
+        FLAGS_logtostderr = false;
+        FLAGS_stderrthreshold = LogSeverity::FATAL;
         FLAGS_max_log_size = 2048;  // 2048 MB
         FLAGS_log_async = true;
 
         Logging::GetInstance()->Start("ds_llt", true, 1);
+    }
+
+    void StartLoggingWithRateLimit(int32_t rate)
+    {
+        FLAGS_log_rate_limit = rate;
+        LogRateLimiter::Instance().Reset();
+        LogRateLimiter::Instance().SetRate(rate);
+        StartLogging();
+        // Logging may already be initialized by another test in the same process.
+        // Set the limiter explicitly so this LLT does not depend on test order.
+        LogRateLimiter::Instance().SetRate(rate);
     }
 
     /**
@@ -135,6 +161,19 @@ public:
         return latencies[index];
     }
 
+    double CalculatePercentile(std::vector<double> latencies, double percentile)
+    {
+        if (latencies.empty()) {
+            return 0.0;
+        }
+        std::sort(latencies.begin(), latencies.end());
+        size_t index = static_cast<size_t>(latencies.size() * percentile);
+        if (index >= latencies.size()) {
+            index = latencies.size() - 1;
+        }
+        return latencies[index];
+    }
+
     /**
      * Calculate average latency
      * @param latencies Collection of latency data points
@@ -147,6 +186,175 @@ public:
 
         double sum = std::accumulate(latencies.begin(), latencies.end(), 0.0);
         return sum / latencies.size();
+    }
+
+    int CountInfoLogLinesWithMarker(const std::string &marker)
+    {
+        DIR *dp = opendir(FLAGS_log_dir.c_str());
+        if (dp == nullptr) {
+            return 0;
+        }
+
+        int count = 0;
+        struct dirent *entry = nullptr;
+        while ((entry = readdir(dp)) != nullptr) {
+            std::string filename(entry->d_name);
+            if (filename.find("ds_llt") == std::string::npos || filename.find(".INFO") == std::string::npos
+                || filename.find(".log") == std::string::npos) {
+                continue;
+            }
+            std::ifstream file(FLAGS_log_dir + "/" + filename);
+            std::string line;
+            while (std::getline(file, line)) {
+                if (line.find(marker) != std::string::npos) {
+                    ++count;
+                }
+            }
+        }
+        closedir(dp);
+        return count;
+    }
+
+    struct PureLogResult {
+        int rate = 0;
+        bool directLog = false;
+        bool expensivePayload = false;
+        int totalRequests = 0;
+        double elapsedSec = 0.0;
+        double achievedQps = 0.0;
+        double avgUs = 0.0;
+        double p50Us = 0.0;
+        double p95Us = 0.0;
+        double p99Us = 0.0;
+        double maxUs = 0.0;
+        int writtenSamples = 0;
+        int payloadBuilds = 0;
+    };
+
+    std::string BuildExpensivePayload(const std::string &payload, int threadId, int seq,
+                                      std::atomic<int> &payloadBuilds)
+    {
+        payloadBuilds.fetch_add(1, std::memory_order_relaxed);
+        std::string message;
+        message.reserve(payload.size() * 4 + 128);
+        message.append(" thread=").append(std::to_string(threadId));
+        message.append(" seq=").append(std::to_string(seq));
+        message.append(" payload=");
+        for (int i = 0; i < 4; ++i) {
+            message.append(payload);
+        }
+        return message;
+    }
+
+    void EmitPureLogLine(bool directLog, bool expensivePayload, const std::string &marker, const std::string &payload,
+                         int threadId, int seq, std::atomic<int> &payloadBuilds)
+    {
+        if (expensivePayload) {
+            if (directLog) {
+                LogMessage(LogSeverity::INFO, __FILE__, __LINE__).Stream()
+                    << marker << BuildExpensivePayload(payload, threadId, seq, payloadBuilds);
+            } else {
+                LOG(INFO) << marker << BuildExpensivePayload(payload, threadId, seq, payloadBuilds);
+            }
+            return;
+        }
+
+        if (directLog) {
+            LogMessage(LogSeverity::INFO, __FILE__, __LINE__).Stream()
+                << marker << ", thread=" << threadId << ", seq=" << seq << ", payload=" << payload;
+        } else {
+            LOG(INFO) << marker << ", thread=" << threadId << ", seq=" << seq << ", payload=" << payload;
+        }
+    }
+
+    PureLogResult RunPureLogWorkload(int rate, const std::string &marker, bool expensivePayload, bool directLog)
+    {
+        StartLoggingWithRateLimit(rate);
+
+        constexpr int requestsPerThread = PURE_LOG_PER_THREAD_QPS * PURE_LOG_DURATION_SEC;
+        constexpr int totalRequests = PURE_LOG_THREAD_COUNT * requestsPerThread;
+        const std::string payload = GenerateLogPayload(64);
+
+        std::atomic<int> ready{ 0 };
+        std::atomic<bool> start{ false };
+        std::atomic<int> payloadBuilds{ 0 };
+        std::chrono::steady_clock::time_point scheduledStart;
+        std::vector<std::vector<double>> threadLatencies(PURE_LOG_THREAD_COUNT);
+        std::vector<std::thread> threads;
+        threads.reserve(PURE_LOG_THREAD_COUNT);
+
+        for (int threadId = 0; threadId < PURE_LOG_THREAD_COUNT; ++threadId) {
+            threads.emplace_back([&, threadId]() {
+                threadLatencies[threadId].reserve(requestsPerThread);
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+
+                const auto period = std::chrono::microseconds(1000000 / PURE_LOG_PER_THREAD_QPS);
+                for (int i = 0; i < requestsPerThread; ++i) {
+                    std::this_thread::sleep_until(scheduledStart + period * i);
+
+                    auto begin = std::chrono::high_resolution_clock::now();
+                    {
+                        TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                        EmitPureLogLine(directLog, expensivePayload, marker, payload, threadId, i, payloadBuilds);
+                    }
+                    auto end = std::chrono::high_resolution_clock::now();
+                    threadLatencies[threadId].push_back(
+                        std::chrono::duration<double, std::micro>(end - begin).count());
+                }
+                Trace::Instance().Invalidate();
+            });
+        }
+
+        while (ready.load(std::memory_order_acquire) != PURE_LOG_THREAD_COUNT) {
+            std::this_thread::yield();
+        }
+        scheduledStart = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        start.store(true, std::memory_order_release);
+
+        for (auto &thread : threads) {
+            thread.join();
+        }
+        const auto finish = std::chrono::steady_clock::now();
+        Provider::Instance().FlushLogs();
+
+        std::vector<double> allLatencies;
+        allLatencies.reserve(totalRequests);
+        for (auto &latencies : threadLatencies) {
+            allLatencies.insert(allLatencies.end(), latencies.begin(), latencies.end());
+        }
+        EXPECT_EQ(allLatencies.size(), static_cast<size_t>(totalRequests));
+
+        PureLogResult result;
+        result.rate = rate;
+        result.directLog = directLog;
+        result.expensivePayload = expensivePayload;
+        result.totalRequests = totalRequests;
+        result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
+        result.achievedQps = totalRequests / result.elapsedSec;
+        result.p50Us = CalculatePercentile(allLatencies, 0.50);
+        result.p95Us = CalculatePercentile(allLatencies, 0.95);
+        result.p99Us = CalculatePercentile(allLatencies, 0.99);
+        result.avgUs = CalculateAvgLatency(allLatencies);
+        result.maxUs = *std::max_element(allLatencies.begin(), allLatencies.end());
+        result.writtenSamples = CountInfoLogLinesWithMarker(marker);
+        result.payloadBuilds = payloadBuilds.load(std::memory_order_relaxed);
+        return result;
+    }
+
+    void PrintPureLogResult(const std::string &tag, const PureLogResult &result)
+    {
+        std::cout << tag << " rate=" << result.rate << " directLog=" << result.directLog
+                  << " expensivePayload=" << result.expensivePayload << " threads=" << PURE_LOG_THREAD_COUNT
+                  << " targetQps=" << PURE_LOG_TARGET_QPS << " durationSec=" << PURE_LOG_DURATION_SEC
+                  << " totalRequests=" << result.totalRequests << " elapsedSec=" << std::fixed
+                  << std::setprecision(OUTPUT_PRECISION) << result.elapsedSec << " achievedQps=" << result.achievedQps
+                  << " avgUs=" << result.avgUs << " p50Us=" << result.p50Us << " p95Us=" << result.p95Us
+                  << " p99Us=" << result.p99Us << " maxUs=" << result.maxUs
+                  << " writtenSamples=" << result.writtenSamples << " payloadBuilds=" << result.payloadBuilds
+                  << std::endl;
     }
 
 private:
@@ -318,6 +526,49 @@ TEST_F(LogPerformanceTest, MultiThreadThroughput)
         std::cout << "  Latency: Avg = " << std::fixed << std::setprecision(OUTPUT_PRECISION) << avgLatency << "μs, "
                   << "P99 = " << p99Latency << "μs\n\n";
     }
+}
+
+TEST_F(LogPerformanceTest, LEVEL1_RequestLogRateLimitPureLoggingQps3200)
+{
+    const std::string marker = "pure-log-rate-limit-qps3200-rate-" + std::to_string(PURE_LOG_RATE_LIMIT);
+    auto result = RunPureLogWorkload(PURE_LOG_RATE_LIMIT, marker, false, false);
+    PrintPureLogResult("PURE_LOG_RATE_LIMIT_RESULT", result);
+
+    EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_GT(result.writtenSamples, 0);
+    EXPECT_LE(result.writtenSamples, PURE_LOG_RATE_LIMIT * (PURE_LOG_DURATION_SEC + 2));
+    EXPECT_LT(result.p99Us, 50000.0);
+}
+
+TEST_F(LogPerformanceTest, LEVEL1_RequestLogRateLimitRejectedExpensivePayloadQps3200)
+{
+    const std::string marker = "pure-log-rate-limit-expensive-rate-" + std::to_string(PURE_LOG_RATE_LIMIT);
+    auto result = RunPureLogWorkload(PURE_LOG_RATE_LIMIT, marker, true, false);
+    PrintPureLogResult("PURE_LOG_RATE_LIMIT_EXPENSIVE_RESULT", result);
+
+    EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_GT(result.writtenSamples, 0);
+    EXPECT_LE(result.writtenSamples, PURE_LOG_RATE_LIMIT * (PURE_LOG_DURATION_SEC + 2));
+    EXPECT_LE(result.payloadBuilds, PURE_LOG_RATE_LIMIT * (PURE_LOG_DURATION_SEC + 2));
+    EXPECT_LT(result.p99Us, 50000.0);
+}
+
+TEST_F(LogPerformanceTest, LEVEL1_LogRateLimitZeroRateMacroOverheadQps3200)
+{
+    auto direct = RunPureLogWorkload(0, "pure-log-zero-rate-direct-baseline", true, true);
+    auto macro = RunPureLogWorkload(0, "pure-log-zero-rate-macro", true, false);
+    PrintPureLogResult("PURE_LOG_ZERO_RATE_DIRECT_RESULT", direct);
+    PrintPureLogResult("PURE_LOG_ZERO_RATE_MACRO_RESULT", macro);
+
+    EXPECT_GE(direct.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_GE(macro.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_EQ(direct.payloadBuilds, direct.totalRequests);
+    EXPECT_EQ(macro.payloadBuilds, macro.totalRequests);
+    EXPECT_GE(direct.writtenSamples, direct.totalRequests);
+    EXPECT_GE(macro.writtenSamples, macro.totalRequests);
+
+    double p99GuardrailUs = std::max(direct.p99Us * 2.0, direct.p99Us + 1000.0);
+    EXPECT_LE(macro.p99Us, p99GuardrailUs);
 }
 
 }  // namespace ut
