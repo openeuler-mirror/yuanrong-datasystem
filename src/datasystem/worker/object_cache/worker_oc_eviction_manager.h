@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 #define DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 
+#include <atomic>
 #include <cstdint>
 #include <future>
 #include <list>
@@ -178,6 +179,7 @@ private:
         }
         ~EvictionTrace()
         {
+            ReportEvictObjectCount();
             if (rc.GetCode() == K_TRY_AGAIN || rc.GetCode() == K_NOT_READY) {
                 return;
             }
@@ -194,7 +196,8 @@ private:
                 ss << "spill cost " << spillCost << " ms, ";
             }
             ss << "status:" << (rc.IsOk() ? "OK" : rc.GetMsg());
-            LOG(INFO) << ss.str();
+            auto logLevel = elapsed > 1 || rc.IsError() ? 0 : 1;
+            VLOG(logLevel) << ss.str();
         }
 
         void AddObjectKeySize(const std::string &key, uint64_t size)
@@ -213,6 +216,29 @@ private:
             objectSize += size;
             objectSize -= std::min(objectSize, it->second);
             it->second = size;
+        }
+
+    private:
+        static void ReportEvictObjectCount()
+        {
+            static std::atomic<uint64_t> evictCountInLastMinute{ 0 };
+            static std::atomic<uint64_t> lastLogTimeMs{ 0 };
+            constexpr uint64_t logIntervalMs = 60 * SECS_TO_MS;
+
+            (void)evictCountInLastMinute.fetch_add(1, std::memory_order_relaxed);
+            auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+            auto lastMs = lastLogTimeMs.load(std::memory_order_relaxed);
+            if (lastMs == 0) {
+                (void)lastLogTimeMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed);
+                return;
+            }
+            if (nowMs - lastMs < logIntervalMs) {
+                return;
+            }
+            if (lastLogTimeMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed)) {
+                auto count = evictCountInLastMinute.exchange(0, std::memory_order_relaxed);
+                LOG(INFO) << "Evict object count in last minute: " << count;
+            }
         }
     };
 

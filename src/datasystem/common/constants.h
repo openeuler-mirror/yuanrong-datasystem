@@ -107,6 +107,11 @@ static const std::string ENV_UB_DEVICE_EID = "DS_UB_DEV_EID";
 static const std::string DEFAULT_UB_DEVICE_NAME = "bonding_dev_0";
 
 static const std::string CLIENT_LOG_FILENAME = "ds_client";
+
+// log limit
+static const int LOG_TIME_LIMIT_LEVEL1 = 1;   // 1 second
+static const int LOG_TIME_LIMIT_LEVEL2 = 10;  // 10 seconds
+
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_CONSTANTS_H

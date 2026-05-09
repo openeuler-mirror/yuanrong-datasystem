@@ -439,16 +439,21 @@ Status WorkerOcEvictionManager::GetAllObjectsInfo(std::vector<EvictionList::Node
 
 void WorkerOcEvictionManager::AsyncMasterTask(const std::string &objectKey, uint64_t version)
 {
-    LOG(INFO) << FormatString("[ObjectKey %s] Start AsyncMasterTask. [version: %zu]", objectKey, version);
     Status rc;
     int retryCount = 0;
     const int maxRetryNum = 3;
+    Timer timer;
     do {
         rc = RemoveMetaFromMasterForEviction(objectKey, version);
     } while (rc.IsError() && retryCount++ < maxRetryNum);
     if (rc.IsError()) {
-        LOG(ERROR) << FormatString("[ObjectKey %s] RemoveMetaFromMasterForEviction failed, %s", objectKey,
-                                   rc.ToString());
+        LOG_EVERY_T(ERROR, LOG_TIME_LIMIT_LEVEL2) << FormatString(
+            "[ObjectKey %s version %zu] RemoveMetaFromMasterForEviction failed, %s", objectKey, version, rc.ToString());
+    } else {
+        auto elapsedMs = timer.ElapsedMilliSecond();
+        auto logLevel = elapsedMs > 1 ? 0 : 1;
+        VLOG(logLevel) << FormatString("[ObjectKey %s version %zu] RemoveMetaFromMasterForEviction took %f ms",
+                                       objectKey, version, elapsedMs);
     }
 }
 

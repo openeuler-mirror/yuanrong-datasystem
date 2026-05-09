@@ -1481,11 +1481,6 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
     }
     point.RecordAndReset(PerfKey::MASTER_REMOVE_META_SINGLE);
 
-    LOG(INFO) << FormatString(
-        "RemoveMeta finished, receive id size: %d, success size: %d, need wait size: %d, need data size: %d, failed "
-        "size: %d, outdated size: %d",
-        request.ids_size() + request.id_with_version_size(), response.success_ids_size(), response.need_wait_ids_size(),
-        response.need_data_ids_size(), response.failed_ids_size(), response.outdated_ids_size());
     return Status::OK();
 }
 
@@ -1693,7 +1688,7 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
         return;
     }
     uint64_t compareVersion;
-    LOG(INFO) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
+    VLOG(1) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
                               address);
     for (const auto &objectKey : notRedirectObjectKeys) {
         if (etcdCM_->CheckLocalNodeIsExiting()) {
