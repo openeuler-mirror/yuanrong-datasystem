@@ -48,6 +48,7 @@ static const std::string LOG_V = "DATASYSTEM_LOG_V";
 static const std::string MIN_LOG_LEVEL = "DATASYSTEM_MIN_LOG_LEVEL";
 static const std::string LOG_MONITOR_ENABLE = "DATASYSTEM_LOG_MONITOR_ENABLE";
 static const std::string LOG_RATE_LIMIT_ENV = "DATASYSTEM_LOG_RATE_LIMIT";
+static const std::string LOG_ONLY_WRITE_INFO_FILE_ENV = "DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE";
 
 constexpr uint32_t DEFAULT_LOG_ASYNC_QUEUE_SIZE = 65536;
 constexpr uint32_t DEFAULT_MAX_LOG_SIZE_MB = 400;

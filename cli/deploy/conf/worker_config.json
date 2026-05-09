@@ -451,6 +451,10 @@
         "value": "0",
         "description": "Maximum sampled request traces per second (0 = unlimited). Sampling applies only to request logs with trace IDs. Sampled traces print complete log chains. Rejected traces are dropped at all log levels."
     },
+    "log_only_write_info_file": {
+        "value": "true",
+        "description": "The INFO log file always receives all severities. Whether to avoid creating additional WARNING/ERROR log files."
+    },
     "enable_curve_zmq": {
         "value": "false",
         "description": "Whether to enable Curve ZMQ for authentication and authorization between components."
