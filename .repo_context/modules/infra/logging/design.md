@@ -219,6 +219,7 @@
     - `minloglevel`
     - `log_async`
     - `log_async_queue_size`
+    - `log_only_write_info_file`
     - `log_rate_limit` (request-level sampling quota by SDK request trace, not per-log throttling; local decisions are stored in the active `Trace` context and the limiter hot path uses only per-window atomics, not a global trace-decision map)
     - `log_dir`
     - `log_filename`
@@ -239,6 +240,7 @@
     - `DATASYSTEM_MIN_LOG_LEVEL`
     - `DATASYSTEM_LOG_MONITOR_ENABLE`
     - `DATASYSTEM_LOG_RATE_LIMIT`
+    - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
 - Background jobs, threads, or callbacks:
   - `LogManager` background thread started by `LogManager::Start()`;
   - exporter flush threads under `HardDiskExporter`;
@@ -251,7 +253,11 @@
     (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops; when a receiver has local
     `log_rate_limit` enabled, an `UNDECIDED` request is decided at the RPC context import boundary before async
     handoff;
-  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it to client-side `LogRateLimiter` once at connect/register time;
+  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it
+    to client-side `LogRateLimiter` at connect/register time;
+  - client log file split behavior is decided before logger sink creation by `log_only_write_info_file` and the
+    client-only `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` override; workers use their own gflag/config value and do not
+    sync this setting through register responses;
   - public SDK entrypoints and language bindings explicitly create request traces with `Trace::SetRequestTraceUUID()`;
   - worker, master, and async callsites restore trace IDs or full `TraceContext` snapshots at request boundaries.
 - Upstream and downstream dependencies:
@@ -427,6 +433,7 @@ Failure-sensitive steps:
 | `DATASYSTEM_CLIENT_LOG_NAME` | environment | client-only override validated by RE2 | changes client ordinary log base name | unsafe naming would break file handling if validation changed |
 | `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` | environment | client-only override validated by RE2 | changes client access-log base name | can break downstream file discovery assumptions |
 | `DATASYSTEM_LOG_MONITOR_ENABLE` | environment | client-only override | enables or disables client monitor logging | may create client and server observability mismatch |
+| `log_only_write_info_file` / `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | gflag or client-only env override | default `true` | INFO files always receive all severities; `true` suppresses additional WARNING/ERROR files, while `false` restores dedicated WARNING/ERROR files and severity fanout | changes file discovery assumptions and disk usage |
 
 ## Examples And Migration Notes
 

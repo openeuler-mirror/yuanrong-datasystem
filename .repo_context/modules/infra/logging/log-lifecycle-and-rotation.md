@@ -83,6 +83,7 @@
   - `DATASYSTEM_LOG_V`
   - `DATASYSTEM_MIN_LOG_LEVEL`
   - `DATASYSTEM_LOG_MONITOR_ENABLE`
+  - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
 - Verified in `provider.cpp`:
   - the early worker log prefix resolves the pod identifier from `POD_IP`, then `POD_NAME`, then `HOSTNAME`
 - Verified in `logging.cpp` and `file_util.cpp`:
