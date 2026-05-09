@@ -37,10 +37,12 @@
 #include "datasystem/object/buffer.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
+#define private public
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
+#undef private
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "securec.h"
@@ -53,6 +55,7 @@ DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_string(obs);
 DS_DECLARE_string(obs_endpoint);
@@ -256,15 +259,31 @@ public:
         return workerAddress.ToString();
     }
 
+    Status QueryMetadata(std::shared_ptr<WorkerMasterOCApi> api, int workerIndex,
+                         const std::vector<std::string> &objectKeys, datasystem::master::QueryMetaRspPb &rsp)
+    {
+        const std::string queryReqId = GetStringUuid();
+        datasystem::master::QueryMetaReqPb req;
+        std::vector<RpcMessage> payloads;
+        *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
+        req.set_request_id(queryReqId);
+        req.set_address(GetWorkerAddr(workerIndex));
+        return api->QueryMeta(req, 0, rsp, payloads);
+    }
+
     Status CreateMeta(const std::string &objectKey, int workerIndex, std::shared_ptr<WorkerMasterOCApi> client,
-                      bool isCopy = false)
+                      bool isCopy = false, uint64_t *version = nullptr)
     {
         if (isCopy) {
             CreateCopyMetaReqPb req;
             CreateCopyMetaRspPb rsp;
             req.set_object_key(objectKey);
             req.set_address(GetWorkerAddr(workerIndex));
-            return client->CreateCopyMeta(req, rsp);
+            auto rc = client->CreateCopyMeta(req, rsp);
+            if (rc.IsOk() && version != nullptr) {
+                *version = rsp.version();
+            }
+            return rc;
         } else {
             auto metaPb = std::make_unique<ObjectMetaPb>();
             metaPb->set_object_key(objectKey);
@@ -273,7 +292,11 @@ public:
             CreateMetaRspPb rsp;
             req.set_address(GetWorkerAddr(workerIndex));
             req.set_allocated_meta(metaPb.release());
-            return client->CreateMeta(req, rsp);
+            auto rc = client->CreateMeta(req, rsp);
+            if (rc.IsOk() && version != nullptr) {
+                *version = rsp.version();
+            }
+            return rc;
         }
     }
 
@@ -631,6 +654,104 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotPrimaryCopy)
     GetAllObjsFromObjectTable(objsInTable);
     ASSERT_LT(objsInList.size(), alreadyPut);   // Delete will erase objects from EvictionList
     ASSERT_LT(objsInTable.size(), alreadyPut);  // Delete will erase objects from ObjectTable
+}
+
+TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEviction)
+{
+    std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+    const bool oldEnableDistributedMaster = FLAGS_enable_distributed_master;
+    FLAGS_enable_distributed_master = false;
+    Raii resetDistributedMaster([oldEnableDistributedMaster]() {
+        FLAGS_enable_distributed_master = oldEnableDistributedMaster;
+    });
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.checkConnection", "return(K_OK)"));
+    Raii clearCheckConnection([]() {
+        (void)inject::Clear("EtcdClusterManager.checkConnection");
+    });
+    InitClusterManager(worker0Addr_);
+    object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
+    evictionManager.SetClusterManager(cm_.get());
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
+    DS_ASSERT_OK(evictionManager.Init(globalRefTable, akSkManager_));
+
+    auto masterClient0 = CreateClient(0);
+    auto masterClient1 = CreateClient(1);
+    const std::string objectKeySuffix = GetStringUuid();
+    const std::string staleKey = "batch_remove_meta_stale_" + objectKeySuffix;
+    const std::string currentKey = "batch_remove_meta_current_" + objectKeySuffix;
+    constexpr uint64_t staleRemoveVersion = 1;
+    uint64_t staleVersion = 0;
+    uint64_t currentVersion = 0;
+    DS_ASSERT_OK(CreateMeta(staleKey, 0, masterClient0, false, &staleVersion));
+    DS_ASSERT_OK(CreateMeta(currentKey, 0, masterClient0, false, &currentVersion));
+    DS_ASSERT_OK(CreateMeta(staleKey, 1, masterClient1, true));
+    DS_ASSERT_OK(CreateMeta(currentKey, 1, masterClient1, true));
+    ASSERT_GT(staleVersion, staleRemoveVersion);
+    ASSERT_GT(currentVersion, 0ul);
+
+    WorkerOcEvictionManager::EvictDeletedObjects deletedObjects = {
+        { staleKey, staleRemoveVersion },
+        { currentKey, currentVersion },
+    };
+    DS_ASSERT_OK(evictionManager.RemoveMetaFromMasterForEviction(deletedObjects));
+
+    QueryMetaRspPb rsp;
+    DS_ASSERT_OK(QueryMetadata(masterClient1, 1, { staleKey, currentKey }, rsp));
+    ASSERT_EQ(rsp.query_metas_size(), 2);
+    std::unordered_map<std::string, std::string> selectedAddresses;
+    for (const auto &meta : rsp.query_metas()) {
+        selectedAddresses.emplace(meta.meta().object_key(), meta.address());
+    }
+    ASSERT_EQ(selectedAddresses[staleKey], GetWorkerAddr(0));
+    ASSERT_TRUE(selectedAddresses[currentKey].empty());
+}
+
+TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEvictionWithUnroutableKey)
+{
+    std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+    const bool oldEnableDistributedMaster = FLAGS_enable_distributed_master;
+    FLAGS_enable_distributed_master = false;
+    Raii resetDistributedMaster([oldEnableDistributedMaster]() {
+        FLAGS_enable_distributed_master = oldEnableDistributedMaster;
+    });
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.checkConnection", "return(K_OK)"));
+    Raii clearCheckConnection([]() {
+        (void)inject::Clear("EtcdClusterManager.checkConnection");
+    });
+    InitClusterManager(worker0Addr_);
+    object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
+    evictionManager.SetClusterManager(cm_.get());
+    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
+    DS_ASSERT_OK(evictionManager.Init(globalRefTable, akSkManager_));
+
+    auto masterClient0 = CreateClient(0);
+    auto masterClient1 = CreateClient(1);
+    const std::string objectKeySuffix = GetStringUuid();
+    const std::string currentKey = "batch_remove_meta_mixed_current_" + objectKeySuffix;
+    const std::string unroutableKey = "batch_remove_meta_mixed_unroutable_" + objectKeySuffix;
+    uint64_t currentVersion = 0;
+    constexpr uint64_t unroutableVersion = 1;
+    DS_ASSERT_OK(CreateMeta(currentKey, 0, masterClient0, false, &currentVersion));
+    DS_ASSERT_OK(CreateMeta(currentKey, 1, masterClient1, true));
+    DS_ASSERT_OK(inject::Set("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
+                             FormatString("call(%s)", unroutableKey)));
+    Raii clearMoveToEmptyMaster([]() {
+        (void)inject::Clear("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster");
+    });
+
+    WorkerOcEvictionManager::EvictDeletedObjects deletedObjects = {
+        { currentKey, currentVersion },
+        { unroutableKey, unroutableVersion },
+    };
+    DS_ASSERT_NOT_OK(evictionManager.RemoveMetaFromMasterForEviction(deletedObjects));
+    ASSERT_EQ(deletedObjects.size(), 1ul);
+    ASSERT_EQ(deletedObjects.count(unroutableKey), 1ul);
+    ASSERT_EQ(deletedObjects[unroutableKey], unroutableVersion);
+
+    QueryMetaRspPb rsp;
+    DS_ASSERT_OK(QueryMetadata(masterClient1, 1, { currentKey }, rsp));
+    ASSERT_EQ(rsp.query_metas_size(), 1);
+    ASSERT_TRUE(rsp.query_metas(0).address().empty());
 }
 
 TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopy)
