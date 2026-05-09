@@ -144,7 +144,7 @@ private:
             return cuda::CudaDeviceManager::Instance();
         }
 #endif
-        LOG(ERROR) << "No accelerator device detected. "
+        LOG(INFO) << "No accelerator device detected. "
                       "Checked:"
 #ifdef USE_NPU
                       " /dev/davinci[0-16]*"
