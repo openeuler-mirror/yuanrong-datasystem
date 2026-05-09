@@ -171,6 +171,9 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     HostPort &localAddress_;
+
+    static constexpr uint64_t DEFAULT_SLOW_LOG_THRESHOLD_MS = 2;
+    uint64_t slowLogThresholdMs_ = DEFAULT_SLOW_LOG_THRESHOLD_MS;
 };
 
 }  // namespace object_cache

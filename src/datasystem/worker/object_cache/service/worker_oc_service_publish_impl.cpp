@@ -131,7 +131,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
                              "hash master get failed, CreateMetadataToMaster failed");
     std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
                                                                                           CreateMetaRspPb &metaResp) {
-        LOG(INFO) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
+        VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
                                         metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->CreateMeta(metaReq, metaResp);
     };
@@ -170,7 +170,7 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
                              "hash master get failed, UpdateMetadataToMaster failed");
     std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
                                                                                           UpdateMetaRspPb &metaRsp) {
-        LOG(INFO) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
+        VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
                                         metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->UpdateMeta(metaReq, metaRsp);
     };
@@ -308,8 +308,8 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     RETURN_IF_NOT_OK(PrepareForPublish(req, clientId, shmUnitId, objectKV));
     constexpr double reserveGetLogThresholdMs = 0.1; // 100us
     if (elapsed > reserveGetLogThresholdMs) {
-        LOG(INFO) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %zu ms.", req.client_id(),
-                                  objectKey, elapsed);
+        VLOG(1) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %lld ms.", req.client_id(),
+                                  objectKey, static_cast<long long>(elapsed));
     }
 
     // Step 3: Request to master and save data (non-shm copy).
@@ -356,7 +356,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
                                                std::vector<RpcMessage> &payloads)
 {
     // Step1: Add namespace for objectKeys.
-    LOG(INFO) << FormatString("[ObjectKey %s] is being publishing [Sz: %zu].", req.object_key(), req.data_size());
+    VLOG(1) << FormatString("[ObjectKey %s] is being publishing [Sz: %zu].", req.object_key(), req.data_size());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     std::vector<ShmKey> shmUnits = std::vector<ShmKey>{ ShmKey::Intern(req.shm_id()) };
@@ -398,7 +398,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
     } else {
         INJECT_POINT("worker.publish_failure");
     }
-    LOG(INFO) << "Put success";
+    VLOG(1) << "Put success";
     INJECT_POINT("worker.after_publish");
     return Status::OK();
 }
@@ -423,8 +423,11 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
     reqParam.existence = std::to_string(req.existence());
     reqParam.cacheType = std::to_string(req.cache_type());
     posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
-    workerOperationTimeCost.Append("Total Publish", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of worker Publish %s", workerOperationTimeCost.GetInfo());
+    auto totalPublishMs = timer.ElapsedMilliSecond();
+    workerOperationTimeCost.Append("Total Publish", totalPublishMs);
+    auto vlogLevel = (totalPublishMs > slowLogThresholdMs_ || rc.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("Publish done, cost: %.1fms, %s",
+        static_cast<double>(totalPublishMs), workerOperationTimeCost.GetInfo());
     return rc;
 }
 

@@ -80,6 +80,7 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
         FormatString("Unexpected error happen, it should not happen, object key size: %d, version size: %d",
                      req.object_keys_size(), req.versions_size()));
     Status lastErr;
+    int failCount = 0;
     for (int i = 0; i < req.object_keys_size(); ++i) {
         const auto &objectKey = req.object_keys(i);
         uint64_t version = req.versions(i);
@@ -89,13 +90,16 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
         }
         if (rc.GetCode() == K_NOT_FOUND) {
             // If the object does not exist, the deletion is successful.
-            LOG(INFO) << FormatString("[ObjectKey %s] DeleteObject not exist.", objectKey);
             continue;
         }
-        LOG(ERROR) << FormatString("[ObjectKey %s] Delete failed, %s", objectKey, rc.ToString());
+        failCount++;
         rsp.add_failed_object_keys(objectKey);
         // if dead lock happened, the last error should return K_WORKER_TIMEOUT.
         lastErr = lastErr.GetCode() == K_WORKER_TIMEOUT ? lastErr : rc;
+    }
+    if (failCount > 0) {
+        LOG(ERROR) << FormatString("Delete copy notification, failed count: %d, total count: %d, lastError: %s",
+            failCount, req.object_keys_size(), lastErr.ToString());
     }
     rsp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     rsp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
