@@ -2446,17 +2446,17 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
             if (clearRc.IsOk()) {
                 clearCount++;
             } else {
-                LOG(ERROR) << FormatString("Failed to erase object %s from object table, %s",
-                                           keyVersion.first, clearRc.ToString());
+                LOG(ERROR) << FormatString("Failed to erase object %s from object table, %s", keyVersion.first,
+                                           clearRc.ToString());
             }
         }
     }
     if (failCount > 0) {
         LOG(WARNING) << FormatString("Clear objects by update location: total %d, cleared %d, failed %d",
-            static_cast<int>(clearKeyVersions.size()), clearCount, failCount);
+                                     static_cast<int>(clearKeyVersions.size()), clearCount, failCount);
     } else if (clearCount > 0) {
         LOG_EVERY_N(INFO, 100) << FormatString("Clear objects by update location: total %d, cleared %d",
-            static_cast<int>(clearKeyVersions.size()), clearCount);
+                                               static_cast<int>(clearKeyVersions.size()), clearCount);
     }
 }
 
@@ -2797,8 +2797,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     auto totalExistMs = timer.ElapsedMilliSecond();
     workerOperationTimeCost.Append("Total Exist", totalExistMs);
     auto vlogLevel = (totalExistMs > 1 || rc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("Exist done, cost: %.1fms, %s",
-        static_cast<double>(totalExistMs), workerOperationTimeCost.GetInfo());
+    VLOG(vlogLevel) << FormatString("Exist done, cost: %.1fms, %s", static_cast<double>(totalExistMs),
+                                    workerOperationTimeCost.GetInfo());
     return rc;
 }
 
