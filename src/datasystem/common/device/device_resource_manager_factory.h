@@ -43,7 +43,7 @@ public:
                 return std::make_unique<CudaResourceManager>();
             case DeviceBackend::UNKNOWN:
             default:
-                LOG(ERROR) << "No accelerator backend detected for DeviceResourceManagerFactory.";
+                LOG(INFO) << "No accelerator backend detected for DeviceResourceManagerFactory.";
                 return nullptr;
         }
 #endif
