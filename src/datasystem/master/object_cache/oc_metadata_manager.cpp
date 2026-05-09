@@ -1804,7 +1804,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
     DeleteObjectMediator &deleteMediator, DeleteAllCopyMetaRspPb &response,
     const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi)
 {
-    LOG(INFO) << "Transfer to delete threads to notify worker delete";
+    VLOG(1) << "Transfer delete request to async thread pool";
     auto ids = deleteMediator.GetObjKeys();
     if (!AddHeavyOp(ids)) {
         std::unordered_set<std::string> failedIds{ ids.begin(), ids.end() };
@@ -1830,8 +1830,8 @@ void OCMetadataManager::TransferSyncDeleteRequest(
         NotifyDeleteAndClearMeta(deleteMediator, false);
         SetDeleteAllCopyMetaRspPb(deleteMediator.GetStatus(), deleteMediator.GetFailedObjs(), response);
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
-        LOG(INFO) << "DeleteAllCopyMeta send response to worker finished, objectKeys: "
-                  << VectorToString(deleteMediator.GetObjKeys());
+        VLOG(1) << "DeleteAllCopyMeta send response to worker finished, object count: "
+                  << deleteMediator.GetObjKeys().size();
     });
 }
 
@@ -2150,7 +2150,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
 
         TbbMetaTable::const_accessor accessor;
         if (!metaTable_.find(accessor, objectKey)) {
-            LOG(INFO) << "Meta not exist, objectKey:" << objectKey;
+            VLOG(1) << "meta not found in meta table";
             // metadata is not present in master. If metadata is not stored in etcd,
             // try to delete all versions of the object from L2 Cache using async delete.
             if (!FLAGS_oc_io_from_l2cache_need_metadata) {
@@ -2161,11 +2161,11 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             }
             continue;
         } else if (accessor->second.meta.version() > static_cast<uint64_t>(info.second.version)) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Has re-set, metadata not need to be cleared.", objectKey);
+            VLOG(1) << "version updated, skip deletion";
             delMediator.SetOutdatedObj(objectKey);
             continue;
         } else if (accessor->second.multiSetState == PENDING) {
-            LOG(INFO) << FormatString("[ObjectKey %s] is creating, metadata not need to be cleared.", objectKey);
+            VLOG(1) << "object is in creating state, skip deletion";
             continue;
         }
 
@@ -2263,9 +2263,9 @@ Status OCMetadataManager::BFSGetDeadObjects(const std::unordered_set<std::string
                                         tempToBeNotifiedNestedRefs.end());
 
     LOG_IF(INFO, !finalDeadObjects.empty())
-        << "BFSGetDeadObjects[%s] to be deleted" << VectorToString(finalDeadObjects);
+        << FormatString("BFSGetDeadObjects: %d objects to be deleted", finalDeadObjects.size());
     LOG_IF(INFO, !tempToBeNotifiedNestedRefs.empty())
-        << "BFSGetDeadObjects[%s] to be notified" << VectorToString(tempToBeNotifiedNestedRefs);
+        << FormatString("BFSGetDeadObjects: %d nested refs to be notified", tempToBeNotifiedNestedRefs.size());
     return Status::OK();
 }
 
@@ -2275,7 +2275,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::const_accessor accessor;
     if (!metaTable_.find(accessor, objectKey)) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Object does not exist", objectKey);
+        VLOG(1) << "meta not found in meta table";
         if (!HasWorkerId(objectKey)) {
             delMediator.AddHashObjsWithoutMeta(objectKey);
         }
@@ -2285,9 +2285,9 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     }
 
     if (delMediator.CheckIfExpired(objectKey, accessor->second.meta.version())) {
-        LOG(INFO) << FormatString("The version[%lld] of object[%s] in request is outdated, current version: %lld",
-                                  delMediator.GetObjectVersionInRequest(objectKey), objectKey,
-                                  accessor->second.meta.version());
+        VLOG(1) << FormatString("version outdated, request version: %lld, current version: %lld",
+                                delMediator.GetObjectVersionInRequest(objectKey),
+                                accessor->second.meta.version());
         delMediator.SetOutdatedObj(objectKey);
         return Status::OK();
     }
