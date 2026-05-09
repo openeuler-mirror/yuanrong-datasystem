@@ -21,6 +21,8 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/utils/status.h"
@@ -137,6 +139,7 @@ public:
             }
             rsp.Clear();
             int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
             sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
@@ -154,9 +157,20 @@ public:
     template <typename Req, typename Rsp>
     static Status RedirectRetryWhenMetasMoving(Req &req, Rsp &rsp, std::function<Status(Req &, Rsp &)> func)
     {
+        static const int64_t initSleepTimeMs = 1;
+        static const int64_t maxSleepTimeMs = 128;
+        int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
+            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp));
-            RETURN_OK_IF_TRUE(MetaMovingDone(rsp));
+            RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
+            rsp.Clear();
+            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
 
@@ -172,9 +186,20 @@ public:
     Status RedirectRetryWhenMetasMoving(Req &req, Rsp &rsp, RpcMessage &payload,
                                         std::function<Status(Req &, Rsp &, RpcMessage &payload)> func)
     {
+        static const int64_t initSleepTimeMs = 1;
+        static const int64_t maxSleepTimeMs = 128;
+        int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
+            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp, payload));
-            RETURN_OK_IF_TRUE(MetaMovingDone(rsp));
+            RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
+            rsp.Clear();
+            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
 
@@ -313,14 +338,11 @@ public:
      * @param needMigrateL2CacheIds Need migrate L2 cache ids.
      * @return Status of the call
      */
-    Status RemoveMetadataFromRedirectMaster(master::RemoveMetaRspPb &rsp,
-                                            const master::RemoveMetaReqPb::Cause removeCause,
-                                            const std::string &localAddress,
-                                            const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
-                                            std::vector<std::string> &failedIds,
-                                            std::vector<std::string> &needMigrateIds,
-                                            std::vector<std::string> &needWaitIds,
-                                            std::vector<std::string> &needMigrateL2CacheIds);
+    Status RemoveMetadataFromRedirectMaster(
+        master::RemoveMetaRspPb &rsp, const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
+        const std::unordered_map<std::string, uint64_t> &batchKeyVersions, std::vector<std::string> &failedIds,
+        std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+        std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief
