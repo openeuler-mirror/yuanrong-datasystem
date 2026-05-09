@@ -191,8 +191,8 @@ Status MasterWorkerOCServiceImpl::ClearData(const ClearDataReqPb &req, ClearData
 Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << "Processing DeleteNotification request with async:" << req.is_async()
-              << ", objectKeys: " << VectorToString(req.object_keys());
+    VLOG(1) << FormatString("DeleteNotification, async: %d, object count: %d",
+              req.is_async(), req.object_keys_size());
     if (req.is_async()) {
         auto traceID = Trace::Instance().GetTraceID();
         ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID] {

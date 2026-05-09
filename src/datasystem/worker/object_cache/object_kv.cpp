@@ -120,14 +120,19 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
         return rc;
     }
     static const std::vector<int> delayMs = { 1, 10, 30, 50, 100 };
-    LOG(INFO) << FormatString("[ObjectKey %s] TryWLock failed, retry.", objectKey);
+    int totalRetryMs = 0;
+    int retryCount = 0;
     for (auto t : delayMs) {
+        totalRetryMs += t;
+        retryCount++;
         std::this_thread::sleep_for(std::chrono::milliseconds(t));
         rc = entry->TryWLock(nullable);
         if (rc.GetCode() != K_TRY_AGAIN) {
+            LOG(INFO) << FormatString("TryWLock succeeded after %d retries, cost %dms", retryCount, totalRetryMs);
             return rc;
         }
     }
+    LOG(INFO) << FormatString("TryWLock timeout after %d retries, cost %dms", retryCount, totalRetryMs);
     return { K_WORKER_TIMEOUT, "Worker timeout" };
 }
 

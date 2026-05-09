@@ -2285,7 +2285,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     if (IsRpcTimeout(rc)) {
         Status status = asyncUpdateLocationManager_->AddTask(std::move(task));
         if (status.IsError()) {
-            LOG(WARNING) << FormatString("Add retry task failed: %s", rc.ToString());
+            LOG(WARNING) << FormatString("Add retry task failed: %s", status.ToString());
             DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
             ClearObjectsByObjectKeys({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         }
@@ -2424,7 +2424,8 @@ void WorkerOcServiceGetImpl::UpdateLocationRedirectKeysToRetry(
 
 void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
 {
-    LOG(INFO) << "clear objects by update location params";
+    int clearCount = 0;
+    int failCount = 0;
     for (auto &keyVersion : clearKeyVersions) {
         std::shared_ptr<SafeObjType> entry;
         auto status = objectTable_->Get(keyVersion.first, entry);
@@ -2432,20 +2433,32 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
             if (status.GetCode() == StatusCode::K_NOT_FOUND) {
                 continue;
             }
-            LOG(WARNING) << FormatString("objectKey: %s get failed, status: %s", keyVersion.first, status.ToString());
+            failCount++;
             continue;
         }
         Status rc = TryLockWithRetry(keyVersion.first, entry);
         if (rc.IsError()) {
-            LOG(WARNING) << FormatString("objectKey: %s lock failed, status: %s", keyVersion.first, rc.ToString());
+            failCount++;
             continue;
         }
         Raii unlock([&entry]() { entry->WUnlock(); });
         if ((*entry)->GetCreateTime() == keyVersion.second) {
             ObjectKV objectKV(keyVersion.first, *entry);
-            LOG_IF_ERROR(ClearObject(objectKV),
-                         FormatString("Failed to erase object %s from object table", keyVersion.first));
+            auto clearRc = ClearObject(objectKV);
+            if (clearRc.IsOk()) {
+                clearCount++;
+            } else {
+                LOG(ERROR) << FormatString("Failed to erase object %s from object table, %s",
+                                           keyVersion.first, clearRc.ToString());
+            }
         }
+    }
+    if (failCount > 0) {
+        LOG(WARNING) << FormatString("Clear objects by update location: total %d, cleared %d, failed %d",
+            static_cast<int>(clearKeyVersions.size()), clearCount, failCount);
+    } else if (clearCount > 0) {
+        LOG_EVERY_N(INFO, 100) << FormatString("Clear objects by update location: total %d, cleared %d",
+            static_cast<int>(clearKeyVersions.size()), clearCount);
     }
 }
 
@@ -2739,7 +2752,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
     INJECT_POINT("Exist.Sleep");
     auto clientId = ClientKey::Intern(req.client_id());
-    LOG(INFO) << "Exist start from client:" << clientId;
+    VLOG(1) << "Exist start from client:" << clientId;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
@@ -2788,8 +2801,11 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     RequestParam reqParam;
     reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
-    workerOperationTimeCost.Append("Total Exist", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of Exist %s", workerOperationTimeCost.GetInfo());
+    auto totalExistMs = timer.ElapsedMilliSecond();
+    workerOperationTimeCost.Append("Total Exist", totalExistMs);
+    auto vlogLevel = (totalExistMs > 1 || rc.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("Exist done, cost: %.1fms, %s",
+        static_cast<double>(totalExistMs), workerOperationTimeCost.GetInfo());
     return rc;
 }
 

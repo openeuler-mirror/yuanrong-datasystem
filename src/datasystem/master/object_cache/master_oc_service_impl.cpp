@@ -120,7 +120,7 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     PerfPoint point(PerfKey::MASTER_CREATE_META);
     const std::string localAddr = GetLocalAddr().ToString();
-    LOG(INFO) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
+    LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
               << AppendSrcDstForLog(req.address(), localAddr);
 
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -136,10 +136,11 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
         INJECT_POINT("MasterOCServiceImpl.CreateMeta.idempotence");
     }
     point.Record();
-    masterOperationTimeCost.Append("Total CreateMeta", timer.ElapsedMilliSecond());
-    if (timer.ElapsedMilliSecond() > logMinTimeMs) {
-        LOG(INFO) << FormatString("The operations of master CreateMeta %s", masterOperationTimeCost.GetInfo());
-    }
+    auto totalMs = timer.ElapsedMilliSecond();
+    masterOperationTimeCost.Append("Total CreateMeta", totalMs);
+    auto vlogLevel = (totalMs > logMinTimeMs || status.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("CreateMeta done, cost: %.1fms, %s",
+        totalMs, masterOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -197,7 +198,7 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     PerfPoint point(PerfKey::MASTER_CREATE_COPY_META);
     const std::string localAddr = GetLocalAddr().ToString();
-    LOG(INFO) << FormatString("Processing CreateCopyMetaReq, redirect: %d", req.redirect())
+    LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateCopyMetaReq, redirect: %d", req.redirect())
               << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
@@ -207,20 +208,22 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     Status status = ocMetadataManager->CreateCopyMeta(req, rsp);
     if (!status.IsOk()) {
         if (status.GetCode() == K_NOT_FOUND) {
-            LOG(INFO) << FormatString("[ObjectKey %s] meta already deleted", req.object_key());
+            VLOG(1) << "meta already deleted";
         } else {
-            LOG(ERROR) << FormatString("[ObjectKey %s] Create copy meta failed with error: %s", req.object_key(),
-                                       status.ToString());
+            LOG(ERROR) << FormatString("CreateCopyMeta failed: %s", status.ToString());
         }
     } else {
-        LOG(INFO) << FormatString("[ObjectKey %s] Create copy meta success", req.object_key());
+        LOG_FIRST_AND_EVERY_N(INFO, 1000) << "CreateCopyMeta success";
         INJECT_POINT("MasterOCServiceImpl.CreateCopyMeta.idempotence");
     }
     VLOG(1) << FormatString("Master %s CreateCopyMeta rsp: %s", GetLocalAddr().ToString(),
                             LogHelper::IgnoreSensitive(rsp));
     point.Record();
-    masterOperationTimeCost.Append("Total CreateCopyMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master CreateCopyMeta %s", masterOperationTimeCost.GetInfo());
+    auto totalMs = timer.ElapsedMilliSecond();
+    masterOperationTimeCost.Append("Total CreateCopyMeta", totalMs);
+    auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s",
+        totalMs, masterOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -265,7 +268,7 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     INJECT_POINT("MasterOCServiceImpl.QueryMeta.busy");
-    LOG(INFO) << FormatString("Processing QueryMetaReq, requestId: %s", req.request_id());
+    VLOG(1) << "Processing QueryMetaReq";
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -273,10 +276,12 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     Status status;
     // Call MetadataManager to query object meta.
     status = ocMetadataManager->QueryMeta(req, rsp, payloads);
-    masterOperationTimeCost.Append("Total QueryMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString(
-        "QueryMeta on master %s, target num %d, success num %d. The operations of master QueryMeta %s", req.address(),
-        req.ids().size(), rsp.query_metas_size(), masterOperationTimeCost.GetInfo());
+    auto totalMs = timer.ElapsedMilliSecond();
+    masterOperationTimeCost.Append("Total QueryMeta", totalMs);
+    auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString(
+        "QueryMeta done, target num %d, success num %d, cost: %.1fms, %s",
+        req.ids().size(), rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo());
     return Status::OK();
 }
 
@@ -385,7 +390,6 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
     DeleteAllCopyMetaReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << FormatString("Processing DeleteAllCopyMetaReq: objects[%s]", VectorToString(req.object_keys()));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -393,9 +397,14 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
         return ocMetadataManager->GetDeviceOcManager()->DeleteDevObjects(req, serverApi);
     }
 
+    Timer timer;
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     ocMetadataManager->DeleteAllCopyMetaWithServerApi(req, serverApi);
+    auto totalMs = timer.ElapsedMilliSecond();
+    auto vlogLevel = (totalMs > 1) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms",
+        req.object_keys_size(), totalMs);
     return Status::OK();
 }
 
@@ -404,7 +413,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     masterOperationTimeCost.Clear();
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    LOG(INFO) << FormatString("Processing DeleteAllCopyMetaReq: objects[%s]", VectorToString(req.object_keys()));
+    VLOG(1) << FormatString("DeleteAllCopyMeta, object count: %d", req.object_keys_size());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -415,8 +424,11 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     ocMetadataManager->DeleteAllCopyMeta(req, rsp);
-    masterOperationTimeCost.Append("Total DeleteAllCopyMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master DeleteAllCopyMeta %s", masterOperationTimeCost.GetInfo());
+    auto totalMs = timer.ElapsedMilliSecond();
+    masterOperationTimeCost.Append("Total DeleteAllCopyMeta", totalMs);
+    auto vlogLevel = (totalMs > 1) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms, %s",
+        req.object_keys_size(), totalMs, masterOperationTimeCost.GetInfo());
     return Status::OK();
 }
 
