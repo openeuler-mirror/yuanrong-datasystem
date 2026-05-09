@@ -12,7 +12,7 @@
   - `src/datasystem/common/log/access_point.def`
   - `src/datasystem/common/metrics/hard_disk_exporter/*`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-05-10`
 - Related design docs:
   - `.repo_context/modules/infra/logging/design.md`
   - `.repo_context/modules/infra/logging/log-lifecycle-and-rotation.md`
@@ -77,6 +77,9 @@
   - `AccessRecorderManager` owns the log-performance export path.
   - `AccessRecorderManager` uses `HardDiskExporter`, so access/performance logs depend on the metrics exporter infrastructure.
   - monitor/access log flush is later driven by the logging lifecycle path, not by each recorder doing synchronous file writes.
+  - SDK client access logs and worker access logs append `logSampled:true` inside the existing request-parameter field when
+    the current request trace was admitted by request log sampling. This does not add a new pipe-delimited column.
+  - `REQUEST_OUT` records are not marked with `logSampled:true`, even when emitted under a sampled request context.
 - Cross-module implication:
   - logging and metrics are coupled here; exporter bugs can show up as missing access logs.
 
@@ -85,6 +88,7 @@
 - Stability-sensitive behavior:
   - key ordering and names in `access_point.def` are operationally visible;
   - the pipe-delimited record shape produced by `AccessRecorderManager::LogPerformance(...)` should be treated as compatibility-sensitive;
+  - sampled-request marking must stay inside the existing request-parameter field and must not introduce another `|` column;
   - client vs. access vs. request-out channel routing affects file names and downstream parsing.
 - Safe change guidance:
   - add new keys in a way that preserves meaning for existing log consumers;
@@ -98,6 +102,7 @@
   - confirm record formatting in `src/datasystem/common/log/access_recorder.cpp`;
   - confirm exporter behavior in `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`.
 - Fast validation targets:
+  - `bazel test //tests/ut/common/log:logging_test --test_filter=LoggingTest.TestAccessLogSampledMarker`
   - `bazel test //tests/ut/common/log:log_performance_test`
   - `bazel test //tests/ut/common/log:hard_disk_exporter_test`
 - Manual validation:
