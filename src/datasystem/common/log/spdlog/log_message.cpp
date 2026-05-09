@@ -27,10 +27,6 @@ namespace datasystem {
 bool ShouldCreateLogMessage(LogSeverity logSeverity)
 {
     auto level = ToSpdlogLevel(logSeverity);
-    if (level >= ds_spdlog::level::err) {
-        return true;
-    }
-
     auto &trace = Trace::Instance();
     bool admitted = false;
     if (trace.GetRequestSampleDecision(admitted)) {

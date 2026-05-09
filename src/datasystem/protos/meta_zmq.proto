@@ -35,10 +35,10 @@ enum LogSampleState {
     // Not an SDK request trace. Background and internal logs are not sampled by log_rate_limit.
     LOG_SAMPLE_NONE = 0;
 
-    // SDK request trace admitted by log_rate_limit. INFO/WARNING logs should be kept across RPC hops.
+    // SDK request trace admitted by log_rate_limit. Logs should be kept across RPC hops.
     LOG_SAMPLE_ADMIT = 1;
 
-    // SDK request trace rejected by log_rate_limit. INFO/WARNING logs are dropped, but ERROR/FATAL still print.
+    // SDK request trace rejected by log_rate_limit. Logs are dropped across RPC hops.
     LOG_SAMPLE_REJECT = 2;
 
     // SDK request trace without a propagated sampling decision yet.
