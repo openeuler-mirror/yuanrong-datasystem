@@ -52,6 +52,7 @@ DS_DECLARE_string(log_dir);
 DS_DECLARE_int32(logbufsecs);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_bool(log_only_write_info_file);
 
 namespace datasystem {
 namespace ut {
@@ -522,6 +523,7 @@ TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
 {
     int replace = 1;
     (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    FLAGS_log_only_write_info_file = false;
     FLAGS_logbufsecs = 0;
     (void)setenv("DATASYSTEM_MIN_LOG_LEVEL", "1", replace);
     Logging::GetInstance()->Start("ds_llt", true);
@@ -646,6 +648,72 @@ TEST_F(LoggingTest, TestMaxLogSize)
     (void)setenv(MAX_LOG_SIZE_ENV.c_str(), "5", replace);
     Logging::GetInstance()->Start("ds_llt", true, 1);
     EXPECT_EQ(FLAGS_max_log_size, 5);  // 5 MB
+}
+
+TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
+{
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    FLAGS_log_only_write_info_file = true;
+    Logging::GetInstance()->Start("ds_llt", true);
+    std::string warningLog = "skip separate warning file";
+    std::string errorLog = "skip separate error file";
+
+    LOG(WARNING) << warningLog;
+    LOG(ERROR) << errorLog;
+
+    bool infoFound = false;
+    bool separateFileFound = false;
+    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+        if (filename.find("ds_llt") == std::string::npos) {
+            continue;
+        }
+        if (filename.find(".INFO.log") != std::string::npos) {
+            infoFound = true;
+            ASSERT_TRUE(FileContains(filename, warningLog));
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        } else if (filename.find(".WARNING.log") != std::string::npos ||
+                   filename.find(".ERROR.log") != std::string::npos) {
+            separateFileFound = true;
+        }
+    }
+
+    ASSERT_TRUE(infoFound);
+    ASSERT_FALSE(separateFileFound);
+}
+
+TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
+{
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    (void)setenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), "false", replace);
+    FLAGS_log_only_write_info_file = true;
+    Logging::GetInstance()->Start("ds_llt", true);
+    std::string warningLog = "env separate warning log";
+    std::string errorLog = "env separate error log";
+
+    LOG(WARNING) << warningLog;
+    LOG(ERROR) << errorLog;
+
+    bool warningFound = false;
+    bool errorFound = false;
+    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+        if (filename.find("ds_llt") == std::string::npos) {
+            continue;
+        }
+        if (filename.find(".WARNING.log") != std::string::npos) {
+            warningFound = true;
+            ASSERT_TRUE(FileContains(filename, warningLog));
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        } else if (filename.find(".ERROR.log") != std::string::npos) {
+            errorFound = true;
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        }
+    }
+
+    ASSERT_TRUE(warningFound);
+    ASSERT_TRUE(errorFound);
+    (void)unsetenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str());
 }
 
 TEST_F(LoggingTest, TestLogName)

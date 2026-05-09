@@ -777,6 +777,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | max_log_file_num | int | `5` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 单个日志文件最大大小（以MB为单位） |
 | log_rate_limit | int | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。 |
+| log_only_write_info_file | bool | `true` | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | `true` | 是否开启接口性能与资源观测日志 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
