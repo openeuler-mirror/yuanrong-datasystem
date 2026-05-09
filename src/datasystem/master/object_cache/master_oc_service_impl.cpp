@@ -22,6 +22,7 @@
 
 #include <chrono>
 #include <memory>
+#include <type_traits>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -43,8 +44,7 @@ static constexpr int ASYNC_MIN_THREAD_NUM = 1;
 static constexpr int ASYNC_MAX_THREAD_NUM = 4;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
-                                         std::shared_ptr<AkSkManager> akSkManager,
-                                         ReplicaManager *replicaManager,
+                                         std::shared_ptr<AkSkManager> akSkManager, ReplicaManager *replicaManager,
                                          ResourceManager *resourceManager)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
@@ -121,7 +121,7 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     PerfPoint point(PerfKey::MASTER_CREATE_META);
     const std::string localAddr = GetLocalAddr().ToString();
     LOG(INFO) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
-             << AppendSrcDstForLog(req.address(), localAddr);
+              << AppendSrcDstForLog(req.address(), localAddr);
 
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
@@ -228,11 +228,25 @@ Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &
 {
     masterOperationTimeCost.Clear();
     Timer timer;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     PerfPoint point(PerfKey::MASTER_CREATE_MULTI_COPY_META);
     const std::string localAddr = GetLocalAddr().ToString();
-    LOG(INFO) << FormatString("Processing CreateMultiCopyMeta, req: ") << LogHelper::IgnoreSensitive(req)
-              << AppendSrcDstForLog(req.address(), localAddr);
+    VLOG(1) << FormatString("Processing CreateMultiCopyMeta, req: ") << LogHelper::IgnoreSensitive(req)
+            << AppendSrcDstForLog(req.address(), localAddr);
+
+    Status status = CreateMultiCopyMetaImpl(req, rsp);
+    point.Record();
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    auto vlogLevel = elapsedMs > 1 ? 0 : 1;
+    masterOperationTimeCost.Append("Total CreateMultiCopyMeta", elapsedMs);
+    VLOG(vlogLevel) << FormatString("Process CreateMultiCopyMeta cost: %d ms, req: ", elapsedMs)
+                    << LogHelper::IgnoreSensitive(req) << AppendSrcDstForLog(req.address(), localAddr) << " "
+                    << masterOperationTimeCost.GetInfo();
+    return status;
+}
+
+Status MasterOCServiceImpl::CreateMultiCopyMetaImpl(const CreateMultiCopyMetaReqPb &req, CreateMultiCopyMetaRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -240,14 +254,7 @@ Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &
     Status status = ocMetadataManager->CreateMultiCopyMeta(req, rsp);
     if (status.IsError()) {
         LOG(ERROR) << FormatString("CreateMultiCopyMeta objects failed with error: %s", status.ToString());
-    } else {
-        LOG(INFO) << "CreateMultiCopyMeta finished";
-        VLOG(1) << FormatString("Master %s CreateMultiCopyMeta rsp: %s", GetLocalAddr().ToString(),
-                                LogHelper::IgnoreSensitive(rsp));
     }
-    point.Record();
-    masterOperationTimeCost.Append("Total CreateMultiCopyMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master CreateMultiCopyMeta %s", masterOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -286,13 +293,28 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
 {
     masterOperationTimeCost.Clear();
     Timer timer;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
 
     PerfPoint point(PerfKey::MASTER_REMOVE_META);
     INJECT_POINT("master.remove_meta");
-    LOG(INFO) << FormatString("Master received RemoveMeta req: %s", LogHelper::IgnoreSensitive(req));
+    VLOG(1) << FormatString("Master received RemoveMeta req: %s", LogHelper::IgnoreSensitive(req));
+    Status status = RemoveMetaImpl(req, rsp);
+    point.Record();
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    masterOperationTimeCost.Append("Total RemoveMeta", elapsedMs);
+    LOG(INFO) << FormatString(
+        "RemoveMeta finished cost %d ms, receive id size: %d, success size: %d, need wait size: %d, need data size: "
+        "%d, failed size: %d, outdated size: %d, req: %s %s",
+        elapsedMs, req.ids_size() + req.id_with_version_size(), rsp.success_ids_size(), rsp.need_wait_ids_size(),
+        rsp.need_data_ids_size(), rsp.failed_ids_size(), rsp.outdated_ids_size(), LogHelper::IgnoreSensitive(req),
+        masterOperationTimeCost.GetInfo());
+    return status;
+}
+
+Status MasterOCServiceImpl::RemoveMetaImpl(const RemoveMetaReqPb &req, RemoveMetaRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -300,9 +322,6 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
     // Call MetadataManager to remove object meta.
     Status status = ocMetadataManager->RemoveMeta(req, rsp);
     LOG_IF_ERROR(status, "RemoveMeta failed");
-    point.Record();
-    masterOperationTimeCost.Append("Total RemoveMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master RemoveMeta %s", masterOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -326,7 +345,7 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed in UpdateMeta");
     const std::string localAddr = GetLocalAddr().ToString();
     LOG(INFO) << FormatString("Processing UpdateMetaReq, redirect: %d", req.redirect())
-             << AppendSrcDstForLog(req.address(), localAddr);
+              << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");
@@ -350,7 +369,7 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(1) << "Master " << GetLocalAddr().ToString()
-              << " received GetObjectLocations req: " << LogHelper::IgnoreSensitive(req);
+            << " received GetObjectLocations req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
                                      "GetOcMetadataManager failed");

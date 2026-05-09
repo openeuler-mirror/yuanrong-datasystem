@@ -128,8 +128,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     auto clientId = ClientKey::Intern(req.client_id());
     auto inflightGauge =
         metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-    LOG(INFO) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
-                              timer.ElapsedMilliSecond(), inflightGauge.Get());
+    VLOG(1) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
+                            timer.ElapsedMilliSecond(), inflightGauge.Get());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
 
@@ -163,11 +163,12 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     .Observe(qUs);
             }
             auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            LOG(INFO) << FormatString("[Get] Receive, clientId: %s, objects: %s, "
-                                      "threadPool: %s, elapsed: %.3fms, remainingTime: %.3fms",
-                                      clientId, VectorToString(request->GetRawObjectKeys()),
-                                      threadPool_->GetStatistics(),
-                                      static_cast<double>(elapsed), static_cast<double>(timeout));
+            auto vlogLevel = elapsed > 1 ? 0 : 1;
+            VLOG(vlogLevel) << FormatString(
+                "[Get] Receive, clientId: %s, objects: %s, "
+                "threadPool: %s, elapsed: %.3fms, remainingTime: %.3fms",
+                clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
+                static_cast<double>(elapsed), static_cast<double>(timeout));
             if (elapsed >= timeout) {
                 LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
                            << ", get threads Statistics: " << threadPool_->GetStatistics();
@@ -190,12 +191,15 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY))
                         .Observe(e2EUs);
                 }
-                workerOperationTimeCost.Append("ProcessGetObjectRequest",
-                                               static_cast<int64_t>(timer.ElapsedMilliSecond()));
+                auto getElapsedMs = timer.ElapsedMilliSecond();
+                workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+                auto inflightGaugeGet =
+                    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
                 LOG(INFO) << FormatString(
-                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
+                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
+                    "%d %s",
                     clientId, request->GetRawObjectKeys().size(),
-                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
+                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs, inflightGauge.Get(),
                     workerOperationTimeCost.GetInfo());
             }
         });
@@ -213,11 +217,15 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     .Observe(e2EUs);
             }
         }
-        workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
-        LOG(INFO) << FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
-                                  clientId, request->GetRawObjectKeys().size(),
-                                  IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
-                                  workerOperationTimeCost.GetInfo());
+        auto getElapsedMs = timer.ElapsedMilliSecond();
+        workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+        auto inflightGaugeGet =
+            metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
+        LOG(INFO) << FormatString(
+            "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
+            "%d %s",
+            clientId, request->GetRawObjectKeys().size(), IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
+            getElapsedMs, inflightGauge.Get(), workerOperationTimeCost.GetInfo());
     }
     return Status::OK();
 }
@@ -779,8 +787,7 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
     LOG(INFO) << FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
-                              objectsNeedGetRemote.size(), queryMetas.size(),
-                              queryMetaTimer.ElapsedMilliSecond());
+                              objectsNeedGetRemote.size(), queryMetas.size(), queryMetaTimer.ElapsedMilliSecond());
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -2592,8 +2599,7 @@ static void MergeObjectLocations(master::GetObjectLocationsRspPb &masterRsp,
 
 Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
     const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
-    std::unordered_map<std::string, ObjectLocationInfoPb> &result,
-    Status &lastRc)
+    std::unordered_map<std::string, ObjectLocationInfoPb> &result, Status &lastRc)
 {
     for (const auto &redirectInfo : infos) {
         HostPort redirectMasterAddr;
