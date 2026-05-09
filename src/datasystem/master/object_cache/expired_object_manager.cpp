@@ -275,8 +275,8 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
         std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
         return Status::OK();
     });
-    auto startTimeUs = GetSystemClockTimeStampUs();
-    LOG(INFO) << "Expire objects size is: " << expiredObjMap.size();
+    Timer timer;
+    VLOG(1) << "Expire objects size is: " << expiredObjMap.size();
     std::unordered_map<std::string, bool> requestObjectKeyMap;
     std::transform(expiredObjMap.begin(), expiredObjMap.end(),
                    std::inserter(requestObjectKeyMap, requestObjectKeyMap.end()),
@@ -317,9 +317,11 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     if (!failedIds.empty()) {
         METRIC_ADD(metrics::KvMetricId::MASTER_TTL_DELETE_FAILED_TOTAL, failedIds.size());
     }
-    LOG(INFO) << FormatString("It cost %llu ms to delete expire object, succeed num:%lzu, failed num:%zu",
-                              (GetSystemClockTimeStampUs() - startTimeUs) / TIME_UNIT_CONVERSION, succeedIds.size(),
-                              failedIds.size());
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    const int logLimitMs = 5;
+    auto vlogLevel = elapsedMs > logLimitMs ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("It cost %.3fms to delete expire object, succeed num:%lzu, failed num:%zu",
+                                    elapsedMs, succeedIds.size(), failedIds.size());
     return Status::OK();
 }
 

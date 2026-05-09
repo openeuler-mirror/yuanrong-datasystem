@@ -128,13 +128,14 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
         std::this_thread::sleep_for(std::chrono::milliseconds(t));
         rc = entry->TryWLock(nullable);
         if (rc.GetCode() != K_TRY_AGAIN) {
-            LOG(INFO) << FormatString("TryWLock succeeded after %d retries, cost %dms", retryCount, totalRetryMs);
+            LOG(INFO) << FormatString("TryWLock succeeded after %d retries for object key %s, cost %dms", retryCount,
+                                      objectKey, totalRetryMs);
             return rc;
         }
     }
-    LOG(INFO) << FormatString("TryWLock timeout after %d retries, cost %dms", retryCount, totalRetryMs);
+    LOG(INFO) << FormatString("TryWLock timeout after %d retries for object key %s, cost %dms", retryCount, objectKey,
+                              totalRetryMs);
     return { K_WORKER_TIMEOUT, "Worker timeout" };
 }
-
-}
-}
+}  // namespace object_cache
+}  // namespace datasystem

@@ -65,7 +65,7 @@ bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
            && req.version() == 0 && req.read_offset() == 0 && req.read_size() == URMA_WARMUP_OBJECT_SIZE
            && req.data_size() == URMA_WARMUP_OBJECT_SIZE && req.comm_id().empty();
 }
-}
+}  // namespace
 
 inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &req)
 {
@@ -202,9 +202,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     std::vector<uint64_t> eventKeys;
     auto isGatherWrite = IsFastTransportEnabled() && batchPtr != nullptr;
     const std::string callerAddress = GetRemoteAddressForLog(subReq);
-    LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]",
-                                                 subReq.object_key(), subReq.read_offset(), subReq.read_size()),
-                                    callerAddress, FLAGS_worker_address);
+    VLOG(1) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]", subReq.object_key(),
+                                               subReq.read_offset(), subReq.read_size()),
+                                  callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
                                          rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
@@ -693,6 +693,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<BatchGetObjectRemoteRspPb, BatchGetObjectRemoteReqPb>>
         serverApi)
 {
+    Timer timer;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     BatchGetObjectRemoteReqPb req;
@@ -704,9 +705,11 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     HostPort requestAddress;
     const std::string callerAddress =
         GetRemoteAddressFromBatchGetReq(req, requestAddress).IsOk() ? requestAddress.ToString() : "";
-    LOG(INFO) << AppendSrcDstForLog(FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %.3fms",
-                                                 req.requests_size(), reqTimeoutDuration.CalcRealRemainingTime()),
-                                    callerAddress, FLAGS_worker_address);
+    const auto &firstObjectKey = req.requests_size() > 0 ? req.requests(0).object_key() : "";
+    auto realRemainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    VLOG(1) << AppendSrcDstForLog(
+        FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %zu", req.requests_size(), realRemainingTime),
+        callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
@@ -716,8 +719,12 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    auto vlogLevel = payload.empty() ? 1 : 0;
-    VLOG(vlogLevel) << "send data success with payload size: " << payload.size();
+    auto elapsedTime = timer.ElapsedMilliSecond();
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %d, start remainingTime: "
+                     "%zu, cost: %.3fms",
+                     req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedTime),
+        callerAddress, FLAGS_worker_address);
     point.Record();
     return Status::OK();
 }
