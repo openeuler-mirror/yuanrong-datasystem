@@ -30,6 +30,7 @@ namespace datasystem {
 namespace object_cache {
 namespace {
 constexpr size_t GET_MATCH_OBJECT_BATCH = 500;
+constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 }
 
 bool MetadataRecoverySelector::SelectionRequest::Empty() const
@@ -100,6 +101,10 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
     auto batchFun = [this, &matchFunc, &objectKeys, includeL2CacheIds](std::vector<std::string> &batchObjectKeys) {
         for (const auto &objectKey : batchObjectKeys) {
             if (!matchFunc(objectKey)) {
+                continue;
+            }
+            // Skip key for URMA warmup.
+            if (objectKey.rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0) {
                 continue;
             }
             if (includeL2CacheIds) {
