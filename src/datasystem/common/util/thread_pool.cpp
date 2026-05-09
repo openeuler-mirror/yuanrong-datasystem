@@ -204,8 +204,7 @@ ThreadPool::ThreadPoolUsage ThreadPool::GetAndResetIntervalStats()
     usage.maxThreadNum = maxThreadNum_;
     usage.runningTasksNum = GetRunningTasksNum();
     usage.waitingTaskNum = GetWaitingTasksNum();
-    usage.threadPoolUsage =
-        maxThreadNum_ > 0 ? usage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
+    usage.threadPoolUsage = maxThreadNum_ > 0 ? usage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
     // Seed next period with current running/waiting to handle cross-interval tasks.
     auto running = static_cast<uint64_t>(usage.runningTasksNum);
     auto waiting = static_cast<uint64_t>(usage.waitingTaskNum);
@@ -293,8 +292,8 @@ void ThreadPool::WarnIfNeed()
     const float sixtyPercentThreshold = 60.0;
     const float eightyPercentThreshold = 80.0;
     float ratio = static_cast<float>(GetRunningTasksNum()) / maxThreadNum_ * oneHundredPercent;
-    std::string msg = FormatString("Thread pool [%s] usage: %.1lf%%, waiting tasks: %d", name_, ratio,
-                                   GetWaitingTasksNum());
+    std::string msg =
+        FormatString("Thread pool [%s] usage: %.1lf%%, waiting tasks: %d", name_, ratio, GetWaitingTasksNum());
     // log uses static variables with line number to save the log write counter, so it is necessary to write repetitive
     // code to distinguish different warn level.
     if (warnLevel_ == WarnLevel::LOW) {
@@ -309,15 +308,15 @@ void ThreadPool::WarnIfNeed()
             LOG_EVERY_T(WARNING, sixtyPercentTime) << msg << ", exceeds 60%";
         }
     } else {
-        const int oneHundredFreq = 5;
-        const int eightyPercentFreq = 50;
-        const int sixtyPercentFreq = 100;
+        const int oneHundredFreq = 50;
+        const int eightyPercentFreq = 500;
+        const int sixtyPercentFreq = 1000;
         if (ratio >= oneHundredPercent) {
-            LOG_EVERY_N(WARNING, oneHundredFreq) << msg << ", thread full";
+            LOG_FIRST_AND_EVERY_N(WARNING, oneHundredFreq) << msg << ", thread full";
         } else if (ratio >= eightyPercentThreshold) {
-            LOG_EVERY_N(WARNING, eightyPercentFreq) << msg << ", exceeds 80%";
+            LOG_FIRST_AND_EVERY_N(WARNING, eightyPercentFreq) << msg << ", exceeds 80%";
         } else if (ratio >= sixtyPercentThreshold) {
-            LOG_EVERY_N(WARNING, sixtyPercentFreq) << msg << ", exceeds 60%";
+            LOG_FIRST_AND_EVERY_N(WARNING, sixtyPercentFreq) << msg << ", exceeds 60%";
         }
     }
 }

@@ -320,7 +320,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     auto elapsedMs = timer.ElapsedMilliSecond();
     const int logLimitMs = 5;
     auto vlogLevel = elapsedMs > logLimitMs ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("It cost %.3fms to delete expire object, succeed num:%lzu, failed num:%zu",
+    VLOG(vlogLevel) << FormatString("It cost %.3fms to delete expire object, succeed num:%zu, failed num:%zu",
                                     elapsedMs, succeedIds.size(), failedIds.size());
     return Status::OK();
 }
