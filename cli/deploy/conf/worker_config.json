@@ -449,7 +449,7 @@
     },
     "log_rate_limit": {
         "value": "0",
-        "description": "Maximum sampled request traces per second (0 = unlimited). Sampling applies only to request logs with trace IDs. Sampled traces print complete log chains. ERROR and FATAL are never sampled."
+        "description": "Maximum sampled request traces per second (0 = unlimited). Sampling applies only to request logs with trace IDs. Sampled traces print complete log chains. Rejected traces are dropped at all log levels."
     },
     "enable_curve_zmq": {
         "value": "false",

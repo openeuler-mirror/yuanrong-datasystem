@@ -213,7 +213,7 @@ TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
     EXPECT_EQ(evaluations, 3);
 }
 
-TEST_F(LogMessageTest, RejectedRequestInfoWarningSkipStreamExpression)
+TEST_F(LogMessageTest, RejectedRequestLogsSkipStreamExpression)
 {
     LogRateLimiter::Instance().SetRate(1);
 
@@ -235,7 +235,7 @@ TEST_F(LogMessageTest, RejectedRequestInfoWarningSkipStreamExpression)
         EXPECT_EQ(evaluations, 0);
 
         LOG(ERROR) << "rejected request error " << BuildSideEffectPayload(evaluations);
-        EXPECT_EQ(evaluations, 1);
+        EXPECT_EQ(evaluations, 0);
         break;
     }
     EXPECT_TRUE(rejectedFound);
@@ -254,7 +254,7 @@ TEST_F(LogMessageTest, PropagatedRejectSkipsStreamExpressionWhenLocalRateIsZero)
     EXPECT_EQ(evaluations, 0);
 
     LOG(ERROR) << "propagated rejected error " << BuildSideEffectPayload(evaluations);
-    EXPECT_EQ(evaluations, 1);
+    EXPECT_EQ(evaluations, 0);
 }
 
 TEST_F(LogMessageTest, VerboseLogging)

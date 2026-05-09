@@ -48,7 +48,6 @@ public:
      * @return true to allow, false to drop.
      *
      * Rules:
-     * - ERROR(level>=4) and FATAL(level=5) always return true.
      * - When rate_ == 0, no request sampling, always returns true.
      * - When traceHash == 0 (non-request log), always returns true.
      * - For request logs (traceHash != 0), sampling is request-level:
