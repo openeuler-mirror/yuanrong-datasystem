@@ -55,9 +55,9 @@ Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shar
                             std::vector<MemView> &payloads, UrmaFallbackTcpLimiter::Ticket &ticket)
 {
     if (IsUrmaFallbackPayload(bufferInfo)) {
-        auto rc = UrmaFallbackTcpLimiter::TryAcquire(
-            pendingBytes, bufferInfo->dataSize,
-            Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG), CLIENT_TO_WORKER_FALLBACK, ticket);
+        auto rc = UrmaFallbackTcpLimiter::TryAcquire(pendingBytes, bufferInfo->dataSize,
+                                                     Status(StatusCode::K_URMA_ERROR, URMA_TRANSPORT_FAILED_MSG),
+                                                     CLIENT_TO_WORKER_FALLBACK, ticket);
         if (rc.IsError()) {
             LOG(WARNING) << "Client-to-worker TCP fallback payload rejected: " << rc.ToString();
             return rc;
@@ -392,10 +392,19 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when get date.");
-            LOG(INFO) << AppendSrcDstForLog(
-                FormatString("Start to send rpc to get object, rpc timeout: %d", realRpcTimeout), "",
+            VLOG(1) << AppendSrcDstForLog(
+                FormatString("Start to get object key from worker, rpc timeout: %d", realRpcTimeout), "",
                 hostPort_.ToString());
+            Timer timer;
             getStatus = stub_->Get(opts, req, rsp, payloads);
+            auto elapsed = timer.ElapsedMilliSecond();
+            const int logLimitMs = 2;
+            const int vlogLevel = (elapsed > logLimitMs || getStatus.IsError()) ? 0 : 1;
+            VLOG(vlogLevel) << AppendSrcDstForLog(
+                FormatString("Finished to get object key from worker, rpc timeout: %d, elapsed: %.3fms", realRpcTimeout,
+                             elapsed),
+                "", hostPort_.ToString());
+
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
@@ -618,14 +627,14 @@ Status ClientWorkerRemoteApi::DecreaseShmRef(const ShmKey &shmId, const std::fun
         decreaseRPCQ_->NotifyNotEmpty();
         break;
     } while (true);
-    
+
     // Time for wait rsp , it can wake up by worker rsp or disconnect.
     // requestTimeoutMs_ is milliseconds; timespec expects seconds + nanoseconds.
     // Avoid intermediate overflow by taking modulo before scaling.
     timeoutStruct.tv_sec = static_cast<time_t>(requestTimeoutMs_ / ONE_THOUSAND);
     timeoutStruct.tv_nsec =
         static_cast<long>((static_cast<int64_t>(requestTimeoutMs_ % ONE_THOUSAND) * ONE_THOUSAND) * ONE_THOUSAND);
-    
+
     auto rc = CheckShmFutexResult((uint32_t *)waitFlag, waitNum, timeoutStruct);
     std::lock_guard<std::mutex> lock(mtx_);  // protect the circular queue.
     waitRespMap_.erase(slotIndex);
@@ -1192,7 +1201,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Exist response size mismatch.");
     }
     exists.assign(rsp.exists().begin(), rsp.exists().end());
-    LOG(INFO) << "Check existence success.";
+    VLOG(1) << "Check existence success.";
     return Status::OK();
 }
 
