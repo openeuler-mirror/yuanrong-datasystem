@@ -28,6 +28,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -37,6 +38,40 @@ DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
+namespace {
+constexpr char LOG_SAMPLED_MARK[] = "logSampled:true";
+constexpr size_t EMPTY_REQ_MSG_SIZE = 2;
+
+bool IsCurrentRequestLogSampled(AccessKeyType type)
+{
+    if (type == AccessKeyType::REQUEST_OUT || !Trace::Instance().IsRequestLogTrace()) {
+        return false;
+    }
+    bool admitted = false;
+    return Trace::Instance().GetRequestSampleDecision(admitted) && admitted;
+}
+
+void AppendReqMsgWithSampleMark(std::ostringstream &logStream, AccessKeyType type, const std::string &reqMsg)
+{
+    if (!IsCurrentRequestLogSampled(type)) {
+        logStream << reqMsg;
+        return;
+    }
+    if (reqMsg.size() >= EMPTY_REQ_MSG_SIZE && reqMsg.front() == '{' && reqMsg.back() == '}') {
+        logStream.write(reqMsg.data(), reqMsg.size() - 1);
+        if (reqMsg.size() > EMPTY_REQ_MSG_SIZE) {
+            logStream << ",";
+        }
+        logStream << LOG_SAMPLED_MARK << "}";
+        return;
+    }
+    logStream << "{";
+    if (!reqMsg.empty()) {
+        logStream << reqMsg << ",";
+    }
+    logStream << LOG_SAMPLED_MARK << "}";
+}
+}  // namespace
 
 AccessRecorder::AccessRecorder(AccessRecorderKey key) : beg_(clock::now()), isRecord_(false)
 {
@@ -171,7 +206,9 @@ Status AccessRecorderManager::LogPerformance(const std::string &handleName, Acce
 
     std::ostringstream logStream;
     logStream << code << " | " << handleName << " | " << microsecond;
-    logStream << " | " << dataSize << " | " << reqMsg << " | " << respMsg;
+    logStream << " | " << dataSize << " | ";
+    AppendReqMsgWithSampleMark(logStream, type, reqMsg);
+    logStream << " | " << respMsg;
     if (type == AccessKeyType::REQUEST_OUT) {
         logStream << " | " << asyncElapseTime;
     }

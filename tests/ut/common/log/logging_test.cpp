@@ -19,10 +19,12 @@
  */
 #include "datasystem/common/log/log.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -35,6 +37,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
@@ -241,6 +244,14 @@ public:
         }
 
         return false;
+    }
+
+    std::string ReadFileContent(const std::string &filename)
+    {
+        std::ifstream file(filename);
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
     }
 
 protected:
@@ -457,6 +468,80 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
     auto lastSize = FileSize(files[0]);
     ASSERT_GT(lastSize, firstSize);
+}
+
+TEST_F(LoggingTest, TestAccessLogSampledMarker)
+{
+    (void)unsetenv(ACCESS_LOG_NAME_ENV.c_str());
+    FLAGS_log_monitor = true;
+    const std::string sampledKey = "access-log-sampled";
+    const std::string rejectedKey = "access-log-rejected";
+    const std::string unlimitedKey = "access-log-unlimited";
+    {
+        AccessRecorderManager clientManager;
+        DS_ASSERT_OK(clientManager.Init(true, false));
+        Trace::Instance().SetRequestLogTrace(true);
+        Trace::Instance().SetRequestSampleDecision(true, true);
+        DS_ASSERT_OK(clientManager.LogPerformance("sampled", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + sampledKey + "}", ""));
+        DS_ASSERT_OK(clientManager.LogPerformance("sampled-empty", AccessKeyType::CLIENT, 1));
+        Trace::Instance().SetRequestSampleDecision(true, false);
+        DS_ASSERT_OK(clientManager.LogPerformance("rejected", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + rejectedKey + "}", ""));
+        Trace::Instance().SetRequestSampleDecision(false, false);
+        DS_ASSERT_OK(clientManager.LogPerformance("unlimited", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + unlimitedKey + "}", ""));
+    }
+
+    {
+        AccessRecorderManager workerManager;
+        DS_ASSERT_OK(workerManager.Init(false, false));
+        Trace::Instance().SetRequestLogTrace(true);
+        Trace::Instance().SetRequestSampleDecision(true, true);
+        DS_ASSERT_OK(workerManager.LogPerformance("worker", AccessKeyType::ACCESS, 1, 0, "1",
+                                                  "{Object_key:access-log-worker}", ""));
+        DS_ASSERT_OK(workerManager.LogPerformance("request-out", AccessKeyType::REQUEST_OUT, 1, 0, "1",
+                                                  "{Object_key:access-log-request-out}", ""));
+    }
+    Trace::Instance().SetRequestLogTrace(false);
+    Trace::Instance().SetRequestSampleDecision(false, false);
+
+    std::vector<std::string> clientFiles;
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + "_[0-9]*\\.log", clientFiles));
+    ASSERT_EQ(clientFiles.size(), 1ul);
+    std::string clientContent = ReadFileContent(clientFiles[0]);
+    auto findLine = [](const std::string &content, const std::string &key) {
+        std::stringstream ss(content);
+        std::string line;
+        while (std::getline(ss, line)) {
+            if (line.find(key) != std::string::npos) {
+                return line;
+            }
+        }
+        return std::string();
+    };
+
+    std::string sampledLine = findLine(clientContent, sampledKey);
+    std::string sampledEmptyLine = findLine(clientContent, "sampled-empty");
+    std::string rejectedLine = findLine(clientContent, rejectedKey);
+    std::string unlimitedLine = findLine(clientContent, unlimitedKey);
+    ASSERT_FALSE(sampledLine.empty());
+    ASSERT_FALSE(sampledEmptyLine.empty());
+    ASSERT_FALSE(rejectedLine.empty());
+    ASSERT_FALSE(unlimitedLine.empty());
+    ASSERT_NE(sampledLine.find("logSampled:true"), std::string::npos);
+    ASSERT_NE(sampledEmptyLine.find("{logSampled:true}"), std::string::npos);
+    ASSERT_EQ(rejectedLine.find("logSampled:true"), std::string::npos);
+    ASSERT_EQ(unlimitedLine.find("logSampled:true"), std::string::npos);
+    ASSERT_EQ(std::count(sampledLine.begin(), sampledLine.end(), '|'),
+              std::count(rejectedLine.begin(), rejectedLine.end(), '|'));
+
+    std::string accessContent = ReadFileContent(FLAGS_log_dir + "/" + ACCESS_LOG_NAME + ".log");
+    ASSERT_NE(accessContent.find("access-log-worker"), std::string::npos);
+    ASSERT_NE(accessContent.find("logSampled:true"), std::string::npos);
+    std::string requestOutContent = ReadFileContent(FLAGS_log_dir + "/" + REQUEST_OUT_LOG_NAME + ".log");
+    ASSERT_NE(requestOutContent.find("access-log-request-out"), std::string::npos);
+    ASSERT_EQ(requestOutContent.find("logSampled:true"), std::string::npos);
 }
 
 TEST_F(LoggingTest, TestShutdownHardDiskExporter)
