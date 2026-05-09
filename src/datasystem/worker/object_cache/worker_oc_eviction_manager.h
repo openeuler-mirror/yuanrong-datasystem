@@ -26,6 +26,7 @@
 #include <list>
 #include <memory>
 #include <shared_mutex>
+#include <unordered_map>
 #include <utility>
 
 #include <tbb/concurrent_hash_map.h>
@@ -164,6 +165,7 @@ public:
 
 private:
     enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN, MIGRATE };
+    using EvictDeletedObjects = std::unordered_map<std::string, uint64_t>;
 
     struct EvictionTrace {
         Timer timer;
@@ -267,11 +269,8 @@ private:
 
     /**
      * @brief Remove meta in master.
-     * @param[in] objectKey The ID of the object that need to remove meta.
-     * @param[in] version The object version.
-     * @return The next action in eviction task.
      */
-    Status RemoveMetaFromMasterForEviction(const std::string &objectKey, uint64_t version);
+    Status RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions);
 
     /**
      * @brief Try to evict a single object.
@@ -279,7 +278,7 @@ private:
      * @param[in] nextAction The next action.
      * @return Status of the call.
      */
-    Status EvictObject(ObjectKV &objectKV, Action nextAction);
+    Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr);
 
     /**
      * @brief Try to evict a single object.
@@ -292,7 +291,7 @@ private:
      */
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
-                          bool &locked);
+                          bool &locked, EvictDeletedObjects *deletedObjects = nullptr);
 
     /**
      * @brief Eviction task, asynchronous.
@@ -326,12 +325,8 @@ private:
      */
     void GetObjectNextAction(SafeObjType &entry, std::unique_ptr<EvictionTrace> &trace, size_t pendingSpillSize);
 
-    /**
-     * @brief Async task to remove meta from master.
-     * @param[in] objectKey The ID of the object that need to remove meta.
-     * @param[in] version The object version.
-     */
-    void AsyncMasterTask(const std::string &objectKey, uint64_t version);
+    void SubmitAsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
+    void AsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
 
     /**
      * @brief Submit spill task to thread pool.
