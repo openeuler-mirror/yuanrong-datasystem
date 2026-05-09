@@ -117,7 +117,7 @@ TEST_F(LogRateLimiterTest, NonRequestLogsAreNeverSampled)
     }
 }
 
-TEST_F(LogRateLimiterTest, RequestInfoAndWarningAreSampledButErrorsPass)
+TEST_F(LogRateLimiterTest, RequestLogsAreSampledAcrossLevels)
 {
     auto &limiter = LogRateLimiter::Instance();
     limiter.SetRate(1);
@@ -138,8 +138,8 @@ TEST_F(LogRateLimiterTest, RequestInfoAndWarningAreSampledButErrorsPass)
 
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::info, rejectedTrace));
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::warn, rejectedTrace));
-    EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::err, rejectedTrace));
-    EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::critical, rejectedTrace));
+    EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::err, rejectedTrace));
+    EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::critical, rejectedTrace));
 }
 
 TEST_F(LogRateLimiterTest, AdmittedTracePrintsWholeChain)
@@ -164,7 +164,7 @@ TEST_F(LogRateLimiterTest, PropagatedDecisionTakesPrecedence)
     Trace::Instance().SetRequestSampleDecision(true, false);
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::info, uint64_t(3001)));
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::warn, uint64_t(3001)));
-    EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::err, uint64_t(3001)));
+    EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::err, uint64_t(3001)));
 
     Trace::Instance().SetRequestSampleDecision(true, true);
     EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::info, uint64_t(3002)));
@@ -382,7 +382,6 @@ TEST_F(LogRateLimiterTest, LEVEL1_HighConcurrencyDecisionStablePerTrace)
     std::atomic<int> ready{ 0 };
     std::atomic<bool> start{ false };
     std::atomic<int> levelMismatch{ 0 };
-    std::atomic<int> errorDrop{ 0 };
 
     std::vector<std::thread> threads;
     threads.reserve(kThreads);
@@ -405,11 +404,8 @@ TEST_F(LogRateLimiterTest, LEVEL1_HighConcurrencyDecisionStablePerTrace)
                 bool err = limiter.ShouldLog(ds_spdlog::level::err, traceHash);
 
                 int observed = info ? 1 : 0;
-                if (observed != expected[idx] || warn != info) {
+                if (observed != expected[idx] || warn != info || err != info) {
                     levelMismatch.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!err) {
-                    errorDrop.fetch_add(1, std::memory_order_relaxed);
                 }
             }
         });
@@ -425,7 +421,6 @@ TEST_F(LogRateLimiterTest, LEVEL1_HighConcurrencyDecisionStablePerTrace)
     }
 
     EXPECT_EQ(levelMismatch.load(std::memory_order_relaxed), 0);
-    EXPECT_EQ(errorDrop.load(std::memory_order_relaxed), 0);
 }
 
 TEST_F(LogRateLimiterTest, DecisionDoesNotDependOnGlobalTraceTable)
@@ -440,7 +435,7 @@ TEST_F(LogRateLimiterTest, DecisionDoesNotDependOnGlobalTraceTable)
     ClearRequestDecision();
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::info, traceHash));
     EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::warn, traceHash));
-    EXPECT_TRUE(limiter.ShouldLog(ds_spdlog::level::err, traceHash));
+    EXPECT_FALSE(limiter.ShouldLog(ds_spdlog::level::err, traceHash));
 }
 
 TEST_F(LogRateLimiterTest, LEVEL1_FastRequestDecisionP99IsBounded)

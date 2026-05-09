@@ -47,10 +47,7 @@ bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level)
 
 bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash)
 {
-    // ERROR and FATAL are always logged.
-    if (level >= ds_spdlog::level::err) {
-        return true;
-    }
+    (void)level;
 
     // Non-request logs (no trace) are never sampled.
     if (traceHash == 0) {

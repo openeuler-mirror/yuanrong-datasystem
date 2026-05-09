@@ -117,7 +117,7 @@ openYuanrong datasystem 的日志分为以下类型：
 - 采样粒度是“请求（traceId）”，不是“单条日志”
 - `log_rate_limit=N` 表示每秒最多采样 `N` 个新请求（trace）
 - 对采样到的请求：链路日志完整打印（INFO/WARNING/ERROR/FATAL）
-- 对未采样请求：仅保留 ERROR/FATAL，非ERROR日志丢弃
+- 对未采样请求：链路日志全部丢弃（包含 WARNING/ERROR/FATAL）
 - 仅 SDK 请求 trace 参与采样；后台线程日志即使带 traceId 也不参与采样
 - 采样决策会随 RPC 元数据传播，跨 client/worker 保持同一 trace 的一致采样结果
 - 不带 traceId 的后台日志（例如 worker/client 后台线程日志）不参与该采样逻辑
