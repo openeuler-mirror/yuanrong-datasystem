@@ -121,19 +121,6 @@ void ZmqServerImpl::StopAllServices()
     }
 }
 
-void RecalculateMetaTimeout(MetaPb &meta, uint64_t lapTime)
-{
-    if (meta.svc_name().empty()) {
-        return;
-    }
-    int64_t timeoutMs = meta.timeout();
-    constexpr uint64_t NANO_TO_MILLI_UNIT = 1'000'000;
-    int64_t lapTimeMs = static_cast<int64_t>(lapTime / NANO_TO_MILLI_UNIT);
-    if (lapTimeMs > 0 && timeoutMs > lapTimeMs) {
-        meta.set_timeout(timeoutMs - lapTimeMs);
-    }
-}
-
 Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventType type, ZmqCurveUserId &userId,
                       PerfKey transferPerfKey)
 {
@@ -167,7 +154,6 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     meta.set_gateway_id(ZmqMessageToString(gatewayId));
     meta.set_route_fd(fd);
     meta.set_event_type(type);
-    RecalculateMetaTimeout(meta, lapTime);
     return Status::OK();
 }
 
