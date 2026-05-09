@@ -576,7 +576,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;
-    const int32_t minRetryOnceRpcMs = 1; // The 1st level of retryIntervalsMs
+    const int32_t minRetryOnceRpcMs = 1;  // The 1st level of retryIntervalsMs
     do {
         dataSizeChange = false;
         BatchGetObjectRemoteReqPb reqPb;
@@ -604,10 +604,9 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
-            LOG(INFO) << AppendSrcDstForLog(
-                FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
-                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
-                localAddress_.ToString(), address);
+            VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+                                                       IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
+                                          localAddress_.ToString(), address);
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
@@ -625,7 +624,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             inflightGauge.Inc();
             LogInflightRemoteGetRequestIfNeeded(inflightGauge);
             Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
-            RETURN_IF_NOT_OK(RetryOnErrorRepent(
+            Timer timer;
+            auto rc = RetryOnErrorRepent(
                 timeoutMs,
                 [&workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, this](int32_t) {
                     PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
@@ -642,8 +642,13 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 []() { return Status::OK(); },
                 { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                   StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
-                minRetryOnceRpcMs));
-            return Status::OK();
+                minRetryOnceRpcMs);
+            auto elapsedTime = timer.ElapsedMilliSecond();
+            LOG(INFO) << AppendSrcDstForLog(
+                FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
+                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedTime),
+                localAddress_.ToString(), address);
+            return rc;
         };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
         Status rc = constructAndSend();
