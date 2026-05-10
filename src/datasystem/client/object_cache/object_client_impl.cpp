@@ -98,7 +98,8 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
-constexpr int RPC_LOG_LIMIT_MS = 2;
+constexpr uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = 1000;
+constexpr double US_PER_MS = 1000.0;
 thread_local bool g_isThroughUb = false;
 
 namespace datasystem {
@@ -1697,10 +1698,13 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
         Timer timer;
         auto rc = workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType);
-        auto elapsed = timer.ElapsedMilliSecond();
-        auto vlogLevel = (elapsed > RPC_LOG_LIMIT_MS || rc.IsError()) ? 0 : 1;
-        VLOG(vlogLevel) << "Finished creating object to worker, object_key: " << objectKey << ", cost: " << elapsed
-                        << "ms";
+        const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+        const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+        PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                        FormatString("Finished creating object to worker, object_key: %s, path: %s, cost: %.3fms, "
+                                     "rc: %s",
+                                     objectKey, IsUrmaEnabled() && urmaDataInfo != nullptr ? "UB" : "SHM", elapsedMs,
+                                     rc.ToString()));
         RETURN_IF_NOT_OK(rc);
         std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
@@ -1969,10 +1973,12 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Timer timer;
     auto rc = workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
-    auto elapsed = timer.ElapsedMilliSecond();
-    auto vlogLevel = (elapsed > RPC_LOG_LIMIT_MS || rc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << "Finished publishing object to worker, object_key: " << objectKey << ", cost: " << elapsed
-                    << "ms";
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("Finished publishing object to worker, object_key: %s, path: %s, cost: %.3fms, rc: %s",
+                                 objectKey, isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP"),
+                                 elapsedMs, rc.ToString()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Publish object %s", objectKey));
     return Status::OK();
 }
@@ -2131,8 +2137,10 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
             LOG(ERROR) << FormatString("Put object %s failed: %s", objectKey, rc.ToString());
         }
     }
-    LOG(INFO) << FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
-                              setTimer.ElapsedMilliSecond(), rc.ToString());
+    const auto totalUs = static_cast<uint64_t>(setTimer.ElapsedMicroSecond());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
+                                 static_cast<double>(totalUs) / US_PER_MS, rc.ToString()));
     return rc;
 }
 
@@ -4020,11 +4028,12 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Timer timer;
     auto rc = workerApi->Exist(keys, exists, queryEtcd, isLocal);
-    auto elapsed = timer.ElapsedMilliSecond();
-    auto vlogLevel = (elapsed > RPC_LOG_LIMIT_MS || rc.IsError()) ? 0 : 1;
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
     const auto &firstKey = keys.empty() ? "" : keys[0];
-    VLOG(vlogLevel) << "Finished check exist from worker, first object_key: " << firstKey << ", cost: " << elapsed
-                    << "ms";
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
+                                 firstKey, elapsedMs, rc.ToString()));
     return rc;
 }
 

@@ -50,6 +50,9 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 namespace {
+constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
+constexpr double US_PER_MS = 1000.0;
+
 void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
 {
     constexpr int logInterval = 10;
@@ -643,11 +646,14 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                   StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
                 minRetryOnceRpcMs);
-            auto elapsedTime = timer.ElapsedMilliSecond();
-            LOG(INFO) << AppendSrcDstForLog(
-                FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
-                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedTime),
-                localAddress_.ToString(), address);
+            const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+            const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+            PLOG_IF_OR_VLOG(
+                INFO, elapsedUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
+                AppendSrcDstForLog(
+                    FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
+                                 IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
+                    localAddress_.ToString(), address));
             return rc;
         };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);

@@ -37,9 +37,11 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -58,6 +60,8 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
+constexpr uint64_t GET_REMOTE_WORKER_LOCAL_SLOW_US = 2000;
+constexpr double US_PER_MS = 1000.0;
 
 bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
 {
@@ -143,6 +147,7 @@ Status WorkerWorkerOCServiceImpl::Init()
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
 {
+    Timer timer;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
     GetObjectRemoteReqPb req;
@@ -171,7 +176,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     }
 
     pointImpl.Record();
-    LOG(INFO) << "send data success";
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
+                    AppendSrcDstForLog(
+                        FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
+                                     req.object_key(), payload.size(), elapsedMs),
+                        GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -719,12 +730,14 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    auto elapsedTime = timer.ElapsedMilliSecond();
-    LOG(INFO) << AppendSrcDstForLog(
-        FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %d, start remainingTime: "
-                     "%zu, cost: %.3fms",
-                     req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedTime),
-        callerAddress, FLAGS_worker_address);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
+                    AppendSrcDstForLog(
+                        FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
+                                     "remainingTime: %zu, cost: %.3fms",
+                                     req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
+                        callerAddress, FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }

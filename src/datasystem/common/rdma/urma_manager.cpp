@@ -848,14 +848,14 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
     auto elapsedMs = timer.ElapsedMilliSecond();
-    auto vlogLevel = (elapsedMs > URMA_LOG_LIMIT_MS || waitRc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
-                    << elapsedMs << "ms, request id:" << requestId
-                    << ", src address:" << localUrmaInfo_.localAddress.ToString()
-                    << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
-                    << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-                    << ", urma_inflight_wr_count: " << tbbEventMap_.size()
-                    << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
+    PLOG_IF_OR_VLOG(INFO, elapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError(), 1,
+                    "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
+                        << elapsedMs << "ms, request id:" << requestId
+                        << ", src address:" << localUrmaInfo_.localAddress.ToString()
+                        << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+                        << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
+                        << ", urma_inflight_wr_count: " << tbbEventMap_.size()
+                        << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
