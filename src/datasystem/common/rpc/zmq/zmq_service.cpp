@@ -335,7 +335,7 @@ Status ZmqService::InitThreadPool()
     auto numThreads = cfg_.numRegularSockets_ + cfg_.numStreamSockets_;
     // We need to account for the streaming threads. They can run forever until the server shutdown.
     const int minThread = 1 + cfg_.numStreamSockets_;
-    const int initMaxThread = 8;
+    const int initMaxThread = 16;
     auto minThreadNum = numThreads / minThread;
     minThreadNum = minThreadNum > minThread ? minThreadNum : minThread;
     minThreadNum = minThreadNum > initMaxThread ? initMaxThread : minThreadNum;
