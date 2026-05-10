@@ -88,6 +88,11 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
+static constexpr uint64_t GET_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr uint64_t GET_QUERY_META_RPC_SLOW_US = 1000;
+static constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
+static constexpr uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
@@ -326,7 +331,15 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL);
     // Try get from local.
     std::set<ReadKey> remoteObjectKeys;
-    RETURN_IF_NOT_OK(TryGetObjectFromLocal(request, remoteObjectKeys));
+    Timer localProcessingTimer;
+    Status localRc = TryGetObjectFromLocal(request, remoteObjectKeys);
+    const auto localProcessingUs = static_cast<uint64_t>(localProcessingTimer.ElapsedMicroSecond());
+    PLOG_IF_OR_VLOG(INFO, localProcessingUs >= GET_LOCAL_PROCESSING_SLOW_US, 1,
+                    FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
+                                 "costUs: %zu, rc: %s",
+                                 request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),
+                                 localProcessingUs, localRc.ToString()));
+    RETURN_IF_NOT_OK(localRc);
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
 
     // Register request for subscribe
@@ -791,8 +804,11 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
-    LOG(INFO) << FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
-                              objectsNeedGetRemote.size(), queryMetas.size(), queryMetaTimer.ElapsedMilliSecond());
+    const auto queryMetaUs = static_cast<uint64_t>(queryMetaTimer.ElapsedMicroSecond());
+    const double queryMetaMs = static_cast<double>(queryMetaUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, queryMetaUs >= GET_QUERY_META_RPC_SLOW_US, 1,
+                    FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
+                                 objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -1266,7 +1282,13 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
     rpcPoint.Record();
-    LOG(INFO) << FormatString("Remote get success, elapsed %.3f ms", remoteGetTimer.ElapsedMilliSecond());
+    const auto remoteGetUs = static_cast<uint64_t>(remoteGetTimer.ElapsedMicroSecond());
+    const double remoteGetMs = static_cast<double>(remoteGetUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, remoteGetUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
+                    AppendSrcDstForLog(
+                        FormatString("Remote get success, objectKey: %s, path: %s, cost: %.3fms", objectKV.GetObjKey(),
+                                     IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
+                        localAddress_.ToString(), address));
     return Status::OK();
 }
 
@@ -2799,11 +2821,11 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     RequestParam reqParam;
     reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
-    auto totalExistMs = timer.ElapsedMilliSecond();
+    const auto totalExistUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Exist", totalExistMs);
-    auto vlogLevel = (totalExistMs > 1 || rc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("Exist done, cost: %.1fms, %s", static_cast<double>(totalExistMs),
-                                    workerOperationTimeCost.GetInfo());
+    PLOG_IF_OR_VLOG(INFO, totalExistUs >= EXIST_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
+                    FormatString("Exist done, cost: %.3fms, %s", totalExistMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

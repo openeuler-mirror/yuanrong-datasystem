@@ -100,11 +100,12 @@ static DsLogger GetMessageLogger()
 
 std::string LogMessageImpl::podName_ = Provider::GetPodName();
 
-LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line)
+LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog)
     : level_(ToSpdlogLevel(logSeverity)),
       sourceLoc_{ file, line, "" },
       streamBuf_(g_ThreadLogData, MAX_LOG_SIZE),
-      logStream_(&streamBuf_)
+      logStream_(&streamBuf_),
+      forceLog_(forceLog)
 {
     Init();
 }
@@ -124,12 +125,15 @@ void LogMessageImpl::Init()
     PerfPoint point(PerfKey::LOG_MESSAGE_INIT);
     logger_ = GetMessageLogger();
     if (logger_) {
-        // Backstop for direct LogMessage construction that bypasses LOG macros.
-        auto &trace = Trace::Instance();
-        uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
-        if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash)) {
-            skip_ = true;
-            return;
+        // Backstop for direct LogMessage construction that bypasses LOG macros. forceLog only skips request sampling;
+        // common initialization and formatting must stay outside this branch.
+        if (!forceLog_) {
+            auto &trace = Trace::Instance();
+            uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
+            if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash)) {
+                skip_ = true;
+                return;
+            }
         }
         AppendLogMessageImplPrefix(podName_, logStream_);
     }

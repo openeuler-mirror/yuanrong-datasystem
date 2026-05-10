@@ -31,6 +31,10 @@
   - read `trace-and-context.md`
 - If the question is about access/performance logs, operation keys, or outbound request recording:
   - read `access-recorder.md`
+- If the question is about Set/Get slow logs that must bypass request sampling:
+  - read `plog-slow-request-plan.md`
+- If the question is about the implemented Get slow-log change or validation result:
+  - read `plog-slow-get-implementation-summary.md`
 - If the question is about startup, file rotation, compression, monitor flush, or crash log output:
   - read `log-lifecycle-and-rotation.md`
 
@@ -56,6 +60,10 @@
   - thread-local trace model, trace ID generation, propagation, and cleanup behavior
 - `access-recorder.md`
   - access/performance recorder lifecycle, operation-key mapping, and exporter coupling
+- `plog-slow-request-plan.md`
+  - English PLOG slow Set/Get request design, first-pass thresholds, and production `v=0` constraints
+- `plog-slow-get-implementation-summary.md`
+  - implementation scope, changed slow Get segments, remote validation commands, and remaining validation blocker
 - `log-lifecycle-and-rotation.md`
   - startup flow, file lifecycle, monitor flushing, crash logging, flags, and environment overrides
 
