@@ -24,7 +24,11 @@ Use it to jump from a question type to the smallest useful document instead of r
 | optimize CMake compile speed or change CMake target/package dependencies | `playbooks/features/quality/cmake-build-optimization.md` | `modules/quality/cmake-build/design.md`, nearest `CMakeLists.txt`, `cmake/package.cmake` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
-| understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `docs/source_zh_cn/design_document/cluster_management.md`, `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/*.py` |
+| understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `modules/runtime/etcd-metadata/README.md`, `modules/runtime/hash-ring/README.md`, `modules/runtime/cluster-manager/README.md` |
+| review scale-up, scale-down, restart, or ETCD crash DFX coverage | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache/kv_client_scale_test.cpp`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp` |
+| understand ETCD proto/client access, watch, keepalive, CAS, or Metastore behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
+| understand distributed hash-ring initialization, add node, remove node, restart, or voluntary scale-down | `modules/runtime/hash-ring/README.md` | `src/datasystem/worker/hash_ring`, `src/datasystem/protos/hash_ring.proto` |
+| understand worker cluster membership, node restart, passive/voluntary scale-down coordination, or route lookup | `modules/runtime/cluster-manager/README.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/worker_oc_server.cpp`, `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp` |
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
 | understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand `l2_cache_type` backend selection, flags, or `PersistenceApi` dispatch | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/util/gflag/*`, `src/datasystem/worker/worker_oc_server.cpp` |
@@ -63,7 +67,11 @@ Use it to jump from a question type to the smallest useful document instead of r
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
-| cluster coordination | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/start.py`, `cli/up.py` |
+| cluster coordination overview | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `third_party/protos/etcd` |
+| cluster DFX scenario matrix | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache` |
+| ETCD metadata backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
+| hash ring | `modules/runtime/hash-ring/README.md` | `src/datasystem/worker/hash_ring`, `src/datasystem/protos/hash_ring.proto` |
+| cluster manager | `modules/runtime/cluster-manager/README.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/worker_oc_server.cpp`, `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
 | l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | l2 cache architecture | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |

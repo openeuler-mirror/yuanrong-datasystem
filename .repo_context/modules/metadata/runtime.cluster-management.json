@@ -3,14 +3,23 @@
   "title": "Cluster Management",
   "status": "active",
   "domain": "runtime",
-  "module_type": "leaf",
+  "module_type": "composite",
   "canonical_docs": {
     "overview": ".repo_context/modules/runtime/cluster-management.md",
     "design": null,
-    "details": []
+    "details": [
+      ".repo_context/modules/runtime/cluster-management-dfx-matrix.md",
+      ".repo_context/modules/runtime/etcd-metadata/README.md",
+      ".repo_context/modules/runtime/hash-ring/README.md",
+      ".repo_context/modules/runtime/cluster-manager/README.md"
+    ]
   },
   "playbooks": {
-    "feature": [],
+    "feature": [
+      ".repo_context/playbooks/features/runtime/etcd-metadata/implementation.md",
+      ".repo_context/playbooks/features/runtime/hash-ring/implementation.md",
+      ".repo_context/playbooks/features/runtime/cluster-manager/implementation.md"
+    ],
     "operations": [],
     "upkeep": [
       ".repo_context/playbooks/upkeep/module-context-generation.md"
@@ -19,14 +28,34 @@
   "source_roots": [
     "src/datasystem/worker/cluster_manager",
     "src/datasystem/worker/hash_ring",
+    "src/datasystem/worker/worker_oc_server.cpp",
+    "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp",
+    "src/datasystem/common/kvstore/etcd",
+    "src/datasystem/common/kvstore/metastore",
+    "third_party/protos/etcd",
     "cli",
     "docs/source_zh_cn/design_document"
   ],
-  "key_tests": [],
+  "key_tests": [
+    "tests/st/worker/object_cache/etcd_cluster_manager_test.cpp",
+    "tests/st/common/kvstore/etcd_store_test.cpp",
+    "tests/st/common/kvstore/grpc_session_test.cpp",
+    "tests/ut/common/kvstore/metastore_server_test.cpp",
+    "tests/ut/worker/object_cache/hash_ring_allocator_test.cpp",
+    "tests/ut/worker/object_cache/hash_ring_health_check_test.cpp",
+    "tests/st/worker/object_cache/hash_ring_test.cpp",
+    "tests/st/client/kv_cache/kv_client_scale_test.cpp",
+    "tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp",
+    "tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp"
+  ],
   "module_boundary": {
     "related_modules": [
+      "runtime.etcd-metadata",
+      "runtime.hash-ring",
+      "runtime.cluster-manager",
       "runtime.worker-runtime",
-      "infra.common-infra"
+      "infra.common-infra",
+      "infra.slot"
     ],
     "split_signals": [
       "distributed_lifecycle",
@@ -37,10 +66,21 @@
     "keywords": [
       "cluster management",
       "etcd",
-      "hash ring"
+      "hash ring",
+      "cluster manager",
+      "Metastore",
+      "scale up",
+      "scale down",
+      "restart",
+      "ETCD crash",
+      "DFX",
+      "reconciliation"
     ],
     "intent_examples": [
-      "understand cluster metadata, ETCD, Metastore, and hash-ring coordination"
+      "understand cluster metadata, ETCD, Metastore, and hash-ring coordination",
+      "review current ETCD plus hash-ring cluster-management pros and cons",
+      "review scale-up scale-down restart and ETCD crash DFX coverage",
+      "choose detailed docs for ETCD metadata, hash ring, or cluster manager behavior"
     ]
   }
 }

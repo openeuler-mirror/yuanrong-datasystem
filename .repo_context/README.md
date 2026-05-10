@@ -92,12 +92,25 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── quality.build-test-debug.json
 │   │   ├── quality.cmake-build.json
 │   │   ├── quality.tests-and-reproduction.json
+│   │   ├── runtime.cluster-manager.json
 │   │   ├── runtime.cluster-management.json
+│   │   ├── runtime.etcd-metadata.json
+│   │   ├── runtime.hash-ring.json
 │   │   └── runtime.worker-runtime.json
 │   ├── runtime/
 │   │   ├── README.md
+│   │   ├── cluster-manager/
+│   │   │   ├── README.md
+│   │   │   └── design.md
 │   │   ├── worker-runtime.md
-│   │   └── cluster-management.md
+│   │   ├── cluster-management.md
+│   │   ├── cluster-management-dfx-matrix.md
+│   │   ├── etcd-metadata/
+│   │   │   ├── README.md
+│   │   │   └── design.md
+│   │   └── hash-ring/
+│   │       ├── README.md
+│   │       └── design.md
 │   ├── infra/
 │   │   ├── README.md
 │   │   ├── common-infra.md
@@ -146,6 +159,17 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   └── skill-trigger-routing.md
 │   └── features/
 │       ├── README.md
+│       ├── runtime/
+│       │   ├── README.md
+│       │   ├── cluster-manager/
+│       │   │   ├── README.md
+│       │   │   └── implementation.md
+│       │   ├── etcd-metadata/
+│       │   │   ├── README.md
+│       │   │   └── implementation.md
+│       │   └── hash-ring/
+│       │       ├── README.md
+│       │       └── implementation.md
 │       ├── quality/
 │       │   ├── README.md
 │       │   ├── cmake-build-optimization.md
@@ -198,5 +222,7 @@ The first pass is intentionally coarse. It currently covers:
 - an upkeep playbook for formal module-context generation and backfill;
 - feature workflow guidance for l2 cache and secondary-storage changes;
 - cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.
+- detailed runtime cluster-management packages for ETCD/Metastore metadata access, hash-ring topology management, and
+  cluster-manager lifecycle/routing behavior.
 
 The next recommended deep dives are recorded in `.repo_context/roadmap.md`.

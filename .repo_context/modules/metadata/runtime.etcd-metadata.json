@@ -1,0 +1,73 @@
+{
+  "id": "runtime.etcd-metadata",
+  "title": "ETCD Metadata",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/etcd-metadata/README.md",
+    "design": ".repo_context/modules/runtime/etcd-metadata/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/etcd-metadata/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "third_party/protos/etcd",
+    "src/datasystem/common/kvstore/etcd",
+    "src/datasystem/common/kvstore/metastore"
+  ],
+  "key_tests": [
+    "tests/st/common/kvstore/etcd_store_test.cpp",
+    "tests/st/common/kvstore/grpc_session_test.cpp",
+    "tests/ut/common/kvstore/metastore_server_test.cpp",
+    "tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp",
+    "tests/st/worker/object_cache/etcd_cluster_manager_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.cluster-manager",
+      "runtime.cluster-management",
+      "runtime.hash-ring",
+      "runtime.worker-runtime",
+      "infra.common-infra"
+    ],
+    "split_signals": [
+      "external_wire_contract",
+      "distributed_lifecycle",
+      "operator_config_surface",
+      "recovery_lifecycle",
+      "security_surface",
+      "backend_compatibility"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "etcd",
+      "EtcdStore",
+      "GrpcSession",
+      "EtcdWatch",
+      "EtcdKeepAlive",
+      "CAS",
+      "Txn",
+      "LeaseKeepAlive",
+      "WatchEvents",
+      "Metastore",
+      "ETCD_CLUSTER_TABLE",
+      "ETCD_RING_PREFIX"
+    ],
+    "intent_examples": [
+      "understand etcd put get watch keepalive and CAS behavior",
+      "debug worker keepalive or cluster table lease writes",
+      "change ETCD watch event compensation",
+      "review CAS conflicts on the hash ring key",
+      "compare external ETCD and built-in Metastore behavior"
+    ]
+  }
+}

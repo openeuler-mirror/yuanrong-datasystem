@@ -2,7 +2,7 @@
 
 `playbooks/` is the task-oriented layer of `.repo_context/`.
 
-Use a playbook when the question is not “what is this module?” but “how should I work in this repo for this task type?”
+Use a playbook when the question is not "what is this module?" but "how should I work in this repo for this task type?"
 
 ## Structure
 
@@ -15,11 +15,24 @@ playbooks/
 │   └── performance-investigation.md
 ├── upkeep/
 │   ├── README.md
-│   └── module-context-generation.md
+│   ├── module-context-generation.md
+│   └── skill-trigger-routing.md
 └── features/
     ├── README.md
+    ├── runtime/
+    │   ├── README.md
+    │   ├── cluster-manager/
+    │   │   ├── README.md
+    │   │   └── implementation.md
+    │   ├── etcd-metadata/
+    │   │   ├── README.md
+    │   │   └── implementation.md
+    │   └── hash-ring/
+    │       ├── README.md
+    │       └── implementation.md
     ├── quality/
     │   ├── README.md
+    │   ├── cmake-build-optimization.md
     │   └── test-implementation.md
     └── infra/
         ├── README.md
@@ -62,6 +75,13 @@ Task-oriented guidance now starts in:
 - `upkeep/module-context-generation.md`
 - `upkeep/skill-trigger-routing.md`
 - `features/README.md`
+- `features/runtime/README.md`
+- `features/runtime/cluster-manager/README.md`
+- `features/runtime/cluster-manager/implementation.md`
+- `features/runtime/etcd-metadata/README.md`
+- `features/runtime/etcd-metadata/implementation.md`
+- `features/runtime/hash-ring/README.md`
+- `features/runtime/hash-ring/implementation.md`
 - `features/quality/README.md`
 - `features/quality/test-implementation.md`
 - `features/infra/README.md`
