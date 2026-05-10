@@ -51,9 +51,9 @@ Usage:
       --since "2026-05-05T22:30:00" \\
       -o /mnt/d/html/report.html --open
 
-  # Custom time bin interval (e.g. 30 minutes)
+  # Custom time bin interval (e.g. 1 minute)
   python3 scripts/generate_resource_report.py /path/to/worker_logs \\
-      --since "2026-05-05T22:30:00" --interval 30 -o report.html
+      --since "2026-05-05T22:30:00" --interval 60000 -o report.html
 
 Directory layouts (auto-detected):
   Layout 1: <log_dir>/<host_ip>/logs/resource.log
@@ -66,7 +66,7 @@ Arguments:
   --until             End time (exclusive), format: YYYY-MM-DDTHH:MM:SS
   -o / --output       Output HTML file path (default: resource_report.html)
   --log-pattern       Filename substring to match (default: resource)
-  --interval          Time bin interval in minutes (default: 60)
+  --interval          Time bin interval in milliseconds (default: 3600000). 1000=1s, 60000=1min, 3600000=1h
   --open              Open report in browser after generation
 
 HTML Report Sections (10 charts + 1 detail table):
@@ -280,21 +280,38 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
     return all_data
 
 
-def _time_bin(ts, interval_minutes=60):
-    """Round timestamp to time bin."""
-    total_minutes = ts.hour * 60 + ts.minute
-    bin_minute = (total_minutes // interval_minutes) * interval_minutes
-    return ts.replace(hour=bin_minute // 60, minute=bin_minute % 60,
-                      second=0, microsecond=0)
+def _time_bin_ms(ts, interval_ms=3600000):
+    """Round timestamp to time bin (millisecond precision).
+
+    Args:
+        ts: datetime object
+        interval_ms: bin size in milliseconds (e.g. 1000=1s, 60000=1min, 3600000=1h)
+    """
+    day_ms = ts.hour * 3600000 + ts.minute * 60000 + ts.second * 1000 + ts.microsecond // 1000
+    bin_ms = (day_ms // interval_ms) * interval_ms
+    return ts.replace(hour=bin_ms // 3600000,
+                      minute=(bin_ms % 3600000) // 60000,
+                      second=(bin_ms % 60000) // 1000,
+                      microsecond=(bin_ms % 1000) * 1000)
 
 
-def _compute_oc_deltas(all_data, interval_minutes):
+def _bin_label(bin_ts, interval_ms):
+    """Format bin timestamp as label string based on granularity."""
+    if interval_ms < 1000:
+        return bin_ts.strftime("%m-%d %H:%M:%S.") + f"{bin_ts.microsecond // 1000:03d}"
+    elif interval_ms < 60000:
+        return bin_ts.strftime("%m-%d %H:%M:%S")
+    else:
+        return bin_ts.strftime("%m-%d %H:%M")
+
+
+def _compute_oc_deltas(all_data, interval_ms):
     """Compute per-host per-bin OC_HIT_NUM deltas from cumulative counters.
 
     Returns: {time_bin: {host: (delta_mem, delta_disk, delta_l2, delta_remote, delta_miss)}}
     """
     sorted_bins = sorted(set(
-        _time_bin(ts, interval_minutes)
+        _time_bin_ms(ts, interval_ms)
         for records in all_data.values()
         for ts, _ in records
     ))
@@ -304,7 +321,7 @@ def _compute_oc_deltas(all_data, interval_minutes):
     for host, records in all_data.items():
         host_bins = defaultdict(list)
         for ts, m in records:
-            tb = _time_bin(ts, interval_minutes)
+            tb = _time_bin_ms(ts, interval_ms)
             oc_vals = tuple(m.get(k, 0) for k in _OC_HIT_KEYS)
             host_bins[tb].append((ts, oc_vals))
         host_bin_last[host] = {}
@@ -327,13 +344,13 @@ def _compute_oc_deltas(all_data, interval_minutes):
     return oc_deltas, sorted_bins
 
 
-def compute_cluster_stats(all_data, interval_minutes=60):
+def compute_cluster_stats(all_data, interval_ms=3600000):
     """Aggregate per-time-bin cluster-wide statistics.
 
     Gauge metrics: avg/max/min across samples.
     Cumulative counters (OC_HIT_NUM): per-host delta, then sum across hosts.
     """
-    oc_deltas, sorted_bins = _compute_oc_deltas(all_data, interval_minutes)
+    oc_deltas, sorted_bins = _compute_oc_deltas(all_data, interval_ms)
 
     # All gauge metric keys including thread pool sub-fields
     tp_keys = [f"tp_{prefix}_{field}" for prefix in _TP_PREFIXES for field in _TP_SUB_FIELDS]
@@ -344,7 +361,7 @@ def compute_cluster_stats(all_data, interval_minutes=60):
 
     for host, records in all_data.items():
         for ts, m in records:
-            tb = _time_bin(ts, interval_minutes)
+            tb = _time_bin_ms(ts, interval_ms)
             b = bins[tb]
             b["hosts"].add(host)
             for key in all_gauge_keys:
@@ -399,14 +416,14 @@ def compute_cluster_stats(all_data, interval_minutes=60):
     return result
 
 
-def compute_per_host_stats(all_data, interval_minutes=60):
+def compute_per_host_stats(all_data, interval_ms=3600000):
     """Compute per-host per-time-bin stats for key metrics."""
     result = {}
     for host, records in all_data.items():
         bins = defaultdict(dict)
         oc_last_per_bin = {}
         for ts, m in records:
-            tb = _time_bin(ts, interval_minutes)
+            tb = _time_bin_ms(ts, interval_ms)
             for key in ["mem_usage", "mem_ratio", "object_count", "object_size"]:
                 if key in m:
                     bins[tb].setdefault(key, []).append(m[key])
@@ -444,7 +461,22 @@ def compute_per_host_stats(all_data, interval_minutes=60):
     return result
 
 
-def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, until, prefix=""):
+def _format_interval(interval_ms):
+    """Format interval_ms as human-readable string."""
+    if interval_ms < 1000:
+        return f"{interval_ms}ms"
+    elif interval_ms < 60000:
+        s = interval_ms / 1000
+        return f"{s:g}s" if s != int(s) else f"{int(s)}s"
+    elif interval_ms < 3600000:
+        m = interval_ms / 60000
+        return f"{m:g}min" if m != int(m) else f"{int(m)}min"
+    else:
+        h = interval_ms / 3600000
+        return f"{h:g}h" if h != int(h) else f"{int(h)}h"
+
+
+def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, until, interval_ms=3600000, prefix=""):
     """Generate self-contained HTML report with ECharts."""
     if not cluster_stats:
         print("No data to report")
@@ -458,7 +490,7 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     host_count = len(all_data)
     total_records = sum(len(v) for v in all_data.values())
 
-    time_labels = [s["time"].strftime("%m-%d %H:%M") for s in cluster_stats]
+    time_labels = [_bin_label(s["time"], interval_ms) for s in cluster_stats]
 
     # Data series extraction
     mem_usage_avg = [round(s["mem_usage_avg"] / 1024**3, 2) for s in cluster_stats]
@@ -509,7 +541,7 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     def _host_mem_series(host):
         points = per_host_stats.get(host, [])
         items = ",".join(
-            '["' + s["time"].strftime("%m-%d %H:%M") + '",' + str(round(s.get("mem_usage_avg", 0) / 1024**3, 2)) + "]"
+            '["' + _bin_label(s["time"], interval_ms) + '",' + str(round(s.get("mem_usage_avg", 0) / 1024**3, 2)) + "]"
             for s in points
         )
         return f'"{host}":[{items}]'
@@ -522,13 +554,13 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
     peak_obj = max(cluster_stats, key=lambda s: s["object_count_max"])
 
     summary_rows = f"""
-    <tr><td>Time Range</td><td>{first_ts.strftime('%Y-%m-%d %H:%M')} ~ {last_ts.strftime('%Y-%m-%d %H:%M')}</td></tr>
+    <tr><td>Time Range</td><td>{_bin_label(first_ts, interval_ms)} ~ {_bin_label(last_ts, interval_ms)}</td></tr>
     <tr><td>Host Count</td><td>{host_count}</td></tr>
     <tr><td>Total Records</td><td>{total_records:,}</td></tr>
     <tr><td>Latest Memory Usage (avg)</td><td>{_fmt_bytes(latest['mem_usage_avg'])} / {_fmt_bytes(latest['mem_total_limit_avg'])} ({_fmt_pct(latest['mem_ratio_avg'])})</td></tr>
-    <tr><td>Peak Memory Usage</td><td>{_fmt_bytes(peak_mem['mem_usage_max'])} at {peak_mem['time'].strftime('%m-%d %H:%M')}</td></tr>
+    <tr><td>Peak Memory Usage</td><td>{_fmt_bytes(peak_mem['mem_usage_max'])} at {_bin_label(peak_mem['time'], interval_ms)}</td></tr>
     <tr><td>Latest Object Count (avg/host)</td><td>{latest['object_count_avg']:,.0f}</td></tr>
-    <tr><td>Peak Object Count</td><td>{peak_obj['object_count_max']:,.0f} at {peak_obj['time'].strftime('%m-%d %H:%M')}</td></tr>
+    <tr><td>Peak Object Count</td><td>{peak_obj['object_count_max']:,.0f} at {_bin_label(peak_obj['time'], interval_ms)}</td></tr>
     <tr><td>Latest Cache Hit Rate</td><td>{_fmt_pct(latest['cache_hit_rate']) if latest['cache_hit_rate'] >= 0 else 'N/A'}</td></tr>
     <tr><td>Active Clients</td><td>{latest['active_clients_avg']:.0f}</td></tr>
     """
@@ -539,7 +571,7 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
         chr_val = _fmt_pct(s["cache_hit_rate"]) if s["cache_hit_rate"] >= 0 else "N/A"
         detail_rows += f"""
         <tr>
-            <td>{s['time'].strftime('%m-%d %H:%M')}</td>
+            <td>{_bin_label(s['time'], interval_ms)}</td>
             <td>{s['host_count']}</td>
             <td>{_fmt_bytes(s['mem_usage_avg'])}</td>
             <td>{_fmt_bytes(s['mem_usage_max'])}</td>
@@ -550,10 +582,10 @@ def generate_html(cluster_stats, per_host_stats, all_data, output_path, since, u
             <td>{chr_val}</td>
             <td>{s['total_hits']:,.0f}</td>
             <td>{s['total_requests']:,.0f}</td>
-            <td>{_fmt_pct(s['tp_worker_oc_usage_avg'])}</td>
-            <td>{s['tp_worker_oc_waiting_avg']:.0f}</td>
-            <td>{_fmt_pct(s['tp_async_usage_avg'])}</td>
-            <td>{s['tp_async_waiting_avg']:.0f}</td>
+            <td>{_fmt_pct(s.get('tp_worker_oc_usage_avg', 0))}</td>
+            <td>{s.get('tp_worker_oc_waiting_avg', 0):.0f}</td>
+            <td>{_fmt_pct(s.get('tp_async_usage_avg', 0))}</td>
+            <td>{s.get('tp_async_waiting_avg', 0):.0f}</td>
         </tr>"""
 
     report_html = f"""<!DOCTYPE html>
@@ -585,7 +617,7 @@ select {{ padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; font-si
 <div class="container">
 <h1>{html.escape(report_title)}</h1>
 <div class="info">
-  Time: {first_ts.strftime('%Y-%m-%d %H:%M')} ~ {last_ts.strftime('%Y-%m-%d %H:%M')} |
+  Time: {_bin_label(first_ts, interval_ms)} ~ {_bin_label(last_ts, interval_ms)} |
   Hosts: {host_count} | Records: {total_records:,}
   {"| Since: " + since if since else ""}{" | Until: " + until if until else ""}
 </div>
@@ -1025,8 +1057,6 @@ window.addEventListener('resize', function() {{
         "__OC_DISK_HIT__": js_arr(oc_disk_hit),
         "__OC_L2_HIT__": js_arr(oc_l2_hit),
         "__OC_REMOTE_HIT__": js_arr(oc_remote_hit),
-        "__TP_OC_ACTIVE__": js_arr(tp_oc_active),
-        "__TP_OC_TOTAL__": js_arr(tp_oc_total),
         "__TP_OC_MR__": js_arr(tp_oc_mr),
         "__TP_OC_TOTAL__": js_arr(tp_oc_total),
         "__TP_OC_TD__": js_arr(tp_oc_td),
@@ -1099,7 +1129,7 @@ def main():
               # narrower time range with 30-min bins
               python3 generate_resource_report.py /data/worker_logs \\
                   --since "2026-05-06T00:00:00" --until "2026-05-06T06:00:00" \\
-                  --interval 30 -o report.html
+                  --interval 600000 -o report.html
 
               # WSL: write to Windows drive, auto-open in Edge
               python3 generate_resource_report.py /data/worker_logs \\
@@ -1149,8 +1179,9 @@ def main():
         help="filename substring to match log files (default: resource)"
     )
     parser.add_argument(
-        "--interval", type=int, default=60,
-        help="time bin size in minutes; smaller = finer chart granularity (default: 60)"
+        "--interval", type=int, default=3600000,
+        help="time bin size in milliseconds; smaller = finer chart granularity "
+             "(default: 3600000 = 1h). 1000=1s, 60000=1min, 600000=10min, 3600000=1h"
     )
     parser.add_argument(
         "--open", action="store_true",
@@ -1185,7 +1216,7 @@ def main():
     per_host_stats = compute_per_host_stats(all_data, args.interval)
 
     print("Generating HTML report...")
-    generate_html(cluster_stats, per_host_stats, all_data, args.output, args.since, args.until, args.prefix)
+    generate_html(cluster_stats, per_host_stats, all_data, args.output, args.since, args.until, args.interval, args.prefix)
 
     if args.open:
         out_path = os.path.abspath(args.output)
