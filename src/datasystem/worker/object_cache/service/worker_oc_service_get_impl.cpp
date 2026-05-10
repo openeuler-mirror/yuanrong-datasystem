@@ -564,6 +564,11 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
         objKeys.emplace_back(kv.first);
     }
     while (!objKeys.empty() && retry < maxRetry) {
+        if (reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+            LOG(WARNING) << "Stop retry delete unacked object meta due to exhausted timeout, remaining size: "
+                          << objKeys.size();
+            break;
+        }
         if (objKeys.size() == 1) {
             auto status = RemoveLocation(objKeys.front(), deleteKeyVersions.at(objKeys.front()));
             if (status.IsOk()) {
