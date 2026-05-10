@@ -13,7 +13,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log/spdlog:ds_spdlog_header",
+        "//src/datasystem/common/log/spdlog:log_rate_limiter",
         "//src/datasystem/common/util:format",
     ],
 )

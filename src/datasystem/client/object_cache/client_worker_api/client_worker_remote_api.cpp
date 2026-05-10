@@ -44,6 +44,7 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
+constexpr uint64_t CLIENT_WORKER_RPC_SLOW_US = 1000;
 
 namespace {
 bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
@@ -92,6 +93,14 @@ void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &b
     req.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     req.set_is_replica(param.isReplica);
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
+}
+
+void LogClientWorkerRpcDone(const char *operation, size_t count, const char *path, uint64_t elapsedUs,
+                            const Status &status)
+{
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || status.IsError(), 1,
+                    FormatString("[Client/WorkerRpc] %s done, count: %zu, path: %s, costUs: %zu, rc: %s", operation,
+                                 count, path, elapsedUs, status.ToString()));
 }
 }  // namespace
 
@@ -205,7 +214,8 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
 
     CreateRspPb rsp;
     PerfPoint partPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
-    RETURN_IF_NOT_OK(RetryOnError(
+    Timer rpcTimer;
+    auto status = RetryOnError(
         requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
@@ -216,7 +226,10 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
             return stub_->Create(opts, req, rsp);
         },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_));
+        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
+                           static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    RETURN_IF_NOT_OK(status);
     INJECT_POINT("ClientWorkerApi.Create.MockTimeout");
     partPoint.Record();
 
@@ -397,13 +410,14 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                 hostPort_.ToString());
             Timer timer;
             getStatus = stub_->Get(opts, req, rsp, payloads);
-            auto elapsed = timer.ElapsedMilliSecond();
-            const int logLimitMs = 2;
-            const int vlogLevel = (elapsed > logLimitMs || getStatus.IsError()) ? 0 : 1;
-            VLOG(vlogLevel) << AppendSrcDstForLog(
-                FormatString("Finished to get object key from worker, rpc timeout: %d, elapsed: %.3fms", realRpcTimeout,
-                             elapsed),
-                "", hostPort_.ToString());
+            const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+            PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || getStatus.IsError(), 1,
+                            AppendSrcDstForLog(
+                                FormatString("[Client/WorkerRpc] Get done, rpc timeout: %d, path: %s, costUs: %zu, "
+                                             "rc: %s",
+                                             realRpcTimeout, req.has_urma_info() ? "UB" : "TCP", elapsedUs,
+                                             getStatus.ToString()),
+                                "", hostPort_.ToString()));
 
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
@@ -454,7 +468,8 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     PublishRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
     bool isRetry = false;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+    Timer rpcTimer;
+    auto status =
         RetryOnError(
             requestTimeoutMs_,
             [this, &req, &rsp, &payloads, &isRetry](int32_t realRpcTimeout) {
@@ -474,8 +489,10 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                 isRetry = true;
                 return s;
             },
-            []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_),
-        "Send Publish request error");
+            []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    const auto *path = isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP");
+    LogClientWorkerRpcDone("Publish", 1, path, static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send Publish request error");
 
     if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
@@ -1114,6 +1131,7 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_tenantid(tenantId);
     GetObjMetaInfoRspPb rsp;
+    Timer rpcTimer;
     auto status = RetryOnError(
         requestTimeoutMs_,
         [this, &req, &rsp, tenantId](int32_t realRpcTimeout) {
@@ -1126,6 +1144,8 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
             return stub_->GetObjMetaInfo(opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    LogClientWorkerRpcDone("GetObjMetaInfo", objectKeys.size(), "UB",
+                           static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send GetObjMetaInfo failed.");
     // fill outpara
     LOG(INFO) << "Finish GetObjMetaInfo success.";
@@ -1180,6 +1200,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token to ExistReqPb.");
     ExistRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_EXIST);
+    Timer rpcTimer;
     auto status = RetryOnError(
         requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
@@ -1191,6 +1212,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
             return stub_->Exist(opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    LogClientWorkerRpcDone("Exist", keys.size(), "RPC", static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     if (status.IsError()) {
         LOG(ERROR) << "Exist resp error, msg:" << status.ToString();
         return status;

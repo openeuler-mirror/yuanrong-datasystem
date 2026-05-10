@@ -29,11 +29,9 @@
 namespace datasystem {
 class LogMessageImpl;
 
-bool ShouldCreateLogMessage(LogSeverity logSeverity);
-
 class LogMessage {
 public:
-    LogMessage(LogSeverity logSeverity, const char *file, int line);
+    LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog = false);
 
     /**
      * @brief Return the output stream for log content.

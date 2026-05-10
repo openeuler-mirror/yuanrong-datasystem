@@ -36,6 +36,8 @@ DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 
 namespace datasystem {
 namespace object_cache {
+static constexpr uint64_t CREATE_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
@@ -74,12 +76,12 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
     posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
     point.Record();
-    auto totalMs = timer.ElapsedMilliSecond();
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Create", totalMs);
     INJECT_POINT("worker.Create.end");
-    auto vlogLevel = (totalMs > 1 || rc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("Create done, cost: %.1fms, %s",
-        totalMs, workerOperationTimeCost.GetInfo());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= CREATE_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
+                    FormatString("Create done, cost: %.3fms, %s", totalMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

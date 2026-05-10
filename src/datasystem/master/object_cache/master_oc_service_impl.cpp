@@ -42,6 +42,9 @@ namespace datasystem {
 namespace master {
 static constexpr int ASYNC_MIN_THREAD_NUM = 1;
 static constexpr int ASYNC_MAX_THREAD_NUM = 4;
+static constexpr uint64_t GET_MASTER_QUERY_META_SLOW_US = 2000;
+static constexpr uint64_t SET_MASTER_LOCAL_SLOW_US = 1000;
+static constexpr double US_PER_MS = 1000.0;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                                          std::shared_ptr<AkSkManager> akSkManager, ReplicaManager *replicaManager,
@@ -111,7 +114,6 @@ Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNes
 
 Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRspPb &rsp)
 {
-    constexpr uint64_t logMinTimeMs = 1;
     INJECT_POINT("master.CreateMeta.begin");
     masterOperationTimeCost.Clear();
     Timer timer;
@@ -136,11 +138,11 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
         INJECT_POINT("MasterOCServiceImpl.CreateMeta.idempotence");
     }
     point.Record();
-    auto totalMs = timer.ElapsedMilliSecond();
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     masterOperationTimeCost.Append("Total CreateMeta", totalMs);
-    auto vlogLevel = (totalMs > logMinTimeMs || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("CreateMeta done, cost: %.1fms, %s",
-        totalMs, masterOperationTimeCost.GetInfo());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= SET_MASTER_LOCAL_SLOW_US || status.IsError(), 1,
+                    FormatString("CreateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
     return status;
 }
 
@@ -276,12 +278,12 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     Status status;
     // Call MetadataManager to query object meta.
     status = ocMetadataManager->QueryMeta(req, rsp, payloads);
-    auto totalMs = timer.ElapsedMilliSecond();
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     masterOperationTimeCost.Append("Total QueryMeta", totalMs);
-    auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString(
-        "QueryMeta done, target num %d, success num %d, cost: %.1fms, %s",
-        req.ids().size(), rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= GET_MASTER_QUERY_META_SLOW_US || status.IsError(), 1,
+                    FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
+                                 rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo()));
     return Status::OK();
 }
 
@@ -365,8 +367,11 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     }
     VLOG(1) << FormatString("Master %s UpdateMeta rsp: %s", GetLocalAddr().ToString(), LogHelper::IgnoreSensitive(rsp));
     INJECT_POINT("master.update_meta_failure");
-    masterOperationTimeCost.Append("Total UpdateMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master UpdateMeta %s", masterOperationTimeCost.GetInfo());
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
+    masterOperationTimeCost.Append("Total UpdateMeta", totalMs);
+    PLOG_IF_OR_VLOG(INFO, totalUs >= SET_MASTER_LOCAL_SLOW_US || status.IsError(), 1,
+                    FormatString("UpdateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
     return status;
 }
 
