@@ -15,7 +15,21 @@
  */
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
 
+namespace {
+static bool ValidateZmqClientIoThread(const char *flagname, int32_t value)
+{
+    (void)flagname;
+    const int32_t minValue = 1;
+    const int32_t maxValue = 32;
+    if ((value < minValue) || (value > maxValue)) {
+        LOG(ERROR) << "The client io thread number must be between " << minValue << " and " << maxValue << ".";
+        return false;
+    }
+    return true;
+}
+}  // namespace
 // In the co-process scenario of client and worker, the following flags variables are redefined in both libdatasystem.so
 // and libdatasystem_worker.so, which will cause a double free error. These libraries need to be packaged as static
 // libraries to avoid this issue.
@@ -93,6 +107,10 @@ DS_DEFINE_int32(io_thread_nice, -15,
 DS_DEFINE_int32(zmq_client_io_context, 5,
                 "Optimize the performance of the client stub. Default value 5. "
                 "The higher the throughput, the higher the value, but should be in range [1, 32]");
+DS_DEFINE_int32(zmq_client_io_thread, 1,
+                "Optimize the performance of the client stub. Default value 1. "
+                "The higher the throughput, the higher the value, but should be in range [1, 32]");
+DS_DEFINE_validator(zmq_client_io_thread, &ValidateZmqClientIoThread);
 DS_DEFINE_int32(zmq_chunk_sz, 1048576, "Parallel payload split chunk size. Default to 1048756 bytes");
 DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and will be removed in future releases.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
