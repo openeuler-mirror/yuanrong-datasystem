@@ -33,6 +33,7 @@
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
@@ -316,6 +317,10 @@ void Logging::InitClientAdvancedConfig()
 
     if (FLAGS_log_rate_limit == 0) {
         FLAGS_log_rate_limit = GetInt32FromEnv(LOG_RATE_LIMIT_ENV.c_str(), 0);
+    }
+
+    if (FLAGS_zmq_client_io_thread == 1) {
+        FLAGS_zmq_client_io_thread = GetInt32FromEnv("DATASYSTEM_ZMQ_CLIENT_IO_THREAD", 1);
     }
 
     if (FLAGS_log_only_write_info_file == DEFAULT_LOG_ONLY_WRITE_INFO_FILE) {

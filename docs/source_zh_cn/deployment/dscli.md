@@ -726,6 +726,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | oc_thread_num | int | `32` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | zmq_server_io_context | int | `5` | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_client_io_context | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
+| zmq_client_io_thread | int | `1` | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | io_thread_nice | int | `-15` | 指定部分 IO 线程的 nice 值，并通过 `setpriority` 生效，取值范围：[-20, 19]。值越小表示调度优先级越高，设置负值通常需要额外权限 |
 | zmq_chunk_sz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
 | max_rpc_session_num | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
