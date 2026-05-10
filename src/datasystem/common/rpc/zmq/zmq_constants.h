@@ -62,6 +62,7 @@ inline constexpr const char *TICK_SERVER_SEND = "SERVER_SEND";
 // ==================== RPC Tracing Helpers (always enabled) ====================
 inline constexpr uint64_t kNsPerUs = 1000ULL;
 inline constexpr uint64_t kRpcFrameworkSlowLogThresholdNs = 3ULL * 1000ULL * 1000ULL;
+inline constexpr uint64_t kRpcCheckLatencyThresholdNs = 2ULL * 1000ULL * 1000ULL;
 
 // Convert nanoseconds to microseconds for metrics reporting
 inline uint64_t NsToUs(uint64_t ns)
@@ -80,6 +81,90 @@ inline uint64_t GetTimeSinceEpoch()
     return std::chrono::high_resolution_clock::now().time_since_epoch().count();
 }
 
+inline void CheckRpcLatencyAfterClientSend(const MetaPb &meta)
+{
+    uint64_t clientStartTs = 0;
+    uint64_t clientSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_CLIENT_START) {
+            clientStartTs = tick.ts();
+        } else if (tick.tick_name() == TICK_CLIENT_SEND) {
+            clientSendTs = tick.ts();
+        }
+    }
+    uint64_t reqFrameworkNs = (clientSendTs > clientStartTs) ? (clientSendTs - clientStartTs) : 0;
+    if (reqFrameworkNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_SEND trace_id=" << meta.trace_id()
+                  << " client_req_framework_us=" << NsToUs(reqFrameworkNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterServerExecStart(const MetaPb &meta)
+{
+    uint64_t serverRecvTs = 0;
+    uint64_t serverExecStartTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_RECV) {
+            serverRecvTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
+        }
+    }
+    uint64_t reqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    if (reqQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_EXEC_START trace_id=" << meta.trace_id()
+                  << " server_req_queue_us=" << NsToUs(reqQueueNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterServerSend(const MetaPb &meta)
+{
+    uint64_t serverExecEndTs = 0;
+    uint64_t serverSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_EXEC_END) {
+            serverExecEndTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_SEND) {
+            serverSendTs = tick.ts();
+        }
+    }
+    uint64_t rspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    if (rspQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_SEND trace_id=" << meta.trace_id()
+                  << " server_rsp_queue_us=" << NsToUs(rspQueueNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterClientRecv(const MetaPb &meta)
+{
+    uint64_t serverRecvTs = 0;
+    uint64_t serverExecStartTs = 0;
+    uint64_t serverExecEndTs = 0;
+    uint64_t serverSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_RECV) {
+            serverRecvTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_END) {
+            serverExecEndTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_SEND) {
+            serverSendTs = tick.ts();
+        }
+    }
+    uint64_t serverReqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    uint64_t serverRspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    if (serverReqQueueNs > kRpcCheckLatencyThresholdNs || serverRspQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_RECV trace_id=" << meta.trace_id()
+                  << " server_req_queue_us=" << NsToUs(serverReqQueueNs)
+                  << " server_rsp_queue_us=" << NsToUs(serverRspQueueNs);
+    }
+}
+
 inline uint64_t RecordTick(MetaPb &meta, const char *tickName)
 {
     auto ts = GetTimeSinceEpoch();
@@ -87,6 +172,18 @@ inline uint64_t RecordTick(MetaPb &meta, const char *tickName)
     tick.set_ts(ts);
     tick.set_tick_name(tickName);
     meta.mutable_latency_ticks()->Add(std::move(tick));
+    // Pointer comparison is safe: all tick name constants are inline constexpr with unique addresses under C++17 ODR.
+    // The only risk is a future caller passing a raw string literal instead of the named constant, which would
+    // silently skip the check.
+    if (tickName == TICK_CLIENT_SEND) {
+        CheckRpcLatencyAfterClientSend(meta);
+    } else if (tickName == TICK_SERVER_EXEC_START) {
+        CheckRpcLatencyAfterServerExecStart(meta);
+    } else if (tickName == TICK_SERVER_SEND) {
+        CheckRpcLatencyAfterServerSend(meta);
+    } else if (tickName == TICK_CLIENT_RECV) {
+        CheckRpcLatencyAfterClientRecv(meta);
+    }
     return ts;
 }
 
