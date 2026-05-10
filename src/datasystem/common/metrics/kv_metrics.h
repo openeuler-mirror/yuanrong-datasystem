@@ -92,6 +92,7 @@ enum class KvMetricId : uint16_t {
     // URMA
     URMA_IMPORT_JFR,
     URMA_INFLIGHT_WR_COUNT,
+    URMA_NANOSLEEP_LATENCY,
     /** Other worker's pull: GetObject* service path */
     WORKER_RPC_REMOTE_GET_INBOUND_LATENCY,
     /** MsgQ: submit -> thread start */
