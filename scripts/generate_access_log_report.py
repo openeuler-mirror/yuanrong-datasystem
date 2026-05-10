@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """KVCache Access Log Analysis - Generate interactive HTML report.
 
-Reads KVCache access logs (client or worker), computes per-hour per-API statistics,
+Reads KVCache access logs (client or worker), computes per-interval per-API statistics,
 and generates a self-contained HTML file with ECharts interactive charts.
 
 Usage:
@@ -18,18 +18,18 @@ Arguments:
     --until             End time (exclusive), format: YYYY-MM-DDTHH:MM:SS
     -o / --output       Output HTML file path (default: kvcache_log_analysis.html)
     --log-pattern       Filename substring to match (default: access)
+    --interval          Time bin in milliseconds (default: 3600000). 1000=1s, 60000=1min, 3600000=1h
     --open              Open report in browser after generation
 
 Report Sections:
     Summary Cards       Total requests, peak QPS, errors, success rate
-    QPS Trend           Per-hour QPS per API (count / actual time span)
-    Latency Trends      Avg / P90 / P99 / P99.99 / Max per API per hour
-    Error Count         Per-hour error count per API (bar chart)
+    QPS Trend           Per-interval QPS per API (count / actual time span)
+    Latency Trends      Avg / P90 / P99 / P99.99 / Max per API per interval
+    Error Count         Per-interval error count per API (bar chart)
     Error Distribution  Error code distribution (pie chart)
     Latency Distribution Per-API latency distribution (grouped bar chart)
     Overall Summary     Per-API aggregate stats table
-    Latency Distribution Detail  Per-hour per-API detail table
-    Hourly Detail       Per-hour per-API detail with QPS and success rate
+    Detail Table        Per-interval per-API detail with QPS and success rate
 """
 
 import argparse
@@ -43,6 +43,31 @@ import sys
 import textwrap
 from collections import defaultdict
 from datetime import datetime
+
+
+def _time_bin_ms(ts, interval_ms=3600000):
+    """Round timestamp to time bin (millisecond precision).
+
+    Args:
+        ts: datetime object
+        interval_ms: bin size in milliseconds (e.g. 1000=1s, 10000=10s, 60000=1min, 3600000=1h)
+    """
+    day_ms = ts.hour * 3600000 + ts.minute * 60000 + ts.second * 1000 + ts.microsecond // 1000
+    bin_ms = (day_ms // interval_ms) * interval_ms
+    return ts.replace(hour=bin_ms // 3600000,
+                      minute=(bin_ms % 3600000) // 60000,
+                      second=(bin_ms % 60000) // 1000,
+                      microsecond=(bin_ms % 1000) * 1000)
+
+
+def _bin_label(bin_ts, interval_ms):
+    """Format bin timestamp as label string based on granularity."""
+    if interval_ms < 1000:
+        return bin_ts.strftime("%Y-%m-%dT%H:%M:%S.") + f"{bin_ts.microsecond // 1000:03d}"
+    elif interval_ms < 60000:
+        return bin_ts.strftime("%Y-%m-%dT%H:%M:%S")
+    else:
+        return bin_ts.strftime("%Y-%m-%dT%H:%M")
 
 
 def _find_log_files(log_dir, pattern="access"):
@@ -63,13 +88,13 @@ def _find_log_files(log_dir, pattern="access"):
     return log_files
 
 
-def parse_records(log_files, since_str, until_str=None):
+def parse_records(log_files, since_str, until_str=None, interval_ms=3600000):
     """Parse access log files and return records with timestamps."""
     since = since_str[:19]
     until = until_str[:19] if until_str else None
     records = []
-    hour_min_sec = defaultdict(lambda: float("inf"))
-    hour_max_sec = defaultdict(lambda: 0.0)
+    bin_min_sec = defaultdict(lambda: float("inf"))
+    bin_max_sec = defaultdict(lambda: 0.0)
     skipped = 0
 
     for host, files in log_files.items():
@@ -98,37 +123,39 @@ def parse_records(log_files, since_str, until_str=None):
                         skipped += 1
                         continue
 
-                    hour_str = ts_str[:13]
                     try:
-                        ts_sec = datetime.strptime(ts_short, "%Y-%m-%dT%H:%M:%S").timestamp()
+                        ts = datetime.strptime(ts_short, "%Y-%m-%dT%H:%M:%S")
                     except ValueError:
                         skipped += 1
                         continue
 
-                    records.append((hour_str, api, retcode, latency, data_size))
-                    hour_min_sec[hour_str] = min(hour_min_sec[hour_str], ts_sec)
-                    hour_max_sec[hour_str] = max(hour_max_sec[hour_str], ts_sec)
+                    bin_ts = _time_bin_ms(ts, interval_ms)
+                    bin_key = _bin_label(bin_ts, interval_ms)
+                    records.append((bin_key, api, retcode, latency, data_size))
+                    ts_sec = ts.timestamp()
+                    bin_min_sec[bin_key] = min(bin_min_sec[bin_key], ts_sec)
+                    bin_max_sec[bin_key] = max(bin_max_sec[bin_key], ts_sec)
 
     if skipped:
         print(f"Skipped {skipped} malformed lines")
 
-    hour_span_sec = {}
-    for h in hour_min_sec:
-        span = hour_max_sec[h] - hour_min_sec[h]
-        hour_span_sec[h] = max(span, 1.0)
+    bin_span_sec = {}
+    for b in bin_min_sec:
+        span = bin_max_sec[b] - bin_min_sec[b]
+        bin_span_sec[b] = max(span, 1.0)
 
-    return records, hour_span_sec
+    return records, bin_span_sec
 
 
-def compute_stats(records, hour_span_sec):
-    """Compute per-hour per-API statistics."""
+def compute_stats(records, bin_span_sec):
+    """Compute per-interval per-API statistics."""
     groups = defaultdict(list)
-    for hour_str, api, retcode, latency, data_size in records:
-        groups[(hour_str, api)].append((retcode, latency, data_size))
+    for bin_key, api, retcode, latency, data_size in records:
+        groups[(bin_key, api)].append((retcode, latency, data_size))
 
-    hours = sorted(set(h for h, _ in groups.keys()))
+    bins = sorted(set(h for h, _ in groups.keys()))
     apis = sorted(set(a for _, a in groups.keys()))
-    hour_labels = [h.replace("T", " ") + ":00" for h in hours]
+    bin_labels = [h.replace("T", " ") for h in bins]
 
     def _percentile(sorted_vals, pct):
         n = len(sorted_vals)
@@ -144,10 +171,10 @@ def compute_stats(records, hour_span_sec):
     err_data = {api: [] for api in apis}
 
     table_rows = []
-    for hour in hours:
-        span = hour_span_sec.get(hour, 3600.0)
+    for bin_key in bins:
+        span = bin_span_sec.get(bin_key, 3600.0)
         for api in apis:
-            items = groups.get((hour, api), [])
+            items = groups.get((bin_key, api), [])
             n = len(items)
             if n == 0:
                 for d in [qps_data, avg_data, p90_data, p99_data, p9999_data, min_data, max_data, err_data]:
@@ -177,7 +204,7 @@ def compute_stats(records, hour_span_sec):
             err_data[api].append(errors)
 
             table_rows.append({
-                "hour": hour.replace("T", " ") + ":00",
+                "bin": bin_key.replace("T", " "),
                 "api": api,
                 "count": n,
                 "qps": qps,
@@ -192,7 +219,7 @@ def compute_stats(records, hour_span_sec):
             })
 
     return {
-        "hours": hours, "apis": apis, "hour_labels": hour_labels,
+        "bins": bins, "apis": apis, "bin_labels": bin_labels,
         "qps_data": qps_data, "avg_data": avg_data,
         "p90_data": p90_data, "p99_data": p99_data, "p9999_data": p9999_data,
         "min_data": min_data, "max_data": max_data, "err_data": err_data,
@@ -294,18 +321,34 @@ def _make_series(api, data_map, chart_type="line"):
     }
 
 
-def generate_html(stats, overall, host_count, output_path, since_str, until_str):
-    """Generate self-contained HTML report with ECharts."""
-    hours = stats["hours"]
-    apis = stats["apis"]
-    hour_labels = stats["hour_labels"]
+def _format_interval(interval_ms):
+    """Format interval_ms as human-readable string."""
+    if interval_ms < 1000:
+        return f"{interval_ms}ms"
+    elif interval_ms < 60000:
+        s = interval_ms / 1000
+        return f"{s:g}s" if s != int(s) else f"{int(s)}s"
+    elif interval_ms < 3600000:
+        m = interval_ms / 60000
+        return f"{m:g}min" if m != int(m) else f"{int(m)}min"
+    else:
+        h = interval_ms / 3600000
+        return f"{h:g}h" if h != int(h) else f"{int(h)}h"
 
-    if not hour_labels:
+
+def generate_html(stats, overall, host_count, output_path, since_str, until_str, interval_ms=3600000):
+    """Generate self-contained HTML report with ECharts."""
+    bins = stats["bins"]
+    apis = stats["apis"]
+    bin_labels = stats["bin_labels"]
+    interval_str = _format_interval(interval_ms)
+
+    if not bin_labels:
         print("No data to report")
         sys.exit(1)
 
     # Pre-compute JSON for charts
-    hour_labels_json = json.dumps(hour_labels)
+    bin_labels_json = json.dumps(bin_labels)
     qps_series = json.dumps([_make_series(a, stats["qps_data"]) for a in apis])
     avg_series = json.dumps([_make_series(a, stats["avg_data"]) for a in apis])
     p90_series = json.dumps([_make_series(a, stats["p90_data"]) for a in apis])
@@ -343,7 +386,7 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
             return 0, "N/A"
         peak = max(non_none)
         idx = [i for i, v in enumerate(vals) if v == peak][0]
-        return peak, hour_labels[idx]
+        return peak, bin_labels[idx]
 
     peak_exist, peak_exist_hour = _peak_qps("DS_KV_CLIENT_EXIST")
     peak_get, peak_get_hour = _peak_qps("DS_KV_CLIENT_GET")
@@ -369,12 +412,12 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
         return "".join(parts)
 
     def _build_detail_table(rows):
-        parts = ['<table>\n<tr><th>Hour</th><th>API</th><th class="num">Count</th><th class="num">QPS</th>',
+        parts = ['<table>\n<tr><th>Time</th><th>API</th><th class="num">Count</th><th class="num">QPS</th>',
                  '<th class="num">Avg (ms)</th><th class="num">P90 (ms)</th><th class="num">P99 (ms)</th><th class="num">P99.99 (ms)</th>',
                  '<th class="num">Min (ms)</th><th class="num">Max (ms)</th>',
                  '<th class="num">Errors</th><th class="num">Success Rate</th></tr>\n']
         for r in rows:
-            parts.append(f'<tr><td>{html.escape(r["hour"])}</td>')
+            parts.append(f'<tr><td>{html.escape(r["bin"])}</td>')
             parts.append(f'<td>{html.escape(r["api"].replace("DS_KV_CLIENT_", ""))}</td>')
             parts.append(f'<td class="num">{r["count"]:,}</td><td class="num">{r["qps"]}</td>')
             parts.append(f'<td class="num">{r["avg"]}</td><td class="num">{r["p90"]}</td>')
@@ -390,7 +433,7 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
     detail_html = _build_detail_table(stats["table_rows"])
 
     # Build report
-    time_range = f"{hour_labels[0]} ~ {hour_labels[-1]}"
+    time_range = f"{bin_labels[0]} ~ {bin_labels[-1]}"
     total_records = sum(d["count"] for d in overall["total_by_api"].values())
 
     report_html = f"""<!DOCTYPE html>
@@ -448,7 +491,7 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
   <div class="card">
     <div class="label">Total Requests</div>
     <div class="value">{total_records:,}</div>
-    <div class="sub">{len(hours)} hours covered</div>
+    <div class="sub">{len(bins)} intervals covered ({interval_str})</div>
   </div>
   <div class="card">
     <div class="label">Peak QPS (EXIST)</div>
@@ -470,7 +513,7 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
 <!-- QPS Trend -->
 <div class="chart-grid">
   <div class="chart-box full">
-    <h3>QPS Trend (per hour)<span class="note"> &mdash; QPS = count / actual time span within each hour</span></h3>
+    <h3>QPS Trend (per {interval_str})<span class="note"> &mdash; QPS = count / actual time span within each interval</span></h3>
     <div id="chart-qps" class="chart-container"></div>
   </div>
 </div>
@@ -498,7 +541,7 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
     <div id="chart-max" class="chart-container"></div>
   </div>
   <div class="chart-box">
-    <h3>Error Count (per hour)</h3>
+    <h3>Error Count (per {interval_str})</h3>
     <div id="chart-errors" class="chart-container"></div>
   </div>
 </div>
@@ -525,8 +568,8 @@ def generate_html(stats, overall, host_count, output_path, since_str, until_str)
   {summary_html}
 </div>
 
-<!-- Hourly Detail Table -->
-<div class="section-title">Hourly Detail Table</div>
+<!-- Detail Table -->
+<div class="section-title">Detail Table</div>
 <div class="table-wrap">
   {detail_html}
 </div>
@@ -538,7 +581,7 @@ var baseOpt = {{
   tooltip: {{ trigger: 'axis', confine: true }},
   legend: {{ top: 0, textStyle: {{ fontSize: 12 }} }},
   grid: {{ top: 50, left: 60, right: 30, bottom: 40 }},
-  xAxis: {{ type: 'category', data: {hour_labels_json}, axisLabel: {{ rotate: 30, fontSize: 11 }} }},
+  xAxis: {{ type: 'category', data: {bin_labels_json}, axisLabel: {{ rotate: 30, fontSize: 11 }} }},
   yAxis: {{ type: 'value', axisLabel: {{ fontSize: 11 }} }},
 }};
 
@@ -641,7 +684,7 @@ def main():
 
               python3 generate_access_log_report.py /data/client_logs \\
                   --since "2026-05-05T22:30:00" --until "2026-05-06T08:00:00" \\
-                  -o report.html --open
+                  --interval 60000 -o report.html --open
 
               # WSL: output to Windows drive and open in Edge
               python3 generate_access_log_report.py /data/client_logs \\
@@ -650,17 +693,18 @@ def main():
 
             report sections:
               Summary Cards           Total requests, peak QPS, errors
-              QPS Trend               Per-hour QPS per API
+              QPS Trend               Per-interval QPS per API
               Latency Trends          Avg / P90 / P99 / P99.99 / Max
-              Error Count             Per-hour error count (bar chart)
+              Error Count             Per-interval error count (bar chart)
               Error Distribution      Error code pie chart
               Latency Distribution    Per-API latency grouped bars
               Overall Summary         Per-API aggregate stats table
-              Hourly Detail           Per-hour per-API detail table
+              Detail Table            Per-interval per-API detail table
 
             notes:
               - ECharts is loaded from CDN (jsdelivr.net); report needs internet.
-              - QPS = count / actual time span within each hour (handles partial hours).
+              - QPS = count / actual time span within each interval (handles partial intervals).
+              - Interval guidance: < 3h -> --interval 60000 (1min), < 12h -> --interval 600000 (10min), > 12h -> default 3600000 (1h).
         """),
     )
     parser.add_argument(
@@ -684,6 +728,11 @@ def main():
         help="filename substring to match log files (default: access)",
     )
     parser.add_argument(
+        "--interval", type=int, default=3600000,
+        help="time bin in milliseconds (default: 3600000 = 1h). "
+             "1000=1s, 10000=10s, 60000=1min, 600000=10min, 3600000=1h",
+    )
+    parser.add_argument(
         "--open", action="store_true",
         help="open report in browser after generation (WSL: opens Edge via file:///)",
     )
@@ -699,7 +748,7 @@ def main():
     print(f"Found {total_files} files across {len(log_files)} hosts")
 
     print("Parsing logs...")
-    records, hour_span_sec = parse_records(log_files, args.since, args.until)
+    records, bin_span_sec = parse_records(log_files, args.since, args.until, args.interval)
     print(f"Parsed {len(records)} records")
 
     if not records:
@@ -707,11 +756,11 @@ def main():
         sys.exit(1)
 
     print("Computing statistics...")
-    stats = compute_stats(records, hour_span_sec)
+    stats = compute_stats(records, bin_span_sec)
     overall = compute_overall(records)
 
     print("Generating HTML report...")
-    generate_html(stats, overall, len(log_files), args.output, args.since, args.until)
+    generate_html(stats, overall, len(log_files), args.output, args.since, args.until, args.interval)
 
     if args.open:
         output_path = os.path.abspath(args.output)
