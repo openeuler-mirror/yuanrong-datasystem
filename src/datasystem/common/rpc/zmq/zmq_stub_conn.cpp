@@ -928,7 +928,7 @@ void ZmqStubConnMgr::AfterFork()
 ZmqStubConnMgrImpl::ZmqStubConnMgrImpl()
     : interrupt_(false),
       initialize_(false),
-      ctx_(std::make_shared<ZmqContext>()),
+      ctx_(std::make_shared<ZmqContext>(FLAGS_zmq_client_io_thread)),
       stubId_(0),
       nextMgrId_(0),
       nextPollerId_(0),

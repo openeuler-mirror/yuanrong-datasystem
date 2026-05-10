@@ -467,6 +467,10 @@
         "value": "5",
         "description": "Optimize the performance of a client stub. Default value 5. The higher the throughput, the higher the value, but should be in range [1, 32]."
     },
+    "zmq_client_io_thread": {
+        "value": "1",
+        "description": "Optimize the performance of the client stub io thread. Default value 1. The higher the throughput, the higher the value, but should be in range [1, 32]."
+    },
     "io_thread_nice": {
         "value": "-15",
         "description": "Nice value applied to selected IO threads with setpriority. Valid range is [-20, 19]. Lower values mean higher scheduling priority."

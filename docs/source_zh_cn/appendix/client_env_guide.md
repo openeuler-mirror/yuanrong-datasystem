@@ -9,6 +9,7 @@
 | 2 | `DATASYSTEM_HOST` | `""` | 设置数据系统Client SDK连接的worker IP地址。如果SDK中没有配置,则读取该环境变量获取host值。 |
 | 3 | `DATASYSTEM_PORT` | `""` | 设置数据系统Client SDK连接的worker端口。如果SDK中没有配置,则读取该环境变量获取port值。 |
 | 4 | `DATASYSTEM_CONNECT_TIME_MS` | `60000` | 设置与worker建立连接超时的时间(毫秒)。如果超出该时间还未成功连接,则返回超时异常。如果SDK中没有配置,则读取该环境变量获取值,环境变量读取不到则赋值为60000。 |
+| 27 | `DATASYSTEM_ZMQ_CLIENT_IO_THREAD` | `1` | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32]。通过该环境变量可调整客户端ZMQ上下文的IO线程数。 |
 
 ## 安全认证配置
 
