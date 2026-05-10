@@ -360,7 +360,7 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
-    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
+    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
 }
 
 Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker)
