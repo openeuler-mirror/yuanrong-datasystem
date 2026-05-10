@@ -17,6 +17,7 @@
 #include "datasystem/common/metrics/metrics.h"
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -57,6 +58,7 @@ struct alignas(64) MetricSlot {
     std::atomic<uint64_t> sum{ 0 };
     std::atomic<uint64_t> max{ 0 };
     std::atomic<uint64_t> periodMax{ 0 };
+    HistBuckets histBuckets{};
     std::mutex histMutex;
     bool used = false;
 };
@@ -66,6 +68,7 @@ struct LastSnapshot {
     uint64_t u64Value = 0;
     int64_t i64Value = 0;
     uint64_t sum = 0;
+    HistBuckets histBuckets{};
 };
 
 std::array<MetricSlot, MAX_METRIC_NUM> g_slots;
@@ -89,6 +92,7 @@ void ClearAll()
         slot.sum.store(0, std::memory_order_relaxed);
         slot.max.store(0, std::memory_order_relaxed);
         slot.periodMax.store(0, std::memory_order_relaxed);
+        slot.histBuckets = {};
         slot.used = false;
     }
     for (auto &last : g_last) {
@@ -126,6 +130,65 @@ std::string RenderJsonSummary(
        << ",\"part_count\":" << partCount << ",\"metrics\":[" << body << "]}";
     return os.str();
 }
+}  // namespace
+
+namespace {
+constexpr uint64_t K_PERCENTILE_SMALL_SAMPLE_MAX_COUNT = 10;
+}  // namespace
+
+uint64_t PercentileFromBuckets(const HistBuckets &buckets, uint64_t count, uint32_t percentile,
+    uint64_t overflowMax)
+{
+    if (count == 0) {
+        return 0;
+    }
+    const auto clampToObservedMax = [overflowMax](uint64_t v) -> uint64_t {
+        return (overflowMax > 0 && v > overflowMax) ? overflowMax : v;
+    };
+    uint64_t target = (count * percentile + 99) / 100;
+    uint64_t seen = 0;
+    for (size_t i = 0; i < buckets.size(); ++i) {
+        uint64_t prevSeen = seen;
+        seen += buckets[i];
+        if (seen >= target) {
+            // If target lands in the last bucket, return the actual overflow max
+            // (not the bucket upper bound, which is just an upper estimate).
+            // This correctly handles sparse data where the actual max is known.
+            if (i == buckets.size() - 1 && overflowMax > 0) {
+                return overflowMax;
+            }
+            // Small count: histogram approximation is unreliable, return actual max
+            if (count <= K_PERCENTILE_SMALL_SAMPLE_MAX_COUNT) {
+                return overflowMax > 0 ? overflowMax : HIST_BUCKET_UPPER.back();
+            }
+            uint64_t lower = (i == 0) ? 0 : HIST_BUCKET_UPPER[i - 1];
+            uint64_t upper = HIST_BUCKET_UPPER[i];
+            uint64_t bucketCount = buckets[i];
+            if (bucketCount == 0) {
+                return clampToObservedMax(upper);
+            }
+            uint64_t positionInBucket = target - prevSeen;
+            uint64_t bucketWidth = upper - lower;
+            if (bucketWidth == 0) {
+                return clampToObservedMax(lower);
+            }
+            uint64_t interpolated =
+                lower + (positionInBucket * bucketWidth + bucketCount - 1) / bucketCount;
+            return clampToObservedMax(interpolated);
+        }
+    }
+    return overflowMax > 0 ? overflowMax : HIST_BUCKET_UPPER.back();
+}
+
+namespace {
+inline HistBuckets DeltaBuckets(const HistBuckets &curr, const HistBuckets &last)
+{
+    HistBuckets delta{};
+    for (size_t i = 0; i < HIST_BUCKET_NUM; ++i) {
+        delta[i] = (curr[i] >= last[i]) ? (curr[i] - last[i]) : curr[i];
+    }
+    return delta;
+}
 
 std::vector<std::string> BuildSummary(int intervalMs)
 {
@@ -156,22 +219,48 @@ std::vector<std::string> BuildSummary(int intervalMs)
             }
             last.i64Value = value;
         } else {
-            std::lock_guard<std::mutex> histLock(slot.histMutex);
-            auto count = slot.u64Value.load(std::memory_order_relaxed);
-            auto sum = slot.sum.load(std::memory_order_relaxed);
-            auto max = slot.max.load(std::memory_order_relaxed);
-            auto dCount = count - last.u64Value;
-            auto dSum = sum - last.sum;
-            auto dMax = slot.periodMax.exchange(0, std::memory_order_relaxed);
+            uint64_t count = 0;
+            uint64_t sum = 0;
+            uint64_t max = 0;
+            uint64_t dCount = 0;
+            uint64_t dSum = 0;
+            uint64_t dMax = 0;
+            HistBuckets currBuckets{};
+            HistBuckets lastBuckets{};
+            {
+                std::lock_guard<std::mutex> histLock(slot.histMutex);
+                count = slot.u64Value.load(std::memory_order_relaxed);
+                sum = slot.sum.load(std::memory_order_relaxed);
+                max = slot.max.load(std::memory_order_relaxed);
+                dCount = count - last.u64Value;
+                dSum = sum - last.sum;
+                dMax = slot.periodMax.exchange(0, std::memory_order_relaxed);
+                currBuckets = slot.histBuckets;
+                lastBuckets = last.histBuckets;
+                last.u64Value = count;
+                last.sum = sum;
+                last.histBuckets = currBuckets;
+            }
+            const HistBuckets deltaHistBuckets = DeltaBuckets(currBuckets, lastBuckets);
+            uint64_t totalP50 = PercentileFromBuckets(currBuckets, count, 50, max);
+            uint64_t totalP90 = PercentileFromBuckets(currBuckets, count, 90, max);
+            uint64_t totalP99 = PercentileFromBuckets(currBuckets, count, 99, max);
+            uint64_t deltaP50 = PercentileFromBuckets(deltaHistBuckets, dCount, 50, dMax);
+            uint64_t deltaP90 = PercentileFromBuckets(deltaHistBuckets, dCount, 90, dMax);
+            uint64_t deltaP99 = PercentileFromBuckets(deltaHistBuckets, dCount, 99, dMax);
             if (count > 0) {
                 needAdd = true;
-                item << "{\"name\":\"" << slot.name << "\",\"total\":"
-                     << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
-                     << ",\"max_us\":" << max << "},\"delta\":{\"count\":" << dCount
-                     << ",\"avg_us\":" << (dCount == 0 ? 0 : dSum / dCount) << ",\"max_us\":" << dMax << "}}";
+                std::ostringstream val;
+                val << "{\"count\":" << count << ",\"avg_us\":" << (count == 0 ? 0 : sum / count)
+                    << ",\"max_us\":" << max << ",\"p50\":" << totalP50 << ",\"p90\":" << totalP90
+                    << ",\"p99\":" << totalP99 << "}";
+                std::ostringstream dval;
+                dval << "{\"count\":" << dCount << ",\"avg_us\":" << (dCount == 0 ? 0 : dSum / dCount)
+                     << ",\"max_us\":" << dMax << ",\"p50\":" << deltaP50 << ",\"p90\":" << deltaP90
+                     << ",\"p99\":" << deltaP99 << "}";
+                item << "{\"name\":\"" << slot.name << "\",\"total\":" << val.str()
+                     << ",\"delta\":" << dval.str() << "}";
             }
-            last.u64Value = count;
-            last.sum = sum;
         }
         if (needAdd) {
             metrics.emplace_back(item.str());
@@ -295,11 +384,13 @@ void Gauge::Dec(int64_t delta) const
 void Histogram::Observe(uint64_t value) const
 {
     if (slot_ != nullptr) {
+        const size_t bucket = BucketIndex(value);
         std::lock_guard<std::mutex> lock(slot_->histMutex);
         slot_->u64Value.fetch_add(1, std::memory_order_relaxed);
         slot_->sum.fetch_add(value, std::memory_order_relaxed);
         UpdateMax(slot_->max, value);
         UpdateMax(slot_->periodMax, value);
+        ++slot_->histBuckets[bucket];
     }
 }
 

@@ -16,6 +16,8 @@ ds_cc_test(
     name = "timeout_duration_test",
     srcs = ["timeout_duration_test.cpp"],
     deps = [
+        # status_helper (via timeout_duration) calls Trace in status.cpp; pull trace.cpp from common_log.
+        "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:timeout_duration",
     ],
 )
