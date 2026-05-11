@@ -360,7 +360,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     if (isClient_) {
         GetInstance()->InitClientConfig();
 
-        clientLogName = logFilename + "_" + std::to_string(getpid());
+        clientLogName = logFilename;
 
         // Allow overriding client log filename via environment variable
         std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");

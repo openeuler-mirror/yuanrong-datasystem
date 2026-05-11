@@ -145,8 +145,7 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
 
     std::vector<std::pair<AccessKeyType, std::string>> typeList;
     if (isClient_) {
-        static auto pid = getpid();
-        std::string clientAccessLogName = CLIENT_ACCESS_LOG_NAME + "_" + std::to_string(pid);
+        std::string clientAccessLogName = CLIENT_ACCESS_LOG_NAME;
 
         // Allow overriding client log filename via environment variable
         std::string accessLogName = GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
