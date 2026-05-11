@@ -132,8 +132,8 @@ worker-to-master metadata RPC. The thresholds use the same `2 ms` budget and lea
 | Segment | Existing carrier | Source path | First threshold | Notes |
 | --- | --- | --- | ---: | --- |
 | client Set/Put total | `[Set] Done ... totalCost` | `object_client_impl.cpp` | `1 ms` | Single-key Set only; fast path stays behind `VLOG(1)`. |
-| client Create RPC | `Finished creating object to worker` and remote `Create` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `1 ms` | Single-key Create only; prints `SHM` or `UB` path when known. |
-| client Publish RPC | `Finished publishing object to worker` and remote `Publish` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `1 ms` | Single-key Publish/Set only. |
+| client Create RPC | `Finished creating object to worker` and remote `Create` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | Single-key Create only; prints `SHM` or `UB` path when known. |
+| client Publish RPC | `Finished publishing object to worker` and remote `Publish` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | Single-key Publish/Set only. |
 | worker create total | `Create done, cost` | `worker_oc_service_create_impl.cpp` | `1 ms` | Object creation should be small; slow create often points to allocation/shared-memory pressure. |
 | publish metadata RPC | `[Set] CreateMeta/UpdateMeta RPC done` | `worker_oc_service_publish_impl.cpp` | `1 ms` | Covers the single-key worker-to-master metadata RPC wrapper. |
 | master CreateMeta local | `CreateMeta done, cost` | `master_oc_service_impl.cpp` | `1 ms` | Single-key CreateMeta only. |
