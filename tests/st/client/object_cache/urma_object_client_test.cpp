@@ -1806,8 +1806,29 @@ TEST_F(UrmaFallbackTest, WorkerWorkerRejectsFallbackPayloadAtOneMb)
     std::string getValue;
     Status status = client2->Get(key, getValue);
     ASSERT_TRUE(status.IsError());
-    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
     ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos);
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWriteRejectsFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWriteError", "1*return()"));
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    const std::string key = "worker-worker-write-one-mb";
+    const std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client1->Set(key, value));
+
+    std::vector<std::string> valuesGet;
+    Status status = client2->Get({ key }, valuesGet);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos) << status.ToString();
 }
 
 TEST_F(UrmaFallbackTest, WorkerWorkerBatchWriteFallback)
@@ -1868,6 +1889,27 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitFallback)
     for (size_t i = 0; i < keys.size(); i++) {
         ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
     }
+}
+
+TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitRejectsFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client1;
+    std::shared_ptr<KVClient> client2;
+    InitTestKVClient(0, client1);
+    InitTestKVClient(1, client2);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.UrmaWaitError", "return()"));
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    const std::string key = "worker-worker-wait-one-mb";
+    const std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client1->Set(key, value));
+
+    std::vector<std::string> valuesGet;
+    Status status = client2->Get({ key }, valuesGet);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("fallback tcp failed"), std::string::npos) << status.ToString();
 }
 
 TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)

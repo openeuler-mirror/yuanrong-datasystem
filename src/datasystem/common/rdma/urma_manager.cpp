@@ -57,7 +57,16 @@ namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
+constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
+constexpr uint32_t URMA_LOG_LIMIT_US = 100;
 constexpr const char *RECV_JETTY_KEY_PREFIX = "recv:";
+constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
+    "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
+    "same time window; if none appear, check URMA and UDMA";
+constexpr const char *URMA_ELAPSED_THREAD_SCHED_SUGGEST = "check OS scheduling overhead";
+constexpr const char *URMA_ELAPSED_POLL_JFC_SUGGEST = "check URMA";
+constexpr const char *URMA_ELAPSED_NOTIFY_SUGGEST = "check OS scheduling overhead";
+constexpr const char *URMA_ERROR_SUGGEST = "check URMA";
 
 enum class UrmaErrorHandlePolicy {
     DEFAULT,  // just report error
@@ -586,9 +595,9 @@ Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const st
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jettyAccessor->second != nullptr, K_RUNTIME_ERROR,
                                          FormatString("[GetTargetSeg] Local Jetty is null for %s", remoteConnectionId));
     *targetJfr = jettyAccessor->second->SharedJfrRaw();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(*targetJfr != nullptr, K_RUNTIME_ERROR,
-                                         FormatString("[GetTargetSeg] Local Jetty shared JFR is null for %s",
-                                                      remoteConnectionId));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        *targetJfr != nullptr, K_RUNTIME_ERROR,
+        FormatString("[GetTargetSeg] Local Jetty shared JFR is null for %s", remoteConnectionId));
     return Status::OK();
 }
 
@@ -761,10 +770,11 @@ Status UrmaManager::CheckAndNotify()
             it = finishedRequests_.erase(it);
         }
     }
-    if (timer.ElapsedMilliSecond() > 1) {
-        LOG(INFO) << "[UrmaEventHandler]: Poll jfc notify elapsed = " << timer.ElapsedMilliSecond() << "ms,"
-                  << ", cpuid: " << sched_getcpu() << ", count: " << count;
-    }
+    auto elapsedMs = timer.ElapsedMilliSecond();
+    LOG_IF(INFO, elapsedMs > URMA_LOG_LIMIT_MS)
+        << "[URMA_ELAPSED_NOTIFY]: urma_poll_jfc thread notify urma_post_jetty_send_wr thread wake up cost "
+        << elapsedMs << "ms, cpuid: " << sched_getcpu() << ", count: " << count
+        << ", suggest: " << URMA_ELAPSED_NOTIFY_SUGGEST;
 
     return Status::OK();
 }
@@ -788,7 +798,8 @@ Status UrmaManager::GetEvent(uint64_t requestId, std::shared_ptr<UrmaEvent> &eve
 
 Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                                 const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress,
-                                UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter)
+                                uint64_t dataSize, UrmaEvent::OperationType operationType,
+                                std::shared_ptr<EventWaiter> waiter)
 {
     if (!jetty->IsValid()) {
         RETURN_STATUS(K_URMA_ERROR, "Urma jetty is invalid");
@@ -808,8 +819,9 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
             connection != nullptr, K_RUNTIME_ERROR,
             FormatString("Urma connection is null. requestId=%s, remoteAddress=%s, op=%s", requestIdStr.c_str(),
                          remoteAddress.c_str(), UrmaEvent::OperationTypeName(operationType)));
-        mapAccessor->second = std::make_shared<UrmaEvent>(
-            requestId, jetty, remoteAddress, connection->GetUrmaJfrInfo().uniqueInstanceId, operationType, waiter);
+        mapAccessor->second =
+            std::make_shared<UrmaEvent>(requestId, jetty, remoteAddress, connection->GetUrmaJfrInfo().uniqueInstanceId,
+                                        dataSize, operationType, waiter);
     }
     return Status::OK();
 }
@@ -837,9 +849,12 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
     auto elapsedMs = timer.ElapsedMilliSecond();
-    auto logLevel = elapsedMs > 1 ? 0 : 1;
-    VLOG(logLevel) << "[UrmaEventHandler] URMA wait elapsed " << elapsedMs << "ms, request id:" << requestId
-                   << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString();
+    LOG_IF(INFO, elapsedMs > URMA_LOG_LIMIT_MS)
+        << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost " << elapsedMs
+        << "ms, request id:" << requestId << ", src address:" << localUrmaInfo_.localAddress.ToString()
+        << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+        << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
+        << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
@@ -860,6 +875,7 @@ Status UrmaManager::HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<Ur
     const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
     auto errMsg = FormatString("Polling failed with an error for requestId: %s, cqe status: %d", requestIdStr.c_str(),
                                statusCode);
+
     return Status(K_URMA_ERROR, errMsg);
 }
 
@@ -939,17 +955,19 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
         auto userCtx = completeRecords[i].user_ctx;
         auto jettyId = completeRecords[i].local_id;
         if (crStatus == URMA_CR_WR_FLUSH_ERR_DONE) {
-            LOG(INFO) << "[UrmaEventHandler] Write flush error done for request id: " << userCtx
+            LOG(INFO) << "[URMA_POLL_JFC] Write flush error done for request id: " << userCtx
                       << ", jetty id: " << jettyId;
             urmaResource_->AsyncDeleteJetty(jettyId);
         } else if (crStatus == URMA_CR_SUCCESS) {
-            VLOG(1) << "[UrmaEventHandler] Got event with request id: " << userCtx << ", count:" << count
+            VLOG(1) << "[URMA_POLL_JFC] Got event with request id: " << userCtx << ", count:" << count
                     << ", cpuid: " << sched_getcpu();
             successCompletedReqs.insert(userCtx);
         } else {
             const auto requestIdStr = std::to_string(static_cast<uint64_t>(userCtx));
-            LOG(ERROR) << FormatString("Failed to poll jfc requestId: %s CR.status: %d", requestIdStr.c_str(),
-                                       crStatus);
+            LOG(ERROR) << FormatString(
+                "[URMA_POLL_JFC]: urma_poll_jfc return failed completion record, requestId: %s "
+                "CR.status: %d",
+                requestIdStr.c_str(), crStatus);
             LOG_IF_ERROR(TryRecoverFailedJettyFromCompletion(userCtx, crStatus, jettyId),
                          FormatString("[URMA_RECREATE_JETTY_FAILED] requestId=%s, jettyId=%u, cqeStatus=%d",
                                       requestIdStr.c_str(), jettyId, crStatus));
@@ -958,7 +976,10 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
     }
 
     if (!failedCompletedReqs.empty()) {
-        RETURN_STATUS(K_URMA_ERROR, "Failed to poll jfc");
+        RETURN_STATUS(K_URMA_ERROR,
+                      FormatString("[URMA_POLL_JFC]: urma_poll_jfc return failed completion record, failed_count:%zu, "
+                                   "suggest: %s",
+                                   failedCompletedReqs.size(), URMA_ERROR_SUGGEST));
     }
     return Status::OK();
 }
@@ -993,8 +1014,10 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
         if (cnt < 0) {
             // this is error case
             // cnt can be 0 or 1
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to poll jfc, ret = %d, CR.status = %d", cnt,
-                                                               completeRecords[0].status));
+            RETURN_STATUS_LOG_ERROR(
+                K_URMA_ERROR,
+                FormatString("[URMA_POLL_JFC]: call urma_poll_jfc failed, ret:%d, CR.status:%d, suggest: %s", cnt,
+                             completeRecords[0].status, URMA_ERROR_SUGGEST));
         } else if (cnt > 0) {
             // Ack the event and rearm jfc to process next event
             uint32_t ack_cnt = 1;
@@ -1012,27 +1035,32 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
     for (uint64_t i = 0; i < maxTryCount; ++i) {
         Timer timer;
         cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
-        if (timer.ElapsedMilliSecond() > 1) {
-            LOG(INFO) << "[UrmaEventHandler]: Poll jfc elapsed = " << timer.ElapsedMilliSecond() << "ms"
-                      << ", cpuid: " << sched_getcpu();
-        }
+        auto pollElapsedUs = timer.ElapsedMicroSecond();
+        LOG_IF(INFO, pollElapsedUs > URMA_LOG_LIMIT_US)
+            << "[URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost " << pollElapsedUs << "us, cpuid: " << sched_getcpu()
+            << ", suggest: " << URMA_ELAPSED_POLL_JFC_SUGGEST;
         if (cnt == 0) {
             // If there is nothing to poll, just sleep.
             // Note that it takes on average 50us to wake up with usleep(0), due to OS timerslack settings.
             Timer sleepTimer;
-            const struct timespec ts{ 0, 1000 };
+            const struct timespec ts {
+                0, 1000
+            };
             if (!tbbEventMap_.empty()) {
                 METRIC_TIMER(metrics::KvMetricId::URMA_NANOSLEEP_LATENCY);
                 nanosleep(&ts, nullptr);
             } else {
                 nanosleep(&ts, nullptr);
             }
-            if (sleepTimer.ElapsedMilliSecond() > 1) {
-                LOG(INFO) << "[UrmaEventHandler]: Poll jfc sleep elapsed = " << sleepTimer.ElapsedMilliSecond() << "ms"
-                          << ", cpuid: " << sched_getcpu();
-            }
+            auto sleepElapsedUs = sleepTimer.ElapsedMicroSecond();
+            LOG_IF(INFO, sleepElapsedUs > URMA_LOG_LIMIT_US)
+                << "[URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc thread wake up after nanosleep(1us) cost "
+                << sleepElapsedUs << "us, cpuid: " << sched_getcpu()
+                << ", suggest: " << URMA_ELAPSED_THREAD_SCHED_SUGGEST;
         } else if (cnt < 0) {
-            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to poll jfc, ret = %d", cnt));
+            RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
+                                    FormatString("[URMA_POLL_JFC]: call urma_poll_jfc failed, ret:%d, suggest: %s", cnt,
+                                                 URMA_ERROR_SUGGEST));
         } else if (cnt > 0) {
             return CheckCompletionRecordStatus(completeRecords, cnt, successCompletedReqs, failedCompletedReqs);
         }
@@ -1046,6 +1074,7 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
 
 Status UrmaManager::ImportRemoteJetty(const UrmaJfrInfo &jfrInfo, uint32_t &localJettyId)
 {
+    LOG(INFO) << "Begin to import remote jfr.";
     PerfPoint point(PerfKey::URMA_SETUP_CONNECTION);
     const std::string remoteConnectionId =
         jfrInfo.clientId.empty() ? jfrInfo.localAddress.ToString() : jfrInfo.clientId;
@@ -1064,6 +1093,7 @@ Status UrmaManager::ImportRemoteJetty(const UrmaJfrInfo &jfrInfo, uint32_t &loca
     bool success = false;
     Raii raii([&success, &accessor, this]() {
         if (!success) {
+            LOG(INFO) << "Fail to import remote jfr.";
             urmaConnectionMap_.erase(accessor);
         }
     });
@@ -1104,6 +1134,8 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
         if (rc.IsError()) {
             // clear import jfr and seg to reconnect next time
             urmaConnectionMap_.erase(accessor);
+            LOG(ERROR) << "Failed to import remote segment, remoteConnectionId: " << remoteConnectionId
+                       << ", status: " << rc.ToString();
             return rc;
         }
     }
@@ -1111,7 +1143,7 @@ Status UrmaManager::ImportRemoteInfo(const UrmaHandshakeReqPb &req)
 }
 
 Status UrmaManager::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJetty> &targetJetty,
-    urma_jetty_t *localJetty)
+                                      urma_jetty_t *localJetty)
 {
     LOG(INFO) << "Begin to import target jft.";
     bondp_rjetty_t bondpRemoteJetty{};
@@ -1122,14 +1154,13 @@ Status UrmaManager::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique
     bondpRemoteJetty.base.flag.bs.has_drv_ext = 1;
     Timer timer;
     METRIC_TIMER(metrics::KvMetricId::URMA_IMPORT_JFR);
-    RETURN_IF_NOT_OK_APPEND_MSG(
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         UrmaTargetJetty::Import(urmaResource_->GetContext(), &(bondpRemoteJetty.base), urmaResource_->GetUrmaToken(),
-            targetJetty),
-        FormatString("Failed to import target jetty, %s", remoteInfo.ToString()));
-    if (timer.ElapsedMilliSecond() > 1) {
-        LOG(INFO) << "[UrmaImportJetty] Import target jetty elapsed = " << timer.ElapsedMilliSecond() << "ms"
-                  << ", cpuid: " << sched_getcpu();
-    }
+                                targetJetty),
+        FormatString("Failed to import target jetty, remoteInfo: %s", remoteInfo.ToString()));
+    LOG_IF(INFO, timer.ElapsedMilliSecond() > 1)
+        << "[URMA_CONNECT] Import target jetty elapsed = " << timer.ElapsedMilliSecond() << "ms"
+        << ", cpuid: " << sched_getcpu() << ", remoteInfo: " << remoteInfo.ToString();
     return Status::OK();
 }
 
@@ -1157,6 +1188,7 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
     bool success = false;
     Raii raii([&success, &accessor, this]() {
         if (!success) {
+            LOG(INFO) << "Erase outbound connection.";
             urmaConnectionMap_.erase(accessor);
         }
     });
@@ -1195,10 +1227,12 @@ static urma_status_t PostJettyRw(urma_jetty_t *jetty, urma_opcode_t opcode, urma
                                  uint64_t localAddress, uint64_t length, urma_jfs_wr_flag_t flag, uint64_t userCtx,
                                  bool useNumaAffinity, uint32_t src_chip_id, uint32_t dst_chip_id)
 {
-    urma_sge_t localSge{ .addr = localAddress, .len = static_cast<uint32_t>(length), .tseg = localSeg,
-                         .user_tseg = nullptr };
-    urma_sge_t remoteSge{ .addr = remoteAddress, .len = static_cast<uint32_t>(length), .tseg = remoteSeg,
-                          .user_tseg = nullptr };
+    urma_sge_t localSge{
+        .addr = localAddress, .len = static_cast<uint32_t>(length), .tseg = localSeg, .user_tseg = nullptr
+    };
+    urma_sge_t remoteSge{
+        .addr = remoteAddress, .len = static_cast<uint32_t>(length), .tseg = remoteSeg, .user_tseg = nullptr
+    };
 
     urma_sg_t src{};
     urma_sg_t dst{};
@@ -1222,7 +1256,7 @@ static urma_status_t PostJettyRw(urma_jetty_t *jetty, urma_opcode_t opcode, urma
         base->next = nullptr;
         bondp_wr.src_chip_id = src_chip_id;
         bondp_wr.dst_chip_id = dst_chip_id;
-        
+
         return ds_urma_post_jetty_send_wr(jetty, base, &badWr);
     } else {
         urma_jfs_wr_t wr{};
@@ -1254,7 +1288,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
         INJECT_POINT("UrmaManager.UrmaWriteError",
                      []() { return Status(K_RUNTIME_ERROR, "Injcect urma write error"); });
-        RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jetty, args.remoteAddress,
+        RETURN_IF_NOT_OK(CreateEvent(key, args.connection, args.jetty, args.remoteAddress, writeSize,
                                      UrmaEvent::OperationType::WRITE, args.waiter));
         urma_status_t ret;
         Timer t;
@@ -1264,16 +1298,18 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                     << ", dst=" << static_cast<uint32_t>(args.dstChipId);
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
-                remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
+                              remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);
         } else {
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
-                remoteAddress, localAddress, writeSize, flag, key, false, args.srcChipId, args.dstChipId);
+                              remoteAddress, localAddress, writeSize, flag, key, false, args.srcChipId, args.dstChipId);
         }
 
         if (ret != URMA_SUCCESS) {
             DeleteEvent(key);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                    FormatString("Failed to urma write object with key = %zu, ret = %d", key, ret));
+                                    FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed with key: %zu, "
+                                                 "ret: %d, suggest: %s",
+                                                 key, ret, URMA_ERROR_SUGGEST));
         }
         VLOG(1) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << t.ElapsedMilliSecond()
                 << ", request id:" << key;
@@ -1413,16 +1449,17 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
         const uint64_t key = requestId_.fetch_add(1);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, UrmaEvent::OperationType::READ));
-        urma_status_t ret =
-            PostJettyRw(jetty->Raw(), URMA_OPC_READ, targetJetty, remoteSegAccessor->second->Raw(),
-                        localSegAccessor->second->Raw(), segVa + urmaInfo.seg_data_offset() + readOffset,
-                        localObjectAddress + metaDataSize + readOffset, readSize, flag, key, false, INVALID_CHIP_ID,
-                        INVALID_CHIP_ID);
+        RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, readSize, UrmaEvent::OperationType::READ));
+        urma_status_t ret = PostJettyRw(
+            jetty->Raw(), URMA_OPC_READ, targetJetty, remoteSegAccessor->second->Raw(), localSegAccessor->second->Raw(),
+            segVa + urmaInfo.seg_data_offset() + readOffset, localObjectAddress + metaDataSize + readOffset, readSize,
+            flag, key, false, INVALID_CHIP_ID, INVALID_CHIP_ID);
         if (ret != URMA_SUCCESS) {
             DeleteEvent(key);
             RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
-                                    FormatString("Failed to urma read object with key = %zu, ret = %d", key, ret));
+                                    FormatString("[URMA_READ]: call urma_post_jetty_send_wr failed with key: %zu, "
+                                                 "ret: %d, suggest: %s",
+                                                 key, ret, URMA_ERROR_SUGGEST));
         }
 
         remainSize -= readSize;
@@ -1501,7 +1538,8 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         wr.user_ctx = key;
         wr.rw = rw;
         wr.next = NULL;
-        RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, UrmaEvent::OperationType::WRITE));
+        RETURN_IF_NOT_OK(
+            CreateEvent(key, connection, jetty, remoteAddress, singleDstWriteSize, UrmaEvent::OperationType::WRITE));
         eventKeys.emplace_back(key);
         if (dstSgeIdx > 0) {
             wrList[dstSgeIdx - 1].next = &wrList[dstSgeIdx];
@@ -1515,7 +1553,10 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         for (auto key : eventKeys) {
             DeleteEvent(key);
         }
-        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR, FormatString("Failed to urma write object, ret = %d", ret));
+        RETURN_STATUS_LOG_ERROR(K_URMA_ERROR,
+                                FormatString("[URMA_WRITE]: call urma_post_jetty_send_wr failed, ret: %d, "
+                                             "suggest: %s",
+                                             ret, URMA_ERROR_SUGGEST));
     }
     if (blocking) {
         auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };

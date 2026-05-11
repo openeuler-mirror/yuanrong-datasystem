@@ -584,7 +584,7 @@ private:
      * @return Status of the call.
      */
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                       const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress,
+                       const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress, uint64_t dataSize,
                        UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr);
 
     struct UrmaWriteArgs {

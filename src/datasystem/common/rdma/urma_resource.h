@@ -63,15 +63,18 @@ public:
      *            recovered via jetty->GetConnection() when needed for recovery.
      * @param[in] remoteAddress Remote address string for logging.
      * @param[in] remoteInstanceId Remote instance id for logging.
+     * @param[in] dataSize Request data size for logging.
      * @param[in] operationType Read or write.
      * @param[in] waiter Optional waiter used for notification.
      */
     UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaJetty> jetty, std::string remoteAddress,
-              std::string remoteInstanceId, OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr)
+              std::string remoteInstanceId, uint64_t dataSize, OperationType operationType,
+              std::shared_ptr<EventWaiter> waiter = nullptr)
         : Event(requestId, std::move(waiter)),
           jetty_(std::move(jetty)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
+          dataSize_(dataSize),
           operationType_(operationType)
     {
     }
@@ -118,6 +121,11 @@ public:
         return remoteAddress_;
     }
 
+    uint64_t GetDataSize() const
+    {
+        return dataSize_;
+    }
+
     const std::string &GetRemoteInstanceId() const
     {
         return remoteInstanceId_;
@@ -145,6 +153,7 @@ private:
     std::weak_ptr<UrmaJetty> jetty_;
     std::string remoteAddress_;
     std::string remoteInstanceId_;
+    uint64_t dataSize_{ 0 };
     OperationType operationType_{ OperationType::UNKNOWN };
 };
 
