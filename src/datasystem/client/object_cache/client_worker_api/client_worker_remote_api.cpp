@@ -44,7 +44,7 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
-constexpr uint64_t CLIENT_WORKER_RPC_SLOW_US = 1000;
+constexpr uint64_t CLIENT_WORKER_RPC_SLOW_US = 2000;
 
 namespace {
 bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
