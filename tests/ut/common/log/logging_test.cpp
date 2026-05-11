@@ -76,16 +76,11 @@ public:
         return Status::OK();
     }
 
-    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress, bool isClient)
+    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress)
     {
         for (int i = 0; i < fileNum; ++i) {
             std::stringstream filename;
-            filename << "ds_llt";
-            if (isClient) {
-                filename << "_" << getpid();
-            }
-
-            filename << ".INFO." << GetCurrentTimestamp();
+            filename << "ds_llt.INFO." << GetCurrentTimestamp();
             const std::string log_suffix = enableCompress ? ".log.gz" : ".log";
             filename << log_suffix;
             DS_EXPECT_OK(CreateTextFile(filename.str(), fileSize));
@@ -147,7 +142,7 @@ public:
         FLAGS_log_filename = "ds_llt";
         FLAGS_max_log_size = 1;
         FLAGS_max_log_file_num = 5;
-        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, enableCompress, false));
+        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, enableCompress));
         std::string logPattern = "ds_llt\\.INFO\\.\\d{14}\\.log";
 
         if (enableCompress) {
@@ -311,7 +306,7 @@ TEST_F(LoggingTest, TestEnvSucceed)
 {
     constexpr int NUM_LOG_FILES_TO_CREATE = 10;
     constexpr size_t LOG_FILE_SIZE_BYTES = 1024 * 1024;
-    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true, true));
+    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true));
 
     int replace = 1;
     (void)setenv(LOG_DIR_ENV.c_str(), FLAGS_log_dir.c_str(), replace);
@@ -339,7 +334,7 @@ TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
     Logging::AccessRecorderManagerInstance()->ResetWriteLogger(false);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "*";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -375,7 +370,7 @@ TEST_F(LoggingTest, TestMultiTimeCostLoggerCompress)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*gz";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "*";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -393,7 +388,7 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
 
     // wait compress success
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*gz";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".[0-9]*";
     std::string pattern = ssTimeCostFile.str();
     int timeout = 10;
     bool success = false;
@@ -443,7 +438,7 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".log";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -507,7 +502,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     Trace::Instance().SetRequestSampleDecision(false, false);
 
     std::vector<std::string> clientFiles;
-    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + "_[0-9]*\\.log", clientFiles));
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + ".log", clientFiles));
     ASSERT_EQ(clientFiles.size(), 1ul);
     std::string clientContent = ReadFileContent(clientFiles[0]);
     auto findLine = [](const std::string &content, const std::string &key) {
