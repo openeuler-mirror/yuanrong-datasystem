@@ -93,7 +93,7 @@ inline void CheckRpcLatencyAfterClientSend(const MetaPb &meta)
             clientSendTs = tick.ts();
         }
     }
-    uint64_t reqFrameworkNs = (clientSendTs > clientStartTs) ? (clientSendTs - clientStartTs) : 0;
+    uint64_t reqFrameworkNs = (clientStartTs > 0 && clientSendTs > clientStartTs) ? (clientSendTs - clientStartTs) : 0;
     if (reqFrameworkNs > kRpcCheckLatencyThresholdNs) {
         LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_SEND trace_id=" << meta.trace_id()
                   << " client_req_framework_us=" << NsToUs(reqFrameworkNs);
@@ -112,7 +112,8 @@ inline void CheckRpcLatencyAfterServerExecStart(const MetaPb &meta)
             serverExecStartTs = tick.ts();
         }
     }
-    uint64_t reqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    uint64_t reqQueueNs =
+        (serverRecvTs > 0 && serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
     if (reqQueueNs > kRpcCheckLatencyThresholdNs) {
         LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_EXEC_START trace_id=" << meta.trace_id()
                   << " server_req_queue_us=" << NsToUs(reqQueueNs);
@@ -131,7 +132,8 @@ inline void CheckRpcLatencyAfterServerSend(const MetaPb &meta)
             serverSendTs = tick.ts();
         }
     }
-    uint64_t rspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    uint64_t rspQueueNs =
+        (serverExecEndTs > 0 && serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
     if (rspQueueNs > kRpcCheckLatencyThresholdNs) {
         LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_SEND trace_id=" << meta.trace_id()
                   << " server_rsp_queue_us=" << NsToUs(rspQueueNs);
@@ -156,8 +158,10 @@ inline void CheckRpcLatencyAfterClientRecv(const MetaPb &meta)
             serverSendTs = tick.ts();
         }
     }
-    uint64_t serverReqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
-    uint64_t serverRspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    uint64_t serverReqQueueNs =
+        (serverRecvTs > 0 && serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    uint64_t serverRspQueueNs =
+        (serverExecEndTs > 0 && serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
     if (serverReqQueueNs > kRpcCheckLatencyThresholdNs || serverRspQueueNs > kRpcCheckLatencyThresholdNs) {
         LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_RECV trace_id=" << meta.trace_id()
                   << " server_req_queue_us=" << NsToUs(serverReqQueueNs)
