@@ -563,10 +563,6 @@
         "value": "true",
         "description": "Register the whole arena as segment during init, otherwise, register each object as a segment."
     },
-    "urma_mode": {
-        "value": "UB",
-        "description": "Option to enable URMA over IB or UB, default UB to run with URMA over UB."
-    },
     "enable_transport_fallback": {
         "value": "true",
         "description": "Enable the fast transport fallback to tcp transport."

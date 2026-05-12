@@ -322,7 +322,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
     rsp.set_log_rate_limit(FLAGS_log_rate_limit);
 #ifdef USE_URMA
-    if (IsUrmaEnabled() && GetUrmaMode() == UrmaMode::UB && !shmEnabled) {
+    if (IsUrmaEnabled() && !shmEnabled) {
         rsp.set_fast_transport_mode(FastTransportMode::UB);
     }
 #endif

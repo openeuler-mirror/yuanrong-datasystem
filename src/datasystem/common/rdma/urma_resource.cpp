@@ -136,7 +136,7 @@ UrmaJfc::~UrmaJfc()
     raw_ = nullptr;
 }
 
-Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &deviceAttr, urma_jfce_t *jfce,
+Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &deviceAttr,
                        std::unique_ptr<UrmaJfc> &jfc)
 {
     LOG(INFO) << "urma create jfc";
@@ -145,13 +145,7 @@ Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &device
     urma_jfc_cfg_t jfcConfig{};
     jfcConfig.depth = deviceAttr.dev_cap.max_jfc_depth;
     jfcConfig.flag.value = 0;
-    if (GetUrmaMode() == UrmaMode::IB) {
-        jfcConfig.jfce = jfce;
-    } else if (GetUrmaMode() == UrmaMode::UB) {
-        jfcConfig.jfce = nullptr;
-    } else {
-        RETURN_STATUS(K_INVALID, "Invalid Urma mode");
-    }
+    jfcConfig.jfce = nullptr;
     jfcConfig.user_ctx = 0;
     jfcConfig.ceqn = 0;
 
@@ -274,9 +268,7 @@ Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::share
     jfsConfig.jfc = resource.GetJfc();
     jfsConfig.user_ctx = 0;
     jfsConfig.flag.value = 0;
-#ifdef URMA_OVER_UB
     jfsConfig.flag.bs.multi_path = 1;
-#endif
 
     urma_jetty_cfg_t jettyConfig{};
     jettyConfig.flag.value = 0;
@@ -575,7 +567,7 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
         LOG_IF_ERROR(context_->ChangeBondingBalanceMode(), "Failed to change bonding balance mode");
     }
     RETURN_IF_NOT_OK(UrmaJfce::Create(context_->Raw(), jfce_));
-    RETURN_IF_NOT_OK(UrmaJfc::Create(context_->Raw(), urmaDeviceAttribute_, jfce_->Raw(), jfc_));
+    RETURN_IF_NOT_OK(UrmaJfc::Create(context_->Raw(), urmaDeviceAttribute_, jfc_));
     if (FLAGS_urma_event_mode) {
         RETURN_IF_NOT_OK(jfc_->Rearm());
     }

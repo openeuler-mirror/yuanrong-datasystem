@@ -139,15 +139,8 @@ UrmaManager::UrmaManager()
     importSegmentFlag_.bs.mapping = URMA_SEG_NOMAP;
     importSegmentFlag_.bs.reserved = 0;
 
-#ifdef URMA_OVER_UB
     registerSegmentFlag_.bs.access = URMA_ACCESS_READ | URMA_ACCESS_WRITE | URMA_ACCESS_ATOMIC;
     importSegmentFlag_.bs.access = URMA_ACCESS_READ | URMA_ACCESS_WRITE | URMA_ACCESS_ATOMIC;
-#else
-    registerSegmentFlag_.bs.access =
-        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
-    importSegmentFlag_.bs.access =
-        URMA_ACCESS_LOCAL_WRITE | URMA_ACCESS_REMOTE_READ | URMA_ACCESS_REMOTE_WRITE | URMA_ACCESS_REMOTE_ATOMIC;
-#endif
     localSegmentMap_ = std::make_unique<UrmaLocalSegmentMap>();
     urmaResource_ = std::make_unique<UrmaResource>();
 }
@@ -194,24 +187,14 @@ Status UrmaManager::Stop()
     return Status::OK();
 }
 
-Status UrmaManager::GetUrmaDeviceName(const HostPort &hostport, std::string &urmaDeviceName, int &eidIndex)
+Status UrmaManager::GetUrmaDeviceName(std::string &urmaDeviceName, int &eidIndex)
 {
-    if (GetUrmaMode() == UrmaMode::IB) {
-        std::string deviceName;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(GetDevNameFromLocalIp(hostport.Host(), deviceName) == 0, K_INVALID,
-                                             "Invalid ip address to get device name");
-        LOG(INFO) << "deviceName = " << deviceName;
-        RETURN_IF_NOT_OK(EthToRdmaDevName(deviceName, urmaDeviceName));
-    } else if (GetUrmaMode() == UrmaMode::UB) {
-        urmaDeviceName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
-        eidIndex = GetInt32FromEnv(ENV_UB_DEVICE_EID.c_str(), 0);
-        if (urmaDeviceName.empty()) {
-            RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
-        }
-        RETURN_IF_NOT_OK(UrmaGetEffectiveDevice(urmaDeviceName));
-    } else {
-        RETURN_STATUS(K_INVALID, "Invalid Urma mode");
+    urmaDeviceName = GetStringFromEnv(ENV_UB_DEVICE_NAME.c_str(), DEFAULT_UB_DEVICE_NAME.c_str());
+    eidIndex = GetInt32FromEnv(ENV_UB_DEVICE_EID.c_str(), 0);
+    if (urmaDeviceName.empty()) {
+        RETURN_STATUS(K_INVALID, "env DS_URMA_DEV_NAME is empty");
     }
+    RETURN_IF_NOT_OK(UrmaGetEffectiveDevice(urmaDeviceName));
     LOG(INFO) << "urmaDeviceName = " << urmaDeviceName;
     return Status::OK();
 }
@@ -238,7 +221,7 @@ Status UrmaManager::Init(const HostPort &hostport)
     RETURN_IF_NOT_OK(UrmaInit());
     std::string urmaDeviceName;
     int eidIndex = -1;
-    RETURN_IF_NOT_OK(GetUrmaDeviceName(hostport, urmaDeviceName, eidIndex));
+    RETURN_IF_NOT_OK(GetUrmaDeviceName(urmaDeviceName, eidIndex));
     const bool isBondingDevice = urmaDeviceName.find("bonding", 0) == 0;
     urma_device_t *urmaDevice = nullptr;
     RETURN_IF_NOT_OK(UrmaGetDeviceByName(urmaDeviceName, urmaDevice));
@@ -1685,7 +1668,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
     // Note: The parameter needs to be consistent in the same client process.
     if (urmaMode == FastTransportMode::UB) {
         FLAGS_enable_urma = true;
-        FLAGS_urma_mode = "UB";
         FLAGS_enable_ub_numa_affinity = true;
         UrmaManager::clientMode_ = true;
         uint64_t expected = DEFAULT_TRANSPORT_MEM_SIZE;

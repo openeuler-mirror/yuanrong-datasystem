@@ -35,25 +35,6 @@ bool ValidateEnableUrma(const char *flagName, bool value)
 #endif
 }
 
-bool ValidateUrmaMode(const char *flagName, const std::string &value)
-{
-    (void)flagName;
-    (void)value;
-#ifdef USE_URMA
-    if (value == "IB") {
-        return true;
-    }
-#ifdef URMA_OVER_UB
-    if (value == "UB") {
-        return true;
-    }
-#endif
-    return false;
-#else
-    return true;
-#endif
-}
-
 bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::string &value)
 {
     if (value == "none" || value == "interleave_all_numa" || value == "interleave_affinity_numa") {
@@ -128,7 +109,6 @@ DS_DEFINE_validator(zmq_chunk_sz, &Validator::ValidateInt32);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
-DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);

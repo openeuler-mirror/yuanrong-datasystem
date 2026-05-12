@@ -21,9 +21,7 @@
 
 #include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_perf.h>
-#ifdef URMA_OVER_UB
 #include <ub/umdk/urma/urma_ubagg.h>
-#endif
 
 // Init API - must call before using any URMA functions via dlopen
 namespace datasystem {
