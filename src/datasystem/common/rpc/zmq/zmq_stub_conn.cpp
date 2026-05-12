@@ -18,6 +18,7 @@
  * Description: Stub connection.
  */
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
+#include "datasystem/common/rpc/zmq/zmq_constants.h"
 
 #include <poll.h>
 #include <utility>
@@ -121,7 +122,6 @@ Status ZmqFrontend::RouteToZmqSocket(MetaPb &meta, ZmqMsgFrames &&p)
         GetGatewayId(), meta.client_id(), channel_->GetZmqEndPoint(), meta.svc_name(), meta.method_index(),
         LogHelper::IgnoreSensitive(meta));
     rc = frontend_->SendAllFrames(p, meta.method_index() < 0 ? ZmqSendFlags::DONTWAIT : ZmqSendFlags::NONE);
-    RecordTick(meta, TICK_CLIENT_SEND);
     return rc;
 }
 
@@ -400,7 +400,6 @@ void ZmqFrontend::InterruptAll()
 
 Status ZmqFrontend::SendMsg(SockConnEntry *cInfo, ZmqMetaMsgFrames &&que, int timeout)
 {
-    RecordTick(que.first, TICK_CLIENT_TO_STUB);
     ConnMsgFrames ele = std::make_pair(cInfo, std::move(que));
     RETURN_IF_NOT_OK(msgQue_->Send(std::move(ele), timeout));
     eventfd_write(efd_, 1);
@@ -1276,6 +1275,8 @@ Status ZmqStubConnMgrImpl::GetZmqFrontendFromPtr(int64_t stubId, ZmqFrontend *ra
 
 Status ZmqStubConnMgrImpl::Outbound(const std::string &sender, ZmqMetaMsgFrames &&p)
 {
+    // CLIENT_TO_STUB: MsgQueMgr prefetcher dequeued (outbound queue); not zmq_msg_send.
+    RecordTick(p.first, TICK_CLIENT_TO_STUB);
     ZmqFrontend *fePtr = nullptr;
     SockConnEntry *connInfo = nullptr;
     int64_t stubId = 0;

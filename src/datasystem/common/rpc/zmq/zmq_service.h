@@ -295,5 +295,6 @@ private:
     std::vector<std::unique_ptr<WorkAgent>> workAgents_;
     std::unique_ptr<ThreadPool> workAgentThreadPool_ { nullptr };
 };
+
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_SERVICE_H

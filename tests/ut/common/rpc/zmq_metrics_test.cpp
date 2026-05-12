@@ -28,7 +28,9 @@
 
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/rpc/zmq/zmq_network_errno.h"
+#include "datasystem/protos/meta_zmq.pb.h"
 
 #include <cerrno>
 #include <string>
@@ -381,6 +383,39 @@ TEST_F(ZmqMetricsTest, scenario_self_prove_framework_innocent)
     EXPECT_EQ(HistogramField(summary, "zmq_rpc_serialize_latency", "total", "avg_us"), 10u);
     EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "count"), 100u);
     EXPECT_EQ(HistogramField(summary, "zmq_rpc_deserialize_latency", "total", "avg_us"), 8u);
+}
+
+// Caller-clock e2e vs residual network estimate; SERVER_RPC_WINDOW_NS = SERVER_SEND - SERVER_RECV (server host).
+TEST_F(ZmqMetricsTest, queue_flow_residual_network_matches_e2e_minus_framework)
+{
+    const uint64_t t0 = 1000000000000000ULL;
+    MetaPb meta;
+    auto addTs = [&](const char *tickName, uint64_t wallNs) {
+        TickPb tk;
+        tk.set_tick_name(tickName);
+        tk.set_ts(wallNs);
+        meta.mutable_ticks()->Add(std::move(tk));
+    };
+    addTs(TICK_CLIENT_ENQUEUE, t0);
+    addTs(TICK_CLIENT_TO_STUB, t0 + 2'500'000ULL);     // client framework fragment = 2.5ms on caller clock
+    addTs(TICK_SERVER_RECV, t0 + 5'500'000ULL);         // diagnostics only — not subtracted vs client timestamps
+    addTs(TICK_SERVER_DEQUEUE, t0 + 5'520'000ULL);
+    addTs(TICK_SERVER_EXEC_END, t0 + 5'570'000ULL);
+    addTs(TICK_SERVER_SEND, t0 + 5'572'000ULL);         // SERVER_SEND − SERVER_RECV = 72000 ns on server clock
+    addTs(TICK_CLIENT_RECV, t0 + 6'572'000ULL);         // e2e_ns = 6572000 ns
+    TickPb winSynth;
+    winSynth.set_tick_name(TICK_SERVER_RPC_WINDOW_NS);
+    winSynth.set_ts(72'000ULL);
+    meta.mutable_ticks()->Add(std::move(winSynth));
+
+    RecordRpcLatencyMetrics(meta);
+
+    auto summary = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_e2e_latency", "total", "count"), 1u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_e2e_latency", "total", "avg_us"), 6572u);
+
+    EXPECT_EQ(HistogramField(summary, "zmq_client_queuing_latency", "total", "avg_us"), 2500u);
+    EXPECT_EQ(HistogramField(summary, "zmq_rpc_network_latency", "total", "avg_us"), 4000u);
 }
 
 }  // namespace
