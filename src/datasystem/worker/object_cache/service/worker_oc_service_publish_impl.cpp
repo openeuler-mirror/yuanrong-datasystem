@@ -246,11 +246,10 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &safeObj = objectKV.GetObjEntry();
     auto oldLifeState = safeObj->GetLifeState();
-    LOG(INFO) << FormatString("Current life state: %d, next state: %d, ttl second: %u.", (int)oldLifeState,
+    VLOG(1) << FormatString("Current life state: %d, next state: %d, ttl second: %u.", (int)oldLifeState,
                               (int)params.lifeState, params.ttlSecond);
     // Step 1: Verify and request to master, object may be expired due to network latency.
     RETURN_IF_NOT_OK(RequestingToMaster(objectKV, params));
-    LOG(INFO) << "Request to master success";
 
     // Step 2: In case of Non-Shm object, save it to memory first. Write to l2cache if in write-through mode.
     if (!payloads.empty()) {
@@ -307,8 +306,11 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     Raii unlock([&entry]() { entry->WUnlock(); });
     ObjectKV objectKV(objectKey, *entry);
     RETURN_IF_NOT_OK(PrepareForPublish(req, clientId, shmUnitId, objectKV));
-    LOG(INFO) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %zu ms.", req.client_id(),
-                              objectKey, elapsed);
+    constexpr double reserveGetLogThresholdMs = 0.1; // 100us
+    if (elapsed > reserveGetLogThresholdMs) {
+        LOG(INFO) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %zu ms.", req.client_id(),
+                                  objectKey, elapsed);
+    }
 
     // Step 3: Request to master and save data (non-shm copy).
     auto newLifeState = req.is_seal() ? ObjectLifeState::OBJECT_SEALED : ObjectLifeState::OBJECT_PUBLISHED;

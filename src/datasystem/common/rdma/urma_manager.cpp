@@ -848,7 +848,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
     auto elapsedMs = timer.ElapsedMilliSecond();
-    auto vlogLevel = elapsedMs > URMA_LOG_LIMIT_MS || waitRc.IsError() ? 0 : 1;
+    auto vlogLevel = (elapsedMs > URMA_LOG_LIMIT_MS || waitRc.IsError()) ? 0 : 1;
     VLOG(vlogLevel) << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
                     << elapsedMs << "ms, request id:" << requestId
                     << ", src address:" << localUrmaInfo_.localAddress.ToString()
@@ -1294,9 +1294,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         Timer t;
         METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
         auto jettyId = args.jetty->GetJettyId();
+        LOG(INFO) << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(args.srcChipId)
+                  << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
+                  << ", urma_inflight_wr_count:" << tbbEventMap_.size();
         if (useNumaAffinity) {
-            LOG(INFO) << "URMA write numa affinity src:" << static_cast<uint32_t>(args.srcChipId)
-                      << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId;
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
                               remoteAddress, localAddress, writeSize, flag, key, true, args.srcChipId, args.dstChipId);

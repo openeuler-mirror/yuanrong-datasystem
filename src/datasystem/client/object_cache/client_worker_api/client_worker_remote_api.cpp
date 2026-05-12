@@ -190,7 +190,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
     (void)urmaDataInfo;
-    LOG(INFO) << AppendSrcDstForLog(
+    VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
         hostPort_.ToString());
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,

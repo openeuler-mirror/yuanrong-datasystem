@@ -492,7 +492,7 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
     if (ubRc.IsError() || ubFastTransportEnabled) {
         const Status &transportStatus =
-            ubRc.IsError() ? ubRc : Status(K_URMA_ERROR, "UB get request fell back to TCP payload before worker UB");
+            ubRc.IsError() ? ubRc : Status(K_URMA_ERROR, "UB get request fallback to TCP payload before worker UB");
         auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, transportStatus, "worker->client");
         if (rc.IsError()) {
             LOG(WARNING) << "Worker-to-client TCP fallback payload rejected for object " << objectKeyUri
@@ -627,8 +627,8 @@ void WorkerRequestManager::DeleteObjects(const std::map<std::string, uint64_t> &
         // call will
         // return fail because the object don't exist on objectTable_. So we don't handle the error when
         // delete.
-        LOG_IF_ERROR_EXCEPT(deleteFunc_(kv.first, kv.second),
-                            FormatString("delete object %s failed", kv.first), K_NOT_FOUND);
+        LOG_IF_ERROR_EXCEPT(deleteFunc_(kv.first, kv.second), FormatString("delete object %s failed", kv.first),
+                            K_NOT_FOUND);
     }
 }
 }  // namespace object_cache

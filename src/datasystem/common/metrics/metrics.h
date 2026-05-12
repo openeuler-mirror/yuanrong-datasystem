@@ -57,6 +57,7 @@ class Gauge {
 public:
     ~Gauge() = default;
     void Set(int64_t value) const;
+    int64_t Get() const;
     void Inc(int64_t delta = 1) const;
     void Dec(int64_t delta = 1) const;
 

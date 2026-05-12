@@ -132,6 +132,7 @@
   - oversized typed-metrics summaries are split into multiple one-line JSON log records rather than truncating a single record.
   - `DumpSummaryForTest()` returns an unsplit JSON snapshot for typed-metrics tests; compatibility-oriented tests that still prefer flat-string parsing should build that view locally from the JSON dump instead of relying on a production-only legacy formatter.
   - the lightweight typed metrics API does not own a background thread; worker main and client runtime code drive periodic `Tick()`/`PrintSummary()` calls, mirroring the `PerfManager` ownership style.
+  - worker object-cache batch remote get now exposes `worker_inflight_remote_get_request` as a typed `Gauge` around the outbound `BatchGetObjectRemote` logical retry flow.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
   - collector startup is gated by `log_monitor` and exporter initialization;

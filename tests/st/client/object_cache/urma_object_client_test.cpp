@@ -170,8 +170,8 @@ class UrmaConnectionWarmupFailureTest : public UrmaObjectClientTest {
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.injectActions += opts.injectActions.empty() ? "" : ";";
-        opts.injectActions += std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT
-                              + ":return(K_RPC_UNAVAILABLE)";
+        opts.injectActions +=
+            std::string(WARMUP_PREPARE_INJECT) + ":call();" + WARMUP_REMOTE_GET_INJECT + ":return(K_RPC_UNAVAILABLE)";
     }
 };
 
@@ -1636,6 +1636,7 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsFallbackPayloadAtOneMb)
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
     ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
+    ASSERT_NE(status.GetMsg().find("cqe status"), std::string::npos) << status.GetMsg();
 }
 
 TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsClientPreRequestFallbackPayloadAtOneMb)
@@ -1652,8 +1653,54 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsClientPreRequestFallbackPayload
     Status status = client->Get("key-get-client-fallback-one-mb", getValue);
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
-    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos)
-        << status.ToString();
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos) << status.ToString();
+}
+
+class UrmaClientHeartbeatReconnectTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        opts.numWorkers = 1;
+        opts.workerConfigs.resize(opts.numWorkers);
+        opts.workerOcDirectPorts.resize(opts.numWorkers);
+        opts.enableDistributedMaster = "true";
+        opts.vLogLevel = 2;
+        opts.workerGflagParams += " -enable_transport_fallback=false -client_dead_timeout_s=3";
+    }
+
+protected:
+    static constexpr uint64_t kClientDeadTimeoutS = 3;
+};
+
+TEST_F(UrmaClientHeartbeatReconnectTest, ClientHeartbeatTimeoutReconnectThenUbSetGetSuccess)
+{
+    DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)"));
+    DS_ASSERT_OK(inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)"));
+    DS_ASSERT_OK(inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)"));
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = 8 * 1024 * 1024UL;
+    const std::string keyBefore = "ub-heartbeat-before";
+    const std::string keyAfter = "ub-heartbeat-after";
+    const std::string valueBefore(dataSize, 'a');
+    const std::string valueAfter(dataSize, 'b');
+
+    DS_ASSERT_OK(client->Set(keyBefore, valueBefore));
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(keyBefore, getValue));
+    ASSERT_EQ(valueBefore, getValue);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Heartbeat.begin", "100*return(K_RPC_UNAVAILABLE)"));
+    std::this_thread::sleep_for(std::chrono::seconds(kClientDeadTimeoutS * 2));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Heartbeat.begin", "off"));
+    std::this_thread::sleep_for(std::chrono::seconds(kClientDeadTimeoutS * 2));
+
+    DS_ASSERT_OK(client->Set(keyAfter, valueAfter));
+    DS_ASSERT_OK(client->Get(keyAfter, getValue));
+    ASSERT_EQ(valueAfter, getValue);
 }
 
 class UrmaAsyncEventTest : public UrmaObjectClientTest {
@@ -1928,6 +1975,7 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitRejectsFallbackPayloadAtOneMb)
     ASSERT_TRUE(status.IsError());
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR) << status.ToString();
     ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos) << status.ToString();
+    ASSERT_NE(status.GetMsg().find("Inject urma wait error"), std::string::npos) << status.ToString();
 }
 
 TEST_F(UrmaFallbackTest, UrmaHandshakeTimeoutReturnEarlyAndContinueInBackground)

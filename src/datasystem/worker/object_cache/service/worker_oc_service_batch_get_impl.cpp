@@ -26,6 +26,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
@@ -47,6 +48,17 @@ DS_DECLARE_bool(enable_data_replication);
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
+namespace {
+void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
+{
+    constexpr int logInterval = 10;
+    constexpr int64_t logLimit = 16;
+    const int64_t inflightCount = inflightGauge.Get();
+    if (inflightCount > logLimit) {
+        LOG_EVERY_T(INFO, logInterval) << "inflight remote get request: " << inflightCount;
+    }
+}
+}  // namespace
 
 Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDataSize, ReadObjectKV &objectKV,
                                                              std::vector<RpcMessage> &payloads, uint64_t &payloadIndex)
@@ -589,7 +601,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
             LOG(INFO) << AppendSrcDstForLog(
-                FormatString("Remote get request:[batch] objects count[%d]", reqPb.requests_size()),
+                FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
                 localAddress_.ToString(), address);
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
@@ -603,6 +616,11 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 reqTimeoutDuration.CalcRealRemainingTime() / (etcdCM_->CheckIfOtherAzNodeConnected(hostAddr) ? 4 : 1);
             timeoutMs = !isMigrateData ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
+            auto inflightGauge =
+                metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
+            inflightGauge.Inc();
+            LogInflightRemoteGetRequestIfNeeded(inflightGauge);
+            Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
             RETURN_IF_NOT_OK(RetryOnErrorRepent(
                 timeoutMs,
                 [&workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, this](int32_t) {
