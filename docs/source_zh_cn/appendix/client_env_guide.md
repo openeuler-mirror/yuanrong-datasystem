@@ -37,7 +37,7 @@
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
 | 19 | `DATASYSTEM_LOG_COMPRESS` | `true` | 日志文件是否压缩,默认压缩。 |
 | 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 用于设置日志记录的最低级别,默认是0。 |
-| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒最大日志条数（0表示不限速）。超出限制后，INFO、WARNING和ERROR日志将被等间隔采样，日志中标注采样率。FATAL不受限速影响。 |
+| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的非ERROR日志会被丢弃。ERROR/FATAL始终打印。 |
 
 ## 运行时环境配置
 
@@ -64,4 +64,3 @@ export DATASYSTEM_HOST=127.0.0.1
 export DATASYSTEM_PORT=8080
 export DATASYSTEM_LOG_V=3
 ```
-

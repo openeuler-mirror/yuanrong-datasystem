@@ -391,7 +391,7 @@ private:
             // Here in exclusive conn mode, it directly sends right here because there is no frontend.
             // Thus, record a perf point here so that the next point, the server-side ZMQ_NETWORK_TRANSFER, will more
             // accurately show the transfer time.
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+            TraceGuard traceGuard = SetTraceContextFromMeta(meta);
             PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_TO_EXCL_CONN, GetLapTime(meta, "ZMQ_STUB_TO_EXCL_CONN"));
 
             // Add the meta to the frames
@@ -469,7 +469,7 @@ private:
             // points, and just record the network transfer here.
             // Note that in non-exclusive mode, the ZMQ_NETWORK_TRANSFER_STUB_UDS was recorded in the frontend codepath,
             // but that code did not run here so this is the appropriate time to capture this stat.
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id(), true);
+            TraceGuard traceGuard = SetTraceContextFromMeta(meta, true);
             PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS,
                                      GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
             reply = std::make_pair(meta, std::move(replyFrames));

@@ -15,13 +15,16 @@
  */
 
 /**
- * Description: Log rate limiter implementation using token bucket + uniform-interval sampling.
+ * Description: Request-level log sampler implementation by trace ID.
  */
 
 #include "datasystem/common/log/spdlog/log_rate_limiter.h"
 
 #include <algorithm>
 #include <chrono>
+#include <mutex>
+
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem {
 
@@ -31,283 +34,179 @@ LogRateLimiter &LogRateLimiter::Instance()
     return instance;
 }
 
-void LogRateLimiter::Refill()
+int64_t LogRateLimiter::NowMs() const
 {
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::steady_clock::now().time_since_epoch())
-                     .count();
-    auto lastMs = lastRefillMs_.load(std::memory_order_relaxed);
-
-    // First call or after Reset(): initialize timestamp without adding tokens
-    if (lastMs == 0) {
-        lastRefillMs_.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed);
-        return;
-    }
-
-    auto elapsed = nowMs - lastMs;
-    if (elapsed <= 0) {
-        return;
-    }
-
-    // CAS to update timestamp; only one thread performs the refill
-    if (!lastRefillMs_.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed)) {
-        return;
-    }
-
-    int32_t r = rate_.load(std::memory_order_relaxed);
-    if (r <= 0) {
-        return;
-    }
-
-    // Refill tokens proportional to elapsed time, capped at rate_ (1 second worth)
-    int64_t newTokens = elapsed * static_cast<int64_t>(r) / 1000;
-    if (newTokens <= 0) {
-        return;
-    }
-
-    // CAS loop to safely add tokens without losing concurrent updates
-    int64_t current = tokens_.load(std::memory_order_relaxed);
-    int64_t desired;
-    do {
-        desired = std::min(current + newTokens, static_cast<int64_t>(r));
-        if (desired <= current) {
-            break;  // Already at or above cap
-        }
-    } while (!tokens_.compare_exchange_weak(current, desired, std::memory_order_relaxed));
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 
-bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, bool *wasSampled)
+bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level)
 {
-    if (wasSampled) {
-        *wasSampled = false;
-    }
+    return ShouldLog(level, 0);
+}
 
-    int32_t r = rate_.load(std::memory_order_relaxed);
-
-    // No rate limiting
-    if (r <= 0) {
+bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash)
+{
+    // ERROR and FATAL are always logged.
+    if (level >= ds_spdlog::level::err) {
         return true;
     }
 
-    // (FATAL=5) always pass
-    if (level >= ds_spdlog::level::critical) {
-        return true;
-    }
-
-    Refill();
-
-    // Try to consume a token
-    int64_t t = tokens_.load(std::memory_order_relaxed);
-    while (t > 0) {
-        if (tokens_.compare_exchange_weak(t, t - 1, std::memory_order_relaxed)) {
-            totalLogged_.fetch_add(1, std::memory_order_relaxed);
-            return true;
-        }
-    }
-
-    // Tokens exhausted -> uniform-interval sampling: keep 1 out of every rate_ dropped logs.
-    // Use max(rate, 2) as divisor to prevent rate=1 edge case where mod 1 == 0 always.
-    int64_t divisor = std::max(static_cast<int64_t>(r), INT64_C(2));
-    int64_t dropped = totalDropped_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (divisor > 0 && dropped % divisor == 0) {
-        totalLogged_.fetch_add(1, std::memory_order_relaxed);
-        if (wasSampled) {
-            *wasSampled = true;
-        }
-        return true;
-    }
-
-    return false;
-}
-
-bool LogRateLimiter::WhitelistContains(uint64_t h) const
-{
-    uint64_t idx = h & (TRACE_WHITELIST_SIZE - 1);
-    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
-        uint64_t slotHash = whitelist_[idx].hash.load(std::memory_order_relaxed);
-        if (slotHash == h) {
-            return true;
-        }
-        if (slotHash == 0) {
-            return false;
-        }
-        idx = (idx + 1) & (TRACE_WHITELIST_SIZE - 1);
-    }
-    return false;
-}
-
-void LogRateLimiter::WhitelistAdd(uint64_t h)
-{
-    uint64_t startIdx = h & (TRACE_WHITELIST_SIZE - 1);
-    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
-        uint64_t idx = (startIdx + i) & (TRACE_WHITELIST_SIZE - 1);
-        uint64_t expected = 0;
-        if (whitelist_[idx].hash.compare_exchange_strong(expected, h, std::memory_order_relaxed)) {
-            return;
-        }
-        if (expected == h) {
-            return;
-        }
-    }
-    // Full → evict last probed position
-    uint64_t evictIdx = (startIdx + TRACE_WHITELIST_PROBE - 1) & (TRACE_WHITELIST_SIZE - 1);
-    whitelist_[evictIdx].hash.store(h, std::memory_order_relaxed);
-    whitelist_[evictIdx].miniTokens.store(0, std::memory_order_relaxed);
-    whitelist_[evictIdx].lastMiniRefillMs.store(0, std::memory_order_relaxed);
-}
-
-void LogRateLimiter::MiniBucketRefill(TraceSlot &slot)
-{
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::steady_clock::now().time_since_epoch())
-                     .count();
-    auto lastMs = slot.lastMiniRefillMs.load(std::memory_order_relaxed);
-    if (lastMs == 0) {
-        slot.lastMiniRefillMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed);
-        return;
-    }
-    auto elapsed = nowMs - lastMs;
-    if (elapsed <= 0) {
-        return;
-    }
-    if (!slot.lastMiniRefillMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed)) {
-        return;
-    }
-    int32_t r = rate_.load(std::memory_order_relaxed);
-    int32_t miniRate = std::min(r, TRACE_MINI_BUCKET_RATE);
-    if (miniRate <= 0) {
-        return;
-    }
-    int64_t newTokens = elapsed * static_cast<int64_t>(miniRate) / 1000;
-    if (newTokens <= 0) {
-        return;
-    }
-    int64_t current = slot.miniTokens.load(std::memory_order_relaxed);
-    int64_t desired;
-    do {
-        desired = std::min(current + newTokens, static_cast<int64_t>(miniRate));
-        if (desired <= current) {
-            break;
-        }
-    } while (!slot.miniTokens.compare_exchange_weak(current, desired, std::memory_order_relaxed));
-}
-
-bool LogRateLimiter::MiniBucketConsume(TraceSlot &slot)
-{
-    MiniBucketRefill(slot);
-    int64_t t = slot.miniTokens.load(std::memory_order_relaxed);
-    while (t > 0) {
-        if (slot.miniTokens.compare_exchange_weak(t, t - 1, std::memory_order_relaxed)) {
-            totalLogged_.fetch_add(1, std::memory_order_relaxed);
-            return true;
-        }
-    }
-    return false;
-}
-
-int LogRateLimiter::FindWhitelistSlot(uint64_t traceHash) const
-{
-    uint64_t startIdx = traceHash & (TRACE_WHITELIST_SIZE - 1);
-    for (int i = 0; i < TRACE_WHITELIST_PROBE; ++i) {
-        uint64_t idx = (startIdx + i) & (TRACE_WHITELIST_SIZE - 1);
-        uint64_t slotHash = whitelist_[idx].hash.load(std::memory_order_relaxed);
-        if (slotHash == traceHash) {
-            return static_cast<int>(idx);
-        }
-        if (slotHash == 0) {
-            break;
-        }
-    }
-    return -1;
-}
-
-bool LogRateLimiter::SamplingFallback(int32_t rate, bool *wasSampled)
-{
-    int64_t divisor = std::max(static_cast<int64_t>(rate), INT64_C(2));
-    int64_t dropped = totalDropped_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (divisor > 0 && dropped % divisor == 0) {
-        totalLogged_.fetch_add(1, std::memory_order_relaxed);
-        if (wasSampled) {
-            *wasSampled = true;
-        }
-        return true;
-    }
-    return false;
-}
-
-bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash, bool *wasSampled)
-{
-    if (wasSampled) {
-        *wasSampled = false;
-    }
-    int32_t r = rate_.load(std::memory_order_relaxed);
-    if (r <= 0 || level >= ds_spdlog::level::err) {
-        return true;
-    }
+    // Non-request logs (no trace) are never sampled.
     if (traceHash == 0) {
-        return ShouldLog(level, wasSampled);
+        return true;
     }
 
-    // Whitelist hit → mini-bucket → sampling fallback
-    int slotIdx = FindWhitelistSlot(traceHash);
-    if (slotIdx >= 0) {
-        return MiniBucketConsume(whitelist_[slotIdx]) || SamplingFallback(r, wasSampled);
+    // RPC-propagated decision takes precedence across processes.
+    bool propagatedAdmit = false;
+    if (Trace::Instance().GetRequestSampleDecision(propagatedAdmit)) {
+        return propagatedAdmit;
     }
 
-    // Not in whitelist → global token bucket
-    Refill();
-    int64_t t = tokens_.load(std::memory_order_relaxed);
-    while (t > 0) {
-        if (tokens_.compare_exchange_weak(t, t - 1, std::memory_order_relaxed)) {
-            totalLogged_.fetch_add(1, std::memory_order_relaxed);
-            WhitelistAdd(traceHash);
+    // No sampling configured.
+    if (rate_.load(std::memory_order_relaxed) <= 0) {
+        return true;
+    }
+
+    return ShouldAdmitRequest(traceHash);
+}
+
+bool LogRateLimiter::ShouldAdmitRequest(uint64_t traceHash)
+{
+    int64_t nowMs = NowMs();
+
+    bool admitted = false;
+    {
+        std::lock_guard<std::mutex> lock(decisionTableMutex_);
+        CleanupExpiredDecisions(nowMs);
+        if (GetDecisionFromTable(traceHash, nowMs, admitted)) {
+            Trace::Instance().SetRequestSampleDecision(true, admitted);
+            return admitted;
+        }
+
+        admitted = TryAdmitInCurrentSecond(nowMs);
+        UpsertDecision(traceHash, admitted, nowMs);
+    }
+
+    Trace::Instance().SetRequestSampleDecision(true, admitted);
+    return admitted;
+}
+
+bool LogRateLimiter::GetOrCreateRequestDecision(uint64_t traceHash, bool &admitted)
+{
+    if (traceHash == 0) {
+        return false;
+    }
+
+    if (Trace::Instance().GetRequestSampleDecision(admitted)) {
+        return true;
+    }
+
+    if (rate_.load(std::memory_order_relaxed) <= 0) {
+        return false;
+    }
+
+    admitted = ShouldAdmitRequest(traceHash);
+    return true;
+}
+
+void LogRateLimiter::RefreshRequestWindow(int64_t nowMs)
+{
+    int64_t currentSec = nowMs / 1000;
+    int64_t oldSec = windowSec_.load(std::memory_order_relaxed);
+
+    while (oldSec != currentSec) {
+        if (windowSec_.compare_exchange_weak(oldSec, currentSec, std::memory_order_relaxed)) {
+            admittedInWindow_.store(0, std::memory_order_relaxed);
+            return;
+        }
+    }
+}
+
+bool LogRateLimiter::TryAdmitInCurrentSecond(int64_t nowMs)
+{
+    RefreshRequestWindow(nowMs);
+
+    int32_t limit = rate_.load(std::memory_order_relaxed);
+    if (limit <= 0) {
+        return true;
+    }
+
+    int32_t admitted = admittedInWindow_.load(std::memory_order_relaxed);
+    while (admitted < limit) {
+        if (admittedInWindow_.compare_exchange_weak(admitted, admitted + 1, std::memory_order_relaxed)) {
             return true;
         }
     }
 
-    // Global tokens exhausted → sampling fallback
-    WhitelistAdd(traceHash);
-    return SamplingFallback(r, wasSampled);
+    return false;
+}
+
+bool LogRateLimiter::GetDecisionFromTable(uint64_t traceHash, int64_t nowMs, bool &admitted)
+{
+    auto it = traceDecisions_.find(traceHash);
+    if (it == traceDecisions_.end()) {
+        return false;
+    }
+
+    if (it->second.expireAtMs <= nowMs) {
+        traceDecisions_.erase(it);
+        return false;
+    }
+
+    admitted = it->second.admitted;
+    it->second.expireAtMs = nowMs + TRACE_DECISION_TTL_MS;
+    return true;
+}
+
+void LogRateLimiter::UpsertDecision(uint64_t traceHash, bool admitted, int64_t nowMs)
+{
+    traceDecisions_[traceHash] = TraceDecisionEntry{ admitted, nowMs + TRACE_DECISION_TTL_MS };
+}
+
+void LogRateLimiter::CleanupExpiredDecisions(int64_t nowMs)
+{
+    if (nowMs - lastCleanupMs_ < TRACE_DECISION_CLEANUP_INTERVAL_MS) {
+        return;
+    }
+    lastCleanupMs_ = nowMs;
+
+    for (auto it = traceDecisions_.begin(); it != traceDecisions_.end();) {
+        if (it->second.expireAtMs <= nowMs) {
+            it = traceDecisions_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
+void LogRateLimiter::ClearDecisionTable()
+{
+    std::lock_guard<std::mutex> lock(decisionTableMutex_);
+    traceDecisions_.clear();
+    lastCleanupMs_ = 0;
 }
 
 void LogRateLimiter::SetRate(int32_t ratePerSecond)
 {
-    // Clamp negative values to 0 (no limit)
-    rate_.store(std::max(ratePerSecond, static_cast<int32_t>(0)), std::memory_order_relaxed);
-}
-
-int64_t LogRateLimiter::GetSamplingRate() const
-{
-    int32_t r = rate_.load(std::memory_order_relaxed);
-    if (r <= 0) {
-        return 1;
+    int32_t newRate = std::max(ratePerSecond, static_cast<int32_t>(0));
+    int32_t oldRate = rate_.exchange(newRate, std::memory_order_relaxed);
+    if (oldRate == newRate) {
+        return;
     }
 
-    int64_t logged = totalLogged_.load(std::memory_order_relaxed);
-    int64_t dropped = totalDropped_.load(std::memory_order_relaxed);
-    int64_t total = logged + dropped;
-    if (total == 0 || logged == 0) {
-        return 1;
-    }
-
-    return total / logged;
+    windowSec_.store(NowMs() / 1000, std::memory_order_relaxed);
+    admittedInWindow_.store(0, std::memory_order_relaxed);
+    ClearDecisionTable();
 }
 
 void LogRateLimiter::Reset()
 {
-    tokens_.store(0, std::memory_order_relaxed);
-    auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                     std::chrono::steady_clock::now().time_since_epoch())
-                     .count();
-    lastRefillMs_.store(nowMs, std::memory_order_relaxed);
     rate_.store(0, std::memory_order_relaxed);
-    totalLogged_.store(0, std::memory_order_relaxed);
-    totalDropped_.store(0, std::memory_order_relaxed);
-    for (int i = 0; i < TRACE_WHITELIST_SIZE; ++i) {
-        whitelist_[i].hash.store(0, std::memory_order_relaxed);
-        whitelist_[i].miniTokens.store(0, std::memory_order_relaxed);
-        whitelist_[i].lastMiniRefillMs.store(0, std::memory_order_relaxed);
-    }
+    windowSec_.store(NowMs() / 1000, std::memory_order_relaxed);
+    admittedInWindow_.store(0, std::memory_order_relaxed);
+    ClearDecisionTable();
 }
 
 }  // namespace datasystem

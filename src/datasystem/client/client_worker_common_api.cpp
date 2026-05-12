@@ -37,6 +37,7 @@
 #endif
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -236,6 +237,8 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
     SetHeartbeatProperties(timeoutMs, rsp);
+    LogRateLimiter::Instance().SetRate(rsp.log_rate_limit());
+    LOG(INFO) << "Sync client log_rate_limit from worker register response: " << rsp.log_rate_limit();
     return Status::OK();
 }
 
@@ -836,6 +839,8 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode();
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
+    LogRateLimiter::Instance().SetRate(rsp.log_rate_limit());
+    LOG(INFO) << "Sync client log_rate_limit from worker register response: " << rsp.log_rate_limit();
 }
 
 Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()

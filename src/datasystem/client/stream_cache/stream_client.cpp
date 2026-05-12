@@ -42,7 +42,7 @@ StreamClient::~StreamClient()
 
 Status StreamClient::ShutDown()
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
         auto rc = impl_->ShutDown(needRollbackState);
@@ -54,7 +54,7 @@ Status StreamClient::ShutDown()
 
 Status StreamClient::Init(bool reportWorkerLost)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     bool needRollbackState;
     auto rc = impl_->Init(ip_, port_, needRollbackState, reportWorkerLost);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
@@ -63,20 +63,20 @@ Status StreamClient::Init(bool reportWorkerLost)
 
 Status StreamClient::UpdateToken(SensitiveValue token)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateToken(token);
 }
 
 Status StreamClient::UpdateAkSk(const std::string accessKey, SensitiveValue secretKey)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->UpdateAkSk(accessKey, secretKey);
 }
 
 Status StreamClient::CreateProducer(const std::string &streamName, std::shared_ptr<Producer> &outProducer,
                                     ProducerConf producerConf)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_CREATE_PRODUCER_ALL);
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_CREATE_PRODUCER);
     auto rc = impl_->CreateProducer(streamName, outProducer, producerConf);
@@ -98,7 +98,7 @@ Status StreamClient::CreateProducer(const std::string &streamName, std::shared_p
 Status StreamClient::Subscribe(const std::string &streamName, const struct SubscriptionConfig &config,
                                std::shared_ptr<Consumer> &outConsumer, bool autoAck)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_CREATE_SUB_ALL);
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_SUBSCRIBE);
     std::string consumerId;
@@ -115,7 +115,7 @@ Status StreamClient::Subscribe(const std::string &streamName, const struct Subsc
 
 Status StreamClient::DeleteStream(const std::string &streamName)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_DELETE_STREAM_ALL);
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_DELETE_STREAM);
     auto rc = impl_->DeleteStream(streamName);
@@ -129,7 +129,7 @@ Status StreamClient::DeleteStream(const std::string &streamName)
 
 Status StreamClient::QueryGlobalProducersNum(const std::string &streamName, uint64_t &gProducerNum)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_QUERY_PRODUCERS_NUM);
     auto rc = impl_->QueryGlobalProducersNum(streamName, gProducerNum);
     StreamRequestParam reqParam;
@@ -143,7 +143,7 @@ Status StreamClient::QueryGlobalProducersNum(const std::string &streamName, uint
 
 Status StreamClient::QueryGlobalConsumersNum(const std::string &streamName, uint64_t &gConsumerNum)
 {
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_QUERY_CONSUMERS_NUM);
     auto rc = impl_->QueryGlobalConsumersNum(streamName, gConsumerNum);
     StreamRequestParam reqParam;

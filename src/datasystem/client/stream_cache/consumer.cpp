@@ -41,7 +41,7 @@ Status Consumer::Receive(uint32_t expectNum, uint32_t timeoutMs, std::vector<Ele
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Receive");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     Optional<uint32_t> expectedNumber(expectNum);
     return impl_->Receive(expectedNumber, timeoutMs, outElements);
 }
@@ -50,7 +50,7 @@ Status Consumer::Receive(uint32_t timeoutMs, std::vector<Element> &outElements)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Receive");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     Optional<uint32_t> expectedNumber;
     return impl_->Receive(expectedNumber, timeoutMs, outElements);
 }
@@ -59,7 +59,7 @@ Status Consumer::Ack(uint64_t elementId)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Ack");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     return impl_->Ack(elementId);
 }
 
@@ -67,7 +67,7 @@ Status Consumer::Close()
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Close");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     AccessRecorder recorder(AccessRecorderKey::DS_STREAM_CLOSE_CONSUMER);
     auto rc = impl_->Close();
     StreamRequestParam reqParam;

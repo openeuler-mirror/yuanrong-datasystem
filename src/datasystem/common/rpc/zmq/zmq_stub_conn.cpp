@@ -179,7 +179,7 @@ Status ZmqFrontend::BackendToFrontend()
 {
     auto func = [this](SockConnEntry *cInfo, MetaPb &meta, ZmqMsgFrames &frames) {
         Status rc;
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+        TraceGuard traceGuard = SetTraceContextFromMeta(meta);
         PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_BACK_TO_FRONT, GetLapTime(meta, "ZMQ_STUB_BACK_TO_FRONT"));
         // First take care of the easy one that must go through the zmq dealer socket.
         // Few internal methods (for uds/tcp handshake) must go through this code path.
@@ -240,7 +240,7 @@ Status ZmqFrontend::ZmqSocketToBackend()
     frames.pop_front();
     MetaPb meta;
     RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     if (receiver != heartBeatID_) {
         INJECT_POINT("ZmqFrontend.CorruptMetaPb", [&meta]() {
             meta.Clear();
@@ -1283,7 +1283,7 @@ Status ZmqStubConnMgrImpl::Outbound(const std::string &sender, ZmqMetaMsgFrames 
     std::shared_ptr<ZmqFrontend> frontend;
     MetaPb meta = p.first;
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_ROUTE_MSG, GetLapTime(meta, "ZMQ_STUB_ROUTE_MSG"));
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(DecodeQueName(sender, fePtr, connInfo, stubId),
                                      FormatString("Bad queue format %s", sender));
     // If the frontend is deallocated, not much we can do at this point.
@@ -1460,7 +1460,7 @@ Status SockConnEntry::FrontendToBackend(int fd, std::shared_ptr<SockConnEntry::F
     frames.pop_front();
     MetaPb meta;
     RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS, GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
     auto p = std::make_pair(meta, std::move(frames));
     VLOG(RPC_LOG_LEVEL) << FormatString("Receiving reply for sender %s gateway %s client %s service '%s' method %d",

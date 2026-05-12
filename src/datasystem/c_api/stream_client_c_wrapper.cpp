@@ -39,7 +39,7 @@ StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort,
                                   const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
                                   const char *enableCrossNodeConnection)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     if (cWorkerHost == nullptr || strlen(cWorkerHost) == 0 || workerPort < 0) {
         LOG(ERROR) << "Host or Port have not been provided correctly";
         return nullptr;
@@ -59,7 +59,7 @@ StreamClient_p StreamCreateClient(const char *cWorkerHost, const int workerPort,
 
 struct StatusC StreamConnectWorker(StreamClient_p clientPtr, bool reportWorkerLost)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     if (clientPtr == nullptr) {
         return StatusC{ datasystem::K_RUNTIME_ERROR, "The client has not been initialized." };
     }

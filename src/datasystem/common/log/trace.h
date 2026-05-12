@@ -29,6 +29,13 @@ constexpr size_t SHORT_TRACEID_SIZE = 16;
 
 class TraceGuard;
 
+struct TraceContext {
+    std::string traceID;
+    bool requestLogTrace = false;
+    bool requestSampleDecisionValid = false;
+    bool requestSampleDecisionAdmitted = false;
+};
+
 class Trace {
 public:
     Trace(const Trace &other) = delete;
@@ -55,6 +62,12 @@ public:
     TraceGuard SetTraceUUID();
 
     /**
+     * @brief Set a new trace ID and mark it as a user request log trace.
+     * @return TraceGuard object. The TraceID is cleared when the object is destructed.
+     */
+    TraceGuard SetRequestTraceUUID();
+
+    /**
      * @brief Set prefix for trace id.
      * @param[in] prefix The prefix for trace id.
      */
@@ -69,6 +82,20 @@ public:
      * @return TraceGuard object. The TraceID is cleared when the object is destructed.
      */
     TraceGuard SetTraceNewID(const std::string &traceID, bool keep = false);
+
+    /**
+     * @brief Restore a trace context captured from another thread.
+     * @param[in] context Trace context snapshot.
+     * @param[in] keep Indicates that the trace context is not cleared when the scope is out.
+     * @return TraceGuard object. The TraceID is cleared when the object is destructed.
+     */
+    TraceGuard SetTraceContext(const TraceContext &context, bool keep = false);
+
+    /**
+     * @brief Capture the current trace context for cross-thread propagation.
+     * @return Current trace context snapshot.
+     */
+    TraceContext GetContext() const;
 
     /**
      * @brief Obtains the trace ID stored in thread_local.
@@ -92,6 +119,49 @@ public:
     const char *GetTraceIDPtr() const
     {
         return traceID_;
+    }
+
+    /**
+     * @brief Set request log sampling decision bound to current trace context.
+     * @param[in] valid Whether decision is present.
+     * @param[in] admitted Whether request trace is admitted when valid=true.
+     */
+    void SetRequestSampleDecision(bool valid, bool admitted)
+    {
+        requestSampleDecisionValid_ = valid;
+        requestSampleDecisionAdmitted_ = admitted;
+    }
+
+    /**
+     * @brief Get request log sampling decision for current trace context.
+     * @param[out] admitted Admitted result when returns true.
+     * @return true if decision exists, otherwise false.
+     */
+    bool GetRequestSampleDecision(bool &admitted) const
+    {
+        if (!requestSampleDecisionValid_) {
+            return false;
+        }
+        admitted = requestSampleDecisionAdmitted_;
+        return true;
+    }
+
+    /**
+     * @brief Whether current trace belongs to request-log sampling scope.
+     * @return true if current trace should participate in request sampling.
+     */
+    bool IsRequestLogTrace() const
+    {
+        return requestLogTrace_;
+    }
+
+    /**
+     * @brief Set whether current trace belongs to request-log sampling scope.
+     * @param[in] enabled true to enable request-log sampling for current trace.
+     */
+    void SetRequestLogTrace(bool enabled = true)
+    {
+        requestLogTrace_ = enabled;
     }
 
     /**
@@ -126,9 +196,17 @@ private:
     int16_t subPosition_ = -1;
 
     uint64_t cachedHash_ = 0;
+    bool requestLogTrace_ = false;
+    bool requestSampleDecisionValid_ = false;
+    bool requestSampleDecisionAdmitted_ = false;
 };
 
-enum class TraceGuardType : int { INVALID = -1, CLEAR_TRACE_ID = 0, CLEAR_SUB_TRACE_ID };
+enum class TraceGuardType : int {
+    INVALID = -1,
+    CLEAR_TRACE_ID = 0,
+    CLEAR_SUB_TRACE_ID,
+    RESTORE_REQUEST_LOG_CONTEXT
+};
 
 class TraceGuard {
 public:
@@ -136,7 +214,20 @@ public:
     {
     }
 
-    TraceGuard(TraceGuard &&other)
+    TraceGuard(TraceGuardType type, bool requestLogTrace, bool requestSampleDecisionValid,
+               bool requestSampleDecisionAdmitted)
+        : type_(type),
+          requestLogTrace_(requestLogTrace),
+          requestSampleDecisionValid_(requestSampleDecisionValid),
+          requestSampleDecisionAdmitted_(requestSampleDecisionAdmitted)
+    {
+    }
+
+    TraceGuard(TraceGuard &&other) noexcept
+        : type_(other.type_),
+          requestLogTrace_(other.requestLogTrace_),
+          requestSampleDecisionValid_(other.requestSampleDecisionValid_),
+          requestSampleDecisionAdmitted_(other.requestSampleDecisionAdmitted_)
     {
         other.type_ = TraceGuardType::INVALID;
     }
@@ -145,12 +236,17 @@ public:
 
     TraceGuard &operator=(const TraceGuard &) = delete;
 
-    TraceGuard &operator=(TraceGuard &&) = default;
+    TraceGuard &operator=(TraceGuard &&other) noexcept;
 
     ~TraceGuard();
 
 private:
+    void Reset();
+
     TraceGuardType type_;
+    bool requestLogTrace_ = false;
+    bool requestSampleDecisionValid_ = false;
+    bool requestSampleDecisionAdmitted_ = false;
 };
 }  // namespace datasystem
 

@@ -574,7 +574,7 @@ Status IOService::ServiceToClient(ZmqPollEntry *pe, EventsVal events)
                              FormatString("Incomplete MetaPb:\n%s", meta.DebugString()));
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_IOSVC, GetLapTime(meta, "ZMQ_FRONTEND_TO_IOSVC"));
     ZmqMsgFrames &frames = p.second;
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(meta.trace_id());
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     int fd = meta.route_fd();
     // No need to prepend the gateway if it is direct connection
     RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));

@@ -44,7 +44,7 @@ KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const i
                           const char *secretKey, size_t secretKeyLen, const char *tenantId, size_t cTenantIdLen,
                           const char *enableCrossNodeConnection)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     return CreateObjectClient(cWorkerHost, workerPort, timeOut, token, tokenLen, clientPublicKey, cClientPublicKeyLen,
                               clientPrivateKey, clientPrivateKeyLen, serverPublicKey, cServerPublicKeyLen, accessKey,
                               cAccessKeyLen, secretKey, secretKeyLen, tenantId, cTenantIdLen,
@@ -53,7 +53,7 @@ KVClient_p KVCreateClient(const char *cWorkerHost, const int workerPort, const i
 
 struct StatusC SCConnectWorker(KVClient_p clientPtr)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     return ConnectWorker(clientPtr);
 }
 
@@ -108,7 +108,7 @@ struct StatusC SCExecuteSet(KVClient_p clientPtr, const char *cKey, size_t keyLe
 struct StatusC SCSet(KVClient_p clientPtr, const char *cKey, size_t keyLen, const char *cVal, size_t valLen,
                      const char *cWriteMode, uint32_t ttlSecond, const char *cExistenceOpt)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
     StatusC rc = SCExecuteSet(clientPtr, cKey, keyLen, cVal, valLen, cWriteMode, ttlSecond, cExistenceOpt);
     std::string s(cKey, keyLen);
@@ -158,7 +158,7 @@ struct StatusC SCExecuteSetValue(KVClient_p clientPtr, char **cKey, size_t *keyL
 struct StatusC SCSetValue(KVClient_p clientPtr, char **cKey, size_t *keyLen, const char *cVal, size_t valLen,
                           const char *cWriteMode, uint32_t ttlSecond, const char *cExistenceOpt)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
     StatusC rc = SCExecuteSetValue(clientPtr, cKey, keyLen, cVal, valLen, cWriteMode, ttlSecond, cExistenceOpt);
     datasystem::RequestParam reqParam;
@@ -200,7 +200,7 @@ struct StatusC SCExecuteGet(KVClient_p clientPtr, const char *cKey, const size_t
 struct StatusC SCGet(KVClient_p clientPtr, const char *cKey, const size_t keyLen, uint32_t ctimeoutms, char **cVal,
                      size_t *valLen)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
     StatusC rc = SCExecuteGet(clientPtr, cKey, keyLen, ctimeoutms, cVal, valLen);
     std::string s(cKey, keyLen);
@@ -238,7 +238,7 @@ struct StatusC SCExecuteDel(KVClient_p clientPtr, const char *cKey, const size_t
 
 struct StatusC SCDel(KVClient_p clientPtr, const char *cKey, const size_t keyLen)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
     StatusC rc = SCExecuteDel(clientPtr, cKey, keyLen);
     std::string s(cKey, keyLen);
@@ -251,7 +251,7 @@ struct StatusC SCDel(KVClient_p clientPtr, const char *cKey, const size_t keyLen
 struct StatusC SCGetArray(KVClient_p clientPtr, const char **cKeys, const size_t *keysLen, uint64_t keysNum,
                           uint32_t ctimeoutms, char **cVals, size_t *valsLen)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
     size_t totalSize = 0;
     datasystem::RequestParam reqParam;
@@ -294,7 +294,7 @@ struct StatusC SCExecuteDelArray(KVClient_p clientPtr, const char **cKeys, uint6
 struct StatusC SCDelArray(KVClient_p clientPtr, const char **cKeys, uint64_t numObjs, char **cFailedKeys,
                           uint64_t *failedCount)
 {
-    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetTraceUUID();
+    datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
     datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
     StatusC rc = SCExecuteDelArray(clientPtr, cKeys, numObjs, cFailedKeys, failedCount);
     datasystem::RequestParam reqParam;
