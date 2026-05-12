@@ -17,8 +17,8 @@ Arguments:
     --since             Start time (inclusive), format: YYYY-MM-DDTHH:MM:SS
     --until             End time (exclusive), format: YYYY-MM-DDTHH:MM:SS
     -o / --output       Output HTML file path (default: kvcache_log_analysis.html)
-    --log-pattern       Filename substring to match (default: access)
-    --interval          Time bin in milliseconds (default: 3600000). 1000=1s, 60000=1min, 3600000=1h
+    --log-pattern       Filename substring to match (default: ds_client_access)
+    --interval          Time bin in milliseconds (default: 60000). 1000=1s, 60000=1min, 3600000=1h
     --open              Open report in browser after generation
 
 Report Sections:
@@ -33,6 +33,7 @@ Report Sections:
 """
 
 import argparse
+import gzip
 import html
 import json
 import os
@@ -43,6 +44,8 @@ import sys
 import textwrap
 from collections import defaultdict
 from datetime import datetime
+
+_RE_IP = re.compile(r"\d+\.\d+\.\d+\.\d+")
 
 
 def _time_bin_ms(ts, interval_ms=3600000):
@@ -75,11 +78,11 @@ def _find_log_files(log_dir, pattern="access"):
     log_files = {}
     for root, dirs, files in os.walk(log_dir, followlinks=False):
         for f in files:
-            if pattern in f and f.endswith(".log") and not f.endswith(".gz"):
+            if pattern in f and (f.endswith(".log") or f.endswith(".log.gz")):
                 host = None
                 parts = root.replace(log_dir, "").strip("/").split("/")
                 for p in parts:
-                    if re.match(r"\d+\.\d+\.\d+\.\d+", p):
+                    if _RE_IP.match(p) or re.match(r"worker_\d+_\d+", p):
                         host = p
                         break
                 if host is None:
@@ -97,10 +100,16 @@ def parse_records(log_files, since_str, until_str=None, interval_ms=3600000):
     bin_max_sec = defaultdict(lambda: 0.0)
     skipped = 0
 
+    total_lines = 0
     for host, files in log_files.items():
         for fpath in files:
-            with open(fpath, "r", errors="replace") as f:
+            print(f"  Parsing {os.path.basename(fpath)}...")
+            opener = gzip.open if fpath.endswith(".gz") else open
+            with opener(fpath, "rt", encoding="utf-8", errors="replace") as f:
                 for line in f:
+                    total_lines += 1
+                    if total_lines % 500000 == 0:
+                        print(f"  ... {total_lines:,} lines, {len(records):,} records")
                     line = line.strip()
                     if not line:
                         continue
@@ -110,21 +119,21 @@ def parse_records(log_files, since_str, until_str=None, interval_ms=3600000):
                         continue
                     if until and ts_short >= until:
                         continue
-                    parts = line.split(" | ")
+                    parts = [p.strip() for p in line.split(" | ")]
                     if len(parts) < 11:
                         skipped += 1
                         continue
                     try:
-                        retcode = int(parts[7].strip())
-                        api = parts[8].strip()
-                        latency = int(parts[9].strip())
-                        data_size = int(parts[10].strip())
+                        retcode = int(parts[7])
+                        api = parts[8]
+                        latency = int(parts[9])
+                        data_size = int(parts[10])
                     except (ValueError, IndexError):
                         skipped += 1
                         continue
 
                     try:
-                        ts = datetime.strptime(ts_short, "%Y-%m-%dT%H:%M:%S")
+                        ts = datetime.fromisoformat(ts_short)
                     except ValueError:
                         skipped += 1
                         continue
@@ -724,11 +733,11 @@ def main():
         help="output HTML file path (default: kvcache_log_analysis.html)",
     )
     parser.add_argument(
-        "--log-pattern", default="access",
+        "--log-pattern", default="ds_client_access",
         help="filename substring to match log files (default: access)",
     )
     parser.add_argument(
-        "--interval", type=int, default=3600000,
+        "--interval", type=int, default=60000,
         help="time bin in milliseconds (default: 3600000 = 1h). "
              "1000=1s, 10000=10s, 60000=1min, 600000=10min, 3600000=1h",
     )
