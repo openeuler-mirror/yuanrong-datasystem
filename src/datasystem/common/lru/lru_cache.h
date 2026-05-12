@@ -1002,6 +1002,7 @@ template <typename LruKey, typename LruObjPtr, typename LruEvictionPolicy>
 Status LruCache<LruKey, LruObjPtr, LruEvictionPolicy>::Remove(const LruKey &key)
 {
     Status rc;
+    LruObjPtr lruObjPtr = nullptr;
 
     {
         // Removing something from the lru needs to protect against concurrent access.
@@ -1017,7 +1018,7 @@ Status LruCache<LruKey, LruObjPtr, LruEvictionPolicy>::Remove(const LruKey &key)
 
         // Iterator points to a pair<key, list iterator>. The list iterator points to a pair<key, objptr>.
         // To get the object ptr, dereference the parent iterator and then the nested iterator.
-        LruObjPtr lruObjPtr = it->second->second;
+        lruObjPtr = it->second->second;
         evictPolicy_->LockObject(lruObjPtr);
 
         // Perform a remove eviction. It is up to the policy to decide if it behaves differently from a regular
@@ -1036,6 +1037,8 @@ Status LruCache<LruKey, LruObjPtr, LruEvictionPolicy>::Remove(const LruKey &key)
 
         evictPolicy_->UnlockObject(lruObjPtr);
     }
+    // Keep the last reference alive until after the lru lock is released so expensive object cleanup does not
+    // serialize all concurrent lru operations behind Remove().
     if (allowAsyncEvict_) {
         asyncEvictThread_->TryToWakeUp();
     }
