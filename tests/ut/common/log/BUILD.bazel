@@ -22,6 +22,7 @@ ds_cc_test(
     srcs = ["hard_disk_exporter_test.cpp"],
     deps = [
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/metrics/hard_disk_exporter",
         "//tests/ut:ut_common",
     ],

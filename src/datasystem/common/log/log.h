@@ -82,8 +82,17 @@ inline bool LogFirstEveryNShouldEmit(int n, int intervalMs, std::atomic<int64_t>
 
 static constexpr int32_t HEARTBEAT_LEVEL = 3;  // Heartbeat log level
 
+inline bool IsLogSeverityEnabled(LogSeverity logSeverity)
+{
+    return logSeverity == LogSeverity::FATAL || FLAGS_minloglevel <= logSeverity;
+}
+
 inline bool ShouldCreateLogMessage(LogSeverity logSeverity)
 {
+    if (!IsLogSeverityEnabled(logSeverity)) {
+        return false;
+    }
+
     auto level = ToSpdlogLevel(logSeverity);
     auto &trace = Trace::Instance();
     bool admitted = false;
@@ -122,11 +131,11 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 // PLOG is for performance slow-path diagnostics. It bypasses request log sampling/rate limiting only;
 // severity filtering still follows FLAGS_minloglevel.
 #define PLOG_IF(severity, condition)                                                \
-    if ((condition) && FLAGS_minloglevel <= DS_LOGS_LEVEL_##severity)               \
+    if ((condition) && datasystem::IsLogSeverityEnabled(DS_LOGS_LEVEL_##severity))  \
     PLOG_IMPL(severity)
 
 // Basic Logging Macros
-#define LOG(severity) LOG_IF(severity, FLAGS_minloglevel <= DS_LOGS_LEVEL_##severity)
+#define LOG(severity) LOG_IF(severity, true)
 #define PLOG(severity) PLOG_IF(severity, true)
 
 // Frequency-Controlled Logging Macros

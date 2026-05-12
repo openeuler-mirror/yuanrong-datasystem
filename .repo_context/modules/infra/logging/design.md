@@ -287,7 +287,7 @@
 1. Runtime or client code calls `Logging::Start(...)`.
 2. Client mode applies environment-driven config overrides before provider initialization.
 3. `InitLoggingWrapper(...)` creates the log directory, initializes the spdlog-backed provider, starts `LogManager`, and initializes `AccessRecorderManager`.
-4. Ordinary `LOG` and `VLOG` macros first call the lightweight `ShouldCreateLogMessage(...)` sampling precheck; rejected request logs at all severities do not evaluate their stream payload expressions.
+4. Ordinary `LOG`, `LOG_IF`, and `VLOG` macros first apply `minloglevel`, then call the lightweight `ShouldCreateLogMessage(...)` sampling precheck; suppressed logs do not evaluate their stream payload expressions.
 5. Admitted logs and non-sampled severities construct `LogMessage`, then emit through the configured provider and sinks; `LogMessageImpl` keeps a defensive sampling backstop for direct `LogMessage` construction outside the macros.
 
 Key files:
