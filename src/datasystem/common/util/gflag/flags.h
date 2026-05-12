@@ -174,6 +174,8 @@ private:
 
     // Only the flag parameter in the flagNameTrustList can be dynamically modified.
     const std::unordered_set<std::string> flagNameTrustList_{ "v",
+                                                              "minloglevel",
+                                                              "log_monitor",
                                                               "log_async_queue_size",
                                                               "log_compress",
                                                               "log_rate_limit",
