@@ -331,6 +331,13 @@ class Command(BaseCommand):
         start_time = time.time()
         while time.time() - start_time < self._timeout:
             try:
+                with open(f'/proc/{pid}/stat', 'r') as f:
+                    stat_info = f.read().split()
+                    if stat_info[2] == 'Z':
+                        return True
+            except (FileNotFoundError, ProcessLookupError):
+                return True
+            try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 return True
