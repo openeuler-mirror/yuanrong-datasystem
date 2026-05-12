@@ -34,6 +34,46 @@ DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections b
 DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 
 namespace datasystem {
+namespace {
+constexpr int64_t SLOW_RPC_STUB_THRESHOLD_MS = 2;
+
+const char *GetSlowPhase(int64_t lookupElapsedMs, int64_t accessElapsedMs, int64_t createElapsedMs)
+{
+    if (createElapsedMs >= lookupElapsedMs && createElapsedMs >= accessElapsedMs) {
+        return "create";
+    }
+    if (accessElapsedMs >= lookupElapsedMs) {
+        return "access";
+    }
+    return "lookup";
+}
+
+void LogStubGetEvent(const char *eventName, const HostPort &hostPort, StubType type, bool cacheHit,
+                     int64_t lookupElapsedMs, int64_t getDataElapsedMs, int64_t accessElapsedMs,
+                     int64_t createElapsedMs, int attempts, const Status *rc = nullptr)
+{
+    const auto totalElapsedMs = lookupElapsedMs + getDataElapsedMs + accessElapsedMs + createElapsedMs;
+    const auto phase = GetSlowPhase(lookupElapsedMs, accessElapsedMs, createElapsedMs);
+    if (rc == nullptr) {
+        LOG_IF(INFO, totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS)
+            << FormatString("[%s] dst=%s type=%d hit=%d phase=%s lookup=%ldms access=%ldms create=%ldms "
+                            "total=%ldms retry=%d trace=%s",
+                            eventName, hostPort.ToString(), static_cast<int>(type), cacheHit, phase, lookupElapsedMs,
+                            accessElapsedMs, createElapsedMs, totalElapsedMs, attempts,
+                            Trace::Instance().GetTraceID());
+        return;
+    }
+    if (totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS) {
+        LOG(ERROR) << FormatString("[%s] dst=%s type=%d phase=%s total=%ldms retry=%d error=%s trace=%s", eventName,
+                                   hostPort.ToString(), static_cast<int>(type), phase, totalElapsedMs, attempts,
+                                   rc->ToString(), Trace::Instance().GetTraceID());
+        return;
+    }
+    LOG(ERROR) << FormatString("[%s] dst=%s type=%d retry=%d error=%s trace=%s", eventName, hostPort.ToString(),
+                               static_cast<int>(type), attempts, rc->ToString(), Trace::Instance().GetTraceID());
+}
+}  // namespace
+
 Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress)
 {
     LOG(INFO) << FormatString("Init RpcStubCacheMgr for %s, max cache num: %d", localAddress.ToString(), maxStubCount);
@@ -179,16 +219,28 @@ void RpcStubCacheMgr::InitCreators()
 
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
 {
+    Timer timer;
+    int64_t lookupElapsedMs = 0;
+    int64_t getDataElapsedMs = 0;
+    int64_t accessElapsedMs = 0;
+    int64_t createElapsedMs = 0;
+    bool cacheHit = false;
     PerfPoint point(PerfKey::WORKER_RPC_STUB_CACHE_LOOKUP);
     std::shared_ptr<RpcStubCacheMgrObj> encapsulatedData = nullptr;
     if (lruCache_->Lookup(HashKeyForRpcStubCacheMgr(hostPort, type), &encapsulatedData).IsOk()) {
+        lookupElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
+        cacheHit = true;
         rpcStub = encapsulatedData->GetData();
+        getDataElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
         if (rpcStub != nullptr) {
+            LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
+                            accessElapsedMs, createElapsedMs, 0);
             return Status::OK();
         }
+    } else {
+        lookupElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
     }
     point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_FIND_CREATOR);
-    LOG(INFO) << "Start to create stub, destAddr: " << hostPort.ToString() << ", type: " << static_cast<int>(type);
     auto creator = creators_.find(type);
     if (creator == creators_.end() || creator->second == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Unsupported type: " + std::to_string(static_cast<int>(type)));
@@ -213,23 +265,36 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
                 }
             }
         } while (rc.GetCode() == K_TRY_AGAIN);
+        accessElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
         RETURN_IF_NOT_OK(rc);
         point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_CONNECT);
         rc = creator->second(hostPort, rpcStub);
+        createElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
         point.Record();
         if (rc.IsError()) {
-            LOG(ERROR) << "create rpc stub failed, rc: " << rc.ToString();
+            LogStubGetEvent("RPC_STUB_GET_FAIL", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
+                            accessElapsedMs, createElapsedMs, attempts, &rc);
             LOG_IF_ERROR(Remove(hostPort, type), "remove rpc stub failed");
             return rc;
         }
         newEncapsulatedData->SetDataWithoutLck(rpcStub);
     }
+    LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
+                    accessElapsedMs, createElapsedMs, attempts);
     return Status::OK();
 }
 
 Status RpcStubCacheMgr::Remove(const HostPort &hostPort, StubType type)
 {
-    return lruCache_->Remove(HashKeyForRpcStubCacheMgr(hostPort, type));
+    Timer timer;
+    Status rc = lruCache_->Remove(HashKeyForRpcStubCacheMgr(hostPort, type));
+    auto totalElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
+    LOG_IF(INFO, totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS
+                    || (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND))
+        << FormatString("[SLOW_RPC_STUB_REMOVE] dst=%s type=%d total=%ldms error=%s trace=%s",
+                        hostPort.ToString(), static_cast<int>(type), totalElapsedMs, rc.ToString(),
+                        Trace::Instance().GetTraceID());
+    return rc;
 }
 
 namespace stub_priority {
