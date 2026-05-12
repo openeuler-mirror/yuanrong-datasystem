@@ -693,9 +693,10 @@ Status UrmaManager::PerfThreadMain()
             LOG_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N) << "[URMA_PERF] Failed to get perf info, ret = " << ret;
             continue;
         }
-
-        std::string msg(buffer.data(), len);
-        LOG(INFO) << "[URMA_PERF]:\n" << msg;
+        if (len > 0) {
+            std::string msg(buffer.data(), len - 1);
+            LOG(INFO) << "[URMA_PERF]:\n" << msg;
+        }
     }
 
     return Status::OK();
@@ -844,17 +845,17 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
             FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s", requestIdStr.c_str()));
     }
 
-    VLOG(1) << "[UrmaEventHandler] Started waiting for the request id: " << requestId;
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
     auto elapsedMs = timer.ElapsedMilliSecond();
-    LOG_IF(INFO, elapsedMs > URMA_LOG_LIMIT_MS)
-        << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost " << elapsedMs
-        << "ms, request id:" << requestId << ", src address:" << localUrmaInfo_.localAddress.ToString()
-        << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
-        << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-        << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
+    auto vlogLevel = elapsedMs > URMA_LOG_LIMIT_MS || waitRc.IsError() ? 0 : 1;
+    VLOG(vlogLevel) << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
+                    << elapsedMs << "ms, request id:" << requestId
+                    << ", src address:" << localUrmaInfo_.localAddress.ToString()
+                    << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+                    << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
+                    << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
@@ -863,7 +864,6 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(elapsedMs));
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
-    VLOG(1) << "[UrmaEventHandler] Done waiting for the request id: " << requestId;
     return Status::OK();
 }
 
@@ -1574,7 +1574,7 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey, bool
     TbbUrmaConnectionMap::accessor connectionAccessor;
     if (urmaConnectionMap_.find(connectionAccessor, connectionKey)) {
         LOG(INFO) << "Remove UrmaConnection for " << connectionKey;
-        auto& connection = connectionAccessor->second;
+        auto &connection = connectionAccessor->second;
         if (connection != nullptr) {
             RETURN_IF_NOT_OK(connection->ModifyJettyToError(*urmaResource_));
         }
@@ -1592,9 +1592,14 @@ Status UrmaManager::RemoveRemoteResources(const std::string &connectionKey, bool
         }
     }
 
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        removed, K_NOT_FOUND,
-        FormatString("Cannot remove URMA resources, connection key %s does not exist", connectionKey.c_str()));
+    if (!removed) {
+        const auto msg = FormatString(
+            "Skip removing URMA resources, connection key %s not found; may be already "
+            "cleaned up or not established",
+            connectionKey.c_str());
+        LOG(INFO) << msg;
+        RETURN_STATUS(K_NOT_FOUND, msg);
+    }
     return Status::OK();
 }
 

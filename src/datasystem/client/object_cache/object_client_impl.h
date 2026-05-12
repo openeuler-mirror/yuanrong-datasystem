@@ -677,6 +677,12 @@ public:
      */
     Status HealthCheck(ServerState &state);
 
+    /**
+     * @brief Get transport data type between client and worker.
+     * @return Transport type.
+     */
+    std::string GetTransportType() const;
+
 private:
     friend Buffer;
     friend DeviceBuffer;
@@ -1307,6 +1313,10 @@ private:
                                        std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
                                        std::unique_ptr<client::MmapManager> &localMmapManager,
                                        std::shared_ptr<client::ListenWorker> &localListenWorker);
+
+    void ReplacePreferredLocalWorkerLocked(std::unique_ptr<client::MmapManager> &localMmapManager,
+                                           std::shared_ptr<client::ListenWorker> &oldLocalListener,
+                                           std::unique_ptr<client::MmapManager> &oldMmapManager);
 
     bool CommitPreferredLocalWorker(WorkerNode oldNode, const HostPort &localAddress,
                                     const std::shared_ptr<ClientWorkerRemoteApi> &localWorkerApi,
