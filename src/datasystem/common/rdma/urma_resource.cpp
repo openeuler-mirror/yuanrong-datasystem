@@ -476,16 +476,14 @@ Status UrmaConnection::ModifyJettyToError(UrmaResource &resource)
         CHECK_FAIL_RETURN_STATUS(jetty_ != nullptr, K_RUNTIME_ERROR, "Jetty already cleared for connection");
         jetty = jetty_;
         if (!jetty->MarkInvalid()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_MODIFY_JETTY_TO_ERROR_SKIP] Jetty " << jetty->GetJettyId()
-                << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-                << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+            LOG(WARNING) << "[URMA_MODIFY_JETTY_TO_ERROR_SKIP] Jetty " << jetty->GetJettyId()
+                      << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+                      << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_MODIFY_JETTY_TO_ERROR] Mark Jetty " << jetty->GetJettyId()
-            << " invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+        LOG(INFO) << "[URMA_MODIFY_JETTY_TO_ERROR] Mark Jetty " << jetty->GetJettyId()
+                  << " invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+                  << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
     }
     return resource.AsyncModifyJettyToError(jetty);
 }

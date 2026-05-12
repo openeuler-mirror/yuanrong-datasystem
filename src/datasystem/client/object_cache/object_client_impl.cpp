@@ -1721,7 +1721,6 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     }
     buffer = std::move(newBuffer);
     createPoint.Record();
-
     VLOG(1) << "Finished creating object, object_key: " << objectKey;
     return Status::OK();
 }
@@ -1977,8 +1976,9 @@ Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo>
                                          uint64_t length)
 {
     g_isThroughUb = true;
-    auto api = std::dynamic_pointer_cast<IClientWorkerApi>(workerApi_[LOCAL_WORKER]);
-    RETURN_RUNTIME_ERROR_IF_NULL(api);
+    std::shared_ptr<IClientWorkerApi> api;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
     return api->SendBufferViaUb(bufferInfo, data, length);
 }
 

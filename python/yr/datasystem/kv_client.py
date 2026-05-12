@@ -24,7 +24,7 @@ from yr.datasystem.lib import libds_client_py as ds
 from yr.datasystem.object_client import WriteMode, CacheType
 from yr.datasystem.util import Validator as validator
 
-DEFAULT_FAST_TRANSPORT_MEM_SIZE = 128 * 1024 * 1024
+DEFAULT_FAST_TRANSPORT_MEM_SIZE = 256 * 1024 * 1024
 MAX_FAST_TRANSPORT_MEM_SIZE = 2 * 1024 * 1024 * 1024
 
 
@@ -187,7 +187,7 @@ class KVClient:
             `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
             the system will throw a request exception.
             fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
-            128MB. The valid range is [1, 2GB].
+            256MB. The valid range is [1, 2GB].
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.

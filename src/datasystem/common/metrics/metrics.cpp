@@ -33,7 +33,7 @@ DS_DECLARE_int32(log_monitor_interval_ms);
 namespace datasystem::metrics {
 namespace {
 constexpr size_t MAX_METRIC_NUM = 1024;
-constexpr size_t MAX_METRICS_LOG_BYTES = 24000;
+constexpr size_t MAX_METRICS_LOG_BYTES = 1024;
 constexpr const char *VERSION = "v0";
 
 std::string BuildSuffix(const char *unit)
@@ -417,6 +417,11 @@ ScopedTimer::~ScopedTimer()
 {
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_);
     GetHistogram(id_).Observe(static_cast<uint64_t>(elapsed.count()));
+}
+
+std::vector<std::string> DumpSummariesForTest(int intervalMs)
+{
+    return BuildSummary(intervalMs);
 }
 
 std::string DumpSummaryForTest(int intervalMs)

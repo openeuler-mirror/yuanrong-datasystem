@@ -30,6 +30,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
@@ -587,8 +588,9 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
-            LOG(INFO) << FormatString("Remote get request:[batch] src[%s] --dst(%s)--> objects count[%d]",
-                                      localAddress_.ToString(), address, reqPb.requests_size());
+            LOG(INFO) << AppendSrcDstForLog(
+                FormatString("Remote get request:[batch] objects count[%d]", reqPb.requests_size()),
+                localAddress_.ToString(), address);
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;

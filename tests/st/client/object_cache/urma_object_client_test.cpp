@@ -1638,6 +1638,24 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsFallbackPayloadAtOneMb)
     ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos);
 }
 
+TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsClientPreRequestFallbackPayloadAtOneMb)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const size_t dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    const std::string value(dataSize, 'a');
+    DS_ASSERT_OK(client->Set("key-get-client-fallback-one-mb", value));
+    DS_ASSERT_OK(inject::Set("UrmaManager.GetMemoryBufferHandle", "1*return(K_OUT_OF_MEMORY)"));
+
+    std::string getValue;
+    Status status = client->Get("key-get-client-fallback-one-mb", getValue);
+    ASSERT_TRUE(status.IsError());
+    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+    ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos)
+        << status.ToString();
+}
+
 class UrmaAsyncEventTest : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

@@ -402,6 +402,13 @@ public:
     Status RemoveRemoteClient(ClientKey clientEntityId);
 
     /**
+     * @brief Check whether the worker has observed a URMA client handshake for the given client entity.
+     * @param[in] clientEntityId Client entity id.
+     * @return True if a remote client mapping exists.
+     */
+    bool HasRemoteClient(ClientKey clientEntityId);
+
+    /**
      * @brief Retrieve local segment and jfr for receiving remote sender cqe.
      * @param[in] segAddress segment start address.
      * @param[in] segSize segment size.
@@ -650,7 +657,7 @@ private:
     void *memoryBuffer_ = nullptr;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
-    static std::atomic<uint64_t> ubTransportMemSize_;  // 128 MB
+    static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB
     uint64_t ubMaxGetDataSize_ = 32 * 1024 * 1024;     // 32 MB
     uint64_t ubMaxSetBufferSize_ = 8 * 1024 * 1024;    // 8 MB
 };
