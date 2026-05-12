@@ -36,6 +36,7 @@ DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(log_async_queue_size);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_int32(logbufsecs);
+DS_DECLARE_bool(log_monitor);
 
 namespace datasystem {
 namespace ut {
@@ -95,6 +96,8 @@ TEST_F(FlagsTest, TestValidateFlagName)
     Flags flag;
     EXPECT_FALSE(flag.ValidateFlagName("logbufsecs"));
     EXPECT_TRUE(flag.ValidateFlagName("log_compress"));
+    EXPECT_TRUE(flag.ValidateFlagName("minloglevel"));
+    EXPECT_TRUE(flag.ValidateFlagName("log_monitor"));
 }
 
 TEST_F(FlagsTest, TestFindFirstSeparator)
@@ -135,6 +138,25 @@ TEST_F(FlagsTest, TestProcessOptions)
     EXPECT_FALSE(FLAGS_log_compress);
     EXPECT_EQ(FLAGS_max_log_file_num, static_cast<uint32_t>(22));
     EXPECT_EQ(FLAGS_arena_per_tenant, static_cast<uint32_t>(30));
+}
+
+TEST_F(FlagsTest, TestProcessOptionsUpdatesRuntimeLogControlFlags)
+{
+    auto oldMinLogLevel = FLAGS_minloglevel;
+    auto oldLogMonitor = FLAGS_log_monitor;
+    FLAGS_minloglevel = 0;
+    FLAGS_log_monitor = true;
+
+    Flags flag;
+    auto flagMap = flag.ProcessOptions("-minloglevel=2\n-log_monitor=false");
+    EXPECT_EQ(flagMap.count("minloglevel"), 1ul);
+    EXPECT_EQ(flagMap.count("log_monitor"), 1ul);
+    flag.UpdateFlagParameter(flagMap);
+    EXPECT_EQ(FLAGS_minloglevel, 2);
+    EXPECT_FALSE(FLAGS_log_monitor);
+
+    FLAGS_minloglevel = oldMinLogLevel;
+    FLAGS_log_monitor = oldLogMonitor;
 }
 
 TEST_F(FlagsTest, TestWorkerFlagValidateSpecial)
