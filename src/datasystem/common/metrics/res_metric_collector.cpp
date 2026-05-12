@@ -92,27 +92,30 @@ void ResMetricCollector::CollectMetrics()
         TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
         int iLimit = int(ResMetricName::RES_METRICS_END) - 1;
         while (!exitFlag_) {
-            std::string metricString;
-            std::stringstream unRegisteredFunctions;
-            for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; i++) {
-                auto iter = collectHandler_.find(i);
-                if (iter != collectHandler_.end()) {
-                    std::string collectMetrics = iter->second();
-                    metricString += collectMetrics + " | ";
-                } else {
-                    metricString += " | ";
-                    unRegisteredFunctions << std::to_string(i) << (i == iLimit ? "" : ",");
+            if (FLAGS_log_monitor) {
+                std::string metricString;
+                std::stringstream unRegisteredFunctions;
+                for (int i = int(ResMetricName::SHARED_MEMORY); i <= iLimit; i++) {
+                    auto iter = collectHandler_.find(i);
+                    if (iter != collectHandler_.end()) {
+                        std::string collectMetrics = iter->second();
+                        metricString += collectMetrics + " | ";
+                    } else {
+                        metricString += " | ";
+                        unRegisteredFunctions << std::to_string(i) << (i == iLimit ? "" : ",");
+                    }
                 }
+                if (!unRegisteredFunctions.str().empty()) {
+                    LOG_FIRST_N(WARNING, 1)
+                        << "No handler found for resource log type :" << unRegisteredFunctions.str();
+                }
+                if (!metricString.empty()) {
+                    metricString.pop_back();
+                }
+                Uri uri(__FILE__);
+                exporter_->Send(metricString, uri, __LINE__);
+                exporter_->SubmitWriteMessage();
             }
-            if (!unRegisteredFunctions.str().empty()) {
-                LOG_FIRST_N(WARNING, 1) << "No handler found for resource log type :" << unRegisteredFunctions.str();
-            }
-            if (!metricString.empty()) {
-                metricString.pop_back();
-            }
-            Uri uri(__FILE__);
-            exporter_->Send(metricString, uri, __LINE__);
-            exporter_->SubmitWriteMessage();
             INJECT_POINT("worker.CollectMetrics", [this](int interval) { msInterval_ = interval; });
             auto waitTimeMs = 100;
             int count = 0;
