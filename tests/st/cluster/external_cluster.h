@@ -115,6 +115,9 @@ public:
 
     bool waitWorkerReady;
 
+    // Keep the old post-start grace period only for tests that explicitly need heartbeat convergence.
+    bool waitAfterStart;
+
     bool enableLivenessProbe;
     // used by ak/sk authorize
     std::string systemAccessKey = "QTWAOYTTINDUT2QVKYUC";
@@ -380,6 +383,11 @@ protected:
     Status CheckProbeFile(const std::string &filepath, int timeoutSecs, pid_t pid);
 
     Status CheckIpPortListen(const std::string &addr, int timeoutSecs);
+
+    bool ShouldWaitAfterStart() const override
+    {
+        return opts_.waitAfterStart;
+    }
 
     // get proper master address param.
     std::string GetProperMasterAddrParam(int index, const HostPort &defaultMasterAddr);

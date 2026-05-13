@@ -23,19 +23,27 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/stream_client.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int STREAM_SERVICE_READY_TIMEOUT_MS = 5'000;
+constexpr int STREAM_SERVICE_READY_RETRY_INTERVAL_MS = 100;
+}  // namespace
+
 void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
 {
     std::string objKey = "ikun";
@@ -57,6 +65,22 @@ void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
     } else {
         ASSERT_EQ(client->Subscribe("test1", config, consumer).GetCode(), StatusCode::K_RUNTIME_ERROR);
     }
+}
+
+Status SubscribeWhenReady(const std::shared_ptr<StreamClient> &client)
+{
+    Timer timer;
+    Status lastStatus;
+    do {
+        std::shared_ptr<Consumer> consumer;
+        SubscriptionConfig config("sub1", SubscriptionType::STREAM);
+        lastStatus = client->Subscribe("test1", config, consumer);
+        if (lastStatus.IsOk()) {
+            return lastStatus;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(STREAM_SERVICE_READY_RETRY_INTERVAL_MS));
+    } while (timer.ElapsedMilliSecond() < STREAM_SERVICE_READY_TIMEOUT_MS);
+    return lastStatus;
 }
 
 void KvOp(const std::shared_ptr<KVClient> &client, bool success)
@@ -94,7 +118,7 @@ TEST_F(OcServiceDisableTest, TestInit)
     KvOp(kVClient, false);
     auto scClient = std::make_shared<StreamClient>(opts);
     DS_ASSERT_OK(scClient->Init());
-    ScOp(scClient, true);
+    DS_ASSERT_OK(SubscribeWhenReady(scClient));
 }
 
 class ScServiceDisableTest : public OCClientCommon {

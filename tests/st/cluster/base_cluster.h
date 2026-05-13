@@ -155,10 +155,12 @@ public:
 
     Status Shutdown() override
     {
+#ifdef BUILD_COVERAGE
         Status status = GcovFlush();
         if (status.IsError()) {
             LOG(ERROR) << "GcovFlush failed:" << status.ToString();
         }
+#endif
         return Subprocess::Shutdown();
     }
 
@@ -242,8 +244,9 @@ public:
         RETURN_IF_NOT_OK(StartOBS());
         RETURN_IF_NOT_OK(StartWorkers());
         RETURN_IF_NOT_OK(WaitUntilClusterReadyOrTimeout(timeoutSecs));
-        // Need to wait a bit before gcs send a heartbeat to register itself.
-        std::this_thread::sleep_for(std::chrono::milliseconds(DEFAULT_SLEEP_FOR_TIME));
+        if (ShouldWaitAfterStart()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(DEFAULT_SLEEP_FOR_TIME));
+        }
         return Status::OK();
     }
 
@@ -541,6 +544,11 @@ public:
     virtual Status KillWorker(uint32_t idx) = 0;
 
 protected:
+    virtual bool ShouldWaitAfterStart() const
+    {
+        return false;
+    }
+
     std::atomic<bool> isRunning_{ false };
 
     static const int WAIT_TIMEOUT_SECS = 150;
