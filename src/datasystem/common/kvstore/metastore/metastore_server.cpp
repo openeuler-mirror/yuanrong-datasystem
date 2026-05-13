@@ -20,6 +20,8 @@
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 
@@ -57,6 +59,16 @@ MetaStoreServer::~MetaStoreServer()
 Status MetaStoreServer::Start(const std::string &address)
 {
     LOG(INFO) << "Starting MetaStore server on " << address;
+
+    // Check if port is available before starting gRPC server
+    HostPort hostPort;
+    RETURN_IF_NOT_OK(hostPort.ParseString(address));
+    Status portStatus = IsPortAvailable(hostPort.Host(), hostPort.Port());
+    if (portStatus.IsError()) {
+        LOG(ERROR) << "Metastore service start failed on " << address << ": " << portStatus.GetMsg();
+        return portStatus;
+    }
+
     // Create gRPC server builder
     grpc::ServerBuilder builder;
 

@@ -19,6 +19,17 @@
  */
 #include "datasystem/common/util/net_util.h"
 
+#include <sstream>
+
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+#include <securec.h>
+
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
 
@@ -48,6 +59,23 @@ Status ParseToHostPortString(const std::string &str, std::string &host, std::str
     host = addrStr;
     port = portNumStr;
 
+    return Status::OK();
+}
+
+Status IsPortAvailable(const std::string &host, int port)
+{
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+
+    if (bind(sockfd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0 && errno == EADDRINUSE) {
+        close(sockfd);
+        return Status(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("Port %d on %s is already in use", port, host));
+    }
+    close(sockfd);
     return Status::OK();
 }
 

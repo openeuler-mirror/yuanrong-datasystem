@@ -52,6 +52,14 @@ std::vector<std::string> Split(const std::string &input, const std::string &patt
  */
 Status ParseToHostPortString(const std::string &str, std::string &host, std::string &port, bool &isIPv6);
 
+/**
+ * @brief Check if a port is available for binding.
+ * @param[in] host The host address (e.g., "0.0.0.0", "127.0.0.1")
+ * @param[in] port The port number to check
+ * @return Status::OK() if port is available, K_RUNTIME_ERROR with specific message if port is in use
+ */
+Status IsPortAvailable(const std::string &host, int port);
+
 class HostPort {
 public:
     explicit HostPort(std::string host = "", int port = -1);
