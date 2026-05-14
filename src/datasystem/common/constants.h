@@ -111,6 +111,7 @@ static const std::string CLIENT_LOG_FILENAME = "ds_client";
 // log limit
 static const int LOG_TIME_LIMIT_LEVEL1 = 1;   // 1 second
 static const int LOG_TIME_LIMIT_LEVEL2 = 10;  // 10 seconds
+static const int LOG_TIME_LIMIT_LEVEL3 = 60;  // 60 seconds
 
 }  // namespace datasystem
 
