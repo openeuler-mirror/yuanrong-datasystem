@@ -21,7 +21,9 @@
 
 #include <csignal>
 #include <fstream>
+#include <netdb.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <wait.h>
 
@@ -40,6 +42,42 @@ DS_DECLARE_bool(enable_etcd_auth);
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int PORT_LISTEN_POLL_INTERVAL_MS = 10;
+
+Status TryConnectTcpPort(const HostPort &addr)
+{
+    struct addrinfo hints = {};
+    hints.ai_family = addr.IsIPv6() ? AF_INET6 : AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+
+    struct addrinfo *rawResult = nullptr;
+    auto port = std::to_string(addr.Port());
+    auto ret = getaddrinfo(addr.Host().c_str(), port.c_str(), &hints, &rawResult);
+    CHECK_FAIL_RETURN_STATUS(ret == 0, K_RUNTIME_ERROR,
+                             FormatString("Resolve address %s failed: %s", addr.ToString(), gai_strerror(ret)));
+    std::unique_ptr<struct addrinfo, decltype(&freeaddrinfo)> result(rawResult, freeaddrinfo);
+
+    std::string lastErr;
+    for (auto *item = result.get(); item != nullptr; item = item->ai_next) {
+        auto fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
+        if (fd < 0) {
+            lastErr = FormatString("Socket create failed: %s", StrErr(errno));
+            continue;
+        }
+        auto connRet = connect(fd, item->ai_addr, item->ai_addrlen);
+        auto err = errno;
+        close(fd);
+        if (connRet == 0) {
+            return Status::OK();
+        }
+        lastErr = FormatString("Socket connect failed: %s", StrErr(err));
+    }
+    RETURN_STATUS(K_NOT_READY, FormatString("Address %s is not listening. %s", addr.ToString(), lastErr));
+}
+}  // namespace
+
 Status BaseCluster::ExecuteCmd(const std::string &cmd, std::string &result, int *exitCode)
 {
     const std::string modifiedCmd = cmd + " 2>&1";
@@ -720,19 +758,20 @@ Status ExternalCluster::CheckIpPortListen(const std::string &addr, int timeoutSe
     timeval now;
     gettimeofday(&now, nullptr);
     time_t deadLine = now.tv_sec + timeoutSecs;
-    // netstat -nat | grep ip:port
-    std::string cmd = "netstat -nat | grep " + addr;
+    HostPort hostPort;
+    RETURN_IF_NOT_OK(hostPort.ParseString(addr));
+    Status lastRc = Status::OK();
     while (true) {
-        std::string result;
-        RETURN_IF_NOT_OK(ExecuteCmd(cmd, result));
-        if (!result.empty() && result.find("LISTEN") != std::string::npos) {
+        lastRc = TryConnectTcpPort(hostPort);
+        if (lastRc.IsOk()) {
             break;
         }
         timeval curr;
         gettimeofday(&curr, nullptr);
         CHECK_FAIL_RETURN_STATUS(curr.tv_sec < deadLine, StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("Process startup timed out. address: %s, port status: %s", addr, result));
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                                 FormatString("Process startup timed out. address: %s, port status: %s", addr,
+                                              lastRc.ToString()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(PORT_LISTEN_POLL_INTERVAL_MS));
     }
     return Status::OK();
 }
@@ -1191,6 +1230,7 @@ ExternalClusterOptions::ExternalClusterOptions()
       masterIdx(0),
       addNodeTime(0),
       waitWorkerReady(true),
+      waitAfterStart(false),
       enableLivenessProbe(false),
       skipWorkerPreShutdown(true),
       isStreamCacheCase(false),
