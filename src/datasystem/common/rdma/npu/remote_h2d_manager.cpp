@@ -42,6 +42,7 @@ DS_DEFINE_string(remote_h2d_device_ids, "",
 
 namespace datasystem {
 bool RemoteH2DManager::enableRemoteH2D_ = false;
+constexpr uint32_t P2P_SCATTER_MAX_BATCH_BLOBS = 128 * 128;
 
 HostSegment::HostSegment(std::byte *data, std::uint64_t dataSize, P2pSegmentInfo segmentInfo,
                          P2pSegmentPermissions permissions)
@@ -119,7 +120,7 @@ Status RemoteH2DManager::GetClientDeviceId(int32_t &devId)
 {
     try {
         devId = stoi(FLAGS_remote_h2d_device_ids);
-    } catch (const std::invalid_argument& e) {
+    } catch (const std::invalid_argument &e) {
         RETURN_STATUS(StatusCode::K_INVALID, "Invalid RemoteH2D dev ids set: " + FLAGS_remote_h2d_device_ids);
     } catch (const std::out_of_range &e) {
         RETURN_STATUS(StatusCode::K_INVALID, "RemoteH2D dev id out of range: " + FLAGS_remote_h2d_device_ids);
@@ -241,9 +242,9 @@ Status RemoteH2DManager::HandleConnection(const std::string &key, const RemoteH2
                                                                          &p2pCommInitOptions);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
     if (kind == P2P_RECEIVER) {
-        clientPingFunctions_.insert({key, p2pCallback});
+        clientPingFunctions_.insert({ key, p2pCallback });
     } else if (kind == P2P_SENDER) {
-        clientDisconnectChecks_.insert({key, p2pCallback});
+        clientDisconnectChecks_.insert({ key, p2pCallback });
     }
     p2pComm->stream = std::make_shared<aclrtStream>();
     RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
@@ -471,9 +472,38 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
     std::lock_guard<std::mutex> lock(p2pComm->mutex);
     p2pComm->waitPost.Wait();
 
-    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMem(
-        entries, size, p2pComm->p2pComm, *(p2pComm->stream)));
-    LOG_IF_ERROR(acl::AclDeviceManager::Instance()->RtSynchronizeStreamWithTimeout(*(p2pComm->stream), 5000), "");
+    auto submitBatch = [&p2pComm](P2pScatterEntry *batchEntries, uint32_t batchSize) {
+        RETURN_OK_IF_TRUE(batchSize == 0);
+        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMem(
+            batchEntries, batchSize, p2pComm->p2pComm, *(p2pComm->stream)));
+        LOG_IF_ERROR(acl::AclDeviceManager::Instance()->RtSynchronizeStreamWithTimeout(*(p2pComm->stream), 5000), "");
+        return Status::OK();
+    };
+
+    uint32_t batchStart = 0;
+    uint32_t batchSize = 0;
+    uint32_t batchBlobCount = 0;
+    for (uint32_t entryIndex = 0; entryIndex < size; ++entryIndex) {
+        auto &entry = entries[entryIndex];
+        CHECK_FAIL_RETURN_STATUS(entry.numEl > 0, K_INVALID,
+                                 FormatString("Remote H2D scatter entry %u has no elements", entryIndex));
+        CHECK_FAIL_RETURN_STATUS(entry.numEl <= P2P_SCATTER_MAX_BATCH_BLOBS, K_INVALID,
+                                 FormatString("Remote H2D scatter entry %u has too many blobs: %u, max: %u", entryIndex,
+                                              entry.numEl, P2P_SCATTER_MAX_BATCH_BLOBS));
+
+        if (batchSize > 0 && batchBlobCount > P2P_SCATTER_MAX_BATCH_BLOBS - entry.numEl) {
+            RETURN_IF_NOT_OK(submitBatch(entries + batchStart, batchSize));
+            batchStart = entryIndex;
+            batchSize = 0;
+            batchBlobCount = 0;
+        }
+        if (batchSize == 0) {
+            batchStart = entryIndex;
+        }
+        batchSize++;
+        batchBlobCount += entry.numEl;
+    }
+    RETURN_IF_NOT_OK(submitBatch(entries + batchStart, batchSize));
     return Status::OK();
 }
 
@@ -516,23 +546,21 @@ void RemoteH2DManager::AfterFork()
 
 void RemoteH2DManager::ManageHeartbeats()
 {
-    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_interval_s", [this](int32_t interval) {
-        this->heartbeatIntervalS_ = interval;
-    });
-    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_timeout_s", [this](int32_t timeout) {
-        this->heartbeatTimeoutS_ = timeout;
-    });
+    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_interval_s",
+                 [this](int32_t interval) { this->heartbeatIntervalS_ = interval; });
+    INJECT_POINT("RH2D.ManageHeartbeats.heartbeat_timeout_s",
+                 [this](int32_t timeout) { this->heartbeatTimeoutS_ = timeout; });
     while (!interrupted_.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(heartbeatIntervalS_));
         // Send pings
-        for (const auto& [_, pingFunc] : clientPingFunctions_) {
+        for (const auto &[_, pingFunc] : clientPingFunctions_) {
             if (pingFunc) {
                 (*pingFunc)();
             }
         }
         // Check if any clients have been disconnected
         std::vector<std::string> disconnected;
-        for (const auto& [commId, callback] : clientDisconnectChecks_) {
+        for (const auto &[commId, callback] : clientDisconnectChecks_) {
             if (callback && ((*callback)() > heartbeatTimeoutS_)) {
                 disconnected.push_back(commId);
             }
