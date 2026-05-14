@@ -65,6 +65,8 @@ namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int BATCH_SPILL_THRESHOLD = 512;
+static constexpr int BATCH_DELETE_META_THRESHOLD = 300;
+static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
 thread_local std::string evictSpillTaskId;
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
@@ -136,29 +138,80 @@ void WorkerOcEvictionManager::Erase(const std::string &objectKey)
     (void)memEvictionList_.Erase(objectKey);
 }
 
-Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(const std::string &objectKey, uint64_t version)
+Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions)
 {
-    VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. ObjectKey: " << objectKey;
-    // Get Master address from objectKey
+    RETURN_OK_IF_TRUE(objectKeyVersions.empty());
+    VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. Object count: " << objectKeyVersions.size();
     if (etcdCM_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(etcdCM_->GetMetaAddress(objectKey, metaAddrInfo));
-
-    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddressAndSaveDbName(),
-                                                                              localAddress_, akSkManager_, masterOc_);
-    RETURN_IF_NOT_OK(workerMasterApi->Init());
-    master::RemoveMetaReqPb req;
-    master::RemoveMetaRspPb rsp;
-    req.add_ids(objectKey);
-    req.set_address(localAddress_.ToString());
-    req.set_cause(master::RemoveMetaReqPb::EVICTION);
-    req.set_version(version);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RemoveMeta(req, rsp),
-                                     FormatString("RemoveMeta failed, objectKey %s.", objectKey));
-    VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction end. ObjectKey: " << objectKey;
-    return Status::OK();
+    EvictDeletedObjects failedObjects;
+    Status lastRc;
+    auto addFailedObjects = [&objectKeyVersions, &failedObjects, &lastRc](const std::vector<std::string> &objectKeys,
+                                                                          const Status &rc) {
+        lastRc = rc;
+        for (const auto &objectKey : objectKeys) {
+            failedObjects[objectKey] = objectKeyVersions.at(objectKey);
+        }
+    };
+    std::vector<std::string> objectKeys;
+    objectKeys.reserve(objectKeyVersions.size());
+    for (const auto &item : objectKeyVersions) {
+        objectKeys.emplace_back(item.first);
+    }
+    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
+                           [&objKeysGrpByMaster](const std::string &objectKey) {
+                               for (auto &item : objKeysGrpByMaster) {
+                                   auto &objectKeys = item.second;
+                                   objectKeys.erase(std::remove(objectKeys.begin(), objectKeys.end(), objectKey),
+                                                    objectKeys.end());
+                               }
+                               objKeysGrpByMaster[MetaAddrInfo()].emplace_back(objectKey);
+                           });
+    for (const auto &item : objKeysGrpByMaster) {
+        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const auto &currentObjectKeys = item.second;
+        if (currentObjectKeys.empty()) {
+            continue;
+        }
+        if (masterAddr.Empty()) {
+            addFailedObjects(currentObjectKeys, { K_NOT_FOUND, "Cannot find master for eviction remove-meta." });
+            continue;
+        }
+        auto workerMasterApi =
+            worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+        auto rc = workerMasterApi->Init();
+        if (rc.IsError()) {
+            addFailedObjects(currentObjectKeys, rc);
+            continue;
+        }
+        master::RemoveMetaReqPb req;
+        master::RemoveMetaRspPb rsp;
+        req.set_address(localAddress_.ToString());
+        req.set_cause(master::RemoveMetaReqPb::EVICTION);
+        req.set_version(UINT64_MAX);
+        *req.mutable_ids() = { currentObjectKeys.begin(), currentObjectKeys.end() };
+        for (const auto &objectKey : currentObjectKeys) {
+            auto *objKeyVersionPb = req.add_id_with_version();
+            objKeyVersionPb->set_id(objectKey);
+            objKeyVersionPb->set_version(objectKeyVersions.at(objectKey));
+        }
+        rc = workerMasterApi->RemoveMeta(req, rsp);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("RemoveMeta failed, object count %zu, status: %s.", currentObjectKeys.size(),
+                                       rc.ToString());
+            addFailedObjects(currentObjectKeys, rc);
+            continue;
+        }
+        if (rsp.meta_is_moving()) { addFailedObjects(currentObjectKeys, { K_TRY_AGAIN, "Meta is moving." }); continue; }
+        if (!rsp.failed_ids().empty()) {
+            std::vector<std::string> failedIds(rsp.failed_ids().begin(), rsp.failed_ids().end());
+            addFailedObjects(failedIds, { K_TRY_AGAIN, "RemoveMeta returned failed ids." });
+        }
+    }
+    objectKeyVersions = std::move(failedObjects);
+    return objectKeyVersions.empty() ? Status::OK() : lastRc;
 }
 
 void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::unique_ptr<EvictionTrace> &trace,
@@ -216,7 +269,7 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     trace->action = nextAction;
 }
 
-Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction)
+Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
@@ -224,13 +277,14 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
     if (nextAction == Action::DELETE) {
         PerfPoint point(PerfKey::WORKER_EVICT_DELETE);
         uint64_t version = entry.Get()->GetCreateTime();
-        auto traceID = Trace::Instance().GetTraceID();
-        masterTaskThreadPool_->Execute([this, objectKey, version, traceID] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            AsyncMasterTask(objectKey, version);
-        });
         // No need to call FreeResources as destructor will free the resources.
         RETURN_IF_NOT_OK(objectTable_->Erase(objectKey, entry));
+        if (deletedObjects == nullptr) {
+            EvictDeletedObjects objectKeyVersions = { { objectKey, version } };
+            SubmitAsyncMasterTask(objectKeyVersions);
+        } else {
+            (*deletedObjects)[objectKey] = version;
+        }
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object delete success", objectKey);
     } else if (nextAction == Action::FREE_MEMORY) {
@@ -289,6 +343,16 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
 {
     EvictFailedList evictFailedIds;
     std::unordered_map<std::string, SpillTask> spillTasks;
+    EvictDeletedObjects deletedObjects;
+    Timer deletedObjectsFlushTimer(BATCH_DELETE_META_MAX_DELAY_MS);
+    auto flushDeletedObjects = [this, &deletedObjects, &deletedObjectsFlushTimer]() {
+        if (deletedObjects.empty()) {
+            return;
+        }
+        SubmitAsyncMasterTask(deletedObjects);
+        deletedObjects.clear();
+        deletedObjectsFlushTimer.Reset();
+    };
     LOG(INFO) << "EvictionList size before evict: " << memEvictionList_.Size();
     size_t pendingSpillSize = 0;
     // The size of low water mark memory usage is not fixed. It varies on the size of shared memory available.
@@ -323,7 +387,13 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
             continue;
         }
         GetObjectNextAction(*entry, trace, pendingSpillSize);
-        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked);
+        bool wasDeletedObjectsEmpty = deletedObjects.empty();
+        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, &deletedObjects);
+        if (wasDeletedObjectsEmpty && !deletedObjects.empty()) { deletedObjectsFlushTimer.Reset(); }
+        if (deletedObjects.size() >= BATCH_DELETE_META_THRESHOLD
+            || (!deletedObjects.empty() && deletedObjectsFlushTimer.IsTimeout())) {
+            flushDeletedObjects();
+        }
         if (rc.IsError()) {
             evictFailedIds.emplace_back(candidateId, READD_COUNTER);
         }
@@ -331,6 +401,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
         INJECT_POINT("worker.Evict", [&pendingSpillSize](size_t size) { pendingSpillSize = size; });
     }
+    flushDeletedObjects();
     auto it = spillTasks.find(GetSpillTaskId());
     if (it != spillTasks.end() && !it->second.future.valid() && !it->second.trace->objectKeySizeMap.empty()) {
         it->second.future = SubmitBatchSpillTask(GetSpillTaskId(), it->second.trace->objectKeySizeMap);
@@ -369,12 +440,13 @@ Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
 
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
-                                               std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked)
+                                               std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked,
+                                               EvictDeletedObjects *deletedObjects)
 {
     const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    Status rc = EvictObject(objectKV, trace->action);
+    Status rc = EvictObject(objectKV, trace->action, deletedObjects);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
@@ -437,18 +509,36 @@ Status WorkerOcEvictionManager::GetAllObjectsInfo(std::vector<EvictionList::Node
     return memEvictionList_.GetAllObjectsInfo(res, oldest);
 }
 
-void WorkerOcEvictionManager::AsyncMasterTask(const std::string &objectKey, uint64_t version)
+void WorkerOcEvictionManager::SubmitAsyncMasterTask(const EvictDeletedObjects &objectKeyVersions)
 {
-    LOG(INFO) << FormatString("[ObjectKey %s] Start AsyncMasterTask. [version: %zu]", objectKey, version);
+    if (objectKeyVersions.empty()) {
+        return;
+    }
+    auto traceID = Trace::Instance().GetTraceID();
+    masterTaskThreadPool_->Execute([this, objectKeyVersions, traceID] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        AsyncMasterTask(objectKeyVersions);
+    });
+}
+
+void WorkerOcEvictionManager::AsyncMasterTask(const EvictDeletedObjects &objectKeyVersions)
+{
     Status rc;
     int retryCount = 0;
     const int maxRetryNum = 3;
+    Timer timer;
+    EvictDeletedObjects failedObjects = objectKeyVersions;
     do {
-        rc = RemoveMetaFromMasterForEviction(objectKey, version);
-    } while (rc.IsError() && retryCount++ < maxRetryNum);
+        rc = RemoveMetaFromMasterForEviction(failedObjects);
+    } while (rc.IsError() && !failedObjects.empty() && retryCount++ < maxRetryNum);
     if (rc.IsError()) {
-        LOG(ERROR) << FormatString("[ObjectKey %s] RemoveMetaFromMasterForEviction failed, %s", objectKey,
-                                   rc.ToString());
+        LOG_EVERY_T(ERROR, LOG_TIME_LIMIT_LEVEL2) << FormatString(
+            "[Object count %zu] RemoveMetaFromMasterForEviction failed, %s", failedObjects.size(), rc.ToString());
+    } else {
+        auto elapsedMs = timer.ElapsedMilliSecond();
+        auto logLevel = elapsedMs > 1 ? 0 : 1;
+        VLOG(logLevel) << FormatString("[Object count %zu] RemoveMetaFromMasterForEviction took %f ms",
+                                       objectKeyVersions.size(), elapsedMs);
     }
 }
 

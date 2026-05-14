@@ -9,6 +9,7 @@
 | 2 | `DATASYSTEM_HOST` | `""` | 设置数据系统Client SDK连接的worker IP地址。如果SDK中没有配置,则读取该环境变量获取host值。 |
 | 3 | `DATASYSTEM_PORT` | `""` | 设置数据系统Client SDK连接的worker端口。如果SDK中没有配置,则读取该环境变量获取port值。 |
 | 4 | `DATASYSTEM_CONNECT_TIME_MS` | `60000` | 设置与worker建立连接超时的时间(毫秒)。如果超出该时间还未成功连接,则返回超时异常。如果SDK中没有配置,则读取该环境变量获取值,环境变量读取不到则赋值为60000。 |
+| 27 | `DATASYSTEM_ZMQ_CLIENT_IO_THREAD` | `1` | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32]。通过该环境变量可调整客户端ZMQ上下文的IO线程数。 |
 
 ## 安全认证配置
 
@@ -37,7 +38,8 @@
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
 | 19 | `DATASYSTEM_LOG_COMPRESS` | `true` | 日志文件是否压缩,默认压缩。 |
 | 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 用于设置日志记录的最低级别,默认是0。 |
-| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的非ERROR日志会被丢弃。ERROR/FATAL始终打印。 |
+| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。 |
+| 26 | `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | `true` | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 
 ## 运行时环境配置
 

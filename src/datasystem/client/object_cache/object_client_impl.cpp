@@ -98,6 +98,8 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
+constexpr uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = 1000;
+constexpr double US_PER_MS = 1000.0;
 thread_local bool g_isThroughUb = false;
 
 namespace datasystem {
@@ -358,7 +360,7 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
-    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 1, "async_release_buffer");
+    asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
 }
 
 Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker)
@@ -374,13 +376,12 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
     if (!initWithWorker) {
-        workerApi_[node] = std::make_shared<ClientWorkerRemoteApi>(address, cred_, heartbeatType, token_,
-                                                                   signature_.get(), tenantId_,
-                                                                   enableCrossNodeConnection_,
-                                                                   enableExclusiveConnection_, deviceId_);
+        workerApi_[node] =
+            std::make_shared<ClientWorkerRemoteApi>(address, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+                                                    enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
     } else {
-        workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(
-            address, embeddedClientWorkerApi_, worker_, heartbeatType, signature_.get(), false, deviceId_);
+        workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
+                                                                  heartbeatType, signature_.get(), false, deviceId_);
     }
     workerApi_[node]->isUseStandbyWorker_ = node != LOCAL_WORKER;
     RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
@@ -469,10 +470,9 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
         HostPort selectedAddress(workerIp, workerPort);
         if (!isSameNode && serviceDiscovery_->HasHostAffinity()) {
             std::string hostPortStr = selectedAddress.ToString();
-            CHECK_FAIL_RETURN_STATUS(
-                Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
-                FormatString("Invalid IP address/port. Host %s, port: %d", selectedAddress.Host(),
-                             selectedAddress.Port()));
+            CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
+                                     FormatString("Invalid IP address/port. Host %s, port: %d", selectedAddress.Host(),
+                                                  selectedAddress.Port()));
 
             LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
             RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
@@ -751,8 +751,8 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
 }
 
 ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToCandidateList(
-    const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current, WorkerNode next,
-    uint64_t switchGeneration, const std::vector<HostPort> &candidates, bool isSameHost)
+    const std::shared_ptr<IClientWorkerApi> &currentApi, WorkerNode current, WorkerNode next, uint64_t switchGeneration,
+    const std::vector<HostPort> &candidates, bool isSameHost)
 {
     for (const auto &addr : candidates) {
         if (addr.Empty()) {
@@ -772,9 +772,8 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToCandid
             }
             continue;
         }
-        auto attemptResult = isSameHost
-                                 ? TrySwitchToLocalSameHost(current, switchGeneration, addr)
-                                 : TrySwitchToStandbyWorker(currentApi, current, next, switchGeneration, addr);
+        auto attemptResult = isSameHost ? TrySwitchToLocalSameHost(current, switchGeneration, addr)
+                                        : TrySwitchToStandbyWorker(currentApi, current, next, switchGeneration, addr);
         if (attemptResult != StandbySwitchAttemptResult::CONTINUE) {
             return attemptResult;
         }
@@ -783,8 +782,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToCandid
 }
 
 void ObjectClientImpl::GetStandbyWorkersForSwitch(const std::shared_ptr<IClientWorkerApi> &currentApi,
-                                                  std::vector<HostPort> &sameHost,
-                                                  std::vector<HostPort> &others) const
+                                                  std::vector<HostPort> &sameHost, std::vector<HostPort> &others) const
 {
     sameHost.clear();
     others.clear();
@@ -900,8 +898,9 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
     return StandbySwitchAttemptResult::SWITCHED;
 }
 
-ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalSameHost(
-    WorkerNode current, uint64_t switchGeneration, const HostPort &localAddress)
+ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalSameHost(WorkerNode current,
+                                                                                        uint64_t switchGeneration,
+                                                                                        const HostPort &localAddress)
 {
     HeartbeatType heartbeatType = workerApi_[current]->heartbeatType_;
     std::shared_ptr<ClientWorkerRemoteApi> localWorkerApi;
@@ -1047,9 +1046,9 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
                                                      std::unique_ptr<client::MmapManager> &localMmapManager,
                                                      std::shared_ptr<client::ListenWorker> &localListenWorker)
 {
-    localWorkerApi = std::make_shared<ClientWorkerRemoteApi>(
-        localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
-        enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
+    localWorkerApi =
+        std::make_shared<ClientWorkerRemoteApi>(localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
+                                                enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
     Status rc = localWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
     if (rc.IsError()) {
         LOG(ERROR) << "[Switch] Init preferred same-node worker " << localAddress.ToString()
@@ -1058,16 +1057,16 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
     }
 
     localMmapManager = std::make_unique<client::MmapManager>(localWorkerApi, false);
-    rc = localWorkerApi->PrepairForDecreaseShmRef(
-        std::bind(&client::MmapManager::LookupUnitsAndMmapFd, localMmapManager.get(), std::placeholders::_1,
-                  std::placeholders::_2));
+    rc = localWorkerApi->PrepairForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
+                                                            localMmapManager.get(), std::placeholders::_1,
+                                                            std::placeholders::_2));
     if (rc.IsError()) {
         LOG(ERROR) << "[Switch] PrepairForDecreaseShmRef for preferred same-node worker failed: " << rc.ToString();
         return rc;
     }
 
-    localListenWorker = std::make_shared<client::ListenWorker>(
-        localWorkerApi, localWorkerApi->heartbeatType_, LOCAL_WORKER, asyncSwitchWorkerPool_.get());
+    localListenWorker = std::make_shared<client::ListenWorker>(localWorkerApi, localWorkerApi->heartbeatType_,
+                                                               LOCAL_WORKER, asyncSwitchWorkerPool_.get());
     localListenWorker->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
     localListenWorker->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
     localListenWorker->SetReleaseFdCallBack(
@@ -1127,8 +1126,8 @@ bool ObjectClientImpl::RecoverPreferredLocalWorker()
     std::shared_ptr<ClientWorkerRemoteApi> localWorkerApi;
     std::unique_ptr<client::MmapManager> localMmapManager;
     std::shared_ptr<client::ListenWorker> localListenWorker;
-    auto rc = PreparePreferredLocalWorker(localAddress, heartbeatType, localWorkerApi, localMmapManager,
-                                          localListenWorker);
+    auto rc =
+        PreparePreferredLocalWorker(localAddress, heartbeatType, localWorkerApi, localMmapManager, localListenWorker);
     if (rc.IsError()) {
         return false;
     }
@@ -1697,8 +1696,16 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         uint64_t metadataSize = 0;
         auto shmBuf = std::make_shared<ShmUnitInfo>();
         std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
-        RETURN_IF_NOT_OK(
-            workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
+        Timer timer;
+        auto rc = workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType);
+        const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+        const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+        PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                        FormatString("Finished creating object to worker, object_key: %s, path: %s, cost: %.3fms, "
+                                     "rc: %s",
+                                     objectKey, IsUrmaEnabled() && urmaDataInfo != nullptr ? "UB" : "SHM", elapsedMs,
+                                     rc.ToString()));
+        RETURN_IF_NOT_OK(rc);
         std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
         if (!urmaDataInfo) {
@@ -1964,11 +1971,15 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence),
-        FormatString("Publish object %s", objectKey));
-
-    VLOG(1) << "Finished publishing object, object_key: " << objectKey;
+    Timer timer;
+    auto rc = workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("Finished publishing object to worker, object_key: %s, path: %s, cost: %.3fms, rc: %s",
+                                 objectKey, isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP"),
+                                 elapsedMs, rc.ToString()));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Publish object %s", objectKey));
     return Status::OK();
 }
 
@@ -2126,8 +2137,10 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
             LOG(ERROR) << FormatString("Put object %s failed: %s", objectKey, rc.ToString());
         }
     }
-    LOG(INFO) << FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
-                              setTimer.ElapsedMilliSecond(), rc.ToString());
+    const auto totalUs = static_cast<uint64_t>(setTimer.ElapsedMicroSecond());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
+                                 static_cast<double>(totalUs) / US_PER_MS, rc.ToString()));
     return rc;
 }
 
@@ -2292,7 +2305,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
         }
     }
     perfPoint.Record();
-    LOG(INFO) << "Finish to Get objects " << VectorToString(objectKeys);
+    VLOG(1) << "Finish to Get objects " << VectorToString(objectKeys);
     return rc;
 }
 
@@ -3037,7 +3050,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
     RETURN_IF_NOT_OK(buffer->CheckDeprecated());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
-    LOG(INFO) << "Start putting buffer";
+    VLOG(1) << "Start putting buffer";
     return buffer->Publish();
 }
 
@@ -4013,8 +4026,15 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    RETURN_IF_NOT_OK(workerApi->Exist(keys, exists, queryEtcd, isLocal));
-    return Status::OK();
+    Timer timer;
+    auto rc = workerApi->Exist(keys, exists, queryEtcd, isLocal);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    const auto &firstKey = keys.empty() ? "" : keys[0];
+    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
+                    FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
+                                 firstKey, elapsedMs, rc.ToString()));
+    return rc;
 }
 
 Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,

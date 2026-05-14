@@ -529,10 +529,10 @@ public:
     /**
      * @brief Get object locations by objectKeys.
      * @param[in] req Includes ids for objects.
-     * @param[out] locations List of objects location info.
+     * @param[out] rsp Response with object location and redirect info.
      * @return Status of the call.
      */
-    Status GetObjectLocations(const GetObjectLocationsReqPb &req, std::vector<ObjectLocationInfoPb> &locations);
+    Status GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp);
 
     /**
      * @brief Delete metadata and notify other workers to delete these objects synchronously.

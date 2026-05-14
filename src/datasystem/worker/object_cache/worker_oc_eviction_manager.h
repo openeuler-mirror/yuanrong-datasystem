@@ -20,11 +20,13 @@
 #ifndef DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 #define DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 
+#include <atomic>
 #include <cstdint>
 #include <future>
 #include <list>
 #include <memory>
 #include <shared_mutex>
+#include <unordered_map>
 #include <utility>
 
 #include <tbb/concurrent_hash_map.h>
@@ -163,6 +165,7 @@ public:
 
 private:
     enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN, MIGRATE };
+    using EvictDeletedObjects = std::unordered_map<std::string, uint64_t>;
 
     struct EvictionTrace {
         Timer timer;
@@ -178,6 +181,7 @@ private:
         }
         ~EvictionTrace()
         {
+            ReportEvictObjectCount();
             if (rc.GetCode() == K_TRY_AGAIN || rc.GetCode() == K_NOT_READY) {
                 return;
             }
@@ -194,7 +198,8 @@ private:
                 ss << "spill cost " << spillCost << " ms, ";
             }
             ss << "status:" << (rc.IsOk() ? "OK" : rc.GetMsg());
-            LOG(INFO) << ss.str();
+            auto logLevel = elapsed > 1 || rc.IsError() ? 0 : 1;
+            VLOG(logLevel) << ss.str();
         }
 
         void AddObjectKeySize(const std::string &key, uint64_t size)
@@ -213,6 +218,29 @@ private:
             objectSize += size;
             objectSize -= std::min(objectSize, it->second);
             it->second = size;
+        }
+
+    private:
+        static void ReportEvictObjectCount()
+        {
+            static std::atomic<uint64_t> evictCountInLastMinute{ 0 };
+            static std::atomic<uint64_t> lastLogTimeMs{ 0 };
+            constexpr uint64_t logIntervalMs = 60 * SECS_TO_MS;
+
+            (void)evictCountInLastMinute.fetch_add(1, std::memory_order_relaxed);
+            auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+            auto lastMs = lastLogTimeMs.load(std::memory_order_relaxed);
+            if (lastMs == 0) {
+                (void)lastLogTimeMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed);
+                return;
+            }
+            if (nowMs - lastMs < logIntervalMs) {
+                return;
+            }
+            if (lastLogTimeMs.compare_exchange_strong(lastMs, nowMs, std::memory_order_relaxed)) {
+                auto count = evictCountInLastMinute.exchange(0, std::memory_order_relaxed);
+                LOG(INFO) << "Evict object count in last minute: " << count;
+            }
         }
     };
 
@@ -241,11 +269,8 @@ private:
 
     /**
      * @brief Remove meta in master.
-     * @param[in] objectKey The ID of the object that need to remove meta.
-     * @param[in] version The object version.
-     * @return The next action in eviction task.
      */
-    Status RemoveMetaFromMasterForEviction(const std::string &objectKey, uint64_t version);
+    Status RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions);
 
     /**
      * @brief Try to evict a single object.
@@ -253,7 +278,7 @@ private:
      * @param[in] nextAction The next action.
      * @return Status of the call.
      */
-    Status EvictObject(ObjectKV &objectKV, Action nextAction);
+    Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr);
 
     /**
      * @brief Try to evict a single object.
@@ -266,7 +291,7 @@ private:
      */
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
-                          bool &locked);
+                          bool &locked, EvictDeletedObjects *deletedObjects = nullptr);
 
     /**
      * @brief Eviction task, asynchronous.
@@ -300,12 +325,8 @@ private:
      */
     void GetObjectNextAction(SafeObjType &entry, std::unique_ptr<EvictionTrace> &trace, size_t pendingSpillSize);
 
-    /**
-     * @brief Async task to remove meta from master.
-     * @param[in] objectKey The ID of the object that need to remove meta.
-     * @param[in] version The object version.
-     */
-    void AsyncMasterTask(const std::string &objectKey, uint64_t version);
+    void SubmitAsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
+    void AsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
 
     /**
      * @brief Submit spill task to thread pool.

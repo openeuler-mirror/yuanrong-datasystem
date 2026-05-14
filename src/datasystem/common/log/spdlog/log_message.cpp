@@ -21,9 +21,9 @@
 #include "datasystem/common/log/spdlog/log_message_impl.h"
 
 namespace datasystem {
-LogMessage::LogMessage(LogSeverity logSeverity, const char *file, int line)
+LogMessage::LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog)
 {
-    impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line);
+    impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line, forceLog);
 }
 
 std::ostream &LogMessage::Stream()

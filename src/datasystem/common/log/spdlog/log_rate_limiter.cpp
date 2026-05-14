@@ -22,7 +22,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <mutex>
 
 #include "datasystem/common/log/trace.h"
 
@@ -48,48 +47,18 @@ bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level)
 
 bool LogRateLimiter::ShouldLog(ds_spdlog::level::level_enum level, uint64_t traceHash)
 {
-    // ERROR and FATAL are always logged.
-    if (level >= ds_spdlog::level::err) {
-        return true;
-    }
+    (void)level;
 
     // Non-request logs (no trace) are never sampled.
     if (traceHash == 0) {
         return true;
     }
 
-    // RPC-propagated decision takes precedence across processes.
-    bool propagatedAdmit = false;
-    if (Trace::Instance().GetRequestSampleDecision(propagatedAdmit)) {
-        return propagatedAdmit;
-    }
-
-    // No sampling configured.
-    if (rate_.load(std::memory_order_relaxed) <= 0) {
+    bool admitted = false;
+    if (!GetOrCreateRequestDecision(traceHash, admitted)) {
+        // No decision means request sampling is disabled locally; keep the log.
         return true;
     }
-
-    return ShouldAdmitRequest(traceHash);
-}
-
-bool LogRateLimiter::ShouldAdmitRequest(uint64_t traceHash)
-{
-    int64_t nowMs = NowMs();
-
-    bool admitted = false;
-    {
-        std::lock_guard<std::mutex> lock(decisionTableMutex_);
-        CleanupExpiredDecisions(nowMs);
-        if (GetDecisionFromTable(traceHash, nowMs, admitted)) {
-            Trace::Instance().SetRequestSampleDecision(true, admitted);
-            return admitted;
-        }
-
-        admitted = TryAdmitInCurrentSecond(nowMs);
-        UpsertDecision(traceHash, admitted, nowMs);
-    }
-
-    Trace::Instance().SetRequestSampleDecision(true, admitted);
     return admitted;
 }
 
@@ -107,7 +76,8 @@ bool LogRateLimiter::GetOrCreateRequestDecision(uint64_t traceHash, bool &admitt
         return false;
     }
 
-    admitted = ShouldAdmitRequest(traceHash);
+    admitted = TryAdmitInCurrentSecond(NowMs());
+    Trace::Instance().SetRequestSampleDecision(true, admitted);
     return true;
 }
 
@@ -143,51 +113,6 @@ bool LogRateLimiter::TryAdmitInCurrentSecond(int64_t nowMs)
     return false;
 }
 
-bool LogRateLimiter::GetDecisionFromTable(uint64_t traceHash, int64_t nowMs, bool &admitted)
-{
-    auto it = traceDecisions_.find(traceHash);
-    if (it == traceDecisions_.end()) {
-        return false;
-    }
-
-    if (it->second.expireAtMs <= nowMs) {
-        traceDecisions_.erase(it);
-        return false;
-    }
-
-    admitted = it->second.admitted;
-    it->second.expireAtMs = nowMs + TRACE_DECISION_TTL_MS;
-    return true;
-}
-
-void LogRateLimiter::UpsertDecision(uint64_t traceHash, bool admitted, int64_t nowMs)
-{
-    traceDecisions_[traceHash] = TraceDecisionEntry{ admitted, nowMs + TRACE_DECISION_TTL_MS };
-}
-
-void LogRateLimiter::CleanupExpiredDecisions(int64_t nowMs)
-{
-    if (nowMs - lastCleanupMs_ < TRACE_DECISION_CLEANUP_INTERVAL_MS) {
-        return;
-    }
-    lastCleanupMs_ = nowMs;
-
-    for (auto it = traceDecisions_.begin(); it != traceDecisions_.end();) {
-        if (it->second.expireAtMs <= nowMs) {
-            it = traceDecisions_.erase(it);
-            continue;
-        }
-        ++it;
-    }
-}
-
-void LogRateLimiter::ClearDecisionTable()
-{
-    std::lock_guard<std::mutex> lock(decisionTableMutex_);
-    traceDecisions_.clear();
-    lastCleanupMs_ = 0;
-}
-
 void LogRateLimiter::SetRate(int32_t ratePerSecond)
 {
     int32_t newRate = std::max(ratePerSecond, static_cast<int32_t>(0));
@@ -198,7 +123,6 @@ void LogRateLimiter::SetRate(int32_t ratePerSecond)
 
     windowSec_.store(NowMs() / 1000, std::memory_order_relaxed);
     admittedInWindow_.store(0, std::memory_order_relaxed);
-    ClearDecisionTable();
 }
 
 void LogRateLimiter::Reset()
@@ -206,7 +130,6 @@ void LogRateLimiter::Reset()
     rate_.store(0, std::memory_order_relaxed);
     windowSec_.store(NowMs() / 1000, std::memory_order_relaxed);
     admittedInWindow_.store(0, std::memory_order_relaxed);
-    ClearDecisionTable();
 }
 
 }  // namespace datasystem

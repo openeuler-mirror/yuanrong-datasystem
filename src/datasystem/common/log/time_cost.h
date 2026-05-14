@@ -33,6 +33,9 @@ class TimeCost {
 public:
     std::string GetInfo() const
     {
+        if (durationList_.empty()) {
+            return "";
+        }
         std::string out = "exceed 3ms: {";
         for (auto iter : durationList_) {
             out += FormatString("%s: %zu ms; ", iter.first, iter.second);

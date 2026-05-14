@@ -31,8 +31,11 @@ DS_DEFINE_string(get_hash_ring, "", "Get hashring from etcd and save to file wit
 DS_DEFINE_string(set_hash_ring, "", "Read hashring from file with json fromat and update to etcd.");
 
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(etcd_username);
+DS_DECLARE_string(etcd_password);
 DS_DECLARE_string(metastore_address);
 DS_DECLARE_int32(minloglevel);
+DS_DECLARE_uint32(etcd_token_refresh_interval_s);
 
 namespace datasystem {
 namespace cli {
@@ -59,6 +62,8 @@ Status GetEtcdStore(std::unique_ptr<EtcdStore> &etcdStore)
     }
     etcdStore = std::make_unique<EtcdStore>(backendAddress);
     RETURN_IF_NOT_OK(etcdStore->Init());
+    RETURN_IF_NOT_OK(
+        etcdStore->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
     return etcdStore->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
 }
 }  // namespace

@@ -36,6 +36,8 @@ DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 
 namespace datasystem {
 namespace object_cache {
+static constexpr uint64_t CREATE_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
@@ -53,7 +55,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     Timer timer;
     PerfPoint point(PerfKey::WORKER_CREATE_OBJECT);
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_CREATE);
-    LOG(INFO) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
+    VLOG(1) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
         req.object_key(), req.data_size());
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
@@ -74,10 +76,12 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
     posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
     point.Record();
-    workerOperationTimeCost.Append("Total Create", timer.ElapsedMilliSecond());
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
+    workerOperationTimeCost.Append("Total Create", totalMs);
     INJECT_POINT("worker.Create.end");
-    LOG(INFO) << FormatString("[Client %s] [ObjectKey %s] The operations of worker Create %s", req.client_id(),
-                              req.object_key(), workerOperationTimeCost.GetInfo());
+    PLOG_IF_OR_VLOG(INFO, totalUs >= CREATE_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
+                    FormatString("Create done, cost: %.3fms, %s", totalMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

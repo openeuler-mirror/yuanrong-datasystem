@@ -259,8 +259,7 @@ inline ZmqMessage ZmqInt64ToMessage(int64_t val)
 inline bool IsRpcError(const Status &status)
 {
     if (status.GetCode() == StatusCode::K_RPC_CANCELLED || status.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
-        || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE
-        || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT) {
+        || status.GetCode() == StatusCode::K_RPC_UNAVAILABLE || status.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT) {
         return true;
     }
     return false;
@@ -324,6 +323,7 @@ inline void StartTheClock(MetaPb &meta)
 {
     // Start the clock
     meta.mutable_ticks()->Clear();
+    meta.mutable_latency_ticks()->Clear();
     TickPb tick;
 #ifdef ENABLE_PERF
     tick.set_ts(TimeSinceEpoch());
@@ -334,6 +334,7 @@ inline void StartTheClock(MetaPb &meta)
     // so we must add one for compatibility.
     meta.mutable_ticks()->Add(std::move(tick));
 #endif
+    RecordTick(meta, TICK_CLIENT_START);
 }
 
 inline uint64_t GetLapTime(MetaPb &meta, const char *tickName)
@@ -385,10 +386,14 @@ inline LogSampleState GetOrCreateLogSampleState()
 inline void ApplyLogSampleState(LogSampleState state)
 {
     switch (state) {
-        case LOG_SAMPLE_UNDECIDED:
+        case LOG_SAMPLE_UNDECIDED: {
             Trace::Instance().SetRequestLogTrace(true);
             Trace::Instance().SetRequestSampleDecision(false, false);
+            bool admitted = false;
+            // Create a local request decision when rate limiting is enabled; the decision is stored in Trace.
+            (void)LogRateLimiter::Instance().GetOrCreateRequestDecision(Trace::Instance().GetCachedHash(), admitted);
             break;
+        }
         case LOG_SAMPLE_ADMIT:
             Trace::Instance().SetRequestLogTrace(true);
             Trace::Instance().SetRequestSampleDecision(true, true);

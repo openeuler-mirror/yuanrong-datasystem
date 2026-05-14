@@ -318,6 +318,8 @@ Status Worker::Init(Flags &flags, int argc, char **argv)
     FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.
     ParseCommandLineFlags(argc, argv);
     if (cli::HandleCli()) {
+        // Notify worker_main to exit after the one-shot CLI command finishes.
+        SignalHandler(0);
         return Status::OK();
     }
     // The configuration file processing is triggered immediately when the worker is started.

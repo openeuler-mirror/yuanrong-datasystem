@@ -480,6 +480,9 @@ public:
     Status LivenessCheck(const LivenessCheckReqPb &req, LivenessCheckRspPb &rsp) override;
 
 private:
+    Status CreateMultiCopyMetaImpl(const CreateMultiCopyMetaReqPb &req, CreateMultiCopyMetaRspPb &rsp);
+    Status RemoveMetaImpl(const RemoveMetaReqPb &req, RemoveMetaRspPb &rsp);
+
     HostPort masterAddress_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };

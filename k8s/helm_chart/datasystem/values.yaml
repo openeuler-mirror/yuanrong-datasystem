@@ -140,7 +140,7 @@ global:
     logCompress: true
     # Maximum sampled request traces per second (0 = unlimited).
     # Sampling applies only to request logs with trace IDs.
-    # Sampled traces print complete log chains. ERROR and FATAL are never sampled.
+    # Sampled traces print complete log chains. Rejected traces are dropped at all log levels.
     logRateLimit: 0
     # Prefix of log filename, default is program invocation short name. Use standard characters only.
     logFilename: ""
@@ -306,6 +306,9 @@ global:
     # Optimize the performance of the client stub. Default value is 5.
     # The higher the throughput, the higher the value, but should be in range [1, 32]
     zmqClientIoContext: 5
+    # Optimize the performance of the client stub io thread. Default value 1.
+    # The higher the throughput, the higher the value, but should be in range [1, 32]
+    zmqClientIoThread: 1
     # Nice value applied to selected IO threads by setpriority.
     # Valid range: [-20, 19]. Lower values mean higher scheduling priority.
     ioThreadNice: -15

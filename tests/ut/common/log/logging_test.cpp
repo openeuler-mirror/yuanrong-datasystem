@@ -19,10 +19,12 @@
  */
 #include "datasystem/common/log/log.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -35,6 +37,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
@@ -52,6 +55,7 @@ DS_DECLARE_string(log_dir);
 DS_DECLARE_int32(logbufsecs);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_bool(log_only_write_info_file);
 
 namespace datasystem {
 namespace ut {
@@ -72,16 +76,11 @@ public:
         return Status::OK();
     }
 
-    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress, bool isClient)
+    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress)
     {
         for (int i = 0; i < fileNum; ++i) {
             std::stringstream filename;
-            filename << "ds_llt";
-            if (isClient) {
-                filename << "_" << getpid();
-            }
-
-            filename << ".INFO." << GetCurrentTimestamp();
+            filename << "ds_llt.INFO." << GetCurrentTimestamp();
             const std::string log_suffix = enableCompress ? ".log.gz" : ".log";
             filename << log_suffix;
             DS_EXPECT_OK(CreateTextFile(filename.str(), fileSize));
@@ -143,7 +142,7 @@ public:
         FLAGS_log_filename = "ds_llt";
         FLAGS_max_log_size = 1;
         FLAGS_max_log_file_num = 5;
-        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, enableCompress, false));
+        DS_EXPECT_OK(CreateLogFiles(10, 1024 * 1024, enableCompress));
         std::string logPattern = "ds_llt\\.INFO\\.\\d{14}\\.log";
 
         if (enableCompress) {
@@ -242,6 +241,14 @@ public:
         return false;
     }
 
+    std::string ReadFileContent(const std::string &filename)
+    {
+        std::ifstream file(filename);
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
+    }
+
 protected:
     RandomData rand_;
 };
@@ -299,7 +306,7 @@ TEST_F(LoggingTest, TestEnvSucceed)
 {
     constexpr int NUM_LOG_FILES_TO_CREATE = 10;
     constexpr size_t LOG_FILE_SIZE_BYTES = 1024 * 1024;
-    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true, true));
+    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true));
 
     int replace = 1;
     (void)setenv(LOG_DIR_ENV.c_str(), FLAGS_log_dir.c_str(), replace);
@@ -327,7 +334,7 @@ TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
     Logging::AccessRecorderManagerInstance()->ResetWriteLogger(false);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "*";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -363,7 +370,7 @@ TEST_F(LoggingTest, TestMultiTimeCostLoggerCompress)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*gz";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "*";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -381,7 +388,7 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
 
     // wait compress success
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log*gz";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".[0-9]*";
     std::string pattern = ssTimeCostFile.str();
     int timeout = 10;
     bool success = false;
@@ -431,7 +438,7 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\.log";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".log";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -456,6 +463,80 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
     auto lastSize = FileSize(files[0]);
     ASSERT_GT(lastSize, firstSize);
+}
+
+TEST_F(LoggingTest, TestAccessLogSampledMarker)
+{
+    (void)unsetenv(ACCESS_LOG_NAME_ENV.c_str());
+    FLAGS_log_monitor = true;
+    const std::string sampledKey = "access-log-sampled";
+    const std::string rejectedKey = "access-log-rejected";
+    const std::string unlimitedKey = "access-log-unlimited";
+    {
+        AccessRecorderManager clientManager;
+        DS_ASSERT_OK(clientManager.Init(true, false));
+        Trace::Instance().SetRequestLogTrace(true);
+        Trace::Instance().SetRequestSampleDecision(true, true);
+        DS_ASSERT_OK(clientManager.LogPerformance("sampled", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + sampledKey + "}", ""));
+        DS_ASSERT_OK(clientManager.LogPerformance("sampled-empty", AccessKeyType::CLIENT, 1));
+        Trace::Instance().SetRequestSampleDecision(true, false);
+        DS_ASSERT_OK(clientManager.LogPerformance("rejected", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + rejectedKey + "}", ""));
+        Trace::Instance().SetRequestSampleDecision(false, false);
+        DS_ASSERT_OK(clientManager.LogPerformance("unlimited", AccessKeyType::CLIENT, 1, 0, "1",
+                                                  "{Object_key:" + unlimitedKey + "}", ""));
+    }
+
+    {
+        AccessRecorderManager workerManager;
+        DS_ASSERT_OK(workerManager.Init(false, false));
+        Trace::Instance().SetRequestLogTrace(true);
+        Trace::Instance().SetRequestSampleDecision(true, true);
+        DS_ASSERT_OK(workerManager.LogPerformance("worker", AccessKeyType::ACCESS, 1, 0, "1",
+                                                  "{Object_key:access-log-worker}", ""));
+        DS_ASSERT_OK(workerManager.LogPerformance("request-out", AccessKeyType::REQUEST_OUT, 1, 0, "1",
+                                                  "{Object_key:access-log-request-out}", ""));
+    }
+    Trace::Instance().SetRequestLogTrace(false);
+    Trace::Instance().SetRequestSampleDecision(false, false);
+
+    std::vector<std::string> clientFiles;
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + ".log", clientFiles));
+    ASSERT_EQ(clientFiles.size(), 1ul);
+    std::string clientContent = ReadFileContent(clientFiles[0]);
+    auto findLine = [](const std::string &content, const std::string &key) {
+        std::stringstream ss(content);
+        std::string line;
+        while (std::getline(ss, line)) {
+            if (line.find(key) != std::string::npos) {
+                return line;
+            }
+        }
+        return std::string();
+    };
+
+    std::string sampledLine = findLine(clientContent, sampledKey);
+    std::string sampledEmptyLine = findLine(clientContent, "sampled-empty");
+    std::string rejectedLine = findLine(clientContent, rejectedKey);
+    std::string unlimitedLine = findLine(clientContent, unlimitedKey);
+    ASSERT_FALSE(sampledLine.empty());
+    ASSERT_FALSE(sampledEmptyLine.empty());
+    ASSERT_FALSE(rejectedLine.empty());
+    ASSERT_FALSE(unlimitedLine.empty());
+    ASSERT_NE(sampledLine.find("logSampled:true"), std::string::npos);
+    ASSERT_NE(sampledEmptyLine.find("{logSampled:true}"), std::string::npos);
+    ASSERT_EQ(rejectedLine.find("logSampled:true"), std::string::npos);
+    ASSERT_EQ(unlimitedLine.find("logSampled:true"), std::string::npos);
+    ASSERT_EQ(std::count(sampledLine.begin(), sampledLine.end(), '|'),
+              std::count(rejectedLine.begin(), rejectedLine.end(), '|'));
+
+    std::string accessContent = ReadFileContent(FLAGS_log_dir + "/" + ACCESS_LOG_NAME + ".log");
+    ASSERT_NE(accessContent.find("access-log-worker"), std::string::npos);
+    ASSERT_NE(accessContent.find("logSampled:true"), std::string::npos);
+    std::string requestOutContent = ReadFileContent(FLAGS_log_dir + "/" + REQUEST_OUT_LOG_NAME + ".log");
+    ASSERT_NE(requestOutContent.find("access-log-request-out"), std::string::npos);
+    ASSERT_EQ(requestOutContent.find("logSampled:true"), std::string::npos);
 }
 
 TEST_F(LoggingTest, TestShutdownHardDiskExporter)
@@ -522,6 +603,7 @@ TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
 {
     int replace = 1;
     (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    FLAGS_log_only_write_info_file = false;
     FLAGS_logbufsecs = 0;
     (void)setenv("DATASYSTEM_MIN_LOG_LEVEL", "1", replace);
     Logging::GetInstance()->Start("ds_llt", true);
@@ -646,6 +728,72 @@ TEST_F(LoggingTest, TestMaxLogSize)
     (void)setenv(MAX_LOG_SIZE_ENV.c_str(), "5", replace);
     Logging::GetInstance()->Start("ds_llt", true, 1);
     EXPECT_EQ(FLAGS_max_log_size, 5);  // 5 MB
+}
+
+TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
+{
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    FLAGS_log_only_write_info_file = true;
+    Logging::GetInstance()->Start("ds_llt", true);
+    std::string warningLog = "skip separate warning file";
+    std::string errorLog = "skip separate error file";
+
+    LOG(WARNING) << warningLog;
+    LOG(ERROR) << errorLog;
+
+    bool infoFound = false;
+    bool separateFileFound = false;
+    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+        if (filename.find("ds_llt") == std::string::npos) {
+            continue;
+        }
+        if (filename.find(".INFO.log") != std::string::npos) {
+            infoFound = true;
+            ASSERT_TRUE(FileContains(filename, warningLog));
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        } else if (filename.find(".WARNING.log") != std::string::npos ||
+                   filename.find(".ERROR.log") != std::string::npos) {
+            separateFileFound = true;
+        }
+    }
+
+    ASSERT_TRUE(infoFound);
+    ASSERT_FALSE(separateFileFound);
+}
+
+TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
+{
+    int replace = 1;
+    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    (void)setenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), "false", replace);
+    FLAGS_log_only_write_info_file = true;
+    Logging::GetInstance()->Start("ds_llt", true);
+    std::string warningLog = "env separate warning log";
+    std::string errorLog = "env separate error log";
+
+    LOG(WARNING) << warningLog;
+    LOG(ERROR) << errorLog;
+
+    bool warningFound = false;
+    bool errorFound = false;
+    for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
+        if (filename.find("ds_llt") == std::string::npos) {
+            continue;
+        }
+        if (filename.find(".WARNING.log") != std::string::npos) {
+            warningFound = true;
+            ASSERT_TRUE(FileContains(filename, warningLog));
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        } else if (filename.find(".ERROR.log") != std::string::npos) {
+            errorFound = true;
+            ASSERT_TRUE(FileContains(filename, errorLog));
+        }
+    }
+
+    ASSERT_TRUE(warningFound);
+    ASSERT_TRUE(errorFound);
+    (void)unsetenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str());
 }
 
 TEST_F(LoggingTest, TestLogName)

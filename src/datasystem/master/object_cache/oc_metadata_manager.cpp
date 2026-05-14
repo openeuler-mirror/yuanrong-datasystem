@@ -1481,11 +1481,6 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
     }
     point.RecordAndReset(PerfKey::MASTER_REMOVE_META_SINGLE);
 
-    LOG(INFO) << FormatString(
-        "RemoveMeta finished, receive id size: %d, success size: %d, need wait size: %d, need data size: %d, failed "
-        "size: %d, outdated size: %d",
-        request.ids_size() + request.id_with_version_size(), response.success_ids_size(), response.need_wait_ids_size(),
-        response.need_data_ids_size(), response.failed_ids_size(), response.outdated_ids_size());
     return Status::OK();
 }
 
@@ -1693,7 +1688,7 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
         return;
     }
     uint64_t compareVersion;
-    LOG(INFO) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
+    VLOG(1) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
                               address);
     for (const auto &objectKey : notRedirectObjectKeys) {
         if (etcdCM_->CheckLocalNodeIsExiting()) {
@@ -1809,7 +1804,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
     DeleteObjectMediator &deleteMediator, DeleteAllCopyMetaRspPb &response,
     const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi)
 {
-    LOG(INFO) << "Transfer to delete threads to notify worker delete";
+    VLOG(1) << "Transfer delete request to async thread pool";
     auto ids = deleteMediator.GetObjKeys();
     if (!AddHeavyOp(ids)) {
         std::unordered_set<std::string> failedIds{ ids.begin(), ids.end() };
@@ -1835,8 +1830,8 @@ void OCMetadataManager::TransferSyncDeleteRequest(
         NotifyDeleteAndClearMeta(deleteMediator, false);
         SetDeleteAllCopyMetaRspPb(deleteMediator.GetStatus(), deleteMediator.GetFailedObjs(), response);
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
-        LOG(INFO) << "DeleteAllCopyMeta send response to worker finished, objectKeys: "
-                  << VectorToString(deleteMediator.GetObjKeys());
+        VLOG(1) << "DeleteAllCopyMeta send response to worker finished, object count: "
+                  << deleteMediator.GetObjKeys().size();
     });
 }
 
@@ -2155,7 +2150,7 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
 
         TbbMetaTable::const_accessor accessor;
         if (!metaTable_.find(accessor, objectKey)) {
-            LOG(INFO) << "Meta not exist, objectKey:" << objectKey;
+            VLOG(1) << "meta not found in meta table";
             // metadata is not present in master. If metadata is not stored in etcd,
             // try to delete all versions of the object from L2 Cache using async delete.
             if (!FLAGS_oc_io_from_l2cache_need_metadata) {
@@ -2166,11 +2161,11 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             }
             continue;
         } else if (accessor->second.meta.version() > static_cast<uint64_t>(info.second.version)) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Has re-set, metadata not need to be cleared.", objectKey);
+            VLOG(1) << "version updated, skip deletion";
             delMediator.SetOutdatedObj(objectKey);
             continue;
         } else if (accessor->second.multiSetState == PENDING) {
-            LOG(INFO) << FormatString("[ObjectKey %s] is creating, metadata not need to be cleared.", objectKey);
+            VLOG(1) << "object is in creating state, skip deletion";
             continue;
         }
 
@@ -2268,9 +2263,9 @@ Status OCMetadataManager::BFSGetDeadObjects(const std::unordered_set<std::string
                                         tempToBeNotifiedNestedRefs.end());
 
     LOG_IF(INFO, !finalDeadObjects.empty())
-        << "BFSGetDeadObjects[%s] to be deleted" << VectorToString(finalDeadObjects);
+        << FormatString("BFSGetDeadObjects: %d objects to be deleted", finalDeadObjects.size());
     LOG_IF(INFO, !tempToBeNotifiedNestedRefs.empty())
-        << "BFSGetDeadObjects[%s] to be notified" << VectorToString(tempToBeNotifiedNestedRefs);
+        << FormatString("BFSGetDeadObjects: %d nested refs to be notified", tempToBeNotifiedNestedRefs.size());
     return Status::OK();
 }
 
@@ -2280,7 +2275,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::const_accessor accessor;
     if (!metaTable_.find(accessor, objectKey)) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Object does not exist", objectKey);
+        VLOG(1) << "meta not found in meta table";
         if (!HasWorkerId(objectKey)) {
             delMediator.AddHashObjsWithoutMeta(objectKey);
         }
@@ -2290,9 +2285,9 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     }
 
     if (delMediator.CheckIfExpired(objectKey, accessor->second.meta.version())) {
-        LOG(INFO) << FormatString("The version[%lld] of object[%s] in request is outdated, current version: %lld",
-                                  delMediator.GetObjectVersionInRequest(objectKey), objectKey,
-                                  accessor->second.meta.version());
+        VLOG(1) << FormatString("version outdated, request version: %lld, current version: %lld",
+                                delMediator.GetObjectVersionInRequest(objectKey),
+                                accessor->second.meta.version());
         delMediator.SetOutdatedObj(objectKey);
         return Status::OK();
     }
@@ -2747,29 +2742,26 @@ void OCMetadataManager::RemoveSubscribeCache(const std::string &requestId)
     }
 }
 
-Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
-                                             std::vector<ObjectLocationInfoPb> &locations)
+Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp)
 {
+    std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
+    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-    std::list<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     for (const auto &objectKey : objectKeys) {
         TbbMetaTable::const_accessor accessor;
+        ObjectLocationInfoPb *location = rsp.add_location_infos();
+        location->set_object_key(objectKey);
         if (metaTable_.find(accessor, objectKey)) {
             VLOG(1) << FormatString("[ObjectKey %s] GetObjectLocations: get object location from cache", objectKey);
-            ObjectLocationInfoPb location;
-            location.set_object_key(objectKey);
             if (!accessor->second.locations.empty()) {
                 for (const auto &address : accessor->second.locations) {
-                    location.mutable_object_locations()->Add()->assign(address.first);
+                    location->mutable_object_locations()->Add()->assign(address.first);
                 }
             }
-            location.set_object_size(accessor->second.meta.data_size());
-            locations.emplace_back(std::move(location));
+            location->set_object_size(accessor->second.meta.data_size());
         } else {
-            ObjectLocationInfoPb location;
-            location.set_object_key(objectKey);
-            location.set_object_size(0);
-            locations.emplace_back(std::move(location));
+            location->set_object_size(0);
         }
     }
     return Status::OK();

@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <memory>
@@ -413,17 +414,21 @@ private:
     /**
      * @brief Submit worker-to-master RPC warmup tasks for newly discovered ready nodes.
      */
-    size_t ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers);
+    size_t ScheduleWorkerMasterRpcWarmupTasks(
+        const std::vector<std::pair<std::string, std::string>> &workers,
+        const std::unordered_set<std::string> *warmedAddrs = nullptr,
+        const std::function<void(const std::string &)> &onSuccess = nullptr);
 
     /**
      * @brief Submit one worker-to-master RPC warmup task.
      */
-    bool SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr);
+    bool SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr,
+                                         const std::function<void(const std::string &)> &onSuccess = nullptr);
 
     /**
-     * @brief Warm up RPC to current ready workers/masters once at startup.
+     * @brief Warm up RPC to current ready workers/masters during startup.
      */
-    void WarmupReadyWorkerMasterRpcOnce();
+    void WarmupReadyWorkerMasterRpcOnStartup();
 
     /**
      * @brief Warm up RPC to a newly ready worker/master seen from ETCD cluster events.
@@ -597,6 +602,10 @@ private:
     std::atomic<bool> warmupExit_{ false };
     std::shared_ptr<ThreadPool> masterRpcWarmupThreadPool_{ nullptr };
     std::atomic<bool> masterRpcWarmupExit_{ false };
+    std::mutex warmupScanMutex_;
+    std::condition_variable warmupScanCv_;
+    std::mutex masterRpcWarmupScanMutex_;
+    std::condition_variable masterRpcWarmupScanCv_;
     std::mutex masterRpcWarmupMutex_;
     std::unordered_set<std::string> warmingMasterRpcAddrs_;
     std::unique_ptr<Thread> clientsExitChecker_{ nullptr };

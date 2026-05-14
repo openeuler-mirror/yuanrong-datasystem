@@ -20,6 +20,7 @@
 #include "datasystem/common/flags/flags.h"
 
 DS_DECLARE_int32(zmq_client_io_context);
+DS_DECLARE_int32(zmq_client_io_thread);
 DS_DECLARE_int32(io_thread_nice);
 DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint32(node_timeout_s);

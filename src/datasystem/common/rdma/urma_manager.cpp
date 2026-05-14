@@ -57,7 +57,7 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr uint32_t K_URMA_ERROR_LOG_EVERY_N = 100;
 constexpr uint32_t URMA_LOG_LIMIT_MS = 1;
-constexpr uint32_t URMA_LOG_LIMIT_US = 100;
+constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr const char *RECV_JETTY_KEY_PREFIX = "recv:";
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
@@ -848,14 +848,14 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     Timer timer;
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
     auto elapsedMs = timer.ElapsedMilliSecond();
-    auto vlogLevel = (elapsedMs > URMA_LOG_LIMIT_MS || waitRc.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
-                    << elapsedMs << "ms, request id:" << requestId
-                    << ", src address:" << localUrmaInfo_.localAddress.ToString()
-                    << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
-                    << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
-                    << ", urma_inflight_wr_count: " << tbbEventMap_.size()
-                    << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST;
+    PLOG_IF_OR_VLOG(INFO, elapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError(), 1,
+                    "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
+                        << elapsedMs << "ms, request id:" << requestId
+                        << ", src address:" << localUrmaInfo_.localAddress.ToString()
+                        << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
+                        << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
+                        << ", urma_inflight_wr_count: " << tbbEventMap_.size()
+                        << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
@@ -1294,9 +1294,10 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         Timer t;
         METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
         auto jettyId = args.jetty->GetJettyId();
-        LOG(INFO) << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(args.srcChipId)
-                  << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
-                  << ", urma_inflight_wr_count:" << tbbEventMap_.size();
+        LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
+            << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(args.srcChipId)
+            << ", dst:" << static_cast<uint32_t>(args.dstChipId) << ", jetty id:" << jettyId
+            << ", urma_inflight_wr_count:" << tbbEventMap_.size();
         if (useNumaAffinity) {
             INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
             ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,

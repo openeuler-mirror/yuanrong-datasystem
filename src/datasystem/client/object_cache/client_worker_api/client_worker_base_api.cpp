@@ -312,7 +312,7 @@ Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutM
 {
     const std::vector<std::string> &objectKeys = getParam.objectKeys;
     const std::vector<ReadParam> &readParams = getParam.readParams;
-    LOG(INFO) << AppendSrcDstForLog(
+    VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to get object, client id: %s, object key: %s", clientId_, VectorToString(objectKeys)), "",
         hostPort_.ToString());
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(

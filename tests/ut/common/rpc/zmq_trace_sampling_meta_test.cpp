@@ -139,10 +139,27 @@ TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaAllowsWorkerLocalSamplingDecision)
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
     bool admitted = false;
-    EXPECT_FALSE(Trace::Instance().GetRequestSampleDecision(admitted));
+    EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+    EXPECT_TRUE(admitted);
     EXPECT_TRUE(LogRateLimiter::Instance().ShouldLog(ds_spdlog::level::info, Trace::Instance().GetCachedHash()));
     EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
     EXPECT_TRUE(admitted);
+}
+
+TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaRemainsUndecidedWhenReceiverHasNoLocalSampling)
+{
+    LogRateLimiter::Instance().SetRate(0);
+
+    MetaPb meta;
+    meta.set_trace_id("rpc-trace-undecided-no-rate");
+    meta.set_log_sample_state(LOG_SAMPLE_UNDECIDED);
+
+    TraceGuard traceGuard = SetTraceContextFromMeta(meta);
+    ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
+    bool admitted = false;
+    EXPECT_FALSE(Trace::Instance().GetRequestSampleDecision(admitted));
+    EXPECT_TRUE(LogRateLimiter::Instance().ShouldLog(ds_spdlog::level::info, Trace::Instance().GetCachedHash()));
+    EXPECT_FALSE(Trace::Instance().GetRequestSampleDecision(admitted));
 }
 
 }  // namespace ut

@@ -219,7 +219,8 @@
     - `minloglevel`
     - `log_async`
     - `log_async_queue_size`
-    - `log_rate_limit` (request-level sampling quota by trace ID, not per-log throttling; per-trace decision cache uses TTL-based hash map entries with periodic expired-entry cleanup, no fixed 1024-slot overwrite path)
+    - `log_only_write_info_file`
+    - `log_rate_limit` (request-level sampling quota by SDK request trace, not per-log throttling; local decisions are stored in the active `Trace` context and the limiter hot path uses only per-window atomics, not a global trace-decision map)
     - `log_dir`
     - `log_filename`
   - client environment overrides:
@@ -239,6 +240,7 @@
     - `DATASYSTEM_MIN_LOG_LEVEL`
     - `DATASYSTEM_LOG_MONITOR_ENABLE`
     - `DATASYSTEM_LOG_RATE_LIMIT`
+    - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
 - Background jobs, threads, or callbacks:
   - `LogManager` background thread started by `LogManager::Start()`;
   - exporter flush threads under `HardDiskExporter`;
@@ -248,8 +250,14 @@
   - `include/datasystem/context/context.h` and `src/datasystem/client/context/context.cpp` feed trace prefixes into `Trace`;
   - `src/datasystem/common/rpc/zmq/zmq_common.h` propagates one `log_sample_state` in `MetaPb` so
     client/worker keep a consistent request marker, and can propagate either unresolved request state
-    (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops;
-  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it to client-side `LogRateLimiter` once at connect/register time;
+    (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops; when a receiver has local
+    `log_rate_limit` enabled, an `UNDECIDED` request is decided at the RPC context import boundary before async
+    handoff;
+  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it
+    to client-side `LogRateLimiter` at connect/register time;
+  - client log file split behavior is decided before logger sink creation by `log_only_write_info_file` and the
+    client-only `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` override; workers use their own gflag/config value and do not
+    sync this setting through register responses;
   - public SDK entrypoints and language bindings explicitly create request traces with `Trace::SetRequestTraceUUID()`;
   - worker, master, and async callsites restore trace IDs or full `TraceContext` snapshots at request boundaries.
 - Upstream and downstream dependencies:
@@ -262,7 +270,7 @@
 
 | Component | Responsibility | Key files | Notes |
 | --- | --- | --- | --- |
-| `log.h` | repository-wide macro surface for logs and checks | `src/datasystem/common/log/log.h` | main entrypoint seen by most callers |
+| `log.h` | repository-wide macro surface for logs and checks | `src/datasystem/common/log/log.h` | main entrypoint seen by most callers; ordinary LOG macros pre-check request sampling before evaluating stream payloads |
 | `Logging` | provider init, env override, singleton lifecycle, startup ordering | `src/datasystem/common/log/logging.h/.cpp` | creates `LogManager` and `AccessRecorderManager` |
 | `LogManager` | background rolling, compression, pruning, and monitor flush | `src/datasystem/common/log/log_manager.h/.cpp` | one local background thread |
 | `Trace` | thread-local correlation state | `src/datasystem/common/log/trace.h/.cpp` | supports generated/imported trace IDs, request-log markers, and sampling-decision snapshots |
@@ -279,7 +287,8 @@
 1. Runtime or client code calls `Logging::Start(...)`.
 2. Client mode applies environment-driven config overrides before provider initialization.
 3. `InitLoggingWrapper(...)` creates the log directory, initializes the spdlog-backed provider, starts `LogManager`, and initializes `AccessRecorderManager`.
-4. Ordinary `LOG` and `VLOG` macros emit through the configured provider and sinks.
+4. Ordinary `LOG` and `VLOG` macros first call the lightweight `ShouldCreateLogMessage(...)` sampling precheck; rejected request logs at all severities do not evaluate their stream payload expressions.
+5. Admitted logs and non-sampled severities construct `LogMessage`, then emit through the configured provider and sinks; `LogMessageImpl` keeps a defensive sampling backstop for direct `LogMessage` construction outside the macros.
 
 Key files:
 
@@ -424,6 +433,7 @@ Failure-sensitive steps:
 | `DATASYSTEM_CLIENT_LOG_NAME` | environment | client-only override validated by RE2 | changes client ordinary log base name | unsafe naming would break file handling if validation changed |
 | `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` | environment | client-only override validated by RE2 | changes client access-log base name | can break downstream file discovery assumptions |
 | `DATASYSTEM_LOG_MONITOR_ENABLE` | environment | client-only override | enables or disables client monitor logging | may create client and server observability mismatch |
+| `log_only_write_info_file` / `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | gflag or client-only env override | default `true` | INFO files always receive all severities; `true` suppresses additional WARNING/ERROR files, while `false` restores dedicated WARNING/ERROR files and severity fanout | changes file discovery assumptions and disk usage |
 
 ## Examples And Migration Notes
 

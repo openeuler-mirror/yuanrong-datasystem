@@ -449,7 +449,11 @@
     },
     "log_rate_limit": {
         "value": "0",
-        "description": "Maximum sampled request traces per second (0 = unlimited). Sampling applies only to request logs with trace IDs. Sampled traces print complete log chains. ERROR and FATAL are never sampled."
+        "description": "Maximum sampled request traces per second (0 = unlimited). Sampling applies only to request logs with trace IDs. Sampled traces print complete log chains. Rejected traces are dropped at all log levels."
+    },
+    "log_only_write_info_file": {
+        "value": "true",
+        "description": "The INFO log file always receives all severities. Whether to avoid creating additional WARNING/ERROR log files."
     },
     "enable_curve_zmq": {
         "value": "false",
@@ -462,6 +466,10 @@
     "zmq_client_io_context": {
         "value": "5",
         "description": "Optimize the performance of a client stub. Default value 5. The higher the throughput, the higher the value, but should be in range [1, 32]."
+    },
+    "zmq_client_io_thread": {
+        "value": "1",
+        "description": "Optimize the performance of the client stub io thread. Default value 1. The higher the throughput, the higher the value, but should be in range [1, 32]."
     },
     "io_thread_nice": {
         "value": "-15",

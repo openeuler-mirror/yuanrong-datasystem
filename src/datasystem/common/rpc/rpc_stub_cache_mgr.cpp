@@ -179,13 +179,38 @@ void RpcStubCacheMgr::InitCreators()
 
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
 {
+    static constexpr int64_t SLOW_GET_STUB_THRESHOLD_MS = 10;
+    auto getSlowPhase = [](int64_t lookupElapsedMs, int64_t accessElapsedMs, int64_t createElapsedMs) {
+        if (createElapsedMs >= lookupElapsedMs && createElapsedMs >= accessElapsedMs) {
+            return "create";
+        }
+        if (accessElapsedMs >= lookupElapsedMs) {
+            return "access";
+        }
+        return "lookup";
+    };
+    Timer timer;
+    int64_t lookupElapsedMs = 0;
+    int64_t accessElapsedMs = 0;
+    int64_t createElapsedMs = 0;
+    bool cacheHit = false;
     PerfPoint point(PerfKey::WORKER_RPC_STUB_CACHE_LOOKUP);
     std::shared_ptr<RpcStubCacheMgrObj> encapsulatedData = nullptr;
     if (lruCache_->Lookup(HashKeyForRpcStubCacheMgr(hostPort, type), &encapsulatedData).IsOk()) {
+        lookupElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
+        cacheHit = true;
         rpcStub = encapsulatedData->GetData();
         if (rpcStub != nullptr) {
+            auto totalElapsedMs = lookupElapsedMs + static_cast<int64_t>(timer.ElapsedMilliSecond());
+            LOG_IF(INFO, totalElapsedMs > SLOW_GET_STUB_THRESHOLD_MS)
+                << FormatString("[SLOW_RPC_STUB_GET] dst=%s type=%d hit=%d phase=%s total=%ldms trace=%s",
+                                hostPort.ToString(), static_cast<int>(type), cacheHit,
+                                getSlowPhase(lookupElapsedMs, accessElapsedMs, createElapsedMs), totalElapsedMs,
+                                Trace::Instance().GetTraceID());
             return Status::OK();
         }
+    } else {
+        lookupElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
     }
     point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_FIND_CREATOR);
     LOG(INFO) << "Start to create stub, destAddr: " << hostPort.ToString() << ", type: " << static_cast<int>(type);
@@ -213,17 +238,31 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
                 }
             }
         } while (rc.GetCode() == K_TRY_AGAIN);
+        accessElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
         RETURN_IF_NOT_OK(rc);
         point.RecordAndReset(PerfKey::WORKER_RPC_STUB_CACHE_CONNECT);
         rc = creator->second(hostPort, rpcStub);
+        createElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
         point.Record();
         if (rc.IsError()) {
+            auto totalElapsedMs = lookupElapsedMs + accessElapsedMs + createElapsedMs;
+            LOG(INFO) << FormatString(
+                "[RPC_STUB_GET_FAIL] dst=%s type=%d phase=%s total=%ldms retry=%d status=%s trace=%s",
+                hostPort.ToString(), static_cast<int>(type),
+                getSlowPhase(lookupElapsedMs, accessElapsedMs, createElapsedMs), totalElapsedMs, attempts,
+                rc.ToString(), Trace::Instance().GetTraceID());
             LOG(ERROR) << "create rpc stub failed, rc: " << rc.ToString();
             LOG_IF_ERROR(Remove(hostPort, type), "remove rpc stub failed");
             return rc;
         }
         newEncapsulatedData->SetDataWithoutLck(rpcStub);
     }
+    auto totalElapsedMs = lookupElapsedMs + accessElapsedMs + createElapsedMs;
+    LOG_IF(INFO, totalElapsedMs > SLOW_GET_STUB_THRESHOLD_MS)
+        << FormatString("[SLOW_RPC_STUB_GET] dst=%s type=%d hit=%d phase=%s total=%ldms retry=%d trace=%s",
+                        hostPort.ToString(), static_cast<int>(type), cacheHit,
+                        getSlowPhase(lookupElapsedMs, accessElapsedMs, createElapsedMs), totalElapsedMs, attempts,
+                        Trace::Instance().GetTraceID());
     return Status::OK();
 }
 

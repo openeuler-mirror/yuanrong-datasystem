@@ -66,7 +66,7 @@ Arguments:
   --until             End time (exclusive), format: YYYY-MM-DDTHH:MM:SS
   -o / --output       Output HTML file path (default: resource_report.html)
   --log-pattern       Filename substring to match (default: resource)
-  --interval          Time bin interval in milliseconds (default: 3600000). 1000=1s, 60000=1min, 3600000=1h
+  --interval          Time bin interval in milliseconds (default: 60000). 1000=1s, 60000=1min, 3600000=1h
   --open              Open report in browser after generation
 
 HTML Report Sections (10 charts + 1 detail table):
@@ -88,6 +88,7 @@ Notes:
 """
 
 import argparse
+import gzip
 import html
 import math
 import os
@@ -98,6 +99,7 @@ import textwrap
 from collections import defaultdict
 from datetime import datetime
 
+_RE_IP = re.compile(r"\d+\.\d+\.\d+\.\d+")
 
 # All gauge metric keys collected per time bin
 _GAUGE_KEYS = [
@@ -121,11 +123,11 @@ def _find_log_files(log_dir, pattern="resource"):
     log_files = {}
     for root, dirs, files in os.walk(log_dir, followlinks=False):
         for f in files:
-            if pattern in f and f.endswith(".log"):
+            if pattern in f and (f.endswith(".log") or f.endswith(".log.gz")):
                 host = None
                 parts = root.replace(log_dir, "").strip("/").split("/")
                 for p in parts:
-                    if re.match(r"\d+\.\d+\.\d+\.\d+", p) or re.match(r"worker_\d+_\d+", p):
+                    if _RE_IP.match(p) or re.match(r"worker_\d+_\d+", p):
                         host = p
                         break
                 if host is None:
@@ -190,9 +192,13 @@ def parse_resource_logs(log_files_by_host, since=None, until=None):
     for host, files in sorted(log_files_by_host.items()):
         records = []
         for fpath in files:
-            with open(fpath, "r", errors="replace") as f:
+            print(f"  Parsing {os.path.basename(fpath)}...")
+            opener = gzip.open if fpath.endswith(".gz") else open
+            with opener(fpath, "rt", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     total_lines += 1
+                    if total_lines % 500000 == 0:
+                        print(f"  ... {total_lines:,} lines, {parsed_lines:,} records")
                     line = line.strip()
                     if not line:
                         continue
@@ -1179,7 +1185,7 @@ def main():
         help="filename substring to match log files (default: resource)"
     )
     parser.add_argument(
-        "--interval", type=int, default=3600000,
+        "--interval", type=int, default=60000,
         help="time bin size in milliseconds; smaller = finer chart granularity "
              "(default: 3600000 = 1h). 1000=1s, 60000=1min, 600000=10min, 3600000=1h"
     )

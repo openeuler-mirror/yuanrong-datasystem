@@ -33,6 +33,7 @@
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
@@ -54,6 +55,7 @@ constexpr bool DEFAULT_ALSO_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_CLIENT_LOG_MONITOR = true;
 constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
 constexpr bool DEFAULT_LOG_COMPRESS = true;
+constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
 constexpr bool DEFAULT_LOG_TO_STDERR = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
@@ -87,9 +89,13 @@ DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of as
 DS_DEFINE_int32(log_rate_limit, 0,
     "Maximum sampled request traces per second (0 = unlimited). "
     "Sampling applies only to request logs with trace IDs. "
-    "Sampled traces print complete log chains. ERROR and FATAL are never sampled.");
+    "Sampled traces print complete log chains. Rejected traces are dropped at all log levels.");
+DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
+               "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
+               "log files.");
 
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(log_only_write_info_file);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
@@ -160,9 +166,11 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
         CHECK_STRNE(programName.c_str(), "UNKNOWN") << ": must initialize flags before logging";
         FLAGS_log_filename = std::move(programName);
     }
-    std::vector<std::string> fileNamePatterns = { (FLAGS_log_filename + ".INFO").c_str(),
-                                                  (FLAGS_log_filename + ".WARNING").c_str(),
-                                                  (FLAGS_log_filename + ".ERROR").c_str() };
+    std::vector<std::string> fileNamePatterns = { (FLAGS_log_filename + ".INFO").c_str() };
+    if (!FLAGS_log_only_write_info_file) {
+        fileNamePatterns.emplace_back((FLAGS_log_filename + ".WARNING").c_str());
+        fileNamePatterns.emplace_back((FLAGS_log_filename + ".ERROR").c_str());
+    }
     LogParam loggerParam;
     loggerParam.fileNamePatterns = fileNamePatterns;
     loggerParam.logDir = FLAGS_log_dir;
@@ -310,6 +318,15 @@ void Logging::InitClientAdvancedConfig()
     if (FLAGS_log_rate_limit == 0) {
         FLAGS_log_rate_limit = GetInt32FromEnv(LOG_RATE_LIMIT_ENV.c_str(), 0);
     }
+
+    if (FLAGS_zmq_client_io_thread == 1) {
+        FLAGS_zmq_client_io_thread = GetInt32FromEnv("DATASYSTEM_ZMQ_CLIENT_IO_THREAD", 1);
+    }
+
+    if (FLAGS_log_only_write_info_file == DEFAULT_LOG_ONLY_WRITE_INFO_FILE) {
+        FLAGS_log_only_write_info_file = GetBoolFromEnv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(),
+                                                        DEFAULT_LOG_ONLY_WRITE_INFO_FILE);
+    }
 }
 
 void Logging::InitClientConfig()
@@ -343,7 +360,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     if (isClient_) {
         GetInstance()->InitClientConfig();
 
-        clientLogName = logFilename + "_" + std::to_string(getpid());
+        clientLogName = logFilename;
 
         // Allow overriding client log filename via environment variable
         std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
@@ -368,6 +385,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
                       << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
                       << ", log_v: " << FLAGS_v
+                      << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file
                       << ", log_rate_limit: " << FLAGS_log_rate_limit << std::endl;
         }
     } else {

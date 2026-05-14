@@ -20,8 +20,6 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/pod_identifier.h"
 
-#include <cstdlib>
-
 namespace datasystem {
 
 static Provider g_ProviderInstance;

@@ -36,6 +36,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | design and implement a low-risk l2 cache or secondary-storage feature | `playbooks/features/infra/l2cache/implementation.md` | `modules/infra/l2cache/design.md`, `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | design and implement a low-risk slot storage or recovery feature | `playbooks/features/infra/slot/implementation.md` | `modules/infra/slot/design.md`, `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | understand logging architecture before adding a feature | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
+| design Set/Get slow logs that bypass request sampling | `modules/infra/logging/plog-slow-request-plan.md` | `src/datasystem/common/log/*`, `src/datasystem/worker/object_cache/*`, `src/datasystem/master/object_cache/*`, `src/datasystem/common/rdma/*`, `src/datasystem/common/rpc/zmq/*` |
+| review the implemented Get PLOG slow-log change and validation result | `modules/infra/logging/plog-slow-get-implementation-summary.md` | `src/datasystem/common/log/*`, `src/datasystem/worker/object_cache/*`, `src/datasystem/master/object_cache/*`, `src/datasystem/common/rdma/*` |
 | understand trace ID generation or propagation | `modules/infra/logging/trace-and-context.md` | `src/datasystem/common/log/trace.*`, `src/datasystem/context/*` |
 | understand access log, performance recording, or operation key mapping | `modules/infra/logging/access-recorder.md` | `src/datasystem/common/log/access_recorder.*`, `src/datasystem/common/log/access_point.def` |
 | understand log startup, rotation, monitor flush, or crash logging | `modules/infra/logging/log-lifecycle-and-rotation.md` | `src/datasystem/common/log/logging.*`, `src/datasystem/common/log/log_manager.*`, `src/datasystem/common/log/failure_handler.*` |
@@ -80,6 +82,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | slot design | `modules/infra/slot/design.md` | `src/datasystem/common/l2cache/slot_client/*`, `src/datasystem/worker/object_cache/slot_recovery*`, `tests/ut/common/l2cache/slot_store_test.cpp` |
 | logging area overview | `modules/infra/logging/README.md` | `src/datasystem/common/log` |
 | logging design | `modules/infra/logging/design.md` | `src/datasystem/common/log/*`, `src/datasystem/common/metrics/hard_disk_exporter/*` |
+| PLOG slow Set/Get design | `modules/infra/logging/plog-slow-request-plan.md` | `src/datasystem/common/log/*`, `src/datasystem/worker/object_cache/*`, `src/datasystem/master/object_cache/*`, `src/datasystem/common/rdma/*`, `src/datasystem/common/rpc/zmq/*` |
+| PLOG slow Get implementation summary | `modules/infra/logging/plog-slow-get-implementation-summary.md` | `src/datasystem/common/log/*`, `src/datasystem/worker/object_cache/*`, `src/datasystem/master/object_cache/*`, `src/datasystem/common/rdma/*` |
 | trace and context propagation | `modules/infra/logging/trace-and-context.md` | `src/datasystem/common/log/trace.*`, `src/datasystem/context/*` |
 | access recorder and access logs | `modules/infra/logging/access-recorder.md` | `src/datasystem/common/log/access_recorder.*`, `src/datasystem/common/log/access_point.def` |
 | log lifecycle and rotation | `modules/infra/logging/log-lifecycle-and-rotation.md` | `src/datasystem/common/log/logging.*`, `src/datasystem/common/log/log_manager.*`, `src/datasystem/common/log/failure_handler.*` |

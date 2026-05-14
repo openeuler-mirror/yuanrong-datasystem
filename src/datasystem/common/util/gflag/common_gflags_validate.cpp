@@ -107,10 +107,23 @@ bool ValidateIoThreadNice(const char *flagName, int32_t value)
     }
     return true;
 }
+
+bool ValidateZmqClientIoThread(const char *flagName, int32_t value)
+{
+    constexpr int32_t kMinValue = 1;
+    constexpr int32_t kMaxValue = 32;
+    if (value < kMinValue || value > kMaxValue) {
+        LOG(ERROR) << FormatString("The %s flag is %d, which must be between %d and %d.", flagName, value, kMinValue,
+                                   kMaxValue);
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
 DS_DEFINE_validator(io_thread_nice, &ValidateIoThreadNice);
+DS_DEFINE_validator(zmq_client_io_thread, &ValidateZmqClientIoThread);
 DS_DEFINE_validator(zmq_chunk_sz, &Validator::ValidateInt32);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);

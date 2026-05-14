@@ -26,8 +26,11 @@
 #include <cstring>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_message.h"
+#include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/spdlog/log_param.h"
+#include "datasystem/common/log/trace.h"
 
 DS_DECLARE_int32(v);
 DS_DECLARE_int32(minloglevel);
@@ -79,6 +82,24 @@ inline bool LogFirstEveryNShouldEmit(int n, int intervalMs, std::atomic<int64_t>
 
 static constexpr int32_t HEARTBEAT_LEVEL = 3;  // Heartbeat log level
 
+inline bool ShouldCreateLogMessage(LogSeverity logSeverity)
+{
+    auto level = ToSpdlogLevel(logSeverity);
+    auto &trace = Trace::Instance();
+    bool admitted = false;
+    if (trace.GetRequestSampleDecision(admitted)) {
+        return admitted;
+    }
+
+    auto &limiter = LogRateLimiter::Instance();
+    if (!limiter.IsEnabled()) {
+        return true;
+    }
+
+    uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
+    return limiter.ShouldLog(level, traceHash);
+}
+
 // `X_##__LINE__` does not expand __LINE__; use DS_LOG_PP_CAT(X_, __LINE__) for per-line unique names.
 #define DS_LOG_PP_CAT_I(a, b) a##b
 #define DS_LOG_PP_CAT(a, b) DS_LOG_PP_CAT_I(a, b)
@@ -91,14 +112,22 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 
 // Basic Logging Macros Impl
 #define LOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__).Stream()
+#define PLOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true).Stream() \
+    << "[PLOG] "
 
 // Conditional Logging Macros
-#define LOG_IF(severity, condition) \
-    if (condition)                  \
+#define LOG_IF(severity, condition)                                                         \
+    if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))         \
     LOG_IMPL(severity)
+// PLOG is for performance slow-path diagnostics. It bypasses request log sampling/rate limiting only;
+// severity filtering still follows FLAGS_minloglevel.
+#define PLOG_IF(severity, condition)                                                \
+    if ((condition) && FLAGS_minloglevel <= DS_LOGS_LEVEL_##severity)               \
+    PLOG_IMPL(severity)
 
 // Basic Logging Macros
 #define LOG(severity) LOG_IF(severity, FLAGS_minloglevel <= DS_LOGS_LEVEL_##severity)
+#define PLOG(severity) PLOG_IF(severity, true)
 
 // Frequency-Controlled Logging Macros
 #define LOG_EVERY_N(severity, n)                     \
@@ -151,6 +180,15 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 #define VLOG_IF(verboselevel, condition)        \
     if (FLAGS_v >= verboselevel && (condition)) \
     LOG(INFO)
+
+#define PLOG_IF_OR_VLOG(severity, condition, verboselevel, message) \
+    do {                                                            \
+        if (condition) {                                            \
+            PLOG(severity) << message;                              \
+        } else {                                                    \
+            VLOG(verboselevel) << message;                          \
+        }                                                           \
+    } while (0)
 
 #define VLOG_EVERY_N(verboselevel, n)                     \
     static int VLOG_EVERY_N_COUNTER_##__LINE__ = 0;       \

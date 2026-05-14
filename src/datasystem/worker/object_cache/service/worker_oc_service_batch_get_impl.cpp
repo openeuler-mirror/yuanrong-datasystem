@@ -33,6 +33,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -49,6 +50,9 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 namespace {
+constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
+constexpr double US_PER_MS = 1000.0;
+
 void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
 {
     constexpr int logInterval = 10;
@@ -176,16 +180,21 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     auto traceContext = Trace::Instance().GetContext();
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
     std::mutex lastRcMutex;
+    Timer timer;
+    int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
 
         auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceContext, &lastRcMutex] {
+                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer, &lastRcMutex] {
+            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+            CHECK_FAIL_RETURN_STATUS(realTimeoutMs > elapsed, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             Status tmpRc = Status::OK();
             for (auto &infoPair : infoList) {
                 auto &infos = infoPair.first;
-                TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
                 tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
                                                        tempNeedRetryIds[index], tempFailedIds[index],
                                                        tempFailedMetas[index]);
@@ -199,8 +208,6 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         if (index + 1 == groupedQueryMetas.size()) {
             LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
         } else {
-            // Fixme: reqTimeoutDuration is not initialized when this function is called, so the timeout set in
-            // RpcOptions inside BatchGetObjectFromRemoteOnLock may not work as expected.
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
@@ -572,7 +579,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;
-    const int32_t minRetryOnceRpcMs = 1; // The 1st level of retryIntervalsMs
+    const int32_t minRetryOnceRpcMs = 1;  // The 1st level of retryIntervalsMs
     do {
         dataSizeChange = false;
         BatchGetObjectRemoteReqPb reqPb;
@@ -600,10 +607,9 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
             RETURN_IF_NOT_OK(
                 ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
-            LOG(INFO) << AppendSrcDstForLog(
-                FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
-                             IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
-                localAddress_.ToString(), address);
+            VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+                                                       IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
+                                          localAddress_.ToString(), address);
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
@@ -621,7 +627,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             inflightGauge.Inc();
             LogInflightRemoteGetRequestIfNeeded(inflightGauge);
             Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
-            RETURN_IF_NOT_OK(RetryOnErrorRepent(
+            Timer timer;
+            auto rc = RetryOnErrorRepent(
                 timeoutMs,
                 [&workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, this](int32_t) {
                     PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
@@ -638,8 +645,16 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 []() { return Status::OK(); },
                 { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                   StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
-                minRetryOnceRpcMs));
-            return Status::OK();
+                minRetryOnceRpcMs);
+            const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+            const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+            PLOG_IF_OR_VLOG(
+                INFO, elapsedUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
+                AppendSrcDstForLog(
+                    FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
+                                 IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
+                    localAddress_.ToString(), address));
+            return rc;
         };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
         Status rc = constructAndSend();

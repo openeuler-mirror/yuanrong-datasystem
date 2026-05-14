@@ -62,11 +62,6 @@ ZmqService::ZmqService()
         VLOG(ZMQ_PERF_LOG_LEVEL) << FormatString("Routing reply from %s to reply queue for service %s", sender,
                                                  serviceName_);
         PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
-        // When multiDestinations_ is false we never call ZmqService::ServiceToClient (only Put on replyQueue_).
-        // Mirror the metric + synthetic tick side of ServiceToClient so server histograms and client network math
-        // still see SERVER_SEND / SERVER_RPC_WINDOW_NS.
-        RecordTick(meta, TICK_SERVER_SEND);
-        RecordServerLatencyMetrics(meta);
         RETURN_IF_NOT_OK(replyQueue_->Put(std::move(p)));
         eventfd_write(outfd_, 1);
         return Status::OK();
@@ -340,7 +335,7 @@ Status ZmqService::InitThreadPool()
     auto numThreads = cfg_.numRegularSockets_ + cfg_.numStreamSockets_;
     // We need to account for the streaming threads. They can run forever until the server shutdown.
     const int minThread = 1 + cfg_.numStreamSockets_;
-    const int initMaxThread = 8;
+    const int initMaxThread = 16;
     auto minThreadNum = numThreads / minThread;
     minThreadNum = minThreadNum > minThread ? minThreadNum : minThread;
     minThreadNum = minThreadNum > initMaxThread ? initMaxThread : minThreadNum;
@@ -713,14 +708,12 @@ Status ZmqService::WorkerCB::WorkerEntry()
         return Status::OK();
     }
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_WORKER, GetLapTime(meta, "ZMQ_FRONTEND_TO_WORKER"));
-    RecordTick(meta, TICK_SERVER_DEQUEUE);
+    RecordTick(meta, TICK_SERVER_EXEC_START);
     VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
                                         meta.svc_name(), meta.method_index(), meta.client_id());
     Status rc = WorkerEntryImpl(meta, inMsg.second, replyMsg);
     VLOG(RPC_LOG_LEVEL) << "Service '" << impl_->ServiceName() << "' Method " << meta.method_index() << " rc "
                         << rc.ToString();
-    // Record SERVER_EXEC_END tick after business logic completes
-    RecordTick(meta, TICK_SERVER_EXEC_END);
     // The response will be sent by the calling method. We can just exit and ignore the rc above
     // except lower level code hit some error and didn't send anything back to the client.
     if (rc.IsError()) {
@@ -987,10 +980,6 @@ Status ZmqService::ServiceToClient(ZmqMetaMsgFrames &p)
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_BACKEND_TO_FRONTEND, GetLapTime(meta, "ZMQ_BACKEND_TO_FRONTEND"));
 
-    // Record SERVER_SEND tick and calculate server-side metrics
-    RecordTick(meta, TICK_SERVER_SEND);
-    RecordServerLatencyMetrics(meta);
-
     // Before we put the replies onto the appropriate queue, we want to intercept the one with payload.
     // If we are going to send it in two steps (e.g. waiting for the client to allocate the buffer),
     // we want to park the payload or send separately. We need to make sure the client is using V2MTP.
@@ -1184,7 +1173,6 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
         }
     }
     MetaPb &meta = p.first;
-    RecordTick(meta, TICK_SERVER_RECV);
     // Branch prediction. Let the most probably case in the first if-block.
     if (meta.worker_id().empty() && meta.method_index() >= 0) {
         return RouteToRegBackend(p);

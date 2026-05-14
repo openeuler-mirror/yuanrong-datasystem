@@ -726,6 +726,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | oc_thread_num | int | `32` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | zmq_server_io_context | int | `5` | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_client_io_context | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
+| zmq_client_io_thread | int | `1` | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | io_thread_nice | int | `-15` | 指定部分 IO 线程的 nice 值，并通过 `setpriority` 生效，取值范围：[-20, 19]。值越小表示调度优先级越高，设置负值通常需要额外权限 |
 | zmq_chunk_sz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
 | max_rpc_session_num | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
@@ -776,7 +777,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_retention_day | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 单个日志文件最大大小（以MB为单位） |
-| log_rate_limit | int | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的非ERROR日志会被丢弃。ERROR/FATAL始终打印 |
+| log_rate_limit | int | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。 |
+| log_only_write_info_file | bool | `true` | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | `true` | 是否开启接口性能与资源观测日志 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |

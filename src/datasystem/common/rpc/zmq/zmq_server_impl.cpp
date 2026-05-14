@@ -121,19 +121,6 @@ void ZmqServerImpl::StopAllServices()
     }
 }
 
-void RecalculateMetaTimeout(MetaPb &meta, uint64_t lapTime)
-{
-    if (meta.svc_name().empty()) {
-        return;
-    }
-    int64_t timeoutMs = meta.timeout();
-    constexpr uint64_t NANO_TO_MILLI_UNIT = 1'000'000;
-    int64_t lapTimeMs = static_cast<int64_t>(lapTime / NANO_TO_MILLI_UNIT);
-    if (lapTimeMs > 0 && timeoutMs > lapTimeMs) {
-        meta.set_timeout(timeoutMs - lapTimeMs);
-    }
-}
-
 Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventType type, ZmqCurveUserId &userId,
                       PerfKey transferPerfKey)
 {
@@ -162,11 +149,11 @@ Status ParseMsgFrames(ZmqMsgFrames &frames, MetaPb &meta, int fd, const EventTyp
     uint64_t lapTime = GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SERVER)");
     // This is the time spent in ZMQ and the underlying network (tcp/ip or unix socket) overhead.
     PerfPoint::RecordElapsed(transferPerfKey, lapTime);
+    RecordTick(meta, TICK_SERVER_RECV);
     // Set up the return address.
     meta.set_gateway_id(ZmqMessageToString(gatewayId));
     meta.set_route_fd(fd);
     meta.set_event_type(type);
-    RecalculateMetaTimeout(meta, lapTime);
     return Status::OK();
 }
 
@@ -246,6 +233,8 @@ Status ZmqServerImpl::ProcessReply(ZmqService *svc)
     ZmqMsgFrames &frames = p.second;
     MetaPb &meta = p.first;
     PerfPoint::RecordElapsed(PerfKey::ZMQ_SVC_TO_ROUTER, GetLapTime(meta, "ZMQ_SVC_TO_ROUTER"));
+    RecordTick(meta, TICK_SERVER_SEND);
+    RecordServerLatencyMetrics(meta);
     return ServiceToClient(meta, std::move(frames));
 }
 
@@ -291,6 +280,7 @@ Status ZmqServerImpl::StartProxy()
         // If we never got any event from previous iteration, wait for a full 100ms
         timeout = RPC_POLL_TIME;
 
+        METRIC_TIMER(metrics::KvMetricId::ZMQ_SERVER_POLL_HANDLE_LATENCY);
         // revents from poll doesn't work correctly with ZMQ socket event fd.
         // We need to check the state
         unsigned int events = static_cast<unsigned int>(frontend_->GetEvents());
@@ -573,6 +563,8 @@ Status IOService::ServiceToClient(ZmqPollEntry *pe, EventsVal events)
     CHECK_FAIL_RETURN_STATUS(meta.ticks_size() > 0, K_RUNTIME_ERROR,
                              FormatString("Incomplete MetaPb:\n%s", meta.DebugString()));
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_IOSVC, GetLapTime(meta, "ZMQ_FRONTEND_TO_IOSVC"));
+    RecordTick(meta, TICK_SERVER_SEND);
+    RecordServerLatencyMetrics(meta);
     ZmqMsgFrames &frames = p.second;
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
     int fd = meta.route_fd();

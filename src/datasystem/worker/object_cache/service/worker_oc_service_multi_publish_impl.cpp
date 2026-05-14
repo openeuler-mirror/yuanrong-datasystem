@@ -75,9 +75,12 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
     RequestParam reqParam;
     reqParam.objectKey = FormatString(
         "%s,count:%s", req.object_info(0).object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT), req.object_info_size());
+    auto totalMs = timer.ElapsedMilliSecond();
     posixPoint.Record(status.GetCode(), std::to_string(req.object_info(0).data_size()), reqParam, status.GetMsg());
-    workerOperationTimeCost.Append("Total MultiPublish", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of worker MultiPublish %s", workerOperationTimeCost.GetInfo());
+    workerOperationTimeCost.Append("Total MultiPublish", totalMs);
+    auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
+    VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s",
+        totalMs, workerOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -122,7 +125,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
             TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_info(i).object_key()));
     }
 
-    LOG(INFO) << FormatString("Process multi pub from client: %s, cacheType: %d", clientId, req.cache_type());
+    VLOG(1) << FormatString("Process multi pub, cacheType: %d", req.cache_type());
     RETURN_IF_NOT_OK(VerifyDuplicateKeys(namespaceUri));
     VLOG(1) << "Multi publish with key : " << VectorToString(namespaceUri);
 

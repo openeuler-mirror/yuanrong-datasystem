@@ -88,6 +88,11 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
+static constexpr uint64_t GET_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr uint64_t GET_QUERY_META_RPC_SLOW_US = 1000;
+static constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
+static constexpr uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = 1000;
+static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
@@ -128,8 +133,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     auto clientId = ClientKey::Intern(req.client_id());
     auto inflightGauge =
         metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-    LOG(INFO) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
-                              timer.ElapsedMilliSecond(), inflightGauge.Get());
+    VLOG(1) << FormatString("[Get] Receive, clientId: %s, serverApiReadCost: %.3fms, inflightRemoteGet: %d", clientId,
+                            timer.ElapsedMilliSecond(), inflightGauge.Get());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
 
@@ -163,11 +168,12 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     .Observe(qUs);
             }
             auto elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            LOG(INFO) << FormatString("[Get] Receive, clientId: %s, objects: %s, "
-                                      "threadPool: %s, elapsed: %.3fms, remainingTime: %.3fms",
-                                      clientId, VectorToString(request->GetRawObjectKeys()),
-                                      threadPool_->GetStatistics(),
-                                      static_cast<double>(elapsed), static_cast<double>(timeout));
+            auto vlogLevel = elapsed > 1 ? 0 : 1;
+            VLOG(vlogLevel) << FormatString(
+                "[Get] Receive, clientId: %s, objects: %s, "
+                "threadPool: %s, elapsed: %.3fms, remainingTime: %.3fms",
+                clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
+                static_cast<double>(elapsed), static_cast<double>(timeout));
             if (elapsed >= timeout) {
                 LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
                            << ", get threads Statistics: " << threadPool_->GetStatistics();
@@ -190,12 +196,15 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_GET_LATENCY))
                         .Observe(e2EUs);
                 }
-                workerOperationTimeCost.Append("ProcessGetObjectRequest",
-                                               static_cast<int64_t>(timer.ElapsedMilliSecond()));
+                auto getElapsedMs = timer.ElapsedMilliSecond();
+                workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+                auto inflightGaugeGet =
+                    metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
                 LOG(INFO) << FormatString(
-                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
+                    "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
+                    "%d %s",
                     clientId, request->GetRawObjectKeys().size(),
-                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
+                    IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs, inflightGauge.Get(),
                     workerOperationTimeCost.GetInfo());
             }
         });
@@ -213,11 +222,15 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     .Observe(e2EUs);
             }
         }
-        workerOperationTimeCost.Append("ProcessGetObjectRequest", timer.ElapsedMilliSecond());
-        LOG(INFO) << FormatString("[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %s",
-                                  clientId, request->GetRawObjectKeys().size(),
-                                  IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
-                                  workerOperationTimeCost.GetInfo());
+        auto getElapsedMs = timer.ElapsedMilliSecond();
+        workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+        auto inflightGaugeGet =
+            metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
+        LOG(INFO) << FormatString(
+            "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
+            "%d %s",
+            clientId, request->GetRawObjectKeys().size(), IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
+            getElapsedMs, inflightGauge.Get(), workerOperationTimeCost.GetInfo());
     }
     return Status::OK();
 }
@@ -318,7 +331,15 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL);
     // Try get from local.
     std::set<ReadKey> remoteObjectKeys;
-    RETURN_IF_NOT_OK(TryGetObjectFromLocal(request, remoteObjectKeys));
+    Timer localProcessingTimer;
+    Status localRc = TryGetObjectFromLocal(request, remoteObjectKeys);
+    const auto localProcessingUs = static_cast<uint64_t>(localProcessingTimer.ElapsedMicroSecond());
+    PLOG_IF_OR_VLOG(INFO, localProcessingUs >= GET_LOCAL_PROCESSING_SLOW_US, 1,
+                    FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
+                                 "costUs: %zu, rc: %s",
+                                 request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),
+                                 localProcessingUs, localRc.ToString()));
+    RETURN_IF_NOT_OK(localRc);
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
 
     // Register request for subscribe
@@ -556,6 +577,11 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
         objKeys.emplace_back(kv.first);
     }
     while (!objKeys.empty() && retry < maxRetry) {
+        if (reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+            LOG(WARNING) << "Stop retry delete unacked object meta due to exhausted timeout, remaining size: "
+                          << objKeys.size();
+            break;
+        }
         if (objKeys.size() == 1) {
             auto status = RemoveLocation(objKeys.front(), deleteKeyVersions.at(objKeys.front()));
             if (status.IsOk()) {
@@ -778,9 +804,11 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
-    LOG(INFO) << FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
-                              objectsNeedGetRemote.size(), queryMetas.size(),
-                              queryMetaTimer.ElapsedMilliSecond());
+    const auto queryMetaUs = static_cast<uint64_t>(queryMetaTimer.ElapsedMicroSecond());
+    const double queryMetaMs = static_cast<double>(queryMetaUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, queryMetaUs >= GET_QUERY_META_RPC_SLOW_US, 1,
+                    FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
+                                 objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -1255,7 +1283,13 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
     rpcPoint.Record();
-    LOG(INFO) << FormatString("Remote get success, elapsed %.3f ms", remoteGetTimer.ElapsedMilliSecond());
+    const auto remoteGetUs = static_cast<uint64_t>(remoteGetTimer.ElapsedMicroSecond());
+    const double remoteGetMs = static_cast<double>(remoteGetUs) / US_PER_MS;
+    PLOG_IF_OR_VLOG(INFO, remoteGetUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
+                    AppendSrcDstForLog(
+                        FormatString("Remote get success, objectKey: %s, path: %s, cost: %.3fms", objectKV.GetObjKey(),
+                                     IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
+                        localAddress_.ToString(), address));
     return Status::OK();
 }
 
@@ -2278,7 +2312,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     if (IsRpcTimeout(rc)) {
         Status status = asyncUpdateLocationManager_->AddTask(std::move(task));
         if (status.IsError()) {
-            LOG(WARNING) << FormatString("Add retry task failed: %s", rc.ToString());
+            LOG(WARNING) << FormatString("Add retry task failed: %s", status.ToString());
             DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
             ClearObjectsByObjectKeys({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         }
@@ -2417,7 +2451,8 @@ void WorkerOcServiceGetImpl::UpdateLocationRedirectKeysToRetry(
 
 void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<std::string, uint64_t> &clearKeyVersions)
 {
-    LOG(INFO) << "clear objects by update location params";
+    int clearCount = 0;
+    int failCount = 0;
     for (auto &keyVersion : clearKeyVersions) {
         std::shared_ptr<SafeObjType> entry;
         auto status = objectTable_->Get(keyVersion.first, entry);
@@ -2425,20 +2460,32 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
             if (status.GetCode() == StatusCode::K_NOT_FOUND) {
                 continue;
             }
-            LOG(WARNING) << FormatString("objectKey: %s get failed, status: %s", keyVersion.first, status.ToString());
+            failCount++;
             continue;
         }
         Status rc = TryLockWithRetry(keyVersion.first, entry);
         if (rc.IsError()) {
-            LOG(WARNING) << FormatString("objectKey: %s lock failed, status: %s", keyVersion.first, rc.ToString());
+            failCount++;
             continue;
         }
         Raii unlock([&entry]() { entry->WUnlock(); });
         if ((*entry)->GetCreateTime() == keyVersion.second) {
             ObjectKV objectKV(keyVersion.first, *entry);
-            LOG_IF_ERROR(ClearObject(objectKV),
-                         FormatString("Failed to erase object %s from object table", keyVersion.first));
+            auto clearRc = ClearObject(objectKV);
+            if (clearRc.IsOk()) {
+                clearCount++;
+            } else {
+                LOG(ERROR) << FormatString("Failed to erase object %s from object table, %s", keyVersion.first,
+                                           clearRc.ToString());
+            }
         }
+    }
+    if (failCount > 0) {
+        LOG(WARNING) << FormatString("Clear objects by update location: total %d, cleared %d, failed %d",
+                                     static_cast<int>(clearKeyVersions.size()), clearCount, failCount);
+    } else if (clearCount > 0) {
+        LOG_EVERY_N(INFO, 100) << FormatString("Clear objects by update location: total %d, cleared %d",
+                                               static_cast<int>(clearKeyVersions.size()), clearCount);
     }
 }
 
@@ -2583,6 +2630,50 @@ Status AuthenticateGetMetaUser(AkSkManager *akSkManager, const GetObjMetaInfoReq
     return Status::OK();
 }
 
+static void MergeObjectLocations(master::GetObjectLocationsRspPb &masterRsp,
+                                 std::unordered_map<std::string, ObjectLocationInfoPb> &result)
+{
+    for (auto &item : *masterRsp.mutable_location_infos()) {
+        // Use operator[] to ensure redirect data (authoritative source) overwrites main query result
+        result[item.object_key()] = std::move(item);
+    }
+}
+
+Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
+    const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+    std::unordered_map<std::string, ObjectLocationInfoPb> &result, Status &lastRc)
+{
+    for (const auto &redirectInfo : infos) {
+        HostPort redirectMasterAddr;
+        Status rc = GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Get redirect master address failed: %s", rc.ToString());
+            lastRc = rc;
+            continue;
+        }
+        auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
+        if (redirectWorkerMasterApi == nullptr) {
+            LOG(ERROR) << FormatString("Get redirect master api failed, address: %s", redirectMasterAddr.ToString());
+            lastRc = Status(K_RUNTIME_ERROR, "redirect master get failed");
+            continue;
+        }
+        master::GetObjectLocationsReqPb redirectReq;
+        master::GetObjectLocationsRspPb redirectRsp;
+        *redirectReq.mutable_object_keys() = { redirectInfo.change_meta_ids().begin(),
+                                               redirectInfo.change_meta_ids().end() };
+        redirectReq.set_redirect(false);
+        rc = redirectWorkerMasterApi->GetObjectLocations(redirectReq, redirectRsp);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Query locations from redirect master %s failed: %s",
+                                       redirectMasterAddr.ToString(), rc.ToString());
+            lastRc = rc;
+            continue;
+        }
+        MergeObjectLocations(redirectRsp, result);
+    }
+    return Status::OK();
+}
+
 Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_string<char>> &objectKeys,
                                                   std::unordered_map<std::string, ObjectLocationInfoPb> &result,
                                                   Status &lastRc)
@@ -2595,20 +2686,23 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
         master::GetObjectLocationsReqPb masterReq;
         master::GetObjectLocationsRspPb masterRsp;
         *masterReq.mutable_object_keys() = { objs.begin(), objs.end() };
-        // redirect
+        masterReq.set_redirect(true);
         auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(workerAddr);
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, GetObjMetaInfo failed");
-        auto status = workerMasterApi->GetObjectLocations(masterReq, masterRsp);
+        std::function<Status(master::GetObjectLocationsReqPb &, master::GetObjectLocationsRspPb &)> func =
+            [&workerMasterApi](master::GetObjectLocationsReqPb &req, master::GetObjectLocationsRspPb &rsp) {
+                return workerMasterApi->GetObjectLocations(req, rsp);
+            };
+        auto status = RedirectRetryWhenMetasMoving(masterReq, masterRsp, func);
         if (status.IsError()) {
             LOG(ERROR) << FormatString("Query locations from %s of %s failed. %s", workerAddr.ToString(),
                                        VectorToString(objs), status.ToString());
             lastRc = status;
             continue;
         }
-        for (auto &item : *masterRsp.mutable_location_infos()) {
-            result.emplace(item.object_key(), std::move(item));
-        }
+        MergeObjectLocations(masterRsp, result);
+        QueryObjectLocationsFromRedirectMaster(masterRsp.info(), result, lastRc);
     }
     if (result.empty()) {
         return lastRc;
@@ -2685,7 +2779,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
     INJECT_POINT("Exist.Sleep");
     auto clientId = ClientKey::Intern(req.client_id());
-    LOG(INFO) << "Exist start from client:" << clientId;
+    VLOG(1) << "Exist start from client:" << clientId;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
@@ -2734,8 +2828,11 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     RequestParam reqParam;
     reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
     posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
-    workerOperationTimeCost.Append("Total Exist", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of Exist %s", workerOperationTimeCost.GetInfo());
+    const auto totalExistUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
+    workerOperationTimeCost.Append("Total Exist", totalExistMs);
+    PLOG_IF_OR_VLOG(INFO, totalExistUs >= EXIST_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
+                    FormatString("Exist done, cost: %.3fms, %s", totalExistMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

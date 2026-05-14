@@ -50,18 +50,19 @@ static constexpr uint32_t K_LIVENESS = 120;              // Peer liveness check 
 #define ZMQ_SOCKET_BACKLOG RPC_SOCKET_BACKLOG
 
 // ==================== RPC Tracing Ticks ====================
-inline constexpr const char* TICK_CLIENT_ENQUEUE = "CLIENT_ENQUEUE";
-inline constexpr const char* TICK_CLIENT_TO_STUB = "CLIENT_TO_STUB";
-inline constexpr const char* TICK_CLIENT_RECV = "CLIENT_RECV";
-inline constexpr const char* TICK_SERVER_RECV = "SERVER_RECV";
-inline constexpr const char* TICK_SERVER_DEQUEUE = "SERVER_DEQUEUE";
-inline constexpr const char* TICK_SERVER_EXEC_END = "SERVER_EXEC_END";
-inline constexpr const char* TICK_SERVER_SEND = "SERVER_SEND";
-// Synthetic duration ticks stored in MetaPb (values are durations, not epoch wall clocks).
-inline constexpr const char* TICK_SERVER_EXEC_NS = "SERVER_EXEC_NS";
-inline constexpr const char* TICK_SERVER_RPC_WINDOW_NS = "SERVER_RPC_WINDOW_NS";
+inline constexpr const char *TICK_CLIENT_START = "CLIENT_START";
+inline constexpr const char *TICK_CLIENT_SEND = "CLIENT_SEND";
+inline constexpr const char *TICK_CLIENT_RECV = "CLIENT_RECV";
+inline constexpr const char *TICK_CLIENT_END = "CLIENT_END";
+
+inline constexpr const char *TICK_SERVER_RECV = "SERVER_RECV";
+inline constexpr const char *TICK_SERVER_EXEC_START = "SERVER_EXEC_START";
+inline constexpr const char *TICK_SERVER_EXEC_END = "SERVER_EXEC_END";
+inline constexpr const char *TICK_SERVER_SEND = "SERVER_SEND";
 // ==================== RPC Tracing Helpers (always enabled) ====================
 inline constexpr uint64_t kNsPerUs = 1000ULL;
+inline constexpr uint64_t kRpcFrameworkSlowLogThresholdNs = 3ULL * 1000ULL * 1000ULL;
+inline constexpr uint64_t kRpcCheckLatencyThresholdNs = 2ULL * 1000ULL * 1000ULL;
 
 // Convert nanoseconds to microseconds for metrics reporting
 inline uint64_t NsToUs(uint64_t ns)
@@ -80,20 +81,116 @@ inline uint64_t GetTimeSinceEpoch()
     return std::chrono::high_resolution_clock::now().time_since_epoch().count();
 }
 
-inline uint64_t RecordTick(MetaPb& meta, const char* tickName)
+inline void CheckRpcLatencyAfterClientSend(const MetaPb &meta)
+{
+    uint64_t clientStartTs = 0;
+    uint64_t clientSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_CLIENT_START) {
+            clientStartTs = tick.ts();
+        } else if (tick.tick_name() == TICK_CLIENT_SEND) {
+            clientSendTs = tick.ts();
+        }
+    }
+    uint64_t reqFrameworkNs = (clientSendTs > clientStartTs) ? (clientSendTs - clientStartTs) : 0;
+    if (reqFrameworkNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_SEND trace_id=" << meta.trace_id()
+                  << " client_req_framework_us=" << NsToUs(reqFrameworkNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterServerExecStart(const MetaPb &meta)
+{
+    uint64_t serverRecvTs = 0;
+    uint64_t serverExecStartTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_RECV) {
+            serverRecvTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
+        }
+    }
+    uint64_t reqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    if (reqQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_EXEC_START trace_id=" << meta.trace_id()
+                  << " server_req_queue_us=" << NsToUs(reqQueueNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterServerSend(const MetaPb &meta)
+{
+    uint64_t serverExecEndTs = 0;
+    uint64_t serverSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_EXEC_END) {
+            serverExecEndTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_SEND) {
+            serverSendTs = tick.ts();
+        }
+    }
+    uint64_t rspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    if (rspQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=SERVER_SEND trace_id=" << meta.trace_id()
+                  << " server_rsp_queue_us=" << NsToUs(rspQueueNs);
+    }
+}
+
+inline void CheckRpcLatencyAfterClientRecv(const MetaPb &meta)
+{
+    uint64_t serverRecvTs = 0;
+    uint64_t serverExecStartTs = 0;
+    uint64_t serverExecEndTs = 0;
+    uint64_t serverSendTs = 0;
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
+        if (tick.tick_name() == TICK_SERVER_RECV) {
+            serverRecvTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_END) {
+            serverExecEndTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_SEND) {
+            serverSendTs = tick.ts();
+        }
+    }
+    uint64_t serverReqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0;
+    uint64_t serverRspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0;
+    if (serverReqQueueNs > kRpcCheckLatencyThresholdNs || serverRspQueueNs > kRpcCheckLatencyThresholdNs) {
+        LOG(INFO) << "[ZMQ_RPC_FRAMEWORK_SLOW] phase=CLIENT_RECV trace_id=" << meta.trace_id()
+                  << " server_req_queue_us=" << NsToUs(serverReqQueueNs)
+                  << " server_rsp_queue_us=" << NsToUs(serverRspQueueNs);
+    }
+}
+
+inline uint64_t RecordTick(MetaPb &meta, const char *tickName)
 {
     auto ts = GetTimeSinceEpoch();
     TickPb tick;
     tick.set_ts(ts);
     tick.set_tick_name(tickName);
-    meta.mutable_ticks()->Add(std::move(tick));
+    meta.mutable_latency_ticks()->Add(std::move(tick));
+    // Pointer comparison is safe: all tick name constants are inline constexpr with unique addresses under C++17 ODR.
+    // The only risk is a future caller passing a raw string literal instead of the named constant, which would
+    // silently skip the check.
+    if (tickName == TICK_CLIENT_SEND) {
+        CheckRpcLatencyAfterClientSend(meta);
+    } else if (tickName == TICK_SERVER_EXEC_START) {
+        CheckRpcLatencyAfterServerExecStart(meta);
+    } else if (tickName == TICK_SERVER_SEND) {
+        CheckRpcLatencyAfterServerSend(meta);
+    } else if (tickName == TICK_CLIENT_RECV) {
+        CheckRpcLatencyAfterClientRecv(meta);
+    }
     return ts;
 }
 
-inline bool MetaHasNamedTick(const MetaPb &meta, const char *tickName)
+inline bool MetaHasNamedLatencyTick(const MetaPb &meta, const char *tickName)
 {
-    for (int i = 0; i < meta.ticks_size(); ++i) {
-        if (meta.ticks(i).tick_name() == tickName) {
+    for (int i = 0; i < meta.latency_ticks_size(); ++i) {
+        if (meta.latency_ticks(i).tick_name() == tickName) {
             return true;
         }
     }
@@ -103,15 +200,15 @@ inline bool MetaHasNamedTick(const MetaPb &meta, const char *tickName)
 static inline void RecordServerLatencyMetrics(MetaPb &meta)
 {
     uint64_t serverRecvTs = 0;
-    uint64_t serverDequeuTs = 0;
+    uint64_t serverExecStartTs = 0;
     uint64_t serverExecEndTs = 0;
     uint64_t serverSendTs = 0;
-    for (int i = 0; i < meta.ticks_size(); i++) {
-        const auto &tick = meta.ticks(i);
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
         if (tick.tick_name() == TICK_SERVER_RECV) {
             serverRecvTs = tick.ts();
-        } else if (tick.tick_name() == TICK_SERVER_DEQUEUE) {
-            serverDequeuTs = tick.ts();
+        } else if (tick.tick_name() == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
         } else if (tick.tick_name() == TICK_SERVER_EXEC_END) {
             serverExecEndTs = tick.ts();
         } else if (tick.tick_name() == TICK_SERVER_SEND) {
@@ -119,89 +216,79 @@ static inline void RecordServerLatencyMetrics(MetaPb &meta)
         }
     }
 
-    if (serverDequeuTs > serverRecvTs) {
-        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_QUEUE_WAIT_LATENCY, serverDequeuTs - serverRecvTs);
+    if (serverRecvTs > 0 && serverExecStartTs > serverRecvTs) {
+        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_REQ_QUEUING_LATENCY, serverExecStartTs - serverRecvTs);
     }
 
-    if (serverExecEndTs > serverDequeuTs) {
-        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY, serverExecEndTs - serverDequeuTs);
+    if (serverExecStartTs > 0 && serverExecEndTs > serverExecStartTs) {
+        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_EXEC_LATENCY, serverExecEndTs - serverExecStartTs);
     }
 
-    // Require EXEC_END wall tick; omitting it (e.g. early Write return before payload append) previously made
-    // (serverSendTs - 0) look like astronomical "latency".
     if (serverExecEndTs > 0 && serverSendTs > serverExecEndTs) {
-        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_REPLY_LATENCY, serverSendTs - serverExecEndTs);
+        RecordLatencyMetric(metrics::KvMetricId::ZMQ_SERVER_RSP_QUEUING_LATENCY, serverSendTs - serverExecEndTs);
     }
-
-    uint64_t serverExecNs = (serverExecEndTs > serverRecvTs) ? (serverExecEndTs - serverRecvTs) : 0;
-    TickPb execTick;
-    execTick.set_ts(serverExecNs);
-    execTick.set_tick_name(TICK_SERVER_EXEC_NS);
-    meta.mutable_ticks()->Add(std::move(execTick));
-
-    uint64_t serverWindowNs =
-        (serverSendTs > serverRecvTs) ? static_cast<uint64_t>(serverSendTs - serverRecvTs) : 0;
-    TickPb windowTick;
-    windowTick.set_ts(serverWindowNs);
-    windowTick.set_tick_name(TICK_SERVER_RPC_WINDOW_NS);
-    meta.mutable_ticks()->Add(std::move(windowTick));
 }
 
-// Caller e2e uses one clock only: CLIENT_RECV - CLIENT_ENQUEUE.
-// Server RPC framework time is SERVER_SEND - SERVER_RECV measured entirely on the server host and embedded as duration
-// tick SERVER_RPC_WINDOW_NS (still valid if CLIENT_* wall timestamps differ from SERVER_* clocks).
-// Approximate remainder on the caller timeline (milliseconds-style algebra, mixed bases):
-//   zmq_rpc_network_latency = e2e - (CLIENT_TO_STUB - CLIENT_ENQUEUE) - SERVER_RPC_WINDOW_NS,
-// clipped at zero. SERVER_RPC_WINDOW_NS stores server-side SEND-RECV duration.
-// CLIENT_* deltas use client wall clock; NTP skew/noise dominates this residual — not literal one-way RTT.
-// Prefer e2e + queuing splits for triaging.
+// RPC latency metrics use MetaPb.latency_ticks, not MetaPb.ticks. The latter is reserved for GetLapTime.
+// CLIENT_* deltas use the client host clock and SERVER_* deltas use the server host clock; only durations are compared.
+// The residual network estimate is approximate, not a literal one-way RTT.
 
 static inline void RecordRpcLatencyMetrics(MetaPb &meta)
 {
-    uint64_t clientEnqueueTs = 0;
-    uint64_t clientToStubTs = 0;
+    uint64_t clientStartTs = 0;
+    uint64_t clientSendTs = 0;
     uint64_t clientRecvTs = 0;
+    uint64_t clientEndTs = 0;
     uint64_t serverRecvTs = 0;
+    uint64_t serverExecStartTs = 0;
+    uint64_t serverExecEndTs = 0;
     uint64_t serverSendTs = 0;
-    uint64_t serverRpcWindowNs = 0;
 
-    for (int i = 0; i < meta.ticks_size(); i++) {
-        const auto &tick = meta.ticks(i);
+    for (int i = 0; i < meta.latency_ticks_size(); i++) {
+        const auto &tick = meta.latency_ticks(i);
         const std::string &name = tick.tick_name();
-        if (name == TICK_CLIENT_ENQUEUE) {
-            clientEnqueueTs = tick.ts();
-        } else if (name == TICK_CLIENT_TO_STUB) {
-            clientToStubTs = tick.ts();
+        if (name == TICK_CLIENT_START) {
+            clientStartTs = tick.ts();
+        } else if (name == TICK_CLIENT_SEND) {
+            clientSendTs = tick.ts();
         } else if (name == TICK_CLIENT_RECV) {
             clientRecvTs = tick.ts();
+        } else if (name == TICK_CLIENT_END) {
+            clientEndTs = tick.ts();
         } else if (name == TICK_SERVER_RECV) {
             serverRecvTs = tick.ts();
+        } else if (name == TICK_SERVER_EXEC_START) {
+            serverExecStartTs = tick.ts();
+        } else if (name == TICK_SERVER_EXEC_END) {
+            serverExecEndTs = tick.ts();
         } else if (name == TICK_SERVER_SEND) {
             serverSendTs = tick.ts();
-        } else if (name == TICK_SERVER_RPC_WINDOW_NS) {
-            serverRpcWindowNs = tick.ts();
         }
     }
 
-    if (serverRpcWindowNs == 0U && serverSendTs > serverRecvTs) {
-        serverRpcWindowNs = serverSendTs - serverRecvTs;
-    }
+    uint64_t e2eNs = (clientEndTs > clientStartTs) ? (clientEndTs - clientStartTs) : 0;
 
-    uint64_t e2eNs = (clientRecvTs > clientEnqueueTs) ? (clientRecvTs - clientEnqueueTs) : 0;
+    uint64_t clientReqFrameworkNs = (clientSendTs > clientStartTs) ? (clientSendTs - clientStartTs) : 0U;
+    uint64_t clientRspFrameworkNs = (clientEndTs > clientRecvTs) ? (clientEndTs - clientRecvTs) : 0U;
 
-    uint64_t clientFrameworkNs =
-        (clientToStubTs > clientEnqueueTs) ? (clientToStubTs - clientEnqueueTs) : 0U;
+    // Client-observed remote processing time includes network transfer plus server-side work.
+    uint64_t remoteProcessingNs = (clientRecvTs > clientSendTs) ? (clientRecvTs - clientSendTs) : 0U;
+    // Server-side processing time includes server framework overhead and application execution.
+    uint64_t serverProcessingNs = (serverSendTs > serverRecvTs) ? (serverSendTs - serverRecvTs) : 0U;
+    uint64_t serverReqQueueNs = (serverExecStartTs > serverRecvTs) ? (serverExecStartTs - serverRecvTs) : 0U;
+    uint64_t serverExecNs = (serverExecEndTs > serverExecStartTs) ? (serverExecEndTs - serverExecStartTs) : 0U;
+    uint64_t serverRspQueueNs = (serverSendTs > serverExecEndTs) ? (serverSendTs - serverExecEndTs) : 0U;
 
     uint64_t networkResidualNs = 0U;
-    if (e2eNs > 0U && serverRpcWindowNs > 0U && clientFrameworkNs < e2eNs) {
-        uint64_t afterQueuingOnCallerClock = e2eNs - clientFrameworkNs;
-        networkResidualNs = (afterQueuingOnCallerClock > serverRpcWindowNs)
-            ? (afterQueuingOnCallerClock - serverRpcWindowNs)
-            : 0U;
+    if (remoteProcessingNs > 0 && serverProcessingNs > 0) {
+        networkResidualNs = (remoteProcessingNs > serverProcessingNs) ? (remoteProcessingNs - serverProcessingNs) : 0U;
     }
 
-    if (clientToStubTs > clientEnqueueTs) {
-        RecordLatencyMetric(metrics::KvMetricId::ZMQ_CLIENT_QUEUING_LATENCY, clientToStubTs - clientEnqueueTs);
+    if (clientReqFrameworkNs > 0U) {
+        RecordLatencyMetric(metrics::KvMetricId::ZMQ_CLIENT_REQ_QUEUING_LATENCY, clientReqFrameworkNs);
+    }
+    if (clientRspFrameworkNs > 0U) {
+        RecordLatencyMetric(metrics::KvMetricId::ZMQ_CLIENT_RSP_QUEUING_LATENCY, clientRspFrameworkNs);
     }
     if (e2eNs > 0U) {
         RecordLatencyMetric(metrics::KvMetricId::ZMQ_RPC_E2E_LATENCY, e2eNs);
@@ -209,8 +296,17 @@ static inline void RecordRpcLatencyMetrics(MetaPb &meta)
     if (networkResidualNs > 0U) {
         RecordLatencyMetric(metrics::KvMetricId::ZMQ_RPC_NETWORK_LATENCY, networkResidualNs);
     }
+    uint64_t frameworkNs = (e2eNs > serverExecNs) ? (e2eNs - serverExecNs) : 0U;
+    const int vlogLevel = frameworkNs > kRpcFrameworkSlowLogThresholdNs ? 0 : 1;
+    VLOG(vlogLevel) << "[ZMQ_RPC_FRAMEWORK_SLOW] trace_id=" << meta.trace_id()
+                    << " framework_us=" << NsToUs(frameworkNs) << " e2e_us=" << NsToUs(e2eNs)
+                    << " client_req_framework_us=" << NsToUs(clientReqFrameworkNs)
+                    << " remote_processing_us=" << NsToUs(remoteProcessingNs)
+                    << " client_rsp_framework_us=" << NsToUs(clientRspFrameworkNs)
+                    << " server_req_queue_us=" << NsToUs(serverReqQueueNs) << " server_exec_us=" << NsToUs(serverExecNs)
+                    << " server_rsp_queue_us=" << NsToUs(serverRspQueueNs)
+                    << " network_residual_us=" << NsToUs(networkResidualNs);
 }
-
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_CONSTANTS_H

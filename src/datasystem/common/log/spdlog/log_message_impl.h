@@ -45,7 +45,7 @@ public:
 
 class LogMessageImpl {
 public:
-    LogMessageImpl(LogSeverity logSeverity, const char *file, int line);
+    LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog = false);
 
     ~LogMessageImpl();
 
@@ -86,6 +86,7 @@ private:
     static std::string podName_;
     LogStreamBuf streamBuf_;
     std::ostream logStream_;
+    bool forceLog_;
     size_t msgSize_;
     bool skip_ = false;  // Request-level log sampling: dropped by limiter
 };

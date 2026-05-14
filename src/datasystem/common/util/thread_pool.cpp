@@ -204,8 +204,7 @@ ThreadPool::ThreadPoolUsage ThreadPool::GetAndResetIntervalStats()
     usage.maxThreadNum = maxThreadNum_;
     usage.runningTasksNum = GetRunningTasksNum();
     usage.waitingTaskNum = GetWaitingTasksNum();
-    usage.threadPoolUsage =
-        maxThreadNum_ > 0 ? usage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
+    usage.threadPoolUsage = maxThreadNum_ > 0 ? usage.runningTasksNum / static_cast<float>(maxThreadNum_) : 0.0f;
     // Seed next period with current running/waiting to handle cross-interval tasks.
     auto running = static_cast<uint64_t>(usage.runningTasksNum);
     auto waiting = static_cast<uint64_t>(usage.waitingTaskNum);
@@ -286,11 +285,15 @@ void ThreadPool::WarnIfNeed()
     if (name_.empty() || warnLevel_ == WarnLevel::NO_WARN) {
         return;
     }
+    if (GetWaitingTasksNum() < 1) {
+        return;
+    }
     const float oneHundredPercent = 100.0;
     const float sixtyPercentThreshold = 60.0;
     const float eightyPercentThreshold = 80.0;
     float ratio = static_cast<float>(GetRunningTasksNum()) / maxThreadNum_ * oneHundredPercent;
-    std::string msg = FormatString("The thread of %s is: [%.3lf]", name_, ratio);
+    std::string msg =
+        FormatString("Thread pool [%s] usage: %.1lf%%, waiting tasks: %d", name_, ratio, GetWaitingTasksNum());
     // log uses static variables with line number to save the log write counter, so it is necessary to write repetitive
     // code to distinguish different warn level.
     if (warnLevel_ == WarnLevel::LOW) {
@@ -298,26 +301,22 @@ void ThreadPool::WarnIfNeed()
         const int eightyPercentTime = 60;
         const int sixtyPercentTime = 100;
         if (ratio >= oneHundredPercent) {
-            LOG_EVERY_T(WARNING, oneHundredTime) << msg << "%, thread full, still wait task: " << GetWaitingTasksNum();
+            LOG_EVERY_T(WARNING, oneHundredTime) << msg << ", thread full";
         } else if (ratio >= eightyPercentThreshold) {
-            LOG_EVERY_T(WARNING, eightyPercentTime)
-                << msg << "%, reaches 80% threshold, still wait task: " << GetWaitingTasksNum();
+            LOG_EVERY_T(WARNING, eightyPercentTime) << msg << ", exceeds 80%";
         } else if (ratio >= sixtyPercentThreshold) {
-            LOG_EVERY_T(WARNING, sixtyPercentTime)
-                << msg << "%, reaches 60% threshold, still wait task: " << GetWaitingTasksNum();
+            LOG_EVERY_T(WARNING, sixtyPercentTime) << msg << ", exceeds 60%";
         }
     } else {
-        const int oneHundredFreq = 5;
-        const int eightyPercentFreq = 50;
-        const int sixtyPercentFreq = 100;
+        const int oneHundredFreq = 50;
+        const int eightyPercentFreq = 500;
+        const int sixtyPercentFreq = 1000;
         if (ratio >= oneHundredPercent) {
-            LOG_EVERY_N(WARNING, oneHundredFreq) << msg << "%, thread full, still wait task: " << GetWaitingTasksNum();
+            LOG_FIRST_AND_EVERY_N(WARNING, oneHundredFreq) << msg << ", thread full";
         } else if (ratio >= eightyPercentThreshold) {
-            LOG_EVERY_N(WARNING, eightyPercentFreq)
-                << msg << "%, reaches 80% threshold, still wait task: " << GetWaitingTasksNum();
+            LOG_FIRST_AND_EVERY_N(WARNING, eightyPercentFreq) << msg << ", exceeds 80%";
         } else if (ratio >= sixtyPercentThreshold) {
-            LOG_EVERY_N(WARNING, sixtyPercentFreq)
-                << msg << "%, reaches 60% threshold, still wait task: " << GetWaitingTasksNum();
+            LOG_FIRST_AND_EVERY_N(WARNING, sixtyPercentFreq) << msg << ", exceeds 60%";
         }
     }
 }
