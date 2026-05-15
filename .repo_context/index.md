@@ -6,17 +6,26 @@ Use it to jump from a question type to the smallest useful document instead of r
 
 ## Read Order
 
-1. `README.md`
-2. `index.md`
-3. `maintenance.md`
-4. `generated/repo_index.md` when you need raw directory orientation
-5. the most relevant module or playbook file
+1. active tool entrypoint: `AGENTS.md`, `CLAUDE.md`, or `.cursor/rules/repo-context.mdc`
+2. `README.md`
+3. `index.md`
+4. `maintenance.md`
+5. `generated/repo_index.md` when you need raw directory orientation
+6. `modules/overview/engineering-principles.md`
+7. the most relevant module or playbook file
 
 ## Quick Routing By Intent
 
 | If you need to... | Read first | Then verify against |
 | --- | --- | --- |
 | understand overall repo shape | `modules/overview/repository-overview.md` | `generated/repo_index.md` |
+| understand repository-level infrastructure engineering standards | `modules/overview/engineering-principles.md` | active tool entrypoint (`AGENTS.md`, `CLAUDE.md`, or `.cursor/rules/repo-context.mdc`), relevant module docs, touched source |
+| choose the default workflow for feature, bugfix, or refactor work | `playbooks/features/infra-engineering-workflow.md` | `modules/overview/engineering-principles.md`, touched source/tests |
+| assess a performance-sensitive change | `playbooks/features/performance-change.md` | `src/datasystem/client`, `src/datasystem/worker`, `src/datasystem/common/perf`, `dsbench`, `tests/perf` |
+| assess concurrency, shared state, or memory lifetime risk | `playbooks/features/concurrency-and-memory-safety.md` | touched locks, queues, callbacks, buffers, and tests |
+| assess persistence, recovery, failover, or compaction risk | `playbooks/features/recovery-and-persistence.md` | `modules/infra/slot/design.md`, `modules/runtime/cluster-management-dfx-matrix.md`, touched source/tests |
+| review a PR or diff | `playbooks/reviews/pr-review-checklist.md` | touched source/tests, `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md` |
+| self-verify before claiming completion | `playbooks/upkeep/ai-self-verification.md` | `git status`, `git diff`, relevant test or metadata commands |
 | understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
 | find build, sanitizer, or coverage entrypoints | `modules/quality/build-test-debug.md` | `build.sh`, `CMakeLists.txt` |
 | understand CMake build rules, third-party dependencies, install outputs, or target graph | `modules/quality/cmake-build/README.md` | `build.sh`, `scripts/build_cmake.sh`, `scripts/build_thirdparty.sh`, `CMakeLists.txt`, `cmake/*`, `src/datasystem/**/CMakeLists.txt` |
@@ -65,6 +74,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | Area | Primary doc | Typical code paths |
 | --- | --- | --- |
 | global repo map | `modules/overview/repository-overview.md` | `src/datasystem`, `include/datasystem`, `cli`, `tests`, `docs` |
+| repository engineering standards | `modules/overview/engineering-principles.md` | `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/repo-context.mdc`, `.repo_context/playbooks`, `.skills`, touched source/tests |
 | repository-local skills and routing | `modules/overview/repository-skills.md` | `.skills`, `.gitee/PULL_REQUEST_TEMPLATE`, `docs/README_CN.md` |
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |

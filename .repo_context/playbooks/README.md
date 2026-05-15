@@ -9,16 +9,24 @@ Use a playbook when the question is not "what is this module?" but "how should I
 ```text
 playbooks/
 ├── README.md
+├── reviews/
+│   ├── README.md
+│   └── pr-review-checklist.md
 ├── operations/
 │   ├── README.md
 │   ├── incident-triage.md
 │   └── performance-investigation.md
 ├── upkeep/
 │   ├── README.md
+│   ├── ai-self-verification.md
 │   ├── module-context-generation.md
 │   └── skill-trigger-routing.md
 └── features/
     ├── README.md
+    ├── infra-engineering-workflow.md
+    ├── performance-change.md
+    ├── concurrency-and-memory-safety.md
+    ├── recovery-and-persistence.md
     ├── runtime/
     │   ├── README.md
     │   ├── cluster-manager/
@@ -57,6 +65,8 @@ playbooks/
 - when the task is explicit module-context generation or backfill, use an upkeep playbook and aim for a canonical,
   complete context package instead of a partial patch note;
 - playbooks should record both the implementation steps and the risk gates that decide when to stop and escalate.
+- review playbooks should lead with defect findings and use repository-level performance, recovery, and concurrency
+  gates before style-only feedback.
 
 ## Current Status
 
@@ -71,10 +81,17 @@ Task-oriented guidance now starts in:
 - `operations/README.md`
 - `operations/incident-triage.md`
 - `operations/performance-investigation.md`
+- `reviews/README.md`
+- `reviews/pr-review-checklist.md`
 - `upkeep/README.md`
+- `upkeep/ai-self-verification.md`
 - `upkeep/module-context-generation.md`
 - `upkeep/skill-trigger-routing.md`
 - `features/README.md`
+- `features/infra-engineering-workflow.md`
+- `features/performance-change.md`
+- `features/concurrency-and-memory-safety.md`
+- `features/recovery-and-persistence.md`
 - `features/runtime/README.md`
 - `features/runtime/cluster-manager/README.md`
 - `features/runtime/cluster-manager/implementation.md`
@@ -95,7 +112,6 @@ Task-oriented guidance now starts in:
 ## Planned Playbooks
 
 - `bugfix-reproduction.md`
-- `code-review-checklist.md`
 - `context-update-rules.md`
 - more `features/*.md` playbooks for compatibility-sensitive modules
 - more `operations/*.md` playbooks for deployment, rollout, and recovery workflows

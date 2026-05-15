@@ -4,8 +4,17 @@ Use this file when you know the problem type but not the owning module.
 
 ## Feature Work
 
+- For any non-trivial feature, bugfix, refactor, or design change:
+  - read `modules/overview/engineering-principles.md`
+  - read `playbooks/features/infra-engineering-workflow.md`
 - If the change adds, moves, labels, or reviews tests:
   - read `playbooks/features/quality/test-implementation.md`
+- If the change can affect latency, throughput, allocations, copies, locks, IO, or background work:
+  - read `playbooks/features/performance-change.md`
+- If the change touches locks, async queues, callbacks, atomics, shared state, or buffers:
+  - read `playbooks/features/concurrency-and-memory-safety.md`
+- If the change touches durable state, metadata, recovery, failover, compaction, migration, or preload:
+  - read `playbooks/features/recovery-and-persistence.md`
 - If the change starts from a public SDK call:
   - read `modules/client/client-sdk.md`
 - If the change touches worker startup, request handling, or service flags:
@@ -41,6 +50,8 @@ Use this file when you know the problem type but not the owning module.
 
 ## Code Review
 
+- Start with:
+  - `playbooks/reviews/pr-review-checklist.md`
 - API or behavior review:
   - `modules/client/client-sdk.md`
 - lifecycle or service review:

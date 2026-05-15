@@ -1,0 +1,4 @@
+interface:
+  display_name: "Datasystem Self Verify"
+  short_description: "Verify diff, tests, context, and infra risk before completion"
+  default_prompt: "Use $ds-self-verify before reporting that the datasystem work is complete."

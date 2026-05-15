@@ -43,6 +43,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 - `.repo_context/maintenance.md`: maintenance and self-update rules.
 - `.repo_context/roadmap.md`: staged rollout plan and persistent backlog.
 - `.repo_context/generated/repo_index.md`: generated coarse repository index.
+- `.repo_context/modules/overview/engineering-principles.md`: repository-level infrastructure engineering rules.
 - `.repo_context/modules/<domain>/*.md`: curated module context, grouped by stable domain.
 - `.repo_context/modules/metadata/*.json`: machine-readable canonical module registry and routing metadata.
 - `.repo_context/playbooks/<category>/...`: task-oriented guidance for feature work, bugfix, review, and upkeep.
@@ -73,6 +74,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 ├── modules/
 │   ├── overview/
 │   │   ├── README.md
+│   │   ├── engineering-principles.md
 │   │   ├── repository-overview.md
 │   │   └── repository-skills.md
 │   ├── client/
@@ -88,6 +90,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── infra.observability.json
 │   │   ├── infra.slot.json
 │   │   ├── overview.repository-overview.json
+│   │   ├── overview.engineering-principles.json
 │   │   ├── overview.repository-skills.json
 │   │   ├── quality.build-test-debug.json
 │   │   ├── quality.cmake-build.json
@@ -153,12 +156,20 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── README.md
 │   │   ├── incident-triage.md
 │   │   └── performance-investigation.md
+│   ├── reviews/
+│   │   ├── README.md
+│   │   └── pr-review-checklist.md
 │   ├── upkeep/
 │   │   ├── README.md
+│   │   ├── ai-self-verification.md
 │   │   ├── module-context-generation.md
 │   │   └── skill-trigger-routing.md
 │   └── features/
 │       ├── README.md
+│       ├── infra-engineering-workflow.md
+│       ├── performance-change.md
+│       ├── concurrency-and-memory-safety.md
+│       ├── recovery-and-persistence.md
 │       ├── runtime/
 │       │   ├── README.md
 │       │   ├── cluster-manager/
@@ -194,19 +205,24 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 
 ## Suggested Usage Flow For AI Tools
 
-1. Read this file.
-2. Read `.repo_context/index.md` to find the right domain document quickly.
-3. Read `.repo_context/maintenance.md`.
-4. Read `.repo_context/generated/repo_index.md` for coarse orientation if needed.
-5. Read the relevant `.repo_context/modules/<domain>/*.md` or `.repo_context/playbooks/<category>/...`.
-6. Confirm the answer or change against the actual source files before implementing, reviewing, or asserting behavior.
-7. If you discover stale or missing context in the touched area, update the relevant context file and regenerate the index if structure changed.
+1. Read the active tool entrypoint: `AGENTS.md` for Codex-compatible agents, `CLAUDE.md` for Claude Code, or
+   `.cursor/rules/repo-context.mdc` for Cursor.
+2. Read this file.
+3. Read `.repo_context/index.md` to find the right domain document quickly.
+4. Read `.repo_context/maintenance.md`.
+5. Read `.repo_context/generated/repo_index.md` for coarse orientation if needed.
+6. Read `.repo_context/modules/overview/engineering-principles.md`.
+7. Read the relevant `.repo_context/modules/<domain>/*.md` or `.repo_context/playbooks/<category>/...`.
+8. Confirm the answer or change against the actual source files before implementing, reviewing, or asserting behavior.
+9. If you discover stale or missing context in the touched area, update the relevant context file and regenerate the index if structure changed.
 
 ## Current Coverage
 
 The first pass is intentionally coarse. It currently covers:
 
 - repository-wide governance for AI context maintenance;
+- repository-level infrastructure engineering standards covering performance, concurrency, memory safety, persistence,
+  recovery, high availability, review, and AI-agent self-verification;
 - navigation for moving from broad repository orientation to domain documents;
 - coarse module boundaries across source, SDK, CLI, docs, and tests;
 - build, test, and debug entrypoints already used by this repository;
