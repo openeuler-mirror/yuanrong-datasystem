@@ -83,7 +83,8 @@ DS_DEFINE_bool(auto_del_dead_node, true, "Decide whether to remove the node from
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");
-DS_DEFINE_bool(enable_data_replication, true, "Allow data's replica to be cached locally, default is true");
+DS_DEFINE_bool(enable_data_replication, true,
+               "Allow data replica cache locally; mainly for performance validation, keep enabled unless needed.");
 
 DS_DEFINE_bool(spill_to_remote_worker, false,
                "It indicates that when node resources are insufficient, "

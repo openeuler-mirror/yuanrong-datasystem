@@ -31,6 +31,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/urma_dlopen_util.h"
@@ -1153,6 +1154,7 @@ Status UrmaManager::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique
 
 Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
 {
+    METRIC_TIMER(metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY);
     PerfPoint point(PerfKey::URMA_FINALIZE_OUTBOUND_CONNECTION);
     CHECK_FAIL_RETURN_STATUS(rsp.has_hand_shake(), K_INVALID, "UrmaHandshakeRspPb has no hand_shake");
 
@@ -1650,6 +1652,7 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
     // Only import remote jetty or segment for the remote node or client.
     if (localUrmaInfo_.localAddress != urmaInfo.localAddress || !req.client_id().empty() || clientMode_) {
         uint32_t localJettyId = 0;
+        METRIC_TIMER(metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY);
         RETURN_IF_NOT_OK(ImportRemoteJetty(urmaInfo, localJettyId));
         RETURN_IF_NOT_OK(ImportRemoteInfo(req));
 

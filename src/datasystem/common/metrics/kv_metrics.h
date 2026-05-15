@@ -108,6 +108,10 @@ enum class KvMetricId : uint16_t {
     WORKER_INFLIGHT_REMOTE_GET_REQUEST,
     /** ZMQ server poll handle latency */
     ZMQ_SERVER_POLL_HANDLE_LATENCY,
+    // Append new metric families here to preserve existing numeric IDs.
+    URMA_CONNECTION_SETUP_LATENCY,
+    URMA_JETTY_CREATE_LATENCY,
+    URMA_JETTY_RECREATE_LATENCY,
     KV_METRIC_END
 };
 
