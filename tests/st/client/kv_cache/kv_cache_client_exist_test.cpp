@@ -31,8 +31,12 @@
 #include "common.h"
 #include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_bool(log_monitor);
 
@@ -109,6 +113,35 @@ TEST_F(KVCacheClientExistTest, TestNotExistKeys)
     ASSERT_EQ(exists[0], false);
     ASSERT_EQ(exists[1], false);
     ASSERT_EQ(exists[2], false); // check object 2
+}
+
+TEST_F(KVCacheClientExistTest, TestNotExistWhenMetadataHasNoLocations)
+{
+    std::string key;
+    DS_ASSERT_OK(client_->GenerateKey("exist_no_location", key));
+    DS_ASSERT_OK(client_->Set(key, "value"));
+
+    HostPort workerAddr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr));
+    auto akSkManager = std::make_shared<AkSkManager>();
+    DS_ASSERT_OK(akSkManager->SetClientAkSk(accessKey_, secretKey_));
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
+    worker::WorkerRemoteMasterOCApi masterApi(workerAddr, workerAddr, akSkManager);
+    DS_ASSERT_OK(masterApi.Init());
+
+    master::RemoveMetaReqPb removeReq;
+    master::RemoveMetaRspPb removeRsp;
+    removeReq.add_ids(TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId_, key));
+    removeReq.set_address(workerAddr.ToString());
+    removeReq.set_cause(master::RemoveMetaReqPb::NORMAL);
+    removeReq.set_version(UINT64_MAX);
+    DS_ASSERT_OK(masterApi.RemoveMeta(removeReq, removeRsp));
+    ASSERT_EQ(removeRsp.failed_ids_size(), 0);
+
+    std::vector<bool> exists;
+    DS_ASSERT_OK(client2_->Exist({ key }, exists));
+    ASSERT_EQ(exists.size(), 1ul);
+    ASSERT_FALSE(exists[0]);
 }
 
 TEST_F(KVCacheClientExistTest, TestPartNotExistKeys)
