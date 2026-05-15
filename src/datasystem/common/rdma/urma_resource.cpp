@@ -20,6 +20,7 @@
 
 #include "datasystem/common/rdma/urma_resource.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <sstream>
 #include <utility>
@@ -41,6 +42,7 @@
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_bool(urma_event_mode);
+DS_DECLARE_uint64(urma_max_wirte_size_mb);
 
 namespace datasystem {
 namespace {
@@ -649,6 +651,13 @@ bool UrmaResource::GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) c
     priority = defaultPriorityForCTP;
     sl = defaultSLForCTP;
     return false;
+}
+
+uint64_t UrmaResource::GetMaxWriteSize() const
+{
+    constexpr uint64_t mbToBytes = 1024ul * 1024ul;
+    const uint64_t maxSize = FLAGS_urma_max_wirte_size_mb * mbToBytes;
+    return std::min<uint64_t>(maxSize, urmaDeviceAttribute_.dev_cap.max_write_size);
 }
 
 void UrmaResource::Clear()
