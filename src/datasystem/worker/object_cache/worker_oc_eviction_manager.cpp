@@ -490,7 +490,7 @@ Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &ent
 
 void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
 {
-    LOG(INFO) << "Eviction start.";
+    LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Eviction start.";
     bool expected = true;
     if (isDone_.compare_exchange_strong(expected, false)) {
         std::unique_lock<std::mutex> lk(cvMutex_);
@@ -500,7 +500,7 @@ void WorkerOcEvictionManager::Evict(uint64_t needSize, CacheType cacheType)
             EvictionTask(needSize, cacheType);
         });
     } else {
-        LOG(INFO) << "Evict is going on...";
+        LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL3) << "Evict is going on...";
     }
 }
 
