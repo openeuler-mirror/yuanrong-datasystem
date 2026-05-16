@@ -37,6 +37,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
@@ -45,6 +46,7 @@
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
+#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
@@ -385,6 +387,44 @@ TEST_F(KVCacheClientEvict2WorkerTest, LEVEL1_TestEvictPrimaryCopyChange)
         DS_ASSERT_OK(client_->Get(keys[i], getVal));
         ASSERT_EQ(getVal, data);
     }
+}
+
+TEST_F(KVCacheClientEvict2WorkerTest, TestLastLocalCopyEvictRemovesMeta)
+{
+    std::string key = client_->GenerateKey("last_local_copy_evict");
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    DS_ASSERT_OK(client_->Set(key, "value", param));
+    HostPort worker0Addr, worker1Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0Addr));
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Addr));
+    auto akSkManager = std::make_shared<AkSkManager>();
+    DS_ASSERT_OK(akSkManager->SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
+    worker::WorkerRemoteMasterOCApi masterApi(worker0Addr, worker1Addr, akSkManager);
+    DS_ASSERT_OK(masterApi.Init());
+    master::CreateCopyMetaReqPb copyReq;
+    master::CreateCopyMetaRspPb copyRsp;
+    copyReq.set_object_key(key);
+    copyReq.set_address(worker1Addr.ToString());
+    DS_ASSERT_OK(masterApi.CreateCopyMeta(copyReq, copyRsp));
+    auto removeLocation = [&](const HostPort &addr) {
+        master::RemoveMetaReqPb req;
+        master::RemoveMetaRspPb rsp;
+        req.add_ids(key);
+        req.set_address(addr.ToString());
+        req.set_cause(master::RemoveMetaReqPb::EVICTION);
+        req.set_version(UINT64_MAX);
+        DS_ASSERT_OK(masterApi.RemoveMeta(req, rsp));
+    };
+    removeLocation(worker0Addr);
+    removeLocation(worker1Addr);
+    master::QueryMetaReqPb queryReq;
+    master::QueryMetaRspPb queryRsp;
+    std::vector<RpcMessage> payloads;
+    queryReq.add_ids(key);
+    queryReq.set_address(worker1Addr.ToString());
+    DS_ASSERT_OK(masterApi.QueryMeta(queryReq, 0, queryRsp, payloads));
+    ASSERT_EQ(queryRsp.not_exist_ids_size(), 1);
 }
 
 TEST_F(KVCacheClientEvict2WorkerTest, LEVEL2_TestEvictTypeGetAfterWorkerRestart)
