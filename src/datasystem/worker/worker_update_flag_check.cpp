@@ -21,6 +21,17 @@
 
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_uint32(node_dead_timeout_s);
+
+namespace {
+constexpr uint32_t kMinNodeTimeoutS = 3;
+constexpr uint32_t kMinNodeDeadTimeoutS = 5;
+
+uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
+{
+    return value < kMinNodeDeadTimeoutS ? kMinNodeDeadTimeoutS : value;
+}
+}  // namespace
 
 namespace datasystem {
 
@@ -49,14 +60,31 @@ bool StrToUint32(const std::string &str, uint32_t &result)
 bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &newVal)
 {
     uint32_t result = 0;
-    if (flagName == "node_dead_timeout_s" && StrToUint32(newVal, result) && !WorkerValidateNodeDeadTimeoutS(result)) {
-        return true;
+    if (flagName == "node_dead_timeout_s" && StrToUint32(newVal, result)) {
+        uint32_t adjusted = AdjustNodeDeadTimeoutS(result);
+        if (!WorkerValidateNodeDeadTimeoutS(result)) {
+            return true;
+        }
+        if (adjusted != result) {
+            FLAGS_node_dead_timeout_s = adjusted;
+            return true;
+        }
     }
     if (flagName == "heartbeat_interval_ms" && StrToUint32(newVal, result)
         && !WorkerValidateHeartbeatIntervalMs(result)) {
         return true;
     }
     return false;
+}
+
+void AdjustNodeTimeoutFlags()
+{
+    if (FLAGS_node_timeout_s < kMinNodeTimeoutS) {
+        FLAGS_node_timeout_s = kMinNodeTimeoutS;
+    }
+    if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
+        FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
+    }
 }
 
 bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)
