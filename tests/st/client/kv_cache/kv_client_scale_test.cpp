@@ -1672,6 +1672,8 @@ TEST_F(STCScaleDownTest, LEVEL1_TestStartWorkerDuringScaleDown1)
         keys.emplace_back(key);
     }
     client_.reset();
+    HostPort scaledDownWorkerAddr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, scaledDownWorkerAddr));
 
     // During the scaling down period, the corresponding scaled-down node cannot be started.
     int submitScaleDownTaskWaitTimeS = 10;
@@ -1679,13 +1681,15 @@ TEST_F(STCScaleDownTest, LEVEL1_TestStartWorkerDuringScaleDown1)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "HashRingTaskExecutor.SubmitScaleDownTask.ProcessSlowly",
                                            FormatString("1*sleep(%d)", submitScaleDownTaskWaitTimeS * S2Ms)));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    // To make sure hashring has been changed and "SubmitScaleDownTask" is not finished.
-    sleep(nodeDeadTimeoutS - nodeTimeoutS + 1);
+    WaitHashRingChange(
+        [&scaledDownWorkerAddr](const HashRingPb &hashRing) {
+            return hashRing.del_node_info().find(scaledDownWorkerAddr.ToString()) != hashRing.del_node_info().end();
+        },
+        submitScaleDownTaskWaitTimeS * S2Ms);
     DS_ASSERT_OK(externalCluster_->StartWorker(
         0, HostPort(),
-        " -inject_actions=HashRing.InitRing.CheckQuickly:call(10);HashRing.InitWithEtcd.MotifyWaitTimeMs:call(5000)"));
-    sleep(submitScaleDownTaskWaitTimeS);  // wait scaling down finish.
-    AssertAllNodesJoinIntoHashRing(1);
+        " -inject_actions=HashRing.InitRing.CheckQuickly:call(10);HashRing.InitWithEtcd.MotifyWaitTimeMs:call(1000)"));
+    WaitAllNodesJoinIntoHashRing(1, submitScaleDownTaskWaitTimeS + 5);  // wait scaling down finish.
 
     // Anything is ok.
     InitTestKVClient(1, client1_);

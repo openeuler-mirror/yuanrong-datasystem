@@ -89,13 +89,21 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashAndOperateBuffer)
     DS_ASSERT_OK(client1->Create(objKey, objSize, param, buffer));
 
     // Then we crash the worker and try to operate the shm pointer.
-    cluster_->ShutdownNodes(WORKER);
-    sleep(2);  // The heartbeat interval is 0.5s, and the maximum number of worker disconnections is 1s.
     std::vector<uint8_t> data;
     data.resize(objSize);
     std::vector<std::string> failedObjectKeys;
+    cluster_->ShutdownNodes(WORKER);
+    Status memoryCopyRc;
+    Timer timer;
+    do {
+        memoryCopyRc = buffer->MemoryCopy(data.data(), data.size());
+        if (memoryCopyRc.IsError()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    } while (timer.ElapsedMilliSecond() < 10'000);
     // Make sure the op below would be failed.
-    DS_ASSERT_NOT_OK(buffer->MemoryCopy(data.data(), data.size()));
+    DS_ASSERT_NOT_OK(memoryCopyRc);
     DS_ASSERT_NOT_OK(buffer->Publish());
     DS_ASSERT_NOT_OK(client1->GIncreaseRef({ objKey }, failedObjectKeys));
     DS_ASSERT_NOT_OK(buffer->Seal());
