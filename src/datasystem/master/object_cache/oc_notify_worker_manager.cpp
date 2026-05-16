@@ -1138,10 +1138,20 @@ Status OCNotifyWorkerManager::SendChangePrimaryCopy(const std::string &workerAdd
 void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
     const std::unordered_map<std::string, std::unordered_set<std::string>> &input, bool ifvoluntaryScaleDown)
 {
+    constexpr int64_t maxRpcTimeoutMs = 3 * 1000;            // Each ChangePrimaryCopy RPC timeout is 3 seconds.
+    constexpr int64_t maxProcessTimeoutMs = 30 * 60 * 1000;  // Stop retrying after 30 minutes.
+    Timer processTimer;
+    Raii resetDuration([]() { timeoutDuration.Reset(); });
     std::unordered_map<std::string, std::unordered_set<std::string>> toBeChanged = input;
     // Key is object key, value is the set of excluded workers.
     std::unordered_map<std::string, std::unordered_set<std::string>> needReselectPrimary;
     do {
+        if (processTimer.ElapsedMilliSecond() > maxProcessTimeoutMs) {
+            LOG(WARNING) << "ProcessChangePrimaryCopy timeout after " << processTimer.ElapsedMilliSecond()
+                         << " ms, stop retrying. Pending worker count: " << toBeChanged.size()
+                         << ", pending reselect object count: " << needReselectPrimary.size();
+            return;
+        }
         for (auto &it : toBeChanged) {
             if (it.second.empty()) {
                 continue;
@@ -1150,6 +1160,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
                 LOG(INFO) << "ProcessChangePrimaryCopy finish, current worker recieved term signal";
                 return;
             }
+            timeoutDuration.Init(maxRpcTimeoutMs);
             std::unordered_set<std::string> successIds;
             (void)SendChangePrimaryCopy(it.first, it.second, successIds);
             for (const auto &id : it.second) {
