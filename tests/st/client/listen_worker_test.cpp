@@ -140,7 +140,7 @@ TEST_F(ListenWorkerTest, TestRPCHeartheat)
     listenWorker.AddCallBackFunc(workerApi.get(), callback);
     DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
     cluster_->ShutdownNodes(WORKER);
-    sleep(2);  // Wait until the client detects that the worker is disconnected and performs callback.
+    sleep(5);  // Wait until the client detects that the worker is disconnected after adjusted node timeout.
     DS_ASSERT_NOT_OK(listenWorker.CheckWorkerAvailable());
     DS_ASSERT_OK(cluster_->StartWorkers());
     sleep(1);  // Wait until the client is successfully reconnected.
@@ -172,7 +172,7 @@ TEST_F(ListenWorkerTest, TestNoHeartbeatTransformRPCHeartbeat)
     DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
 
     cluster_->ShutdownNodes(WORKER);
-    sleep(2);  // Wait until the client detects that the worker is disconnected and performs callback.
+    sleep(5);  // Wait until the client detects that the worker is disconnected after adjusted node timeout.
     DS_ASSERT_NOT_OK(listenWorker.CheckWorkerAvailable());
 }
 

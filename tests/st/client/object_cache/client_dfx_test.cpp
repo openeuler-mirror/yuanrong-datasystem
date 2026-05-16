@@ -90,7 +90,7 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashAndOperateBuffer)
 
     // Then we crash the worker and try to operate the shm pointer.
     cluster_->ShutdownNodes(WORKER);
-    sleep(2);  // The heartbeat interval is 0.5s, and the maximum number of worker disconnections is 1s.
+    sleep(5);  // Wait until the client detects worker disconnection after adjusted node timeout.
     std::vector<uint8_t> data;
     data.resize(objSize);
     std::vector<std::string> failedObjectKeys;
