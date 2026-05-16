@@ -24,12 +24,14 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/client/mmap/embedded_mmap_table.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/queue/queue.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -473,6 +475,35 @@ TEST_F(EvictionManagerAndMasterTest, TestEndLifeEvictionUsesAsyncDeleteAllCopyMe
     }
     ASSERT_TRUE(removedFast) << "END_LIFE eviction should not wait for synchronous DeleteNotification timeout.";
     ASSERT_FALSE(objectTable_->Contains(objectKey));
+}
+
+TEST_F(EvictionManagerAndMasterTest, TestRemoveMetaRpcTimeoutRetryOnceByTimer)
+{
+    ASSERT_TRUE(TimerQueue::GetInstance()->Initialize());
+    const std::string objectKey = "remove_meta_rpc_timeout_retry";
+    const std::string removeMetaInject = "WorkerOcEvictionManager.RemoveMetaFromMasterForEviction";
+    const std::string retryIntervalInject = "WorkerOcEvictionManager.RemoveMetaRetryIntervalMs";
+    Raii clearInject([&removeMetaInject, &retryIntervalInject] {
+        (void)inject::Clear(removeMetaInject);
+        (void)inject::Clear(retryIntervalInject);
+    });
+    std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+    auto evictionManager = std::make_shared<WorkerOcEvictionManager>(objectTable, worker0Addr_, metaAddr_, nullptr);
+    DS_ASSERT_OK(evictionManager->Init(std::make_shared<ObjectGlobalRefTable<ClientKey>>(), akSkManager_));
+    DS_ASSERT_OK(inject::Set(removeMetaInject, "5*return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(inject::Set(retryIntervalInject, "call(1000)"));
+
+    DS_ASSERT_OK(CreateObject(objectKey, 1024 * 1024, WriteMode::NONE_L2_CACHE_EVICT, false));
+    evictionManager->Add(objectKey);
+    evictionManager->Evict(maxMemorySize, CacheType::MEMORY);
+
+    Timer timer;
+    while (timer.ElapsedMilliSecond() < 5000 && inject::GetExecuteCount(removeMetaInject) < 5) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ASSERT_EQ(inject::GetExecuteCount(removeMetaInject), 5);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    ASSERT_EQ(inject::GetExecuteCount(removeMetaInject), 5);
 }
 
 TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotExistInObjTable)

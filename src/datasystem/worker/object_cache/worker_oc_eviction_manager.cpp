@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/object_cache/shm_guard.h"
@@ -33,7 +34,9 @@
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/object/object_enum.h"
@@ -65,6 +68,7 @@ namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int BATCH_SPILL_THRESHOLD = 512;
+static constexpr uint64_t REMOVE_META_RETRY_INTERVAL_MS = 60'000;
 thread_local std::string evictSpillTaskId;
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
@@ -139,6 +143,7 @@ void WorkerOcEvictionManager::Erase(const std::string &objectKey)
 Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(const std::string &objectKey, uint64_t version)
 {
     VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. ObjectKey: " << objectKey;
+    INJECT_POINT("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction");
     // Get Master address from objectKey
     if (etcdCM_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
@@ -449,6 +454,29 @@ void WorkerOcEvictionManager::AsyncMasterTask(const std::string &objectKey, uint
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("[ObjectKey %s] RemoveMetaFromMasterForEviction failed, %s", objectKey,
                                    rc.ToString());
+        if (IsRpcTimeout(rc)) {
+            auto traceID = Trace::Instance().GetTraceID();
+            auto intervalMs = REMOVE_META_RETRY_INTERVAL_MS;
+            INJECT_POINT("WorkerOcEvictionManager.RemoveMetaRetryIntervalMs",
+                         [&intervalMs](int64_t interval) { intervalMs = interval; });
+            std::weak_ptr<WorkerOcEvictionManager> weakSelf = weak_from_this();
+            TimerQueue::TimerImpl timer;
+            auto task = [weakSelf, objectKey, version, traceID] {
+                auto self = weakSelf.lock();
+                if (self == nullptr) {
+                    return;
+                }
+                self->masterTaskThreadPool_->Execute([self, objectKey, version, traceID] {
+                    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+                    reqTimeoutDuration.Init();
+                    LOG_IF_ERROR(self->RemoveMetaFromMasterForEviction(objectKey, version),
+                                 FormatString("[ObjectKey %s] RemoveMetaFromMasterForEviction retry failed",
+                                              objectKey));
+                });
+            };
+            LOG_IF_ERROR(TimerQueue::GetInstance()->AddTimer(intervalMs, task, timer),
+                         FormatString("[ObjectKey %s] Add RemoveMeta retry timer failed", objectKey));
+        }
     }
 }
 
