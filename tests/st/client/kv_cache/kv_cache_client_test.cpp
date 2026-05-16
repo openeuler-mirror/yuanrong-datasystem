@@ -3011,14 +3011,6 @@ public:
     {
         std::unordered_set<std::string> usedWorkerUuids;
         for (size_t i = 0; i < clients.size(); ++i) {
-            std::string key = FormatString("switch_spread_%zu_%s", i, GetStringUuid());
-            std::string value = "clients should be redistributed across remaining workers";
-            RETURN_IF_NOT_OK(clients[i]->Set(key, value));
-
-            std::string result;
-            RETURN_IF_NOT_OK(clients[i]->Get(key, result));
-            CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
-
             std::string currentWorkerUuid;
             RETURN_IF_NOT_OK(CurrentClientWorkerUuid(clients[i], currentWorkerUuid));
             CHECK_FAIL_RETURN_STATUS(remoteWorkerUuids.count(currentWorkerUuid) == 1, K_NOT_READY,
@@ -3029,6 +3021,15 @@ public:
         CHECK_FAIL_RETURN_STATUS(usedWorkerUuids.size() == remoteWorkerUuids.size(), K_NOT_READY,
                                  FormatString("Clients only spread to %zu remote workers, expected %zu.",
                                               usedWorkerUuids.size(), remoteWorkerUuids.size()));
+        for (size_t i = 0; i < clients.size(); ++i) {
+            std::string key = FormatString("switch_spread_%zu_%s", i, GetStringUuid());
+            std::string value = "clients should be redistributed across remaining workers";
+            RETURN_IF_NOT_OK(clients[i]->Set(key, value));
+
+            std::string result;
+            RETURN_IF_NOT_OK(clients[i]->Get(key, result));
+            CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
+        }
         return Status::OK();
     }
 
