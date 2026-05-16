@@ -1721,8 +1721,12 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
                 continue;
             }
             (void)accessor->second.locations.erase(address);
+            (void)objectStore_->RemoveObjectLocation(objectKey, address);
+            if (accessor->second.locations.empty() && accessor->second.IsNoneL2CacheEvict()) {
+                (void)objectStore_->RemoveMeta(objectKey, false);
+                (void)metaTable_.erase(accessor);
+            }
         }
-        (void)objectStore_->RemoveObjectLocation(objectKey, address);
         response.add_success_ids(objectKey);
     }
 }

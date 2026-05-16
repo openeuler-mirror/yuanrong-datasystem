@@ -2704,9 +2704,14 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
         std::vector<RpcMessage> payloads;
         std::map<std::string, uint64_t> absentObjectKeys;
-        rc = QueryMetadataFromMaster(keys, 0, queryResult, req.query_l2cache());
+        rc = QueryMetadataFromMaster(nonLocalKeys, 0, queryResult, req.query_l2cache());
+        const auto localAddress = localAddress_.ToString();
         for (const auto &meta : queryMetas) {
-            existKeys.emplace(meta.meta().object_key());
+            // Master skips returning the source worker as a remote address; a single local primary copy still exists.
+            const bool isLocalPrimaryCopy = meta.single_copy() && meta.meta().primary_address() == localAddress;
+            if (!meta.address().empty() || isLocalPrimaryCopy) {
+                existKeys.emplace(meta.meta().object_key());
+            }
         }
     }
 
