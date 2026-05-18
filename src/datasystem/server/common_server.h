@@ -76,11 +76,12 @@ public:
      * @param[in] supportMultiShmRefCount Client support multi shm ref count or not.
      * @param[in] deviceId pipeline h2d device id
      * @param[out] lockId The lock id.
+     * @param[out] pipelineQueueId The pipeline notify message share memory queue id.
      * @return Status of the call.
      */
     virtual Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                              bool enableCrossNode, const std::string &podName, bool supportMultiShmRefCount,
-                             std::string deviceId, uint32_t &lockId) = 0;
+                             std::string deviceId, uint32_t &lockId, uint32_t *pipelineQueueId = nullptr) = 0;
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.

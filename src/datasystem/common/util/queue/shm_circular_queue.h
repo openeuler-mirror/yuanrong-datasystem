@@ -145,6 +145,11 @@ public:
     void Clear();
 
     /**
+     * @brief: Reset one queue
+    */
+    void Reset();
+
+    /**
      * @brief Support multiple process to occupy a slot in this queue first.
      * @param[out] slotIndex User can set an index on the data that will not be set by other process.
      * @return True if we get the slot, False if the queue is full and not get the slot.
@@ -269,7 +274,7 @@ public:
      */
     static Status CheckFutexErrno(long res);
 
-private:
+protected:
     /**
      * @brief Set the queue info to shm.
      * @param[in] needSetHead Whether or not to set the head's pos to shared memory.

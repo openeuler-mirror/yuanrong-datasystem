@@ -26,6 +26,10 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/flags/flags.h"
+#ifdef BUILD_PIPLN_H2D
+#include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
+#endif
+
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -192,6 +196,34 @@ Status ClientWorkerRemoteApi::InitDecreaseQueue()
     decreaseRPCQ_ = std::make_shared<ShmCircularQueue>(defaultMeta.capacity, elementSize, decShmUnit_, lockId, true);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(decreaseRPCQ_->Init(), "Init failed with shm circular queue.");
     decreaseRPCQ_->UpdateQueueMeta();
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::InitPipelineRH2DQueue(ShmConvertHookFunc hook)
+{
+#ifdef BUILD_PIPLN_H2D
+    auto converter = std::make_shared<ShmConvertHookFunc>(std::move(hook));
+    if (pipelineMsgShmUnit_) {
+        pipelineConsumer_ = std::make_shared<OsXprtPipln::PipelineRH2DQueueConsumer>();
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(pipelineConsumer_->InitQueue(pipelineMsgShmUnit_, converter),
+                                         "init pipeline queue failed");
+        // RegisterClient returns current data shm arenas. Mmap and cudaHostRegister them here so later H2D chunks do
+        // not pay pageable-memory/staging overhead in cudaMemcpyAsync.
+        for (auto &shmUnit : pipelineDataShmUnits_) {
+            auto ret = (*converter)(shmUnit);
+            if (ret.IsError()) {
+                LOG(WARNING) << "mmap pipeline data shm failed before pinning " << ret.GetMsg();
+            } else {
+                LOG_IF_ERROR(
+                    pipelineConsumer_->RegisterHostMemory(shmUnit->fd, shmUnit->GetPointer(), shmUnit->mmapSize),
+                    "cudaHostRegister pipeline data shm failed");
+            }
+        }
+    }
+
+#else
+    (void)hook;
+#endif
     return Status::OK();
 }
 
@@ -606,6 +638,13 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     return Status::OK();
 }
 
+void ClientWorkerRemoteApi::CleanUpForPipelineRH2DQueueAfterWorkerLost()
+{
+    if (pipelineConsumer_) {
+        pipelineConsumer_ = nullptr;
+    }
+}
+
 Status ClientWorkerRemoteApi::CleanUpForDecreaseShmRefAfterWorkerLost()
 {
     if (decreaseRPCQ_ == nullptr) {
@@ -758,36 +797,43 @@ Status ClientWorkerRemoteApi::ReconcileShmRef(const std::unordered_set<ShmKey> &
     return Status::OK();
 }
 
-Status ClientWorkerRemoteApi::PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp)
+bool ClientWorkerRemoteApi::WorkerSupportPiplnRH2D()
+{
+    return pipelineConsumer_ != nullptr;
+}
+
+Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp)
 {
 #ifdef BUILD_PIPLN_H2D
+    if (!pipelineConsumer_)
+        return Status(K_NOT_SUPPORTED, "pipeline msg queue is null, server may not support pipeline rh2d");
     reqTimeoutDuration.Init(connectTimeoutMs_);
     GetReqPb req;
 
-    H2DChunkManager chunkManager{ true /* isClient */ };
-    RETURN_IF_NOT_OK(PreparePipelineRH2DReq(h2DParam, chunkManager, req));
+    RETURN_IF_NOT_OK(PreparePipelineRH2DReq(piplnRh2dParam, pipelineConsumer_, req));
 
     // send and wait
-    int64_t rpcTimeout = std::max<int64_t>(h2DParam.subTimeoutMs, rpcTimeoutMs_);
+    int64_t rpcTimeout = std::max<int64_t>(piplnRh2dParam.subTimeoutMs, rpcTimeoutMs_);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PIPELINE_H2D);
     Status status = RetryOnError(
-        std::max<int32_t>(requestTimeoutMs_, h2DParam.subTimeoutMs),
-        [this, &req, &rsp](int32_t realRpcTimeout) {
+        std::max<int32_t>(requestTimeoutMs_, piplnRh2dParam.subTimeoutMs),
+        [this, &req, &rsp, &piplnRh2dParam](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when sending H2D request.");
             VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
-            std::vector<RpcMessage> payloads;
-            return stub_->Get(opts, req, rsp, payloads);
+            RETURN_IF_NOT_OK(stub_->Get(opts, req, rsp, piplnRh2dParam.payloads));
+            return Status::OK();
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     perfPoint.Record();
+    piplnRh2dParam.version = workerVersion_.load(std::memory_order_relaxed);
 
     return WithRpcDiag(status, "Get", hostPort_);
 #else
-    (void)h2DParam;
+    (void)piplnRh2dParam;
     (void)rsp;
     return Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D");
 #endif

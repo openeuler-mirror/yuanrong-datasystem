@@ -584,6 +584,40 @@ void ClientWorkerRemoteCommonApi::ConstructDecShmUnit(const RegisterClientRspPb 
     }
 }
 
+void ClientWorkerRemoteCommonApi::ConstructPipelineShmUnit(const RegisterClientRspPb &rsp)
+{
+    if (!IsShmEnable())
+        return;
+    auto &info = rsp.pipeline_queue_info();
+    if (info.shm_fd() == -1)
+        return;
+    pipelineMsgShmUnit_ = std::make_shared<ShmUnitInfo>();
+    pipelineMsgShmUnit_->fd = info.shm_fd();
+    pipelineMsgShmUnit_->mmapSize = info.mmap_size();
+    pipelineMsgShmUnit_->offset = static_cast<ptrdiff_t>(info.offset());
+    pipelineMsgShmUnit_->id = ShmKey::Intern(info.shm_id());
+}
+
+void ClientWorkerRemoteCommonApi::ConstructPipelineDataShmUnits(const RegisterClientRspPb &rsp)
+{
+    pipelineDataShmUnits_.clear();
+    if (!IsShmEnable()) {
+        return;
+    }
+    pipelineDataShmUnits_.reserve(rsp.pipeline_data_shm_infos_size());
+    for (const auto &info : rsp.pipeline_data_shm_infos()) {
+        if (info.shm_fd() <= 0 || info.mmap_size() == 0) {
+            continue;
+        }
+        auto shmUnit = std::make_shared<ShmUnitInfo>(info.shm_fd(), info.mmap_size());
+        shmUnit->offset = 0;
+        shmUnit->id = ShmKey::Intern("");  // not must
+        pipelineDataShmUnits_.emplace_back(std::move(shmUnit));
+    }
+    LOG(INFO) << "Pipeline RH2D RegisterClient received " << pipelineDataShmUnits_.size()
+              << " data shm fd(s) to cudaHostRegister";
+}
+
 void ClientWorkerRemoteCommonApi::CloseSocketFd()
 {
     if (socketFd_ == INVALID_SOCKET_FD) {
@@ -910,6 +944,8 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     ConstructDecShmUnit(rsp);
     LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode();
+    ConstructPipelineShmUnit(rsp);
+    ConstructPipelineDataShmUnits(rsp);
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
     if (rsp.has_log_sample_config()) {
         MaybeApplyLogSampleConfig(rsp.log_sample_config(), "remote worker register");

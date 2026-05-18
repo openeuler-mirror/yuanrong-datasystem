@@ -1,2 +1,6 @@
 find_package(Cuda)
 find_package(OsTransport)
+if(NOT CUDA_INCLUDE_DIR)
+    message(WARNING "CUDA_INCLUDE_DIR is empty. Enabling PIPLN_USE_MOCK globally.")
+    add_compile_definitions(PIPLN_USE_MOCK)
+endif()

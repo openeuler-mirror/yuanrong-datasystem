@@ -21,6 +21,8 @@
 #ifndef OS_XPRT_PIPLN_COMMON_API
 #define OS_XPRT_PIPLN_COMMON_API
 
+#include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
+
 #ifdef BUILD_PIPLN_H2D
 #include <ub/umdk/urma/urma_api.h>
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -71,5 +73,11 @@ struct H2DChunkManager {
 };
 
 #endif
+
+namespace OsXprtPipln {
+
+DEFINE_HOOK_WITH_RETTYPE(void, SwitchToAndGetGpuId(const std::string &uuidOrId));
+
+}
 
 #endif

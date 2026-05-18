@@ -35,6 +35,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -57,7 +58,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_uint32(page_size);
 DS_DEFINE_bool(authorization_enable, false, "Indicates whether to enable the tenant authentication, default is false.");
@@ -257,6 +257,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     const auto &version = req.version();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckClientVersion(version), "worker check client version failed");
     uint32_t lockId = 0;
+    uint32_t pipelineQueueId = OsXprtPipln::INVALID_PIPLN_QUEUE_ID;
     auto shmEnabled = req.shm_enabled();
     int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
     bool supportMultiShmRefCount = req.support_multi_shm_ref_count();
@@ -272,7 +273,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     if (req.heartbeat_enabled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
-                               supportMultiShmRefCount, req.device_id(), lockId),
+                               supportMultiShmRefCount, req.device_id(), lockId, &pipelineQueueId),
             "worker add client failed");
     }
     // After executing "AddClient", the server fd will be bound to the client and released when the client loses
@@ -321,6 +322,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_exclusive_conn_sockpath(exclusiveConnSockPath);
     rsp.set_support_multi_shm_ref_count(supportMultiShmRefCount);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
+    OsXprtPipln::SetPiplnQueueShmInfo(rsp, pipelineQueueId, tenantId);
 #ifdef USE_URMA
     if (IsUrmaEnabled() && !shmEnabled) {
         rsp.set_fast_transport_mode(FastTransportMode::UB);

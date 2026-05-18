@@ -93,6 +93,21 @@ message RegisterClientRspPb {
     bool support_multi_shm_ref_count = 22;
     FastTransportMode fast_transport_mode = 23;
     LogSampleConfigPb log_sample_config = 24;
+    message PipelineRH2DQueueInfo {
+        int32 shm_fd = 1;
+        uint64 offset = 2;
+        uint64 mmap_size = 3;
+        string shm_id = 4;
+    };
+    PipelineRH2DQueueInfo pipeline_queue_info = 25;
+
+    // Data shared-memory arenas that can be used as H2D source.
+    // The client mmaps and cudaHostRegister()'s these regions during RegisterClient post-processing.
+    message PipelineRH2DDataShmInfo {
+        int32 shm_fd = 1;
+        uint64 mmap_size = 2;
+    };
+    repeated PipelineRH2DDataShmInfo pipeline_data_shm_infos = 26;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;

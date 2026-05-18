@@ -21,6 +21,10 @@
 #ifndef OS_XPRT_PIPLN_DLOPEN_UTIL
 #define OS_XPRT_PIPLN_DLOPEN_UTIL
 
+#include <cstdint>
+#ifndef PIPLN_USE_MOCK
+#include <cuda_runtime.h>
+#endif
 #include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_opcode.h>
 
@@ -30,21 +34,25 @@
 namespace OsXprtPipln {
 
 struct LibLoaderBase {
-    LibLoaderBase(const std::string &libName) : libName_(libName){};
+    LibLoaderBase(const std::string &libName);
     virtual void Load();
     virtual void UnLoad();
+
+    bool TryLoad(const std::string &path);
+    void AddPath(const std::string &path);
     bool Inited()
     {
         return handle_ != nullptr;
     }
 
+    std::vector<std::string> libpaths_;
     void *handle_ = nullptr;
     std::string libName_;
 };
 
 #define CALL_DYN_FUNC_BASE(type, ret, funcName, ...)                   \
     {                                                                  \
-        auto &func = OsXprtPipln::type::Instance()->funcName##Func_; \
+        auto &func = OsXprtPipln::type::Instance()->funcName##Func_;   \
         if (func)                                                      \
             ret = static_cast<decltype(ret)>(func(__VA_ARGS__));       \
         else                                                           \
@@ -67,17 +75,20 @@ struct OsTransportLibLoader : public LibLoaderBase {
     REG_METHOD(DoLogReg, int, int, log_callback_t);
     REG_METHOD(DoInit, uint32_t, urma_context_t *urma_ctx, os_transport_cfg_t *ost_cfg, void **handle);
     REG_METHOD(DoRecv, uint32_t, void *handle, ost_buffer_info_t *host_src, ost_device_info_t *device_dst, uint32_t len,
-               uint32_t client_key, task_sync_t **ret_sync_handle);
+               uint32_t client_key, task_sync_t **ret_sync_handle, notify_callback_t notify_callback);
     REG_METHOD(DoSend, uint32_t, void *handle, urma_jetty_info_t *jetty_info, ost_buffer_info_t *local_src,
                ost_buffer_info_t *remote_dst, uint32_t len, uint32_t server_key, uint32_t client_key,
                task_sync_t **ret_sync_handle);
     REG_METHOD(DoDestroy, uint32_t, void *handle);
     REG_METHOD(DoWait, uint32_t, void *handle, task_sync_t *sync_handle);
+    REG_METHOD(DoWaitTimeout, uint32_t, void *handle, task_sync_t *sync_handle, int64_t timeout_ms);
     REG_METHOD(DoNotify, int, void *handle, void *cr_t);
+    REG_METHOD(DoCancel, uint32_t, void *handle, void **sync_handle, uint32_t request_id);
 };
 
 #define CALL_OS_XPRT_FUNC(ret, funcName, ...) CALL_DYN_FUNC_BASE(OsTransportLibLoader, ret, funcName, __VA_ARGS__);
 
+#ifndef PIPLN_USE_MOCK
 struct CudaRTLibLoader : public LibLoaderBase {
     CudaRTLibLoader() : LibLoaderBase("libcudart.so")
     {
@@ -88,19 +99,34 @@ struct CudaRTLibLoader : public LibLoaderBase {
 
     // cuda toolkit
     REG_METHOD(cudaSetDevice, cudaError_t, int);
+    REG_METHOD(cudaDeviceReset, cudaError_t);
     REG_METHOD(cudaIpcOpenMemHandle, cudaError_t, void **, cudaIpcMemHandle_t, unsigned int);
     REG_METHOD(cudaStreamCreateWithFlags, cudaError_t, cudaStream_t *, unsigned int);
     REG_METHOD(cudaEventCreate, cudaError_t, cudaEvent_t *, unsigned int);
     REG_METHOD(cudaMemcpyAsync, cudaError_t, void *, const void *, size_t, cudaMemcpyKind, cudaStream_t);
     REG_METHOD(cudaEventRecord, cudaError_t, cudaEvent_t, cudaStream_t);
-    REG_METHOD(cudaStreamWaitEvent, cudaError_t, cudaStream_t, cudaEvent_t, unsigned int);
+    REG_METHOD(cudaStreamDestroy, cudaError_t, cudaStream_t);
+    REG_METHOD(cudaEventSynchronize, cudaError_t, cudaEvent_t);
     REG_METHOD(cudaEventDestroy, cudaError_t, cudaEvent_t);
     REG_METHOD(cudaIpcCloseMemHandle, cudaError_t, void *);
     REG_METHOD(cudaIpcGetMemHandle, cudaError_t, cudaIpcMemHandle_t *, void *);
     REG_METHOD(cudaGetErrorString, const char *, cudaError_t);
+    REG_METHOD(cudaHostRegister, cudaError_t, void *, size_t, unsigned int);
+    REG_METHOD(cudaHostUnregister, cudaError_t, void *);
 };
-
+#else
+typedef int cudaError_t;
+struct CudaRTLibLoader {
+    void Load(){};
+    void UnLoad(){};
+    static CudaRTLibLoader *Instance()
+    {
+        static struct CudaRTLibLoader dummy;
+        return &dummy;
+    }
+    REG_METHOD(cudaSetDevice, cudaError_t, int);
+};
+#endif
 #define CALL_CUDA_RT_FUNC(ret, funcName, ...) CALL_DYN_FUNC_BASE(CudaRTLibLoader, ret, funcName, __VA_ARGS__);
-
 }  // namespace OsXprtPipln
 #endif

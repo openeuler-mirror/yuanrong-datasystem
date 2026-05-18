@@ -23,11 +23,14 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <ub/umdk/urma/urma_api.h>
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_types.h"
+#include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 namespace OsXprtPipln {
@@ -35,55 +38,86 @@ namespace OsXprtPipln {
 using datasystem::Status;
 using datasystem::StatusCode;
 
-class IpcDriver {
+class BaseRH2DDriver {
 public:
-    IpcDriver(const DevShmInfo &devInfo, const std::string &targetHandle, bool isClient)
+    BaseRH2DDriver(const DevShmInfo &devInfo, bool isClient)
         : devId(devInfo.devId),
           targetAddr(devInfo.ptr),
           targetSize(devInfo.size),
-          targetHandle(targetHandle),
           targetType(devInfo.devType),
           isClient(isClient)
     {
     }
-    virtual ~IpcDriver()
+    virtual ~BaseRH2DDriver()
     {
     }
-    virtual Status EncodeDriver() = 0;
-    virtual Status DecodeDriver() = 0;
+    virtual Status Init() = 0;
     virtual Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) = 0;
     virtual Status WaitIO() = 0;
     virtual Status Release() = 0;
+    virtual Status Cancel()
+    {
+        return Status::OK();
+    };
+    static Status GetDriver(const uint32_t reqId, const DevShmInfo &devInfo, bool isClient,
+                            std::shared_ptr<BaseRH2DDriver> &driver);
 
-    static Status GetDriver(const DevShmInfo &devInfo, const std::string &targetHandle, bool isClient,
-                            std::shared_ptr<IpcDriver> &driver);
+    void SetShmFd(int32_t shmId);
+    int32_t GetShmFd();
+    void SetShmOffset(uint64_t shmOffset);
+    uint64_t GetShmOffset();
+    void SetShmSize(uint64_t shmSize);
+    uint64_t GetShmSize();
 
 public:
-    uint32_t devId;
-    void *targetAddr;
-    size_t targetSize;
-    std::string targetHandle;
+    uint32_t devId;     // reuse as shmFd
+    void *targetAddr;   // reuse as shmOffset
+    size_t targetSize;  // reuse as shmSize
     TargetDeviceType targetType;
     bool isClient;
-
-protected:
-    static inline size_t ReservedHandleSize()
-    {
-        return sizeof(devId);
-    };
-    void *GetEncodeHandle(size_t handleSize);
-    void *GetDecodeHandle(size_t handleSize);
-#define DEFINE_ENCODE_HANDLE(type) type *handle = (type *)GetEncodeHandle(sizeof(type))
-#define DEFINE_DECODE_HANDLE(type) type *handle = (type *)GetDecodeHandle(sizeof(type))
 };
 
 struct ReqInfo {
+    ReqInfo()
+    {
+        canceledOrDoneFuture = canceledOrDonePromise.get_future().share();
+    }
+    /**
+     * @return true: done
+     * @return false: canceled
+     */
+    bool WaitCancelOrDone();
+    bool WaitCancelOrDone(int64_t timeoutMs);
+    bool WaitPipelineDone(int64_t timeoutMs);
+    bool IsCanceledOrDone();
+    bool IsCanceled();
+    void Cancel();
+    void Done();
+
+    std::string DebugString();
+
     int32_t receivedChunks = 0;
-    int32_t failedChunkId = 0;
+    int32_t totalChunks = 0;
+    int32_t failedChunkId = -1;
     void *syncHandle = nullptr;
     std::string key;
-    std::shared_ptr<IpcDriver> driver;
-    bool isCanceled = false;
+    std::shared_ptr<BaseRH2DDriver> driver;
+    // For worker-side remote pipeline receive, this is the real object payload size for the current request.
+    // BaseRH2DDriver::targetSize is reused as shmSize on worker side after SetShmSize(), so it must not be
+    // used to recover the last chunk's real size.
+    uint64_t objectSize = 0;
+    int shmFd;
+    int shmOffset;
+    /**
+     * @brief step before doneStep is all done canceled
+     * step1: worker2 -> worker1
+     * step2: worker1 -> kvclient
+     * step3: kvclient -> cuda
+     */
+    PiplnDoneStep doneStep = PIPLN_DONE_NO_STEP;  // prevent get from local worker again
+    std::promise<bool> canceledOrDonePromise;     // if canceled, ignore following chunks
+    std::shared_future<bool> canceledOrDoneFuture;
+    std::mutex promiseMutex;
 };
 
 class ChunkManager {
@@ -96,40 +130,74 @@ public:
         ReleaseAll();
     }
 
-    Status AddKey(const std::string &key, uint32_t reqId, const DevShmInfo &devInfo, const std::string &targetHandle);
+    // common
+    Status AddKey(const std::string &key, uint32_t reqId, const DevShmInfo &devInfo, int index = -1);
+    void AddReqIdMap(uint32_t serverReqId, uint32_t clientReqId);
     ReqInfo *GetReqInfo(uint32_t reqId);
-    Status ReceiveRemoteChunk(ChunkTag tagId, void *srcData);
-    Status ReceiveLocalChunk(uint32_t reqId, void *srcData, size_t srcSize);
+    ReqInfo *GetReqInfoByIndex(int32_t keyIndex);
     Status ReleaseAll();
     Status GetReqId(const std::string &key, uint32_t &reqId);
     static uint32_t GenerateReqId();
     int32_t KeyNum() const
     {
-        return reqInfos.size();
+        return reqInfos_.size();
     };
-
-    static Status InitOsPiplnH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, urma_jfce_t *jfce, int threadNum);
-    static void UnInitOsPiplnH2DEnv();
-    Status StartReceiver(uint32_t reqId, uint64_t src, uint64_t size, urma_target_seg_t *targetSeg,
-                         urma_jfr_t *targetJfr);
-    Status StartSender(PiplnSndArgs &args);
-
+    static Status InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, urma_jfce_t *jfce, uint32_t jettySize,
+                                     int threadNum, bool needCuda);
+    static void UnInitOsPiplnRH2DEnv();
     Status WaitAll();
-    Status WaitPipelineDone();
-    void Cancel(uint32_t ReqId);
+    void MarkCancelOrDone(uint32_t reqId, bool isDone);
+    void MarkCancelOrDone(const std::string &key, bool isDone);
     void CancelAll();
 
+    // dataSrc = shmPointer + shmOffset + metaSize
+    // step 1
+    Status DoPiplnStep1_StartReceiver(uint32_t reqId, uint64_t dataSrc, uint64_t size, urma_target_seg_t *targetSeg,
+                                      urma_jfr_t *targetJfr, urma_jetty_t *targetJetty, int32_t shmFd, uint64_t shmSize,
+                                      uint64_t shmOffset);
+    Status DoPiplnStep1_StartSender(PiplnSndArgs &args);
+    static int DoPiplnStep1_ReceiveCallback(void *arg);
+    Status WaitPiplnStep12Done();
     // @return: is my event ?
-    static int ReceiveEventHook(urma_cr_t *cr);
+    static bool DoPiplnStep1_ReceiveUrmaEventHook(urma_cr_t *cr);
+
+    // step 2
+    Status DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmFd, uint64_t shmSize, uint64_t shmOffset,
+                                          size_t srcSize);
+
+    void RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueConsumer> &pipelineConsumer);
+    void DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize);
+    void RemoveConsumerCallback(uint32_t reqId);
+
+    void RegisterPipelineProducer(std::shared_ptr<PipelineRH2DQueueProducer> &pipelineProducer, uint32_t queueId);
+    Status DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag);
+
+    // step 3
+    bool CheckIsRequestSuccess(uint32_t reqId);
+    // copy srcData -> destData + destOffset
+    Status DoPiplnStep3_SubmitIO(ReqInfo &info, void *srcData, size_t srcSize, size_t destOffset);
+
+    void DebugPrintAllPipelineStatus();
+
+public:
+    std::shared_mutex releaseMutex;
 
 private:
-    Status SubmitIO(ReqInfo &info, void *srcData, size_t srcSize, size_t destOffset);
     static std::atomic<uint32_t> reqId_;
     bool isClient_;
     static void *osPiplnH2DHandle_;
-    std::unordered_map<uint32_t, ReqInfo> reqInfos;
-    std::unordered_map<std::string, uint32_t> keyToReqIdMap;
-    bool canceled = false;
+    std::map<uint32_t, ReqInfo> reqInfos_;
+    std::unordered_map<std::string, uint32_t> keyToReqIdMap_;
+    std::map<uint32_t, ReqInfo *> indexToReqIdMap_;
+    bool allDone_ = false;
+
+    static std::mutex reqIdToChkMgrMapMutex_;
+    static std::map<uint32_t, ChunkManager *> reqIdToChkMgrMap_;
+
+    uint32_t queueId_;
+    std::shared_ptr<PipelineRH2DQueueConsumer> pipelineConsumer_;
+    std::shared_ptr<PipelineRH2DQueueProducer> pipelineProducer_;
+    std::map<uint32_t, uint32_t> reqIdMap_;
 };
 
 }  // namespace OsXprtPipln

@@ -26,6 +26,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <memory>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -165,6 +166,7 @@ struct ClientWorkerCommonApiAttribute {
     bool enableCrossNodeConnection_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
+    std::shared_ptr<ShmUnitInfo> pipelineMsgShmUnit_;
     Signature *signature_;
     bool workerSupportMultiShmRefCount_;
 
@@ -522,6 +524,7 @@ protected:
     std::string deviceId_;
     UrmaSuccessRateTracker urmaSuccessRateTracker_;
     std::function<bool()> urmaDataPlaneFailureCallback_;
+    std::vector<std::shared_ptr<ShmUnitInfo>> pipelineDataShmUnits_;
 
     struct FtHandshakeContext {
         int32_t timeoutMs{ 0 };
@@ -582,6 +585,18 @@ private:
      * @param[in] rsp Register respond.
      */
     void ConstructDecShmUnit(const RegisterClientRspPb &rsp);
+
+    /**
+     * @brief Construct pipelineMsgShmUnit_ after register.
+     * @param[in] rsp Register respond.
+     */
+    void ConstructPipelineShmUnit(const RegisterClientRspPb &rsp);
+
+    /**
+    * @brief Construct pipeline data shm units after register. These units are used as H2D sources.
+    * @param[in] rsp Register respond.
+    */
+    void ConstructPipelineDataShmUnits(const RegisterClientRspPb &rsp);
 
     /**
      * @brief Save standby worker.

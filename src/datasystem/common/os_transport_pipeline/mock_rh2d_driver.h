@@ -15,41 +15,36 @@
  */
 
 /**
- * Description: define cuda ipc driver.
+ * Description: define mock IPC driver
  */
 
-#ifndef OS_XPRT_PIPLN_CUDA_IPC
-#define OS_XPRT_PIPLN_CUDA_IPC
+#ifndef OS_XPRT_PIPLN_MOCK_IPC
+#define OS_XPRT_PIPLN_MOCK_IPC
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include <mutex>
 
 #include "datasystem/common/os_transport_pipeline/chunk_manager.h"
 
 namespace OsXprtPipln {
-
-class CudaIPC : public IpcDriver {
+class MockRH2DDriver : public BaseRH2DDriver {
 public:
-    CudaIPC(const DevShmInfo &devInfo, const std::string &targetHandle, bool isClient)
-        : IpcDriver(devInfo, targetHandle, isClient)
+    MockRH2DDriver(const DevShmInfo &devInfo, bool isClient) : BaseRH2DDriver(devInfo, isClient)
     {
     }
-    virtual ~CudaIPC()
+    virtual ~MockRH2DDriver()
     {
         Release();
     }
-
+    void SetReqId(uint32_t reqId);
     Status SubmitIO(void *srcData, size_t srcSize, size_t destOffset) override;
-    Status EncodeDriver() override;
-    Status DecodeDriver() override;
+    Status Init() override;
     Status WaitIO() override;
     Status Release() override;
 
-    void ExportHandles(cudaStream_t &stream, cudaEvent_t &event);
-
 private:
-    cudaEvent_t event_ = nullptr;
-    static inline std::unordered_map<int, cudaStream_t> streams_;
+    static std::string mockFilePathPrefix;
+    uint32_t reqId_ = 0;
+    std::string mockFilePath;
 };
 }  // namespace OsXprtPipln
 

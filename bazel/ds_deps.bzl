@@ -1,7 +1,9 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load(":ds_python_deps.bzl", "ds_python_deps")
 load(":grpc_deps.bzl", "grpc_deps")
+load(":cuda_local_repo.bzl", "cuda_local_repository")
 
 def ds_deps():
     """Loads dependencies need to compile and test the Yuanrong Datasystem ."""
@@ -26,6 +28,15 @@ def ds_deps():
     setup_nlohmann_json()
     setup_rocksdb()
     setup_curl()
+    setup_cuda()
+    setup_mlcachedirect()
+    setup_local_urma()
+
+def setup_cuda():
+    maybe(
+        cuda_local_repository,
+        name = "local_cuda",
+    )
 
 def setup_nlohmann_json():
     maybe(
@@ -310,3 +321,23 @@ def setup_curl():
         ],
         build_file = "@yuanrong-datasystem//third_party:curl.BUILD",
     )
+
+def setup_mlcachedirect():
+    maybe(
+        http_archive,
+        name = "mlcachedirect",
+        sha256 = "b0ee4c7e3749733d61d9f2cad61df379646a820dd0998d775e4cae955cc74e25",
+        strip_prefix = "MLCacheDirect-0.0.8",
+        urls = [
+            "https://github.com/openeuler-mirror/MLCacheDirect/archive/refs/tags/v0.0.8.tar.gz",
+        ],
+    )
+
+def setup_local_urma():
+    maybe(
+        new_local_repository,
+        name = "local_urma",
+        path = "/usr",
+        build_file = "@mlcachedirect//third_party:BUILD.urma",
+    )
+

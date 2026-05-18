@@ -30,6 +30,7 @@
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/strings_util.h"
@@ -38,7 +39,6 @@
 #include "datasystem/object/buffer.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"
-
 namespace datasystem {
 namespace object_cache {
 class ClientWorkerRemoteApi : public ClientWorkerBaseApi, public client::ClientWorkerRemoteCommonApi {
@@ -94,7 +94,7 @@ public:
     Status MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
                         MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
-    Status PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp) override;
+    Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override;
     Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
     Status InvalidateBuffer(const std::string &objectKey) override;
     Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
@@ -136,11 +136,14 @@ public:
     void RecreateOCStub();
     Status PrepairForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
+    Status InitPipelineRH2DQueue(ShmConvertHookFunc hook) override;
+    void CleanUpForPipelineRH2DQueueAfterWorkerLost() override;
     Status CleanUpForDecreaseShmRefAfterWorkerLost() override;
     Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
                           std::shared_timed_mutex &mtx) override;
     Status ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
                            std::vector<ShmKey> &maybeExpiredShmIds) override;
+    bool WorkerSupportPiplnRH2D() override;
 
 private:
 #ifdef USE_URMA
@@ -207,6 +210,9 @@ private:
     std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
     std::unique_ptr<WorkerOCService::Stub> stub_;
     std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{ 0 };
+
+    // for pipeline rh2d receive queue
+    std::shared_ptr<OsXprtPipln::PipelineRH2DQueueConsumer> pipelineConsumer_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem
