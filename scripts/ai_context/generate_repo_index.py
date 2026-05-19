@@ -17,6 +17,7 @@ SECTIONS = [
     {"name": "examples", "path": "example", "max_depth": 2},
     {"name": "docs", "path": "docs/source_zh_cn", "max_depth": 2},
     {"name": "skills", "path": ".skills", "max_depth": 3},
+    {"name": "codex_project_hooks", "path": ".codex", "max_depth": 3},
     {"name": "transfer_engine", "path": "transfer_engine", "max_depth": 2},
 ]
 
@@ -32,6 +33,7 @@ ROOT_FILES = [
 IGNORED_NAMES = {
     "__pycache__",
     ".DS_Store",
+    "working-state.md",
 }
 
 

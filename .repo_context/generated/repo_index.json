@@ -1,6 +1,6 @@
 {
   "repo_root": "/Users/marck/workspace/yuanrong-datasystem-0.8.1",
-  "generated_at_utc": "2026-05-19T07:57:14+00:00",
+  "generated_at_utc": "2026-05-19T08:27:07+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -487,6 +487,28 @@
         "  - agents/",
         "    - openai.yaml",
         "  - SKILL.md"
+      ]
+    },
+    {
+      "name": "codex_project_hooks",
+      "path": ".codex",
+      "exists": true,
+      "tree": [
+        "- context/",
+        "  - module-map.json",
+        "- hooks/",
+        "  - context_survival.py",
+        "  - post_compact_rehydrate.py",
+        "  - post_tool_working_state.py",
+        "  - pre_compact_snapshot.py",
+        "  - pre_tool_context_router.py",
+        "  - session_start_context.py",
+        "  - stop_working_state.py",
+        "  - user_prompt_context.py",
+        "- tests/",
+        "  - test_context_survival.py",
+        "- README.md",
+        "- hooks.json"
       ]
     },
     {

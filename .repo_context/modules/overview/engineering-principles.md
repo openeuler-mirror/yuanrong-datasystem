@@ -11,6 +11,7 @@
   - `CLAUDE.md`
   - `.cursor/rules/repo-context.mdc`
   - `.repo_context/`
+  - `.codex/`
   - `src/datasystem`
   - `include/datasystem`
   - `tests`

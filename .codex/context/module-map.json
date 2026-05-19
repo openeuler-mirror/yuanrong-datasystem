@@ -1,0 +1,71 @@
+{
+  "defaults": [
+    ".repo_context/modules/overview/engineering-principles.md",
+    ".repo_context/modules/quality/tests-and-reproduction.md"
+  ],
+  "routes": [
+    {
+      "prefixes": ["src/datasystem/worker/object_cache", "src/datasystem/worker"],
+      "docs": [".repo_context/modules/runtime/worker-runtime.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/master"],
+      "docs": [".repo_context/modules/overview/repository-overview.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/common/kvstore/etcd", "third_party/protos/etcd"],
+      "docs": [".repo_context/modules/runtime/etcd-metadata/README.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/worker/cluster_manager"],
+      "docs": [".repo_context/modules/runtime/cluster-manager/README.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/worker/hash_ring"],
+      "docs": [".repo_context/modules/runtime/hash-ring/README.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/common/l2cache"],
+      "docs": [".repo_context/modules/infra/l2cache/design.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/common/l2cache/slot_client", "src/datasystem/worker/object_cache/slot_recovery"],
+      "docs": [".repo_context/modules/infra/slot/design.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/common/log"],
+      "docs": [".repo_context/modules/infra/logging/design.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/common/metrics"],
+      "docs": [".repo_context/modules/infra/metrics/design.md"]
+    },
+    {
+      "prefixes": ["src/datasystem/client", "include/datasystem", "python/yr/datasystem", "java", "go"],
+      "docs": [".repo_context/modules/client/client-sdk.md"]
+    },
+    {
+      "prefixes": ["tests"],
+      "docs": [
+        ".repo_context/modules/quality/tests-and-reproduction.md",
+        ".repo_context/modules/quality/test-suite-design.md"
+      ]
+    },
+    {
+      "prefixes": ["build.sh", "CMakeLists.txt", "cmake", "src/datasystem/CMakeLists.txt"],
+      "docs": [".repo_context/modules/quality/cmake-build/README.md"]
+    },
+    {
+      "prefixes": [".skills"],
+      "docs": [".repo_context/modules/overview/repository-skills.md"]
+    },
+    {
+      "prefixes": [".repo_context"],
+      "docs": [
+        ".repo_context/README.md",
+        ".repo_context/index.md",
+        ".repo_context/maintenance.md"
+      ]
+    }
+  ]
+}
