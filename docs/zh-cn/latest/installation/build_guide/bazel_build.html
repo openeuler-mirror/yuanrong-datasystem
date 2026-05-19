@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -605,9 +608,11 @@ bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> <
 <h3>编译产物<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <p>编译完成后 <code class="docutils literal notranslate"><span class="pre">output/</span></code> 目录结构：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>output/
-├── yr-datasystem-v0.7.7.tar.gz          # 部署包
+├── yr-datasystem-v0.7.7.tar.gz           # 部署包
 ├── cpp/                                  # 外部 SDK（find_package / Bazel 集成）
 │   ├── BUILD.bazel                       # Bazel 外部项目模板
+│   ├── DATASYSTEM_SYM 
+│   |    └── libdatasystem.so.sym         # 符号表文件
 │   ├── include/datasystem/               # C++ 头文件
 │   └── lib/
 │       ├── libdatasystem.so              # SDK 动态库
@@ -620,13 +625,17 @@ bash<span class="w"> </span>build.sh<span class="w"> </span>-b<span class="w"> <
 ├── sdk/cpp/                 # C++ SDK
 │   ├── include/datasystem/  # 头文件
 │   └── lib/
-│       ├── libdatasystem.so
-│       └── cmake/Datasystem/
+│   │    ├── libdatasystem.so
+│   │    └── cmake/Datasystem/
+|   └── DATASYSTEM_SYM
+│        └── libdatasystem.so.sym # 符号表文件
 ├── service/                 # 服务端
 │   ├── datasystem_worker    # Worker 进程
 │   ├── lib/
 │   │   ├── libdatasystem_worker.so
 │   │   └── libjemalloc.so.2
+|   └── DATASYSTEM_SYM
+│       └── libdatasystem_worker.sym # worker符号表文件
 │   ├── worker_config.json
 │   └── cluster_config.json
 ├── cli/                     # CLI 工具

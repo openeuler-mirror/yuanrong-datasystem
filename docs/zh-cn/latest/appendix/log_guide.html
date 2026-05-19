@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -751,7 +754,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p>shm info</p></td>
 <td><p>47</p></td>
-<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: %</p></td>
+<td><p>记录共享内存使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：memoryUsage/physicalMemoryUsage/totalLimit/rate/scMemoryUsage/scMemoryLimit<br>1) memoryUsage	已分配的内存大小，是已缓存的对象大小总和。注意：由于系统中使用jemalloc管理内存，实际分配的内存会按size class对齐，因此memoryUsage通常比实际对象大小的总和高一些，包含一定的内存对齐开销。<br>2) physicalMemoryUsage	已分配的物理内存大小。<br>3) totalLimit	共享内存总大小。<br>4) Rate	共享内存使用率，memoryUsage/totalLimit, 保留3位有效数字，单位: % <br>5) scMemoryUsage 流缓存共享内存使用大小，单位：byte <br>6) scMemoryLimit 流缓存的共享内存限制，单位：byte</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill disk info</p></td>
 <td><p>47</p></td>
@@ -933,14 +936,17 @@ document.addEventListener('DOMContentLoaded', function() {
 <hr class="docutils" />
 <section id="id7">
 <h2>日志采样<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
-<p>大流量场景下，可通过 <code class="docutils literal notranslate"><span class="pre">log_rate_limit</span></code> 参数限制每秒最大日志条数，避免高频路径上的 INFO/WARNING/ERROR 日志产生过多磁盘 I/O。</p>
+<p>大流量场景下，可通过 <code class="docutils literal notranslate"><span class="pre">log_rate_limit</span></code> 参数控制每秒采样请求数，避免高频请求日志产生过多磁盘 I/O。</p>
 <section id="id8">
 <h3>工作原理<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <ul class="simple">
-<li><p>采用令牌桶算法 + 等间隔采样策略</p></li>
-<li><p>当日志速率超出设定值时，INFO、WARNING 和 ERROR 日志会被等间隔采样，被保留的日志末尾会追加 <code class="docutils literal notranslate"><span class="pre">[sampled</span> <span class="pre">1/N]</span></code> 标注，表示当前采样率</p></li>
-<li><p><strong>FATAL 始终全量输出，不受限速影响</strong></p></li>
-<li><p><strong>同一请求（trace）的日志保证链路完整性</strong>：首条日志通过限速后，后续同 trace 日志优先通过独立小桶（上限 20 条/秒），小桶耗尽后降级为全局等间隔采样</p></li>
+<li><p>采样粒度是“请求（traceId）”，不是“单条日志”</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">log_rate_limit=N</span></code> 表示每秒最多采样 <code class="docutils literal notranslate"><span class="pre">N</span></code> 个新请求（trace）</p></li>
+<li><p>对采样到的请求：链路日志完整打印（INFO/WARNING/ERROR/FATAL）</p></li>
+<li><p>对未采样请求：链路日志全部丢弃（包含 WARNING/ERROR/FATAL）</p></li>
+<li><p>仅 SDK 请求 trace 参与采样；后台线程日志即使带 traceId 也不参与采样</p></li>
+<li><p>采样决策会随 RPC 元数据传播，跨 client/worker 保持同一 trace 的一致采样结果</p></li>
+<li><p>不带 traceId 的后台日志（例如 worker/client 后台线程日志）不参与该采样逻辑</p></li>
 </ul>
 </section>
 <section id="id9">
@@ -956,15 +962,15 @@ document.addEventListener('DOMContentLoaded', function() {
 <tbody>
 <tr class="row-even"><td><p>Worker 命令行</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">--log_rate_limit=N</span></code> 启动参数</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">./datasystem_worker</span> <span class="pre">--log_rate_limit=1000</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">./datasystem_worker</span> <span class="pre">--log_rate_limit=20</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>Embedded Worker</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">EmbeddedConfig::LogRateLimit(N)</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">config.LogRateLimit(1000)</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">config.LogRateLimit(20)</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>Standalone Client</p></td>
 <td><p>环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_RATE_LIMIT</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">DATASYSTEM_LOG_RATE_LIMIT=500</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">DATASYSTEM_LOG_RATE_LIMIT=20</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>运行时动态修改</p></td>
 <td><p>修改 <code class="docutils literal notranslate"><span class="pre">datasystem.config</span></code> 中 <code class="docutils literal notranslate"><span class="pre">log_rate_limit</span></code> 值</p></td>

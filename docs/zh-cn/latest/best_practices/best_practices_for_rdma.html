@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -946,6 +949,112 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 更多 dscli绑定numa节点 部署详细信息请参考：<a class="reference internal" href="../deployment/dscli.html#id13"><span class="std std-ref">dscli命令参数说明</span></a>。</p>
 </section>
 </section>
+<section id="id9">
+<h2>常见问题<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
+<ol class="arabic">
+<li><p><strong>如何验证节点是否具备 RDMA 网卡？</strong></p>
+<p>部署 RDMA 功能前，需确认节点已配备 RDMA 网卡硬件及相应驱动。可通过以下命令进行验证：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 检查 RDMA 设备列表</span>
+ibv_devices
+
+<span class="c1"># 使用 lspci 检查 InfiniBand/RDMA 网卡硬件</span>
+lspci<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span><span class="s2">&quot;infiniband\|rdma\|mellanox\|connectx&quot;</span>
+
+<span class="c1"># 检查 RDMA 相关内核模块是否加载</span>
+lsmod<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;ib_core|mlx4_core|mlx5_core|rdma&quot;</span>
+</pre></div>
+</div>
+<p>若 <code class="docutils literal notranslate"><span class="pre">ibv_devices</span></code> 输出显示设备列表（如 <code class="docutils literal notranslate"><span class="pre">mlx5_0</span></code>），说明 RDMA 网卡已正确识别。若无输出或报错，请检查：</p>
+<ul class="simple">
+<li><p>RDMA 网卡是否正确安装</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">rdma-core</span></code> 软件包是否已安装</p></li>
+<li><p>RDMA 内核模块是否已加载</p></li>
+</ul>
+</li>
+<li><p><strong>容器环境运行 RDMA 有哪些特殊要求？</strong></p>
+<p>在容器环境（如 Kubernetes）中运行 RDMA，需满足以下条件：</p>
+<ul class="simple">
+<li><p><strong>memlock 资源限制</strong>：必须设置为 <code class="docutils literal notranslate"><span class="pre">unlimited</span></code>，否则 RDMA 内存注册将失败。配置方法详见<a class="reference internal" href="#id5">部署指南</a>章节中的容器内 memlock 资源限制配置。</p></li>
+<li><p><strong>设备挂载</strong>：容器需挂载 RDMA 相关设备目录：</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">/dev/infiniband</span></code>：RDMA 设备文件</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">/sys/class/infiniband</span></code>：RDMA 设备属性信息</p></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><p><strong>如何测试 RDMA 网络连通性？</strong></p>
+<p>可使用 <code class="docutils literal notranslate"><span class="pre">ib_write_bw</span></code> 工具测试两节点之间的 RDMA 写带宽，验证 RDMA 网络连通性。首先需安装 <code class="docutils literal notranslate"><span class="pre">perftest</span></code> 工具包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 安装 perftest 工具（以 openEuler 为例）</span>
+yum<span class="w"> </span>install<span class="w"> </span>perftest
+</pre></div>
+</div>
+<p>在服务端节点执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 启动 ib_write_bw 服务端，-d 指定设备名，-R 表示使用 RDMA 写</span>
+ib_write_bw<span class="w"> </span>-d<span class="w"> </span>mlx5_0<span class="w"> </span>-R
+</pre></div>
+</div>
+<p>在客户端节点执行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 连接服务端进行带宽测试</span>
+ib_write_bw<span class="w"> </span>-d<span class="w"> </span>mlx5_0<span class="w"> </span>-R<span class="w"> </span>&lt;server_ip&gt;
+</pre></div>
+</div>
+<p>参数说明：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">-d</span> <span class="pre">mlx5_0</span></code>：RDMA 设备名称（可通过 <code class="docutils literal notranslate"><span class="pre">ibv_devices</span></code> 查看）</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-R</span></code>：使用 RDMA 写操作</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">&lt;server_ip&gt;</span></code>：服务端节点的 IP 地址</p></li>
+</ul>
+<p>正常输出示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w"> </span><span class="c1">#bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]</span>
+<span class="w"> </span><span class="m">65536</span><span class="w">      </span><span class="m">5000</span><span class="w">            </span><span class="m">9993</span>.41<span class="w">            </span><span class="m">5032</span>.27<span class="w">              </span><span class="m">0</span>.080516
+</pre></div>
+</div>
+<p>若测试失败，请检查 RDMA 网卡配置、网络链路连通性及防火墙设置。</p>
+</li>
+<li><p><strong>UCX_TLS=rc_x 环境变量的含义是什么？</strong></p>
+<p><code class="docutils literal notranslate"><span class="pre">UCX_TLS=rc_x</span></code> 是 UCX 传输层选择的环境变量配置，指定使用 <strong>RDMA RC (Reliable Connection) 传输模式</strong>。</p>
+<p><strong>关键特性</strong>：</p>
+<ul class="simple">
+<li><p><strong>纯 RDMA 模式</strong>：设置 <code class="docutils literal notranslate"><span class="pre">UCX_TLS=rc_x</span></code> 后，UCX 将<strong>仅使用 RDMA RC 传输，不会回退到 TCP</strong>。</p></li>
+<li><p><strong>严格验证</strong>：若 RDMA 不可用或通信失败，系统将直接报错而非降级使用 TCP。</p></li>
+<li><p><strong>成功即 RDMA</strong>：若应用在此模式下成功运行，则必然使用 RDMA 传输，可<strong>确认 RDMA 功能正常工作</strong>。</p></li>
+</ul>
+<p>这意味着：<strong>开启 <code class="docutils literal notranslate"><span class="pre">UCX_TLS=rc_x</span></code> 后能跑通，必定是使用 RDMA；若不能跑通，说明 RDMA 环境配置有问题</strong>。</p>
+<p><strong>替代传输模式</strong>：</p>
+<p>若当前网卡或驱动不支持 <code class="docutils literal notranslate"><span class="pre">rc_x</span></code>，可尝试以下替代选项（详见<a class="reference internal" href="#id5">部署指南</a>）：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>模式</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">rc</span></code></p></td>
+<td><p>可靠连接模式，兼容性较好</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ud</span></code></p></td>
+<td><p>不可靠数据报模式，适用于低延迟、小消息场景</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">dc</span></code></p></td>
+<td><p>动态连接模式，适用于大规模节点通信（需 Mellanox 网卡支持）</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>验证 RDMA 是否生效</strong>：</p>
+<p>可通过 UCX 日志确认 RDMA 传输是否生效：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">UCX_LOG_FILE</span><span class="o">=</span>/tmp/ucx.log
+<span class="nb">export</span><span class="w"> </span><span class="nv">UCX_LOG_LEVEL</span><span class="o">=</span>INFO
+<span class="c1"># 启动 worker 后检查日志</span>
+grep<span class="w"> </span>-i<span class="w"> </span><span class="s2">&quot;rc\|rdma&quot;</span><span class="w"> </span>/tmp/ucx.log
+</pre></div>
+</div>
+<p>若日志中出现 RC 相关传输信息，说明 RDMA 已正确启用。</p>
+</li>
+</ol>
+</section>
 </section>
 
         </article>
@@ -1017,6 +1126,7 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 <li><a class="reference internal" href="#numa">绑定NUMA节点</a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#id9">常见问题</a></li>
 </ul>
 </li>
 </ul>
