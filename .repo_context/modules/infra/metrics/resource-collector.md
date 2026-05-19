@@ -11,7 +11,7 @@
   - `src/datasystem/common/metrics/res_metric_collector.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-05-12`
 - Related design docs:
   - `.repo_context/modules/infra/metrics/design.md`
   - `.repo_context/modules/infra/metrics/metric-families-and-registration.md`
@@ -44,6 +44,7 @@
   - `ResMetricCollector` is a singleton periodic collector.
   - collector interval defaults to `FLAGS_log_monitor_interval_ms`.
   - collector only initializes exporter infrastructure when `FLAGS_log_monitor` is true.
+  - after startup, each collection loop re-checks runtime `FLAGS_log_monitor` before polling handlers or writing `resource.log`.
   - current supported exporter selection is `"harddisk"` via `FLAGS_log_monitor_exporter`.
   - `CollectMetrics()` iterates metric IDs from `ResMetricName::SHARED_MEMORY` up to `RES_METRICS_END - 1`.
   - if a metric has no registered handler, an empty field is emitted and a warning is logged once.
@@ -65,7 +66,7 @@
   - `log_monitor_exporter`
   - exporter initialization success
 - Runtime behavior:
-  - registered handlers are polled periodically
+  - registered handlers are polled periodically only while `log_monitor=true`
   - returned strings are assembled into exporter output
   - missing handlers do not fail hard
 
@@ -101,7 +102,7 @@
 - Partial blank columns with only one warning:
   - likely missing `RegisterCollectHandler` coverage for one or more enum IDs
 - Metrics stop after startup:
-  - inspect collector thread lifecycle and exporter initialization path
+  - inspect collector thread lifecycle, exporter initialization path, and runtime `log_monitor`
 
 ## Bugfix And Review Notes
 

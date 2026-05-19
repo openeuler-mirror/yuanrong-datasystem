@@ -19,7 +19,9 @@
  */
 #include "ut/common.h"
 
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -28,11 +30,17 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
+#include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uri.h"
 
+DS_DECLARE_bool(log_monitor);
 DS_DECLARE_string(log_dir);
+DS_DECLARE_string(log_monitor_exporter);
+DS_DECLARE_int32(minloglevel);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
 
@@ -119,6 +127,25 @@ public:
         buffer << ifs.rdbuf();
         return buffer.str().find(content) != std::string::npos;
     }
+
+    uint64_t CountPatternInFile(const std::string &filePath, const std::string &pattern)
+    {
+        std::ifstream ifs(filePath);
+        if (!ifs.is_open()) {
+            return 0;
+        }
+
+        uint64_t count = 0;
+        std::string line;
+        while (std::getline(ifs, line)) {
+            size_t pos = 0;
+            while ((pos = line.find(pattern, pos)) != std::string::npos) {
+                ++count;
+                pos += pattern.size();
+            }
+        }
+        return count;
+    }
 };
 
 TEST_F(HardDiskExporterTest, TestPodIpPriority)
@@ -166,6 +193,65 @@ TEST_F(HardDiskExporterTest, TestMaxLogFileNumLimit)
     ASSERT_TRUE(Retry([this, &filePath]() -> bool { return CountRotatedFiles(filePath) == FLAGS_max_log_file_num; },
                       retryTimes,
                       std::chrono::milliseconds(100)));  // 100 ms
+}
+
+TEST_F(HardDiskExporterTest, ResourceCollectorIgnoresMinLogLevelAndRespectsLogMonitor)
+{
+    auto oldLogMonitor = FLAGS_log_monitor;
+    auto oldLogMonitorExporter = FLAGS_log_monitor_exporter;
+    auto oldLogMonitorInterval = FLAGS_log_monitor_interval_ms;
+    auto oldMinLogLevel = FLAGS_minloglevel;
+    Raii restoreFlags([&] {
+        FLAGS_log_monitor = oldLogMonitor;
+        FLAGS_log_monitor_exporter = oldLogMonitorExporter;
+        FLAGS_log_monitor_interval_ms = oldLogMonitorInterval;
+        FLAGS_minloglevel = oldMinLogLevel;
+    });
+
+    FLAGS_log_monitor = true;
+    FLAGS_log_monitor_exporter = "harddisk";
+    FLAGS_log_monitor_interval_ms = 100;
+    FLAGS_minloglevel = 0;
+
+    const std::string filePath = FLAGS_log_dir + "/" + RESOURCE_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
+
+    std::atomic<uint64_t> seq{ 0 };
+    ResMetricCollector collector;
+    DS_ASSERT_OK(collector.Init());
+    collector.RegisterCollectHandler(ResMetricName::SHARED_MEMORY, [&seq] {
+        return "resource_marker_" + std::to_string(++seq);
+    });
+    collector.Start();
+
+    const std::string marker = "resource_marker_";
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([this, &filePath, &marker]() { return CountPatternInFile(filePath, marker) > 0; }, retryTimes,
+                      std::chrono::milliseconds(100)));
+
+    FLAGS_minloglevel = 3;
+    auto minLogLevelSeq = seq.load();
+    auto minLogLevelCount = CountPatternInFile(filePath, marker);
+    ASSERT_TRUE(Retry([&seq, minLogLevelSeq]() { return seq.load() > minLogLevelSeq; }, retryTimes,
+                      std::chrono::milliseconds(100)));
+    ASSERT_TRUE(Retry([this, &filePath, &marker, minLogLevelCount]() {
+        return CountPatternInFile(filePath, marker) > minLogLevelCount;
+    }, retryTimes, std::chrono::milliseconds(100)));
+
+    FLAGS_log_monitor = false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    auto disabledSeq = seq.load();
+    auto disabledCount = CountPatternInFile(filePath, marker);
+    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    EXPECT_EQ(seq.load(), disabledSeq);
+    EXPECT_EQ(CountPatternInFile(filePath, marker), disabledCount);
+
+    FLAGS_log_monitor = true;
+    ASSERT_TRUE(Retry([&seq, disabledSeq]() { return seq.load() > disabledSeq; }, retryTimes,
+                      std::chrono::milliseconds(100)));
+    ASSERT_TRUE(Retry([this, &filePath, &marker, disabledCount]() {
+        return CountPatternInFile(filePath, marker) > disabledCount;
+    }, retryTimes, std::chrono::milliseconds(100)));
 }
 }  // namespace ut
 }  // namespace datasystem

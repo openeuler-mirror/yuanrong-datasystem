@@ -135,7 +135,7 @@
   - worker object-cache batch remote get now exposes `worker_inflight_remote_get_request` as a typed `Gauge` around the outbound `BatchGetObjectRemote` logical retry flow.
   - request-path latency for `set/get` style APIs is mostly surfaced through the logging/access-recorder path rather than through typed metrics families.
 - Relevant constraints from current release or deployment:
-  - collector startup is gated by `log_monitor` and exporter initialization;
+  - collector startup is gated by `log_monitor` and exporter initialization, and each resource-write loop re-checks runtime `log_monitor`;
   - `HardDiskExporter` is shared with logging-side access records, so exporter changes are cross-cutting;
   - family ordering in `res_metrics.def` is explicitly marked as order-sensitive.
 - Similar upstream, industry, or historical approaches considered:
