@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <memory>
 
 #include "datasystem/transfer_engine/status_helper.h"
 #include "internal/log/logging.h"
@@ -67,20 +68,63 @@ bool WriteExact(int fd, const uint8_t *buf, size_t n)
     return true;
 }
 
-Result BuildBindAddr(const std::string &host, uint16_t port, sockaddr_in *addr)
-{
-    TE_CHECK_PTR_OR_RETURN(addr);
-    std::memset(addr, 0, sizeof(*addr));
-    addr->sin_family = AF_INET;
-    addr->sin_port = htons(port);
+struct AddrInfoDeleter {
+    void operator()(addrinfo *info) const
+    {
+        if (info != nullptr) {
+            freeaddrinfo(info);
+        }
+    }
+};
 
-    if (host == "0.0.0.0" || host == "*" || host.empty()) {
-        addr->sin_addr.s_addr = htonl(INADDR_ANY);
-        return Result::OK();
+using AddrInfoPtr = std::unique_ptr<addrinfo, AddrInfoDeleter>;
+
+Result ResolveTcpAddr(const std::string &host, uint16_t port, int flags, AddrInfoPtr *out)
+{
+    TE_CHECK_PTR_OR_RETURN(out);
+    struct addrinfo hints;
+    std::memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = flags;
+
+    const std::string portStr = std::to_string(port);
+    struct addrinfo *result = nullptr;
+    const char *node = host.empty() ? nullptr : host.c_str();
+    const int gaiRc = getaddrinfo(node, portStr.c_str(), &hints, &result);
+    if (gaiRc != 0) {
+        TE_LOG_WARNING << "getaddrinfo failed"
+                       << ", host=" << host << ", port=" << port << ", gai_rc=" << gaiRc
+                       << ", reason=" << gai_strerror(gaiRc);
+        return TE_MAKE_STATUS(ErrorCode::kInvalid, std::string("resolve tcp address failed: ") + gai_strerror(gaiRc));
     }
-    if (::inet_pton(AF_INET, host.c_str(), &addr->sin_addr) != 1) {
-        return TE_MAKE_STATUS(ErrorCode::kInvalid, "host should be a valid IPv4 address");
+
+    out->reset(result);
+    return Result::OK();
+}
+
+std::string NormalizeBindHost(const std::string &host)
+{
+    if (host.empty() || host == "*") {
+        return "";
     }
+    return host;
+}
+
+void SetCommonSocketOptions(int fd, int family)
+{
+    int opt = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (family == AF_INET6) {
+        (void)setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &opt, sizeof(opt));
+    }
+}
+
+Result CreateSocketFromAddr(const addrinfo &addr, int &fd)
+{
+    fd = ::socket(addr.ai_family, addr.ai_socktype, addr.ai_protocol);
+    TE_CHECK_OR_RETURN(fd >= 0, ErrorCode::kRuntimeError, "create socket failed");
+    SetCommonSocketOptions(fd, addr.ai_family);
     return Result::OK();
 }
 
@@ -124,35 +168,22 @@ Result ConnectTo(const std::string &host, uint16_t port, int *fd)
     TE_CHECK_PTR_OR_RETURN(fd);
     *fd = -1;
 
-    struct addrinfo hints;
-    std::memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-
-    struct addrinfo *result = nullptr;
-    const std::string portStr = std::to_string(port);
-    const int gaiRc = getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result);
-    if (gaiRc != 0) {
-        TE_LOG_WARNING << "getaddrinfo failed"
-                     << ", host=" << host << ", port=" << port << ", gai_rc=" << gaiRc;
-        return TE_MAKE_STATUS(ErrorCode::kRuntimeError, std::string("getaddrinfo failed: ") + gai_strerror(gaiRc));
-    }
+    AddrInfoPtr result;
+    TE_RETURN_IF_ERROR(ResolveTcpAddr(host, port, 0, &result));
 
     int sock = -1;
-    for (auto *it = result; it != nullptr; it = it->ai_next) {
-        sock = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
-        if (sock < 0) {
+    for (auto *it = result.get(); it != nullptr; it = it->ai_next) {
+        Result socketRc = CreateSocketFromAddr(*it, sock);
+        if (socketRc.IsError()) {
             continue;
         }
         if (::connect(sock, it->ai_addr, it->ai_addrlen) == 0) {
             *fd = sock;
-            freeaddrinfo(result);
             return Result::OK();
         }
         ::close(sock);
         sock = -1;
     }
-    freeaddrinfo(result);
     TE_LOG_WARNING << "connect failed, host=" << host << ", port=" << port;
     return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "connect failed");
 }
@@ -177,30 +208,35 @@ Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, i
     listenFd = -1;
     TE_CHECK_OR_RETURN(backlog > 0, ErrorCode::kInvalid, "backlog should be positive");
 
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    TE_CHECK_OR_RETURN(fd >= 0, ErrorCode::kRuntimeError, "create socket failed");
+    const std::string bindHost = NormalizeBindHost(host);
+    AddrInfoPtr result;
+    TE_RETURN_IF_ERROR(ResolveTcpAddr(bindHost, port, AI_PASSIVE, &result));
 
-    int opt = 1;
-    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    int lastErrno = 0;
+    for (auto *it = result.get(); it != nullptr; it = it->ai_next) {
+        int fd = -1;
+        Result socketRc = CreateSocketFromAddr(*it, fd);
+        if (socketRc.IsError()) {
+            lastErrno = errno;
+            continue;
+        }
+        if (::bind(fd, it->ai_addr, it->ai_addrlen) != 0) {
+            lastErrno = errno;
+            LogListenSocketFailure(failureLogLevel, "bind", bindHost, port, lastErrno);
+            ::close(fd);
+            continue;
+        }
+        if (::listen(fd, backlog) != 0) {
+            lastErrno = errno;
+            LogListenSocketFailure(failureLogLevel, "listen", bindHost, port, lastErrno);
+            ::close(fd);
+            continue;
+        }
+        listenFd = fd;
+        return Result::OK();
+    }
 
-    sockaddr_in addr;
-    Result addrRc = BuildBindAddr(host, port, &addr);
-    if (addrRc.IsError()) {
-        ::close(fd);
-        return addrRc;
-    }
-    if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-        LogListenSocketFailure(failureLogLevel, "bind", host, port, errno);
-        ::close(fd);
-        return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "bind failed");
-    }
-    if (::listen(fd, backlog) != 0) {
-        LogListenSocketFailure(failureLogLevel, "listen", host, port, errno);
-        ::close(fd);
-        return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "listen failed");
-    }
-    listenFd = fd;
-    return Result::OK();
+    return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "listen failed");
 }
 
 Result SetSocketTimeoutSec(int fd, int timeoutSec)
@@ -252,8 +288,8 @@ Result RecvFrame(int fd, RpcMethod *method, std::vector<uint8_t> *payload)
     return Result::OK();
 }
 
-Result InvokeRpc(const std::string &host, uint16_t port, RpcMethod expectedMethod, const std::vector<uint8_t> &reqPayload,
-                 std::vector<uint8_t> *rspPayload)
+Result InvokeRpc(const std::string &host, uint16_t port, RpcMethod expectedMethod,
+                 const std::vector<uint8_t> &reqPayload, std::vector<uint8_t> *rspPayload)
 {
     TE_CHECK_PTR_OR_RETURN(rspPayload);
     int fd = -1;

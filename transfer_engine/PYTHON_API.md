@@ -126,6 +126,7 @@ Notes:
 - `device_name` is parsed internally and its numeric suffix is stored as the engine `device_id`
 - malformed `device_name` returns `ErrorCode.kInvalid`
 - Python does not expose `rpc_threads`; the engine uses a fixed internal value
+- IPv6 endpoints must use bracketed host syntax, for example `"[::1]:60551"` or `"[fd00::1]:60551"`.
 
 ### Engine Information
 
@@ -482,5 +483,9 @@ Typical failure cases:
 - HIXL `auto` route selection and the settings for deterministic HCCS or RoCE behavior are documented in
   [Backend and HIXL Route Selection](README.md#backend-and-hixl-route-selection).
 - `device_name` must use the `npu:${device_id}` format.
+- `P2P_IF_IP` and `HCCL_IF_IP` may be IPv4 or IPv6 addresses.
+- `P2P_ADDR_FAMILY=auto|ipv4|ipv6` controls host-side P2P TCP bootstrap address selection.
+- `P2P_ROCE_ADDR_FAMILY=auto|ipv4|ipv6` controls RoCE/RDMA NPU IP address selection.
+- The default `auto` mode keeps IPv4 preferred for compatibility and falls back to IPv6 when no IPv4 address is available.
 - The loader in `yr.datasystem` preloads several runtime shared libraries when available.
 - The transfer_engine wheel is no longer published separately, and the installed Python import path remains `yr.datasystem`.

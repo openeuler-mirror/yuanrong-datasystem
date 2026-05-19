@@ -2,12 +2,18 @@ syntax = "proto3";
 
 message SenderData {
   uint32 sendNpuIpv4 = 1;
+  // Additive proto3 fields: legacy peers omit these and receivers fall back to sendNpuIpv4.
+  int32 sendNpuIpFamily = 2;
+  bytes sendNpuIp = 3;
 };
 
 message ReceiverData {
   uint32 recvNpuIpv4 = 1;
   uint32 recvListenPort = 2;
   string tag = 3;
+  // Additive proto3 fields: legacy peers omit these and receivers fall back to recvNpuIpv4.
+  int32 recvNpuIpFamily = 4;
+  bytes recvNpuIp = 5;
 };
 
 message ReceiverNpuResources {

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "communicator/roce/RoceReceiver.h"
+#include <cstring>
 #include <string>
 #include "tools/npu-error.h"
 #include "tools/tools.h"
@@ -21,6 +22,56 @@
 #include "runtime/dev.h"
 #include "tools/env.h"
 #include "tools/logging.h"
+
+namespace {
+
+std::string EncodeIpBytes(const P2PIpAddress &ipAddr)
+{
+    if (ipAddr.family == AF_INET6) {
+        return std::string(reinterpret_cast<const char *>(&ipAddr.addr.addr6), sizeof(ipAddr.addr.addr6));
+    }
+    return std::string(reinterpret_cast<const char *>(&ipAddr.addr.addr), sizeof(ipAddr.addr.addr));
+}
+
+std::string IpAddressToString(const P2PIpAddress &ipAddr)
+{
+    char buffer[INET6_ADDRSTRLEN] = { 0 };
+    const void *address = ipAddr.family == AF_INET6 ? static_cast<const void *>(&ipAddr.addr.addr6)
+                                                    : static_cast<const void *>(&ipAddr.addr.addr);
+    const char *result = inet_ntop(ipAddr.family, address, buffer, sizeof(buffer));
+    return result == nullptr ? "<invalid>" : std::string(result);
+}
+
+Status DecodeIpAddress(int family, const std::string &bytes, uint32_t fallbackIpv4, P2PIpAddress &ipAddr)
+{
+    if (family == AF_INET && bytes.size() == sizeof(ipAddr.addr.addr)) {
+        ipAddr.family = AF_INET;
+        std::memcpy(&ipAddr.addr.addr, bytes.data(), sizeof(ipAddr.addr.addr));
+        return Status::Success();
+    }
+    if (family == AF_INET6 && bytes.size() == sizeof(ipAddr.addr.addr6)) {
+        ipAddr.family = AF_INET6;
+        std::memcpy(&ipAddr.addr.addr6, bytes.data(), sizeof(ipAddr.addr.addr6));
+        return Status::Success();
+    }
+    if (fallbackIpv4 != 0) {
+        ipAddr.family = AF_INET;
+        uint32_to_in_addr(fallbackIpv4, ipAddr.addr.addr);
+        return Status::Success();
+    }
+    return Status::Error(ErrorCode::INVALID_INPUT, "Invalid remote NPU IP address");
+}
+
+void SetReceiverIp(ReceiverData &receiverData, const P2PIpAddress &ipAddr)
+{
+    receiverData.set_recvnpuipfamily(ipAddr.family);
+    receiverData.set_recvnpuip(EncodeIpBytes(ipAddr));
+    if (ipAddr.family == AF_INET) {
+        receiverData.set_recvnpuipv4(in_addr_to_uint32(ipAddr.addr.addr));
+    }
+}
+
+}  // namespace
 
 RoceReceiver::RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
                            uint32_t nRecvBuffs, uint32_t qpNum)
@@ -68,13 +119,13 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     }
 
     CHECK_STATUS(RdmaDev::GetInstance(phyId, rdmaDev));
-    union hccp_ip_addr ipv4Addr;
-    CHECK_STATUS(rdmaDev->getIpv4(&ipv4Addr));
+    P2PIpAddress localIp;
+    CHECK_STATUS(rdmaDev->getIp(&localIp));
     p2p::LogInfo(std::string("RoceReceiver::Initialize NPU network ready, recv_device_id=") +
                  std::to_string(recvDeviceId) + ", phy_id=" + std::to_string(phyId) +
-                 ", local_npu_ip=" + in_addr_to_string(ipv4Addr.addr));
+                 ", local_npu_ip=" + IpAddressToString(localIp));
 
-    rdmaSocket = std::make_unique<RdmaSocket>(phyId, ipv4Addr, SERVER);
+    rdmaSocket = std::make_unique<RdmaSocket>(phyId, localIp, SERVER);
     CHECK_STATUS(rdmaSocket->init());
     CHECK_STATUS(rdmaSocket->listenFirstAvailable(listenPortRangeStart, listenPortRangeEnd));
     SenderData senderData;
@@ -84,7 +135,8 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
         CHECK_STATUS(client->ReceiveObject(senderData));
     }
 
-    uint32_to_in_addr(senderData.sendnpuipv4(), remoteIp.addr);
+    CHECK_STATUS(DecodeIpAddress(senderData.sendnpuipfamily(), senderData.sendnpuip(), senderData.sendnpuipv4(),
+                                 remoteIp));
 
     CHECK_STATUS(rdmaSocket->addWhitelist(remoteIp, tag));
 
@@ -92,7 +144,7 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     CHECK_STATUS(rdmaSocket->getListenPort(listenPort));
 
     ReceiverData receiverData;
-    receiverData.set_recvnpuipv4(in_addr_to_uint32(ipv4Addr.addr));
+    SetReceiverIp(receiverData, localIp);
     receiverData.set_recvlistenport(listenPort);
     receiverData.set_tag(tag);
 
@@ -103,8 +155,8 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     }
 
     p2p::LogInfo(std::string("RoceReceiver::Initialize wait RoCE socket, local_npu_ip=") +
-                 in_addr_to_string(ipv4Addr.addr) + ", listen_port=" + std::to_string(listenPort) +
-                 ", remote_npu_ip=" + in_addr_to_string(remoteIp.addr) + ", timeout_disabled=true");
+                 IpAddressToString(localIp) + ", listen_port=" + std::to_string(listenPort) +
+                 ", remote_npu_ip=" + IpAddressToString(remoteIp) + ", timeout_disabled=true");
     CHECK_STATUS(rdmaSocket->waitReady(0));
     p2p::LogInfo("RoceReceiver::Initialize RoCE socket connected");
 

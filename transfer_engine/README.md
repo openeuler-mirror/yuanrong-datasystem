@@ -131,6 +131,26 @@ requester.finalize()
 owner.finalize()
 ```
 
+### IPv6 and address selection
+
+TransferEngine accepts IPv6 endpoints in bracketed form, for example `"[::1]:60551"` or `"[fd00::1]:60551"`.
+
+The P2P host control path selects local addresses in this order:
+
+1. `P2P_IF_IP`
+2. `P2P_SOCKET_IFNAME`
+3. `HCCL_IF_IP`
+4. `HCCL_SOCKET_IFNAME`
+5. detected external, container, then loopback interfaces
+
+`P2P_IF_IP` and `HCCL_IF_IP` may be IPv4 or IPv6 addresses. Address family preference can be controlled with:
+
+- `P2P_ADDR_FAMILY=auto|ipv4|ipv6`: host-side P2P TCP bootstrap address selection.
+- `P2P_ROCE_ADDR_FAMILY=auto|ipv4|ipv6`: RoCE/RDMA NPU IP address selection.
+
+The default `auto` mode keeps IPv4 preferred for compatibility and falls back to IPv6 when no IPv4 address is available.
+Set the value to `ipv6` when the deployment must use IPv6 addresses.
+
 ## 5. Cross-node Smoke Example (owner/requester)
 
 Smoke script:

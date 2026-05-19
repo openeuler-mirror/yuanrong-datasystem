@@ -14,6 +14,8 @@ constexpr const char *IF_IP_ENV = "P2P_IF_IP";
 constexpr const char *IF_NAME_ENV = "P2P_SOCKET_IFNAME";
 constexpr const char *IF_IP_ENV_HCCL = "HCCL_IF_IP";
 constexpr const char *IF_NAME_ENV_HCCL = "HCCL_SOCKET_IFNAME";
+constexpr const char *ADDR_FAMILY_ENV = "P2P_ADDR_FAMILY";
+constexpr const char *ROCE_ADDR_FAMILY_ENV = "P2P_ROCE_ADDR_FAMILY";
 
 // The port range on the given interface(s) used by P2P for communicator information exchange
 constexpr const char *PORT_RANGE_ENV = "P2P_PORT_RANGE";

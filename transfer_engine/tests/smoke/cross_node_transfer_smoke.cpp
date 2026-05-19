@@ -199,6 +199,14 @@ bool CheckedMul(uint64_t left, uint64_t right, uint64_t *out)
     return true;
 }
 
+std::string FormatHostPort(const std::string &host, uint16_t port)
+{
+    if (host.find(':') != std::string::npos && (host.empty() || host.front() != '[')) {
+        return "[" + host + "]:" + std::to_string(port);
+    }
+    return host + ":" + std::to_string(port);
+}
+
 bool ParseArgs(int argc, char **argv, Options *opt, std::string *err)
 {
     if (opt == nullptr || err == nullptr) {
@@ -513,7 +521,7 @@ Result RunOwner(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "p2p",
+    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "p2p",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;
@@ -639,7 +647,7 @@ Result RunRequester(const Options &opt)
     }
 
     TransferEngine engine;
-    rc = engine.Initialize(opt.localIp + ":" + std::to_string(opt.localPort), "p2p",
+    rc = engine.Initialize(FormatHostPort(opt.localIp, opt.localPort), "p2p",
                            "npu:" + std::to_string(opt.deviceId));
     if (rc.IsError()) {
         return rc;
@@ -722,7 +730,7 @@ Result RunRequester(const Options &opt)
         return Result(ErrorCode::kInvalid, "perf sample byte size overflow");
     }
 
-    const std::string targetHostname = opt.peerIp + ":" + std::to_string(opt.peerPort);
+    const std::string targetHostname = FormatHostPort(opt.peerIp, opt.peerPort);
     const uint32_t totalSamples = opt.perfWarmup + opt.perfRepeats;
     for (uint32_t sample = 0; sample < totalSamples; ++sample) {
         const auto start = std::chrono::steady_clock::now();

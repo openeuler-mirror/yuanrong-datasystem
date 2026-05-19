@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "communicator/P2PCommunicator.h"
+#include <arpa/inet.h>
 #include "securec.h"
 #include "communicator/hccs-ipc/HccsReceiver.h"
 #include "communicator/hccs-ipc/HccsSender.h"
@@ -21,6 +22,29 @@
 #include "communicator/roce/RoceSender.h"
 #include "tools/host-interface.h"
 #include "tools/logging.h"
+
+namespace {
+
+int NormalizeRootIpFamily(const char *ip, int32_t family)
+{
+    if (family == AF_INET || family == AF_INET6) {
+        return family;
+    }
+
+    struct in_addr ipv4Addr {};
+    if (inet_pton(AF_INET, ip, &ipv4Addr) == 1) {
+        return AF_INET;
+    }
+
+    struct in6_addr ipv6Addr {};
+    if (inet_pton(AF_INET6, ip, &ipv6Addr) == 1) {
+        return AF_INET6;
+    }
+
+    return AF_INET;
+}
+
+}  // namespace
 
 Status p2pKindToCommRole(P2pKind kind, P2PCommRole &role)
 {
@@ -60,13 +84,16 @@ Status P2PCommunicator::StartRoot()
 
 Status P2PCommunicator::StartClient(P2PRootHandle &rootHandle)
 {
+    int rootFamily = NormalizeRootIpFamily(rootHandle.ip, rootHandle.ipFamily);
     p2p::LogInfo(std::string("P2PCommunicator::StartClient begin, root_ip=") + rootHandle.ip +
-                 ", root_port=" + std::to_string(rootHandle.listenPort));
+                 ", root_port=" + std::to_string(rootHandle.listenPort) + ", root_family=" +
+                 std::to_string(rootFamily));
     if (isRoot) {
         return Status::Error(ErrorCode::NOT_SUPPORTED, "Communicator not of type client");
     }
 
     std::string ip = rootHandle.ip;
+    serverIpFamily = rootFamily;
     identifier = std::string(&rootHandle.identifier[0], ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
 
     CHECK_STATUS(CreateClient(ip, rootHandle.listenPort));
@@ -81,9 +108,16 @@ Status P2PCommunicator::GetRootHandle(P2PRootHandle &rootHandle)
     }
 
     std::string ip = server->GetIp();
-    memcpy_s(rootHandle.ip, ip.length(), ip.data(), ip.length());
+    if (ip.length() >= ROOTHANDLE_IP_ADDRESS_BUFFER_LEN) {
+        return Status::Error(ErrorCode::INVALID_INPUT, "Root handle IP address is too long");
+    }
+    errno_t err = memcpy_s(rootHandle.ip, ROOTHANDLE_IP_ADDRESS_BUFFER_LEN, ip.data(), ip.length());
+    if (err != EOK) {
+        return Status::Error(ErrorCode::INTERNAL_ERROR, "Failed to copy root handle IP address");
+    }
     rootHandle.ip[ip.length()] = '\0';
     rootHandle.listenPort = server->GetPort();
+    rootHandle.ipFamily = serverIpFamily;
     memcpy_s(rootHandle.identifier, ROOTHANDLE_INDENTIFIER_MAX_LENGTH, identifier.data(),
              ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
 
@@ -212,8 +246,10 @@ Status P2PCommunicator::CreateServer()
                  std::to_string(endPort));
 
     std::string ip;
-    CHECK_STATUS(GetHostIp(ip));
+    int family = 0;
+    CHECK_STATUS(GetHostIp(ip, family));
     serverIp = ip;
+    serverIpFamily = family;
     server = std::make_unique<TCPObjectServer>(ip, COMMUNICATOR_TCP_TIMEOUT_S);
 
     Status status = server->ListenFirstAvailable(startPort, endPort);
@@ -221,8 +257,9 @@ Status P2PCommunicator::CreateServer()
         server.reset();
         return status;
     }
+    serverIpFamily = server->GetIpFamily();
     p2p::LogInfo(std::string("P2PCommunicator::CreateServer listen success, ip=") + ip + ", port=" +
-                 std::to_string(server->GetPort()));
+                 std::to_string(server->GetPort()) + ", family=" + std::to_string(serverIpFamily));
 
     return Status::Success();
 }
@@ -286,7 +323,8 @@ Status P2PCommunicator::ConnectServer()
     authData.set_identifier(identifier);
 
     std::string clientIp;
-    Status hostIpStatus = GetHostIp(clientIp);
+    int family = 0;
+    Status hostIpStatus = GetHostIp(clientIp, family);
     if (!hostIpStatus.IsSuccess()) {
         authData.set_client_ip("");
     } else {

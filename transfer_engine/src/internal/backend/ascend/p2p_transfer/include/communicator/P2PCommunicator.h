@@ -39,6 +39,7 @@ struct P2PRootHandle {
     char ip[ROOTHANDLE_IP_ADDRESS_BUFFER_LEN];
     uint16_t listenPort;
     char identifier[ROOTHANDLE_INDENTIFIER_MAX_LENGTH];
+    int32_t ipFamily;
 };
 
 class P2PCommunicator {
@@ -71,6 +72,7 @@ private:
     std::string identifier;
     std::string clientIp;
     std::string serverIp;
+    int32_t serverIpFamily = 0;
 
     std::unique_ptr<TCPObjectClient> client;
     std::unique_ptr<TCPObjectServer> server;

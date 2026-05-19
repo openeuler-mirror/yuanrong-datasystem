@@ -13,6 +13,7 @@
 #include <chrono>
 #include <vector>
 #include "external/ra.h"
+#include "npu/RdmaAgent.h"
 
 enum RdmaSocketStatus {
     SOCKET_INITIALIZED = 0,
@@ -25,6 +26,14 @@ enum RdmaSocketStatus {
 
 class RdmaSocket {
 public:
+    RdmaSocket(uint32_t phyId, P2PIpAddress localIp, enum socket_role socketRole)
+        : status(RdmaSocketStatus::SOCKET_UNINITIALIZED), phyId(phyId), socketRole(socketRole)
+    {
+        roceDevInfo.phy_id = phyId;
+        roceDevInfo.family = localIp.family;
+        roceDevInfo.local_ip = localIp.addr;
+    }
+
     RdmaSocket(uint32_t phyId, union hccp_ip_addr ipv4Addr, enum socket_role socketRole)
         : status(RdmaSocketStatus::SOCKET_UNINITIALIZED), phyId(phyId), socketRole(socketRole)
     {
@@ -41,10 +50,12 @@ public:
     Status init();
     Status listenFirstAvailable(unsigned int startPort, unsigned int endPort);
     Status getListenPort(unsigned int &listenport);
+    Status connect(P2PIpAddress remoteIp, unsigned int remotePort, std::string tag);
     Status connect(union hccp_ip_addr remoteIp, unsigned int remotePort, std::string tag);
     Status getSocketStatus(RdmaSocketStatus *socketStatus);
     Status waitReady(uint32_t timeOutMs);
     Status getFdHandle(void **fdHandle);
+    Status addWhitelist(P2PIpAddress remoteIp, std::string tag);
     Status addWhitelist(union hccp_ip_addr remoteIp, std::string tag);
     Status removeWhitelist(union hccp_ip_addr remoteIp);
 
@@ -62,7 +73,7 @@ private:
     std::vector<socket_wlist_info_t> whiteList;
 
     std::string tag;
-    union hccp_ip_addr remoteIp;
+    P2PIpAddress remoteIp;
     unsigned int remotePort;
 
     socket_info_t socketInfo{};

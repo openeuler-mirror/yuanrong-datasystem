@@ -36,6 +36,7 @@ constexpr uint32_t P2P_NUM_PINGPONG_BUFF = 2;
 constexpr uint32_t P2P_BLOCK_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t P2P_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
 constexpr uint32_t P2P_QP_NUM = 3;
+static_assert(sizeof(P2PRootHandle) <= HCCL_ROOT_INFO_BYTES, "P2PRootHandle must fit in HcclRootInfo");
 
 // Manages P2PCommunicators of the current process
 P2PCommunicatorManager commManager;
@@ -57,7 +58,7 @@ HcclResult P2PGetRootInfo(HcclRootInfo *rootInfo)
     CHECK_STATUS_HCCL(p2pComm->StartRoot());
 
     // Write connection info to rootInfo
-    P2PRootHandle rootHandle;
+    P2PRootHandle rootHandle {};
     CHECK_STATUS_HCCL(p2pComm->GetRootHandle(rootHandle));
     memcpy_s(rootInfo->internal, sizeof(rootHandle), &rootHandle, sizeof(rootHandle));
     p2p::LogInfo(std::string("P2PGetRootInfo: root handle generated, listen_port=") +
@@ -102,7 +103,7 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     std::shared_ptr<RdmaAgent> agent;
     CHECK_STATUS_HCCL(RdmaAgent::GetInstance(deviceId, agent));
 
-    P2PRootHandle rootHandle;
+    P2PRootHandle rootHandle {};
     memcpy_s(&rootHandle, sizeof(rootHandle), rootInfo->internal, sizeof(rootHandle));
     std::string identifier(rootHandle.identifier, ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
 
@@ -370,7 +371,7 @@ HcclResult P2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segm
     CHECK_STATUS_HCCL(rdmaDev->registerGlobalMemoryRegion(hostBuf, devPtr, size, accessFlag));
 
     // Write segment info to segmentInfo
-    P2PSegmentHandle segmentHandle;
+    P2PSegmentHandle segmentHandle {};
     CHECK_STATUS_HCCL(rdmaDev->getSegmentHandle(hostBuf, segmentHandle));
     errno_t err = memcpy_s(segmentInfo->internal, P2P_SEGMENT_INFO_BYTES, &segmentHandle, sizeof(segmentHandle));
     if (err != EOK) {
@@ -389,7 +390,7 @@ HcclResult P2PImportHostSegment(P2pSegmentInfo segmentInfo)
     std::shared_ptr<RdmaAgent> agent;
     CHECK_STATUS_HCCL(RdmaAgent::GetInstance(deviceId, agent));
 
-    struct P2PSegmentHandle segmentHandle;
+    struct P2PSegmentHandle segmentHandle {};
     memcpy_s(&segmentHandle, sizeof(segmentHandle), segmentInfo.internal, sizeof(segmentInfo));
 
     std::shared_ptr<RdmaDev> rdmaDev;
