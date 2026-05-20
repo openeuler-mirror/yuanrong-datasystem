@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+output/
+
+# SDK libs (copied via `make copy-sdk`)
+third_party/sdk/
+
+# SDK include symlink (created by build.sh)
+build_sdk/
+
+# Packaged binary (old name)
+kvclient_standalone_test
+kvtest
+
+# Local config files (use config.json.example as template)
+config/config.*.json
+!config/config.json.example
+config/deploy.*.json
+!config/deploy.json.example
+config/*.bak
+
+# Generated output directories
+metrics_*/
+run.log
+resource_monitor.log
+
+# Collected output files
+collected/
+
+# Archive files
+*.tar
+
+# Python cache
+__pycache__/

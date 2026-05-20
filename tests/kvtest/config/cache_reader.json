@@ -1,0 +1,17 @@
+{
+  "instance_id": 1,
+  "role": "reader",
+  "etcd_address": "127.0.0.1:2379",
+  "listen_port": 9001,
+  "data_sizes": ["1MB"],
+  "key_pool_size": 100,
+  "inference_delay_ms": 10,
+  "warmup_timeout_seconds": 60,
+  "target_qps": 20,
+  "num_set_threads": 2,
+  "ttl_seconds": 0,
+  "nodes": [
+    {"host": "127.0.0.1", "port": 9000, "instance_id": 0, "role": "writer"},
+    {"host": "127.0.0.1", "port": 9001, "instance_id": 1, "role": "reader"}
+  ]
+}
