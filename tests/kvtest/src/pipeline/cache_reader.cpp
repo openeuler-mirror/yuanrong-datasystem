@@ -82,10 +82,10 @@ void CacheReader::OnEvictKeys(const std::vector<std::string> &keys) {
     // Capacity control: remove oldest eviction keys if over limit
     // Warmup keys are at [0, warmupKeyCount), evict keys after that
     if (keyPool_.size() > maxKeyPoolSize_ && prevSize >= static_cast<size_t>(cfg_.keyPoolSize)) {
-        size_t excess = keyPool_.size() - maxKeyPoolSize_;
-        size_t evictStart = static_cast<size_t>(cfg_.keyPoolSize);
+        size_t evictStart = std::min(static_cast<size_t>(cfg_.keyPoolSize), keyPool_.size());
+        size_t eraseCount = std::min(keyPool_.size() - evictStart, keyPool_.size() - maxKeyPoolSize_);
         keyPool_.erase(keyPool_.begin() + evictStart,
-                       keyPool_.begin() + evictStart + excess);
+                       keyPool_.begin() + evictStart + eraseCount);
     }
 }
 

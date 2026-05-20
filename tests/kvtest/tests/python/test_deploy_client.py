@@ -71,8 +71,18 @@ class TestBuildConfigNodes(unittest.TestCase):
         d = _make_deployer(nodes, {'listen_port': 9000})
         result = d.build_config_nodes()
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0], {'host': 'h1', 'port': 9000, 'instance_id': 0})
-        self.assertEqual(result[1], {'host': 'h2', 'port': 9001, 'instance_id': 1})
+        self.assertEqual(result[0], {'host': 'h1', 'port': 9000, 'instance_id': 0, 'role': 'writer'})
+        self.assertEqual(result[1], {'host': 'h2', 'port': 9001, 'instance_id': 1, 'role': 'writer'})
+
+    def test_with_roles(self):
+        nodes = [
+            {'host': 'h1', 'port': 9000, 'instance_id': 0, 'role': 'writer'},
+            {'host': 'h2', 'port': 9000, 'instance_id': 1, 'role': 'reader'},
+        ]
+        d = _make_deployer(nodes, {'listen_port': 9000})
+        result = d.build_config_nodes()
+        self.assertEqual(result[0]['role'], 'writer')
+        self.assertEqual(result[1]['role'], 'reader')
 
 
 class TestBuildPeers(unittest.TestCase):

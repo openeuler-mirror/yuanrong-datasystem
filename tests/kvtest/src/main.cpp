@@ -83,7 +83,7 @@ static int RunMode(const Config &cfg) {
     std::cerr << "KVClient initialized" << std::endl;
 
     bool cacheMode = cfg.keyPoolSize > 0;
-    MetricsCollector metrics(cfg.instanceId, cfg.metricsIntervalMs, cfg.outputDir, cacheMode);
+    MetricsCollector metrics(cfg.instanceId, cfg.metricsIntervalMs, cfg.outputDir, cacheMode, cfg.metricsFile);
     if (!cfg.targetQpsStages.empty()) {
         metrics.SetQpsStages(cfg.targetQpsStages, cfg.stageDurationSeconds);
     }

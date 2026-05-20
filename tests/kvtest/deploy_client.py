@@ -250,6 +250,7 @@ class Deployer:
                 'host': self._comm_host(n),
                 'port': n.get('port', self.listen_port),
                 'instance_id': n['instance_id'],
+                'role': n.get('role', 'writer'),
             })
         return result
 
@@ -352,10 +353,10 @@ class Deployer:
             env_prefix = f'LD_LIBRARY_PATH={ld_path}:$LD_LIBRARY_PATH ' if ld_path else ''
 
             # Add custom environment variables from config
-            custom_env = config.get('env', {})
+            custom_env = {k: v for k, v in config.get('env', {}).items() if k}
             if custom_env:
-                env_parts = [f'export {k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
-                env_prefix += ' '.join(env_parts) + ' '
+                env_assignments = [f'{k}={shlex.quote(str(v))}' for k, v in custom_env.items()]
+                env_prefix += ' '.join(env_assignments) + ' '
 
             start_cmd = (
                 f"cd {self.remote_work_dir} && "

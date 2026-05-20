@@ -26,7 +26,7 @@ package:
 	@cp third_party/sdk/*.so* $(OUTPUT)/lib/
 	@rm -f $(OUTPUT)/lib/libds_client_py.so*
 	@cp deploy_client.py tools/procmon.py VERSION $(OUTPUT)/
-	@cp tools/test_deploy.sh $(OUTPUT)/
+	@cp tests/test_deploy.sh $(OUTPUT)/
 	@cp config/config.json.example $(OUTPUT)/config/
 	@cp config/deploy.json.example $(OUTPUT)/config/
 	@echo "Packaged to $(OUTPUT)/:"

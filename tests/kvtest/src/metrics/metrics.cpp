@@ -12,10 +12,11 @@
 using json = nlohmann::json;
 
 MetricsCollector::MetricsCollector(int instanceId, int intervalMs,
-                                   const std::string &outputDir, bool cacheMode)
+                                   const std::string &outputDir, bool cacheMode,
+                                   const std::string &metricsFile)
     : instanceId_(instanceId), intervalMs_(intervalMs),
       outputDir_(outputDir),
-      metricsFile_(outputDir + "/latency_timeseries.csv"),
+      metricsFile_(metricsFile.empty() ? outputDir + "/latency_timeseries.csv" : metricsFile),
       cacheModeEnabled_(cacheMode) {}
 
 OpMetrics& MetricsCollector::GetOrCreateOp(const std::string &op) {

@@ -5,12 +5,12 @@
 
 TEST(GetAllOpNames_Base) {
     auto &names = GetAllOpNames(false);
-    ASSERT_EQ(names.size(), 9u);
+    ASSERT_EQ(names.size(), 10u);
 }
 
 TEST(GetAllOpNames_Cache) {
     auto &names = GetAllOpNames(true);
-    ASSERT_EQ(names.size(), 13u);
+    ASSERT_EQ(names.size(), 14u);
 }
 
 TEST(GetAllOpNames_StableReference) {

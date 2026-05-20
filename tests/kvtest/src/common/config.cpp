@@ -237,6 +237,11 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_WARN("Cache mode with ttl_seconds=" << cfg.ttlSeconds
                   << ": data may expire before LRU evicts it, affecting hit rate accuracy");
     }
+    if (cfg.maxKeyPoolSize > 0 && cfg.maxKeyPoolSize < static_cast<uint64_t>(cfg.keyPoolSize)) {
+        SLOG_ERROR("max_key_pool_size (" << cfg.maxKeyPoolSize
+                  << ") must be >= key_pool_size (" << cfg.keyPoolSize << ")");
+        return false;
+    }
 
     auto joinStr = [](const std::vector<std::string> &v) -> std::string {
         std::string r;

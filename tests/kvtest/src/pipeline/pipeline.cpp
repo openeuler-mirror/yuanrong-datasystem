@@ -206,6 +206,7 @@ const std::vector<const char *> &GetAllOpNames(bool cacheMode) {
         kOpSetStringView, kOpGetBuffer, kOpExist,
         kOpCreateBuffer, kOpMemoryCopy, kOpSetBuffer,
         kOpMCreate, kOpMSet, kOpMGet,
+        kOpCacheGetOrCreate,
     };
     static const std::vector<const char *> cacheNames = {
         kOpCacheGetOrFillHit, kOpCacheExist,

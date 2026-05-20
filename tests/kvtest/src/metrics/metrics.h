@@ -30,7 +30,7 @@ struct OpMetrics {
 class MetricsCollector {
 public:
     MetricsCollector(int instanceId, int intervalMs, const std::string &outputDir,
-                     bool cacheMode = false);
+                     bool cacheMode = false, const std::string &metricsFile = "");
 
     void SetQpsStages(const std::vector<int> &stages, int durationSec) {
         qpsStages_ = stages;
