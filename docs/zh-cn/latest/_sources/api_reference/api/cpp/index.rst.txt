@@ -36,6 +36,9 @@ C++
    Status
    Future
    enum-StatusCode
+   ServiceDiscovery
+   struct-ServiceDiscoveryOptions
+   enum-ServiceAffinityPolicy
 
 KV接口
 -----------------------------------
@@ -208,3 +211,25 @@ Stream接口
       - 关闭消费者后，它将不再允许调用receive和ack。对已关闭的消费者调用 Close() 方法将返回 K_OK。
     * - :cpp:func:`Consumer::GetStatisticsMessage`
       - 获取自此消费者构造以来已接收的element的数量，以及未处理的element的数量。
+
+服务发现接口
+-----------------------------------
+
+.. list-table::
+    :widths: 30 70
+    :header-rows: 0
+
+    * - :cpp:func:`ServiceDiscovery::ServiceDiscovery`
+      - 构造服务发现实例。
+    * - :cpp:func:`ServiceDiscovery::Init`
+      - 连接 ETCD 并完成服务发现初始化。
+    * - :cpp:func:`ServiceDiscovery::SelectWorker`
+      - 根据亲和性策略选择一个 Worker 地址。
+    * - :cpp:func:`ServiceDiscovery::SelectSameNodeWorker`
+      - 选择同节点 Worker 地址。
+    * - :cpp:func:`ServiceDiscovery::GetAllWorkers`
+      - 获取所有 Worker 地址，按同节点/其他节点分组。
+    * - :cpp:func:`ServiceDiscovery::GetAffinityPolicy`
+      - 获取当前亲和性策略。
+    * - :cpp:func:`ServiceDiscovery::HasHostAffinity`
+      - 检查是否启用了节点亲和性。

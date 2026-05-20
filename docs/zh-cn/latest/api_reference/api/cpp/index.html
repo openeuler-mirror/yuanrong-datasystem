@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -832,6 +835,40 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 </section>
+<section id="id1">
+<h2>服务发现接口<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-given docutils container">
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 30.0%" />
+<col style="width: 70.0%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4N16ServiceDiscovery16ServiceDiscoveryERK23ServiceDiscoveryOptions" title="ServiceDiscovery::ServiceDiscovery"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::ServiceDiscovery()</span></code></a></p></td>
+<td><p>构造服务发现实例。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4N16ServiceDiscovery4InitEv" title="ServiceDiscovery::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::Init()</span></code></a></p></td>
+<td><p>连接 ETCD 并完成服务发现初始化。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4N16ServiceDiscovery12SelectWorkerERNSt6stringERiPb" title="ServiceDiscovery::SelectWorker"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::SelectWorker()</span></code></a></p></td>
+<td><p>根据亲和性策略选择一个 Worker 地址。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4N16ServiceDiscovery20SelectSameNodeWorkerERNSt6stringERi" title="ServiceDiscovery::SelectSameNodeWorker"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::SelectSameNodeWorker()</span></code></a></p></td>
+<td><p>选择同节点 Worker 地址。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4N16ServiceDiscovery13GetAllWorkersERNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE" title="ServiceDiscovery::GetAllWorkers"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::GetAllWorkers()</span></code></a></p></td>
+<td><p>获取所有 Worker 地址，按同节点/其他节点分组。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4NK16ServiceDiscovery17GetAffinityPolicyEv" title="ServiceDiscovery::GetAffinityPolicy"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::GetAffinityPolicy()</span></code></a></p></td>
+<td><p>获取当前亲和性策略。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="ServiceDiscovery.html#_CPPv4NK16ServiceDiscovery15HasHostAffinityEv" title="ServiceDiscovery::HasHostAffinity"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::HasHostAffinity()</span></code></a></p></td>
+<td><p>检查是否启用了节点亲和性。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 
         </article>
@@ -894,6 +931,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#hetero">Hetero接口</a></li>
 <li><a class="reference internal" href="#object">Object接口</a></li>
 <li><a class="reference internal" href="#stream">Stream接口</a></li>
+<li><a class="reference internal" href="#id1">服务发现接口</a></li>
 </ul>
 </li>
 </ul>

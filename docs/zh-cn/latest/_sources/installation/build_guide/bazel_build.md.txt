@@ -37,9 +37,11 @@ bash build.sh -b bazel -j 16
 
 ```text
 output/
-├── yr-datasystem-v0.7.7.tar.gz          # 部署包
+├── yr-datasystem-v0.7.7.tar.gz           # 部署包
 ├── cpp/                                  # 外部 SDK（find_package / Bazel 集成）
 │   ├── BUILD.bazel                       # Bazel 外部项目模板
+│   ├── DATASYSTEM_SYM 
+│   |    └── libdatasystem.so.sym         # 符号表文件
 │   ├── include/datasystem/               # C++ 头文件
 │   └── lib/
 │       ├── libdatasystem.so              # SDK 动态库
@@ -54,13 +56,17 @@ datasystem/
 ├── sdk/cpp/                 # C++ SDK
 │   ├── include/datasystem/  # 头文件
 │   └── lib/
-│       ├── libdatasystem.so
-│       └── cmake/Datasystem/
+│   │    ├── libdatasystem.so
+│   │    └── cmake/Datasystem/
+|   └── DATASYSTEM_SYM
+│        └── libdatasystem.so.sym # 符号表文件
 ├── service/                 # 服务端
 │   ├── datasystem_worker    # Worker 进程
 │   ├── lib/
 │   │   ├── libdatasystem_worker.so
 │   │   └── libjemalloc.so.2
+|   └── DATASYSTEM_SYM
+│       └── libdatasystem_worker.sym # worker符号表文件
 │   ├── worker_config.json
 │   └── cluster_config.json
 ├── cli/                     # CLI 工具

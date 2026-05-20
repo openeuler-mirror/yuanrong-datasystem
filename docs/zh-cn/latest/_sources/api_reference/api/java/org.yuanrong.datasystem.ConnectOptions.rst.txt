@@ -48,7 +48,6 @@ ConnectOptions
    * - enableCrossNodeConnection
      - boolean
      - 是否允许客户端连接到备用节点，默认为 false。
-
 构造方法
 --------
 

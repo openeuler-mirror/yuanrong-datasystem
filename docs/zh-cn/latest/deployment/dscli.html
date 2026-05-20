@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -1579,6 +1582,16 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
 <td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
+<tr class="row-odd"><td><p>zmq_client_io_thread</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
+</tr>
+<tr class="row-even"><td><p>io_thread_nice</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">-15</span></code></p></td>
+<td><p>指定部分 IO 线程的 nice 值，并通过 <code class="docutils literal notranslate"><span class="pre">setpriority</span></code> 生效，取值范围：[-20, 19]。值越小表示调度优先级越高，设置负值通常需要额外权限</p></td>
+</tr>
 <tr class="row-odd"><td><p>zmq_chunk_sz</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
@@ -1800,34 +1813,39 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>log_rate_limit</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>每秒最大日志条数（0表示不限速）。超出限制后，INFO、WARNING和ERROR日志将被等间隔采样，日志中标注采样率。FATAL不受限速影响</p></td>
+<td><p>每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。</p></td>
 </tr>
-<tr class="row-odd"><td><p>log_monitor</p></td>
+<tr class="row-odd"><td><p>log_only_write_info_file</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。</p></td>
+</tr>
+<tr class="row-even"><td><p>log_monitor</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否开启接口性能与资源观测日志</p></td>
 </tr>
-<tr class="row-even"><td><p>monitor_config_file</p></td>
+<tr class="row-odd"><td><p>monitor_config_file</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code></p></td>
 <td><p>配置worker监控配置文件的路径</p></td>
 </tr>
-<tr class="row-odd"><td><p>log_monitor_exporter</p></td>
+<tr class="row-even"><td><p>log_monitor_exporter</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code></p></td>
 <td><p>指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下</p></td>
 </tr>
-<tr class="row-even"><td><p>log_monitor_interval_ms</p></td>
+<tr class="row-odd"><td><p>log_monitor_interval_ms</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
 <td><p>观测日志收集导出的间隔时间（以毫秒为单位）</p></td>
 </tr>
-<tr class="row-odd"><td><p>minloglevel</p></td>
+<tr class="row-even"><td><p>minloglevel</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>设置记录冗余日志的最低级别，低于这个级别的日志不会被记录</p></td>
 </tr>
-<tr class="row-even"><td><p>logfile_mode</p></td>
+<tr class="row-odd"><td><p>logfile_mode</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">416</span></code></p></td>
 <td><p>设置日志文件模式/权限，值为八进制数</p></td>
@@ -2167,7 +2185,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><td><p>enable_urma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否开启Urma以实现对象worker之间的数据传输</p></td>
+<td><p>是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接</p></td>
 </tr>
 <tr class="row-even"><td><p>enable_ub_numa_affinity</p></td>
 <td><p>bool</p></td>

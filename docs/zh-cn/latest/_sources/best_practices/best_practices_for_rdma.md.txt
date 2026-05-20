@@ -364,3 +364,108 @@ dscli start \
 
 表示绑定到 NUMA 节点 0 的 CPU，并在节点 NUMA 0 分配内存。
 更多 dscli绑定numa节点 部署详细信息请参考：[dscli命令参数说明](../deployment/dscli.md#命令行参数说明)。
+
+## 常见问题
+
+1. **如何验证节点是否具备 RDMA 网卡？**
+
+   部署 RDMA 功能前，需确认节点已配备 RDMA 网卡硬件及相应驱动。可通过以下命令进行验证：
+
+   ```bash
+   # 检查 RDMA 设备列表
+   ibv_devices
+
+   # 使用 lspci 检查 InfiniBand/RDMA 网卡硬件
+   lspci | grep -i "infiniband\|rdma\|mellanox\|connectx"
+
+   # 检查 RDMA 相关内核模块是否加载
+   lsmod | grep -E "ib_core|mlx4_core|mlx5_core|rdma"
+   ```
+
+   若 `ibv_devices` 输出显示设备列表（如 `mlx5_0`），说明 RDMA 网卡已正确识别。若无输出或报错，请检查：
+   - RDMA 网卡是否正确安装
+   - `rdma-core` 软件包是否已安装
+   - RDMA 内核模块是否已加载
+
+2. **容器环境运行 RDMA 有哪些特殊要求？**
+
+   在容器环境（如 Kubernetes）中运行 RDMA，需满足以下条件：
+
+   - **memlock 资源限制**：必须设置为 `unlimited`，否则 RDMA 内存注册将失败。配置方法详见[部署指南](#部署指南)章节中的容器内 memlock 资源限制配置。
+
+   - **设备挂载**：容器需挂载 RDMA 相关设备目录：
+     - `/dev/infiniband`：RDMA 设备文件
+     - `/sys/class/infiniband`：RDMA 设备属性信息
+
+3. **如何测试 RDMA 网络连通性？**
+
+   可使用 `ib_write_bw` 工具测试两节点之间的 RDMA 写带宽，验证 RDMA 网络连通性。首先需安装 `perftest` 工具包：
+
+   ```bash
+   # 安装 perftest 工具（以 openEuler 为例）
+   yum install perftest
+   ```
+
+   在服务端节点执行：
+
+   ```bash
+   # 启动 ib_write_bw 服务端，-d 指定设备名，-R 表示使用 RDMA 写
+   ib_write_bw -d mlx5_0 -R
+   ```
+
+   在客户端节点执行：
+
+   ```bash
+   # 连接服务端进行带宽测试
+   ib_write_bw -d mlx5_0 -R <server_ip>
+   ```
+
+   参数说明：
+   - `-d mlx5_0`：RDMA 设备名称（可通过 `ibv_devices` 查看）
+   - `-R`：使用 RDMA 写操作
+   - `<server_ip>`：服务端节点的 IP 地址
+
+   正常输出示例：
+
+   ```bash
+    #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]
+    65536      5000            9993.41            5032.27              0.080516
+   ```
+
+   若测试失败，请检查 RDMA 网卡配置、网络链路连通性及防火墙设置。
+
+4. **UCX_TLS=rc_x 环境变量的含义是什么？**
+
+   `UCX_TLS=rc_x` 是 UCX 传输层选择的环境变量配置，指定使用 **RDMA RC (Reliable Connection) 传输模式**。
+
+   **关键特性**：
+
+   - **纯 RDMA 模式**：设置 `UCX_TLS=rc_x` 后，UCX 将**仅使用 RDMA RC 传输，不会回退到 TCP**。
+   - **严格验证**：若 RDMA 不可用或通信失败，系统将直接报错而非降级使用 TCP。
+   - **成功即 RDMA**：若应用在此模式下成功运行，则必然使用 RDMA 传输，可**确认 RDMA 功能正常工作**。
+
+   这意味着：**开启 `UCX_TLS=rc_x` 后能跑通，必定是使用 RDMA；若不能跑通，说明 RDMA 环境配置有问题**。
+
+   **替代传输模式**：
+
+   若当前网卡或驱动不支持 `rc_x`，可尝试以下替代选项（详见[部署指南](#部署指南)）：
+
+   | 模式 | 说明 |
+   | --- | --- |
+   | `rc` | 可靠连接模式，兼容性较好 |
+   | `ud` | 不可靠数据报模式，适用于低延迟、小消息场景 |
+   | `dc` | 动态连接模式，适用于大规模节点通信（需 Mellanox 网卡支持） |
+
+   **验证 RDMA 是否生效**：
+
+   可通过 UCX 日志确认 RDMA 传输是否生效：
+
+
+   ```bash
+   export UCX_LOG_FILE=/tmp/ucx.log
+   export UCX_LOG_LEVEL=INFO
+   # 启动 worker 后检查日志
+   grep -i "rc\|rdma" /tmp/ucx.log
+   ```
+
+   若日志中出现 RC 相关传输信息，说明 RDMA 已正确启用。

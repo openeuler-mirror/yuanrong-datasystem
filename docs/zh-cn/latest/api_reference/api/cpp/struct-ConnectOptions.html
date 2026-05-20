@@ -505,6 +505,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -668,8 +671,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions20fastTransportMemSizeE">
-<span id="_CPPv3N14ConnectOptions20fastTransportMemSizeE"></span><span id="_CPPv2N14ConnectOptions20fastTransportMemSizeE"></span><span id="ConnectOptions::fastTransportMemSize__uint64_t"></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fastTransportMemSize</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">128</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions20fastTransportMemSizeE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>client侧 fast transport（urma）内存池大小，单位为字节。默认值：128MB，取值范围为 <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">2GB]</span></code> 。仅在 fast transport 场景下生效。</p>
+<span id="_CPPv3N14ConnectOptions20fastTransportMemSizeE"></span><span id="_CPPv2N14ConnectOptions20fastTransportMemSizeE"></span><span id="ConnectOptions::fastTransportMemSize__uint64_t"></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">fastTransportMemSize</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">256</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="w"> </span><span class="o"><span class="pre">*</span></span><span class="w"> </span><span class="m"><span class="pre">1024</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions20fastTransportMemSizeE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：256MB，取值范围为 <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">2GB]</span></code>。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。</p>
 </dd></dl>
 
 <p><strong>公共函数</strong></p>
