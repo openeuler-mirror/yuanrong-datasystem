@@ -718,6 +718,7 @@ Status ZmqService::WorkerCB::WorkerEntry()
     // except lower level code hit some error and didn't send anything back to the client.
     if (rc.IsError()) {
         replyMsg.clear();
+        RecordTick(meta, TICK_SERVER_EXEC_END);
         RETURN_IF_NOT_OK(
             ZmqService::SendStatus(replyMsg, meta, rc, [this](ZmqMetaMsgFramesRef e) { return worker_->SendMsg(e); }));
     }
