@@ -630,10 +630,7 @@ public:
      * @brief Get the maximum supported Urma write size.
      * @return Maximum write size in bytes.
      */
-    uint64_t GetMaxWriteSize() const
-    {
-        return urmaDeviceAttribute_.dev_cap.max_write_size;
-    }
+    uint64_t GetMaxWriteSize() const;
 
     /**
      * @brief Get the maximum supported Urma read size.
