@@ -1,6 +1,6 @@
 {
   "repo_root": "/Users/marck/workspace/yuanrong-datasystem-0.8.1",
-  "generated_at_utc": "2026-05-08T01:35:49+00:00",
+  "generated_at_utc": "2026-05-19T07:57:14+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -294,6 +294,7 @@
       "tree": [
         "- benchmark/",
         "  - hetero_h2d_d2h_benchmark.py",
+        "  - kv_set_exist_get_steady.py",
         "- common/",
         "  - binmock/",
         "  - CMakeLists.txt",
@@ -379,6 +380,7 @@
         "  - kv_client_example.py",
         "  - object_client_example.py",
         "- README.md",
+        "- kv_set_exist_get.py",
         "- run-example.sh"
       ]
     },
@@ -455,7 +457,15 @@
         "  - tests/",
         "    - test_create_pr.py",
         "  - SKILL.md",
+        "- ds-infra-engineering/",
+        "  - agents/",
+        "    - openai.yaml",
+        "  - SKILL.md",
         "- ds-log-analysis/",
+        "  - agents/",
+        "    - openai.yaml",
+        "  - SKILL.md",
+        "- ds-pr-review/",
         "  - agents/",
         "    - openai.yaml",
         "  - SKILL.md",
@@ -468,6 +478,10 @@
         "    - refresh_online_docs.py",
         "  - tests/",
         "    - test_refresh_online_docs.py",
+        "  - SKILL.md",
+        "- ds-self-verify/",
+        "  - agents/",
+        "    - openai.yaml",
         "  - SKILL.md",
         "- rdma-ucx-perf-debug/",
         "  - agents/",

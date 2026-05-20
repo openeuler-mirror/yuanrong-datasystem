@@ -1,0 +1,4 @@
+interface:
+  display_name: "Datasystem Infra Engineering"
+  short_description: "Use repo-level performance, concurrency, and recovery gates"
+  default_prompt: "Use $ds-infra-engineering before changing or analyzing infrastructure-sensitive datasystem code."

@@ -18,6 +18,7 @@ Design choices:
 
 Current canonical records:
 
+- `overview.engineering-principles.json`
 - `overview.repository-overview.json`
 - `overview.repository-skills.json`
 - `client.client-sdk.json`

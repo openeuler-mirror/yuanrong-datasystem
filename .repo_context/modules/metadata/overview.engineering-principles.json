@@ -1,0 +1,67 @@
+{
+  "id": "overview.engineering-principles",
+  "title": "Engineering Principles",
+  "status": "active",
+  "domain": "overview",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/overview/engineering-principles.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/infra-engineering-workflow.md",
+      ".repo_context/playbooks/features/performance-change.md",
+      ".repo_context/playbooks/features/concurrency-and-memory-safety.md",
+      ".repo_context/playbooks/features/recovery-and-persistence.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/ai-self-verification.md"
+    ]
+  },
+  "source_roots": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".cursor/rules/repo-context.mdc",
+    ".repo_context",
+    ".skills",
+    "src/datasystem",
+    "include/datasystem",
+    "tests"
+  ],
+  "key_tests": [],
+  "module_boundary": {
+    "related_modules": [
+      "overview.repository-overview",
+      "overview.repository-skills",
+      "quality.tests-and-reproduction",
+      "infra.common-infra",
+      "runtime.cluster-management"
+    ],
+    "split_signals": [
+      "repository_level_policy",
+      "ai_native_workflow",
+      "performance_gate",
+      "recovery_gate",
+      "concurrency_gate"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "engineering principles",
+      "infra engineering",
+      "performance gate",
+      "concurrency safety",
+      "persistence recovery",
+      "AI self verification",
+      "PR review checklist"
+    ],
+    "intent_examples": [
+      "understand repository-level engineering standards",
+      "choose the workflow for an infrastructure-sensitive change",
+      "prepare a high-performance cache code review"
+    ]
+  }
+}

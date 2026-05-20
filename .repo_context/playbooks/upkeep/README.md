@@ -7,5 +7,6 @@ implement a product feature or triage a runtime issue.
 
 Current docs:
 
+- `ai-self-verification.md`
 - `module-context-generation.md`
 - `skill-trigger-routing.md`

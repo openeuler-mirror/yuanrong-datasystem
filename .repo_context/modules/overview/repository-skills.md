@@ -11,13 +11,20 @@ when a natural-language request should invoke one of them.
   - `.skills/`
   - `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md`
   - `docs/README_CN.md`
+  - `.repo_context/modules/overview/engineering-principles.md`
+  - `.repo_context/playbooks/`
 - Key verification paths:
+  - `.skills/ds-infra-engineering/SKILL.md`
+  - `.skills/ds-pr-review/SKILL.md`
+  - `.skills/ds-self-verify/SKILL.md`
   - `.skills/ds-create-pr/SKILL.md`
   - `.skills/ds-create-pr/scripts/create_pr.py`
   - `.skills/ds-refresh-docs/SKILL.md`
   - `.skills/ds-refresh-docs/scripts/refresh_online_docs.py`
+  - `.skills/ds-log-analysis/SKILL.md`
+  - `.skills/rdma-ucx-perf-debug/SKILL.md`
 - Last verified against source:
-  - `2026-04-18`
+  - `2026-05-14`
 
 ## Purpose
 
@@ -26,13 +33,20 @@ when a natural-language request should invoke one of them.
   or opening GitCode PRs.
 - Natural-language routing should prefer these skills when the request is a high-confidence match for a registered
   workflow.
+- `.skills/` remains Codex-specific; shared guidance for Claude Code, Cursor, and other AI coding tools lives in
+  `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/repo-context.mdc`, and `.repo_context/`.
 
 ## Current Skills
 
 | Skill | Canonical use | Source-backed trigger phrases | Ambiguous mentions that require confirmation |
 | --- | --- | --- | --- |
+| `ds-infra-engineering` | route implementation, debugging, refactor, design, and codebase Q&A through repository-level infrastructure engineering gates | “实现/修复/重构/分析 datasystem 代码”, “修改 worker/client/common/master”, “性能/并发/恢复相关改动”, “infra engineering” | broad discussion of engineering philosophy without asking for codebase-specific analysis |
+| `ds-pr-review` | review a diff, PR, commit, or design using correctness, performance, concurrency, persistence, recovery, and test gates | “review this diff”, “检查这个 PR”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review |
+| `ds-self-verify` | verify diff, tests, context updates, and infra risk before Codex claims work is complete or PR-ready, using the shared AI self-verification playbook | “完成前自检”, “self verify”, “准备提交/PR前检查”, Codex is about to claim completion after file changes | general questions about verification policy |
 | `ds-create-pr` | create a GitCode PR for a pushed branch with a template-compliant PR body | “创建PR”, “提交PR”, “开PR”, “create pull request”, “open a PR”, “发起合并请求” | mentions of PR review policy, PR template, or PR conflicts without asking to create a PR |
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |
+| `ds-log-analysis` | analyze KVCache access/resource logs and generate HTML reports | “日志分析”, “access log 分析”, “resource log 报告”, “QPS/延迟/错误率趋势”, “KVCache report” | asking what the log format means without requesting report generation |
+| `rdma-ucx-perf-debug` | diagnose RDMA/UCX throughput, latency, flush, submit, batch get, or resource lifetime problems | “RDMA 性能”, “UCX 延迟”, “UCP flush”, “BatchGet 远端拉取慢”, “P2P/RDMA crash” | generic mention of RDMA code ownership without a performance/debugging task |
 
 ## Skill Package Structure
 
@@ -56,6 +70,9 @@ Examples:
 - “用 ds-refresh-docs 更新在线文档”
 - “更新在线文档”
 - “帮我创建这个分支的 PR”
+- “review this diff”
+- “修改 worker object cache 的恢复逻辑”
+- “完成前跑自检”
 
 ### Ambiguous mention
 

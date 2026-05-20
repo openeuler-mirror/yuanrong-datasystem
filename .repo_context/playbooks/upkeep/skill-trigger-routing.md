@@ -14,7 +14,7 @@
   - `.skills/*/scripts/*`
   - `.repo_context/modules/overview/repository-skills.md`
 - Last verified against source:
-  - `2026-04-18`
+  - `2026-05-14`
 
 ## Purpose
 
@@ -58,6 +58,10 @@ Treat the request as a high-confidence execution trigger when it contains both:
 - an action verb such as “更新”, “刷新”, “创建”, “提交”, “发布”, “open”, “create”, “refresh”
 - the managed artifact or workflow target such as “在线文档”, “PR”, “pull request”
 
+Treat repository engineering skills as high-confidence triggers when the request asks Codex to perform codebase work,
+review work, or completion verification in `yuanrong-datasystem`. These skills are guardrail workflows rather than
+external side-effect tools, so they should trigger more readily than publishing or PR-creation skills.
+
 Treat the request as ambiguous when it mentions the managed target but the verb is about understanding, checking,
 comparing, or deciding.
 
@@ -82,6 +86,11 @@ Examples that should not trigger:
 
 | Skill | Trigger now | Confirm first when |
 | --- | --- | --- |
+| `ds-infra-engineering` | implementation, debugging, refactor, design, or codebase Q&A touches runtime/client/worker/master/common infra, performance, concurrency, or recovery-sensitive code | user only asks broad engineering philosophy unrelated to the repository |
+| `ds-pr-review` | user asks to review a diff, PR, commit, code change, or design | user asks only how review policy works |
+| `ds-self-verify` | Codex changed files and is preparing to claim completion, or user explicitly asks for completion self-check using the shared AI self-verification playbook | user asks only what self-verification means |
+| `ds-log-analysis` | user asks to analyze KVCache access/resource logs or generate a report | user only asks about log format or script internals |
+| `rdma-ucx-perf-debug` | user asks to diagnose RDMA/UCX/P2P throughput, latency, flush, submit, or resource lifetime issues | user only asks where RDMA code lives |
 | `ds-refresh-docs` | user explicitly asks to update, refresh, or publish online docs | user only mentions online docs, `doc_pages`, or docs publishing context |
 | `ds-create-pr` | user explicitly asks to create or submit a PR for a branch | user only asks about PR policy, PR template, or merge conflicts |
 

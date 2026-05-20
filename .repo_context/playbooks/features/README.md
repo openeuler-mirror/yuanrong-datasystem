@@ -18,6 +18,10 @@ Rules:
 
 Current docs:
 
+- `infra-engineering-workflow.md`
+- `performance-change.md`
+- `concurrency-and-memory-safety.md`
+- `recovery-and-persistence.md`
 - `runtime/README.md`
 - `runtime/cluster-manager/README.md`
 - `runtime/cluster-manager/implementation.md`
