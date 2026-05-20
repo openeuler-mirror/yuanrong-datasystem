@@ -742,6 +742,47 @@ protected:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
 };
 
+class OCVoluntaryScaleDownNoReplicationTest : public OCScaleTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 2;
+        opts.numOBS = 0;
+        opts.enableSpill = false;
+        opts.enableDistributedMaster = "true";
+        opts.addNodeTime = SCALE_DOWN_ADD_TIME;
+        opts.workerGflagParams = FormatString(
+            " -v=2 -node_timeout_s=%d -node_dead_timeout_s=%d -auto_del_dead_node=true "
+            "-enable_urma=false -enable_data_replication=false ",
+            nodeTimeout_, nodeDeadTimeout_);
+        opts.waitWorkerReady = false;
+        for (size_t i = 0; i < opts.numWorkers; i++) {
+            opts.workerConfigs.emplace_back(HOST_IP_PREFIX + std::to_string(i), GetFreePort());
+            workerAddress_.emplace_back(opts.workerConfigs.back().ToString());
+        }
+        worker0Address_ = opts.workerConfigs[0];
+        worker1Address_ = opts.workerConfigs[1];
+    }
+
+    void SetObjOnWorker(const int &workerIdx, std::shared_ptr<ObjectClient> client, const std::string &data,
+                        std::vector<std::string> &objectKey)
+    {
+        for (uint32_t i = 0; i < objectKey.size(); ++i) {
+            objectKey[i] = "a_key_hash_to_" + std::to_string(workerHashValue_[workerIdx] - i);
+            CreateParam param{};
+            DS_ASSERT_OK(client->Put(objectKey[i], reinterpret_cast<const uint8_t *>(data.data()), data.size(), param,
+                                     {}));
+        }
+    }
+
+protected:
+    const int nodeTimeout_ = 3;
+    const int nodeDeadTimeout_ = 5;
+    HostPort worker0Address_;
+    HostPort worker1Address_;
+};
+
 TEST_F(OCVoluntaryScaleDownTest, VoluntaryWorkerScaleDownFinalStageLeaving)
 {
     FLAGS_v = 2;  // vlog is 2
@@ -1275,6 +1316,49 @@ TEST_F(OCVoluntaryScaleDownTest, LEVEL1_TestVoluntaryDownMigrateSmallObjectsData
     ASSERT_EQ(buffers1.size(), noneL2CacheObjects.size());
     for (auto &buf : buffers1) {
         AssertBufferEqual(*buf, value);
+    }
+}
+
+TEST_F(OCVoluntaryScaleDownNoReplicationTest, LEVEL1_TestVoluntaryDownMigrateSmallObjectsDataTwice)
+{
+    LOG(INFO) << "Test voluntary scale down migrated objects remain readable after async delete window when "
+                 "replication is disabled";
+    StartWorkerAndWaitReady({ 0, 1 });
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    InitTestEtcdInstance();
+    GetHashOnWorker(2);
+    std::shared_ptr<ObjectClient> client, client1;
+    InitTestClient(0, client);
+    InitTestClient(1, client1);
+    uint64_t count = 64;
+    std::vector<std::string> noneL2CacheObjects(count);
+    std::string value = "data";
+    SetObjOnWorker(0, client, value, noneL2CacheObjects);
+    client.reset();
+    VoluntaryScaleDownInject(0);
+    int waitTimeout = 10;
+    int stillAliveWorkers = 1;
+    ASSERT_TRUE(WaitForVoluntaryDownFinished(waitTimeout, stillAliveWorkers, worker0Address_.ToString()));
+
+    std::vector<Optional<Buffer>> firstBuffers;
+    DS_ASSERT_OK(client1->Get(noneL2CacheObjects, 0, firstBuffers));
+    ASSERT_EQ(firstBuffers.size(), noneL2CacheObjects.size());
+    for (auto &buf : firstBuffers) {
+        AssertBufferEqual(*buf, value);
+    }
+
+    // needDelete objects are reclaimed asynchronously after the response is sent. Wait for that window and keep
+    // reading to make sure migrated data was not marked for post-response deletion.
+    sleep(2);
+    constexpr int repeatedReadRounds = 3;
+    for (int round = 0; round < repeatedReadRounds; ++round) {
+        std::vector<Optional<Buffer>> repeatedBuffers;
+        DS_ASSERT_OK(client1->Get(noneL2CacheObjects, 0, repeatedBuffers));
+        ASSERT_EQ(repeatedBuffers.size(), noneL2CacheObjects.size());
+        for (auto &buf : repeatedBuffers) {
+            AssertBufferEqual(*buf, value);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 }
 

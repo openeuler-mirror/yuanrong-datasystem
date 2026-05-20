@@ -986,6 +986,9 @@ private:
         std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
         Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas);
 
+    void ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
+                                           std::map<ReadKey, LockedEntity> &lockedEntries);
+
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer

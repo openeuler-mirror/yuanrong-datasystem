@@ -24,8 +24,11 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "securec.h"
@@ -33,9 +36,15 @@
 #include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#define private public
+#include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
+#undef private
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "eviction_manager_common.h"
@@ -524,6 +533,87 @@ class MigrateL2DataServiceTest : public MigrateDataServiceTest {};
 TEST_F(MigrateL2DataServiceTest, TestMigrateL2Data)
 {
     
+}
+
+class NotifyRemoteGetMigrationTest : public CommonTest {
+public:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        objectTable_ = std::make_shared<ObjectTable>();
+        WorkerOcServiceCrudParam param{
+            .workerMasterApiManager = nullptr,
+            .workerRequestManager = requestManager_,
+            .memoryRefTable = nullptr,
+            .objectTable = objectTable_,
+            .evictionManager = nullptr,
+            .workerDevOcManager = nullptr,
+            .asyncPersistenceDelManager = nullptr,
+            .asyncSendManager = nullptr,
+            .asyncRollbackManager = nullptr,
+            .metadataSize = 0,
+            .persistenceApi = nullptr,
+            .etcdCM = nullptr,
+        };
+        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                          HostPort("127.0.0.1:18888"));
+    }
+
+protected:
+    std::shared_ptr<ObjectTable> objectTable_;
+    WorkerRequestManager requestManager_;
+    std::shared_ptr<WorkerOcServiceGetImpl> impl_;
+};
+
+TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDeleteFlagWhenReplicationDisabled)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = false;
+
+    auto entry = std::make_shared<SafeObjType>();
+    auto obj = std::make_unique<ObjCacheShmUnit>();
+    obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+    obj->stateInfo.SetNeedToDelete(true);
+    entry->SetRealObject(std::move(obj));
+
+    auto untouchedEntry = std::make_shared<SafeObjType>();
+    auto untouchedObj = std::make_unique<ObjCacheShmUnit>();
+    untouchedObj->stateInfo.SetDataFormat(DataFormat::BINARY);
+    untouchedObj->stateInfo.SetNeedToDelete(true);
+    untouchedEntry->SetRealObject(std::move(untouchedObj));
+
+    ASSERT_TRUE(entry->WLock().IsOk());
+    ASSERT_TRUE(untouchedEntry->WLock().IsOk());
+    ASSERT_TRUE(entry->IsWLockedByCurrentThread());
+    ASSERT_TRUE(untouchedEntry->IsWLockedByCurrentThread());
+
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    lockedEntries.emplace(ReadKey("obj1", 0, 1), WorkerOcServiceGetImpl::LockedEntity{ entry, false });
+    lockedEntries.emplace(ReadKey("obj2", 0, 1), WorkerOcServiceGetImpl::LockedEntity{ untouchedEntry, false });
+
+    using NotifyRemoteGetGroup =
+        std::unordered_map<std::string,
+                           std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>>;
+    NotifyRemoteGetGroup groupedQueryMetas;
+    groupedQueryMetas.emplace("127.0.0.1:18889",
+                              std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
+    std::vector<std::vector<std::string>> tempSuccessIds{ { "obj1" } };
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(1);
+    std::vector<std::unordered_set<std::string>> tempFailedIds(1);
+    std::set<ReadKey> objectsNeedGetRemote;
+    Status lastRc = Status::OK();
+    NotifyRemoteGetRspPb rsp;
+    QueryMetaMap queryMetas;
+
+    impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
+                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+
+    EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
+    EXPECT_TRUE(untouchedEntry->Get()->stateInfo.IsNeedToDelete());
+
+    entry->WUnlock();
+    untouchedEntry->WUnlock();
 }
 }  // namespace ut
 }  // namespace datasystem

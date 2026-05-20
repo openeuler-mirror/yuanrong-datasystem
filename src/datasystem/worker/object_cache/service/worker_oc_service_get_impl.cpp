@@ -2928,7 +2928,24 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
                    << VectorToString(successIds) << "], meta data num: " << lockedEntries.size()
                    << " lastRc: " << lastRc.ToString();
     }
+    ClearNeedDeleteForMigratedObjects(successIds, lockedEntries);
     BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
+}
+
+void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
+                                                               std::map<ReadKey, LockedEntity> &lockedEntries)
+{
+    if (!successIds.empty() && !FLAGS_enable_data_replication) {
+        VLOG(1) << FormatString("[NotifyRemoteGet] clear needDelete for %zu migrated objects", successIds.size());
+        for (const auto &objectKey : successIds) {
+            auto it = lockedEntries.find(ReadKey(objectKey));
+            if (it == lockedEntries.end()) {
+                continue;
+            }
+            VLOG(1) << FormatString("[NotifyRemoteGet] clear needDelete for object %s", objectKey);
+            it->second.safeObj->Get()->stateInfo.SetNeedToDelete(false);
+        }
+    }
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
