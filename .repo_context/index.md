@@ -27,6 +27,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | review a PR or diff | `playbooks/reviews/pr-review-checklist.md` | touched source/tests, `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md` |
 | self-verify before claiming completion | `playbooks/upkeep/ai-self-verification.md` | `git status`, `git diff`, relevant test or metadata commands |
 | understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
+| understand Codex project hooks or context-survival behavior | `.codex/README.md` | `.codex/hooks.json`, `.codex/hooks/context_survival.py`, `.codex/context/module-map.json` |
 | find build, sanitizer, or coverage entrypoints | `modules/quality/build-test-debug.md` | `build.sh`, `CMakeLists.txt` |
 | understand CMake build rules, third-party dependencies, install outputs, or target graph | `modules/quality/cmake-build/README.md` | `build.sh`, `scripts/build_cmake.sh`, `scripts/build_thirdparty.sh`, `CMakeLists.txt`, `cmake/*`, `src/datasystem/**/CMakeLists.txt` |
 | validate CMake release package shape | `modules/quality/cmake-build/README.md` | `scripts/verify_package_manifest.py`, `scripts/package_manifest/*`, generated `output/*.tar.gz` and `output/*.whl` |
@@ -76,6 +77,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | global repo map | `modules/overview/repository-overview.md` | `src/datasystem`, `include/datasystem`, `cli`, `tests`, `docs` |
 | repository engineering standards | `modules/overview/engineering-principles.md` | `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/repo-context.mdc`, `.repo_context/playbooks`, `.skills`, touched source/tests |
 | repository-local skills and routing | `modules/overview/repository-skills.md` | `.skills`, `.gitee/PULL_REQUEST_TEMPLATE`, `docs/README_CN.md` |
+| Codex project hooks and context survival | `.codex/README.md` | `.codex/hooks.json`, `.codex/hooks`, `.codex/context/module-map.json` |
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |

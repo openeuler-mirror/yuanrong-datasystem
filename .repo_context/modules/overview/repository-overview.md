@@ -33,6 +33,7 @@ This document captures a coarse, source-backed map of the repository. It is inte
 | `transfer_engine` | separate but related transfer subsystem | linked from root build when hetero and NPU-related flags are enabled |
 | `docs` | checked-in docs source and generated docs artifacts | current source docs live under `docs/source_zh_cn` |
 | `.skills` | repository-local official Codex skills | includes reusable Codex workflows for GitCode PR creation and online documentation refresh |
+| `.codex` | project-local Codex hooks and context survival layer | routes Codex hook events to compact `.repo_context/` slices and writes transient `.codex/context/working-state.md` |
 | `.repo_context/modules/overview/engineering-principles.md` | repository-level infrastructure engineering standards | global entrypoint for performance, concurrency, persistence, recovery, review, and self-verification rules |
 
 ## Architectural Notes Backed By Current Docs
@@ -43,6 +44,8 @@ This document captures a coarse, source-backed map of the repository. It is inte
 - `CMakeLists.txt` confirms the core build graph centers on `src/datasystem`, `dsbench`, tests, optional Java API, and optionally `transfer_engine`.
 - `AGENTS.md`, `CLAUDE.md`, and `.cursor/rules/repo-context.mdc` now route their respective AI coding tools through
   the repository-level infrastructure engineering principles before local module work.
+- `.codex/hooks.json` registers project-local Codex lifecycle hooks that keep long-running AI work resumable by routing
+  path-specific context through `.codex/context/module-map.json` and refreshing `.codex/context/working-state.md`.
 
 ## Known Gaps
 
