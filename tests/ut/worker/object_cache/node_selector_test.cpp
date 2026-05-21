@@ -54,6 +54,7 @@ public:
     using NodeSelector::Shutdown;
     using NodeSelector::SelectNode;
     using NodeSelector::GetAvailableMemory;
+    using NodeSelector::TryGetAvailableMemory;
     using NodeSelector::HasEnoughAvailableMemory;
 
     // Make the protected method public
@@ -244,6 +245,30 @@ TEST_F(NodeSelectorTest, TestGetAvailableMemory)
             ASSERT_TRUE(NodeSelectorHelper::Instance().GetAvailableMemory(node.nodeId) == 0);
         }
     }
+}
+
+TEST_F(NodeSelectorTest, TestTryGetAvailableMemoryStatus)
+{
+    std::vector<NodeInfo> nodes;
+    std::vector<NodeInfo> sortedNodes;
+    GetNodeInfosHelper(nodes, sortedNodes);
+    (void)sortedNodes;
+    MockCollectClusterInfo(nodes);
+
+    size_t availableMemory = 0;
+    auto rc = NodeSelectorHelper::Instance().TryGetAvailableMemory("notExistKey", availableMemory);
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_NOT_FOUND);
+
+    auto notReadyNode = std::find_if(nodes.begin(), nodes.end(), [](const NodeInfo &node) { return !node.isReady; });
+    ASSERT_NE(notReadyNode, nodes.end());
+    rc = NodeSelectorHelper::Instance().TryGetAvailableMemory(notReadyNode->nodeId, availableMemory);
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
+
+    auto readyNode = std::find_if(nodes.begin(), nodes.end(), [](const NodeInfo &node) { return node.isReady; });
+    ASSERT_NE(readyNode, nodes.end());
+    rc = NodeSelectorHelper::Instance().TryGetAvailableMemory(readyNode->nodeId, availableMemory);
+    DS_ASSERT_OK(rc);
+    ASSERT_EQ(availableMemory, readyNode->availableMemory);
 }
 
 TEST_F(NodeSelectorTest, TestHasEnoughMemory)

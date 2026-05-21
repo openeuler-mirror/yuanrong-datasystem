@@ -114,8 +114,10 @@ Status MigrateDataHandler::MigrateDataByCacheType(CacheType type, std::vector<st
 
     for (auto it = needMigrateDataIds.begin(); it != needMigrateDataIds.end(); ++it) {
         if (IsRemoteLackResources()) {
-            LOG(WARNING) << FormatString("[Migrate Data] Remote node %s has no remain bytes: %ld",
-                                         remoteApi_->Address(), maxBatchSize_);
+            LOG(WARNING) << FormatString(
+                "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, "
+                "max batch size: %ld",
+                remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
             std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
                            [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
             (void)failedIds_.insert(it, needMigrateDataIds.end());
@@ -179,40 +181,70 @@ std::string MigrateDataHandler::ResultToString(const MigrateResult &result)
 Status MigrateDataHandler::SpyOnRemoteRemainBytes(CacheType type)
 {
     if (ShouldUseFastTransport()) {
-        maxBatchSize_ = NodeSelector::Instance().GetAvailableMemory(remoteApi_->Address());
-    } else {
-        MigrateDataReqPb req;
-        req.set_type(type_);
-        MigrateDataRspPb rsp;
-        Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
-
-        if (!strategy_->CheckCondition(rsp, type)) {
-            RETURN_STATUS(StatusCode::K_NO_SPACE,
-                          "[Migrate Data] migrateDataStrategy.CheckCondition failed due to insufficient space");
-        }
-
-        if (s.IsOk()) {
-            RETURN_IF_NOT_OK(TryUpdateRate(rsp.limit_rate()));
-            type == CacheType::MEMORY ? AdjustMaxBatchSize(rsp.remain_bytes())
-                                      : AdjustMaxBatchSize(rsp.disk_remain_bytes());
-            remoteDiskRemainSize_ = rsp.disk_remain_bytes();
-            remoteMemoryRemainSize_ = rsp.remain_bytes();
+        size_t availableMemory = 0;
+        Status rc = NodeSelector::Instance().TryGetAvailableMemory(remoteApi_->Address(), availableMemory);
+        if (rc.IsOk()) {
+            maxBatchSize_ = availableMemory;
+        } else if (rc.GetCode() == StatusCode::K_NOT_READY) {
+            LOG(WARNING) << FormatString(
+                "[Migrate Data] Remote node %s is not ready from resource snapshot, local node: %s, status: %s",
+                remoteApi_->Address(), localAddr_, rc.ToString());
+            return rc;
         } else {
-            LOG(WARNING) << FormatString("[Migrate Data] Spy on remote node %s remain bytes but meets error: %s",
-                                         remoteApi_->Address(), s.ToString());
-            if (s.GetCode() == StatusCode::K_NOT_READY) {
-                RETURN_STATUS(StatusCode::K_NOT_READY, "[Migrate Data] Remote node cannot accept data");
-            }
+            LOG(WARNING) << FormatString(
+                "[Migrate Data] Failed to get remote node %s available memory from resource snapshot, local node: %s, "
+                "status: %s, fallback to remote probe",
+                remoteApi_->Address(), localAddr_, rc.ToString());
+            RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc(type));
         }
+    } else {
+        RETURN_IF_NOT_OK(SpyOnRemoteRemainBytesByRpc(type));
     }
 
     if (IsRemoteLackResources()) {
-        LOG(WARNING) << FormatString("[Migrate Data] Remote node %s has no remain bytes: %ld", remoteApi_->Address(),
-                                     maxBatchSize_);
+        LOG(WARNING) << FormatString(
+            "[Migrate Data] Remote node %s has no remain bytes, local node: %s, cache type: %d, max batch size: %ld",
+            remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
         RETURN_STATUS(StatusCode::K_NO_SPACE, "[Migrate Data] No remain bytes");
     }
 
-    LOG(INFO) << FormatString("[Migrate Data] Remote node %s remain bytes: %ld", remoteApi_->Address(), maxBatchSize_);
+    LOG(INFO) << FormatString(
+        "[Migrate Data] Remote node %s remain bytes, local node: %s, cache type: %d, max batch size: %ld",
+        remoteApi_->Address(), localAddr_, static_cast<int>(type), maxBatchSize_);
+    return Status::OK();
+}
+
+Status MigrateDataHandler::SpyOnRemoteRemainBytesByRpc(CacheType type)
+{
+    MigrateDataReqPb req;
+    req.set_type(type_);
+    MigrateDataRspPb rsp;
+    Status s = MigrateDataToRemoteRetry(remoteApi_, req, {}, rsp);
+    if (s.IsError()) {
+        LOG(WARNING) << FormatString(
+            "[Migrate Data] Spy on remote node %s remain bytes but meets error, local node: %s, status: %s",
+            remoteApi_->Address(), localAddr_, s.ToString());
+        if (s.GetCode() == StatusCode::K_NOT_READY) {
+            RETURN_STATUS(StatusCode::K_NOT_READY,
+                          FormatString("[Migrate Data] Remote node %s cannot accept data", remoteApi_->Address()));
+        }
+        return s;
+    }
+    if (!strategy_->CheckCondition(rsp, type)) {
+        LOG(WARNING) << FormatString(
+            "[Migrate Data] Remote node %s has insufficient space, local node: %s, cache type: %d, remain bytes: %ld, "
+            "disk remain bytes: %ld, available ratio: %.2f, disk available ratio: %.2f, scale down state: %d",
+            remoteApi_->Address(), localAddr_, static_cast<int>(type), rsp.remain_bytes(), rsp.disk_remain_bytes(),
+            rsp.available_ratio(), rsp.disk_available_ratio(), static_cast<int>(rsp.scale_down_state()));
+        RETURN_STATUS(StatusCode::K_NO_SPACE,
+                      FormatString("[Migrate Data] Remote node %s has insufficient space", remoteApi_->Address()));
+    }
+    RETURN_IF_NOT_OK(TryUpdateRate(rsp.limit_rate()));
+    if (type == CacheType::MEMORY) {
+        AdjustMaxBatchSize(rsp.remain_bytes());
+    } else {
+        AdjustMaxBatchSize(rsp.disk_remain_bytes());
+    }
     return Status::OK();
 }
 
@@ -262,11 +294,6 @@ Status MigrateDataHandler::AddObjectDataLocked(const ObjectKV &objectKV)
     }
     currBatchSize_ += entry->GetDataSize();
     ++currBatchCount_;
-    if (entry->modeInfo.GetCacheType() == CacheType::MEMORY) {
-        currentMemorySize_ += entry->GetDataSize();
-    } else {
-        currentDiskSize_ += entry->GetDataSize();
-    }
     return Status::OK();
 }
 
