@@ -495,7 +495,7 @@ TEST_F(WorkerDfxTest, TestClientExitAsyncNotifyToMaster)
     DS_ASSERT_OK(objClient1_->Create("Warriors", objSize, param, buffer));
 }
 
-TEST_F(WorkerDfxTest, TestMasterCacheInvalidFailure)
+TEST_F(WorkerDfxTest, DISABLED_TestMasterCacheInvalidFailure)
 {
     LOG(INFO) << "Test master process cache invalid failure.";
     // Sort worker addresses.

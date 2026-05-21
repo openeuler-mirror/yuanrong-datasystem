@@ -243,11 +243,27 @@ Status HttpRequest::GetCanonicalRequest(bool isEscape, std::string &canonicalReq
 
 void HttpRequest::ConcatenateQueryParams()
 {
+    auto queryPos = url_.find('?');
+    if (queryPos != std::string::npos) {
+        std::string query = url_.substr(queryPos + 1);
+        url_.erase(queryPos);
+        std::stringstream queryStream(query);
+        std::string param;
+        while (std::getline(queryStream, param, '&')) {
+            if (param.empty()) {
+                continue;
+            }
+            auto separatorPos = param.find('=');
+            std::string name = separatorPos == std::string::npos ? param : param.substr(0, separatorPos);
+            std::string value = separatorPos == std::string::npos ? "" : param.substr(separatorPos + 1);
+            queryParams_.emplace(std::move(name), std::move(value));
+        }
+    }
     if (queryParams_.empty()) {
         return;
     }
     std::stringstream ss;
-    ss << url_ << "/?";
+    ss << url_ << "?";
     for (auto it = queryParams_.begin(); it != queryParams_.end(); ++it) {
         ss << it->first;
         if (!it->second.empty()) {

@@ -80,5 +80,94 @@ TEST_F(HttpRequestTest, GetCanonicalRequestWhenEmptyArgsTest)
     EXPECT_EQ(canonicalRequest, expected);
 }
 
+TEST_F(HttpRequestTest, ConcatenateQueryParamsShouldNotAppendPathSlash)
+{
+    HttpRequest req;
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/BQeOm/1779085341528296");
+    req.AddQueryParam("uploads", "");
+
+    req.ConcatenateQueryParams();
+
+    EXPECT_EQ(req.GetUrl(), "http://127.0.0.1:30110/ci-bucket/BQeOm/1779085341528296?uploads");
+}
+
+TEST_F(HttpRequestTest, ConcatenateQueryParamsShouldKeepExistingPathSlash)
+{
+    HttpRequest req;
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/BQeOm/1779085341528296/");
+    req.AddQueryParam("uploads", "");
+
+    req.ConcatenateQueryParams();
+
+    EXPECT_EQ(req.GetUrl(), "http://127.0.0.1:30110/ci-bucket/BQeOm/1779085341528296/?uploads");
+}
+
+TEST_F(HttpRequestTest, ConcatenateQueryParamsShouldUseAmpersandWhenQueryExists)
+{
+    HttpRequest req;
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/object?prefix=a");
+    req.AddQueryParam("uploadId", "id-001");
+
+    req.ConcatenateQueryParams();
+
+    EXPECT_EQ(req.GetUrl(), "http://127.0.0.1:30110/ci-bucket/object?prefix=a&uploadId=id-001");
+}
+
+TEST_F(HttpRequestTest, ConcatenateQueryParamsShouldMergeExistingQueryParams)
+{
+    HttpRequest req;
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/object?prefix=a");
+    req.AddQueryParam("prefix", "new-a");
+    req.AddQueryParam("uploadId", "id-001");
+
+    req.ConcatenateQueryParams();
+
+    EXPECT_EQ(req.GetUrl(), "http://127.0.0.1:30110/ci-bucket/object?prefix=new-a&uploadId=id-001");
+    EXPECT_EQ(req.GetQueryParams().at("prefix"), "new-a");
+    EXPECT_EQ(req.GetQueryParams().at("uploadId"), "id-001");
+}
+
+TEST_F(HttpRequestTest, CanonicalRequestShouldUseOriginalPathAfterConcatenateQueryParams)
+{
+    HttpRequest req;
+    req.SetMethod(HttpMethod::POST);
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/BQeOm/1779085341528296");
+    req.AddQueryParam("uploads", "");
+    req.ConcatenateQueryParams();
+
+    std::string canonicalRequest;
+    DS_ASSERT_OK(req.GetCanonicalRequest(true, canonicalRequest));
+
+    std::string expected =
+        "POST\n"
+        "/ci-bucket/BQeOm/1779085341528296\n"
+        "uploads=\n"
+        "\n"
+        "\n"
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    EXPECT_EQ(canonicalRequest, expected);
+}
+
+TEST_F(HttpRequestTest, CanonicalRequestShouldUseMergedExistingQueryParams)
+{
+    HttpRequest req;
+    req.SetMethod(HttpMethod::POST);
+    req.SetUrl("http://127.0.0.1:30110/ci-bucket/object?prefix=a");
+    req.AddQueryParam("uploadId", "id-001");
+    req.ConcatenateQueryParams();
+
+    std::string canonicalRequest;
+    DS_ASSERT_OK(req.GetCanonicalRequest(true, canonicalRequest));
+
+    std::string expected =
+        "POST\n"
+        "/ci-bucket/object\n"
+        "prefix=a&uploadId=id-001\n"
+        "\n"
+        "\n"
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    EXPECT_EQ(canonicalRequest, expected);
+}
+
 }  // namespace ut
 }  // namespace datasystem
