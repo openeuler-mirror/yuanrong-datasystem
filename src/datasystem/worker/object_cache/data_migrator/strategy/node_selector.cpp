@@ -183,7 +183,7 @@ size_t NodeSelector::GetAvailableMemory(const std::string &address)
     if (!it->isReady) {
         return 0;
     }
-
+    
     return it->availableMemory;
 }
 
