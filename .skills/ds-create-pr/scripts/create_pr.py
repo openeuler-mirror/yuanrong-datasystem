@@ -22,6 +22,36 @@ DEFAULT_PR_TEMPLATE_FILE = (
     REPO_ROOT / ".gitee" / "PULL_REQUEST_TEMPLATE" / "PULL_REQUEST_TEMPLATE.zh-cn.md"
 )
 REPO_TEMPLATE_TARGET = ("openeuler", "yuanrong-datasystem")
+SENSITIVE_CONTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "server IP or endpoint",
+        re.compile(r"\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?::\d{1,5})?\b"),
+    ),
+    (
+        "local filesystem path",
+        re.compile(
+            r"(?<![\w.-])(?:/(?:Users|home|root|tmp|var|mnt|opt|workspace|Volumes)(?:/[^\s`'\"<>]+)+"
+            r"|[A-Za-z]:\\(?:Users|workspace|tmp|temp)\\[^\s`'\"<>]+)"
+        ),
+    ),
+    (
+        "credential assignment",
+        re.compile(
+            r"(?i)\b(?:password|passwd|pwd|secret|token|access[_ -]?key|secret[_ -]?key|"
+            r"system[_ -]?access[_ -]?key|system[_ -]?secret[_ -]?key|"
+            r"tenant[_ -]?access[_ -]?key|tenant[_ -]?secret[_ -]?key|ak|sk|"
+            r"username|user|account)\s*[:=]"
+        ),
+    ),
+    (
+        "private or ssh key",
+        re.compile(
+            r"(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"
+            r"BEGIN OPENSSH PRIVATE KEY|"
+            r"ssh-rsa\s+[A-Za-z0-9+/=]{20,}"
+        ),
+    ),
+)
 
 
 def require_non_empty_token(token: str, source: str, fallback_path: Path) -> str:
@@ -100,6 +130,24 @@ def validate_pr_body(body: str | None, template_path: Path | None) -> str | None
     return body
 
 
+def validate_no_sensitive_content(fields: dict[str, str | None]) -> None:
+    violations: list[str] = []
+    for field_name, value in fields.items():
+        if not value:
+            continue
+        matched_categories = [
+            category for category, pattern in SENSITIVE_CONTENT_PATTERNS if pattern.search(value)
+        ]
+        if matched_categories:
+            violations.append(f"{field_name}: {', '.join(matched_categories)}")
+    if violations:
+        raise SystemExit(
+            "Sensitive information is not allowed in commit messages or PR descriptions. "
+            "Remove or redact these categories before creating the PR: "
+            + "; ".join(violations)
+        )
+
+
 def put_if_present(payload: dict[str, Any], key: str, value: Any) -> None:
     if value is not None:
         payload[key] = value
@@ -107,6 +155,13 @@ def put_if_present(payload: dict[str, Any], key: str, value: Any) -> None:
 
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     body = validate_pr_body(read_body(args), resolve_template_file(args))
+    validate_no_sensitive_content(
+        {
+            "PR title": args.title,
+            "PR body": body,
+            "squash commit message": args.squash_commit_message,
+        }
+    )
     payload: dict[str, Any] = {
         "title": args.title,
         "head": args.head,
@@ -222,7 +277,10 @@ def main() -> int:
     info = conflict_info or result
     if detect_conflict(info):
         print("CONFLICT_STATUS=conflict")
-        print("The PR appears to have conflicts. Refresh doc_pages from upstream and regenerate the docs refresh commit.")
+        print(
+            "The PR appears to have conflicts. Refresh doc_pages from upstream "
+            "and regenerate the docs refresh commit."
+        )
         return 2
     if conflict_info is not None:
         print("CONFLICT_STATUS=clean")

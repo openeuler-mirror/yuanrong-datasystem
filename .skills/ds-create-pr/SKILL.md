@@ -13,7 +13,8 @@ description: Create GitCode Pull Requests for openeuler/yuanrong-datasystem or o
 3. Get the token from `GITCODE_TOKEN`, `GITCODE_ACCESS_TOKEN`, or `~/.local/gitcode_token`. Never print the token.
    Empty or whitespace-only token values are treated as configuration errors and will produce a clear prompt telling the caller what to fix.
 4. Before submitting the PR, prepare a PR description that follows `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md` and fills in the current change summary, verification result, and any API-impact notes. For `openeuler/yuanrong-datasystem`, the bundled script now treats a missing or non-template PR body as an error.
-5. Prefer the bundled script:
+5. Check commit messages and the PR description for sensitive or personal information before creating the PR. Do not include server IPs or ports, local absolute paths, account names, passwords, tokens, SSH/private keys, AK/SK, or similar non-public details. Redact or generalize them first; use repository-relative paths and sanitized log names instead.
+6. Prefer the bundled script:
 
    ```bash
    python3 .skills/ds-create-pr/scripts/create_pr.py \
@@ -25,8 +26,8 @@ description: Create GitCode Pull Requests for openeuler/yuanrong-datasystem or o
      --body-file /tmp/pr-body.md
    ```
 
-6. Keep `--check-conflicts` enabled. If the script reports `CONFLICT_STATUS=conflict`, tell the caller to refresh from the latest upstream `doc_pages` and regenerate the docs refresh commit before opening a new PR.
-7. Report the returned `html_url`, `web_url`, or `url` to the user.
+7. Keep `--check-conflicts` enabled. If the script reports `CONFLICT_STATUS=conflict`, tell the caller to refresh from the latest upstream `doc_pages` and regenerate the docs refresh commit before opening a new PR.
+8. Report the returned `html_url`, `web_url`, or `url` to the user.
 
 ## Defaults For This Repository
 
@@ -44,5 +45,6 @@ For online documentation refreshes, use base branch `doc_pages` and the pushed d
 - Do not push local branches to the upstream `openeuler/yuanrong-datasystem` repository when preparing the PR source branch. Push to a fork or another non-upstream remote instead.
 - Do not create a PR until the source branch exists on the remote.
 - Check the created PR for conflicts before declaring the workflow complete.
-- Do not include credentials in command output, PR body, commit messages, or logs.
+- Do not include sensitive or personal information in command output, PR body, commit messages, or logs. This includes server IPs or ports, local absolute paths, account names, passwords, tokens, SSH/private keys, AK/SK, and similar non-public details.
+- The bundled script rejects common sensitive patterns in PR title, PR body, and `--squash-commit-message`; still inspect regular commit messages separately because they may not be passed to the script.
 - If the API fails, preserve the HTTP status and response body summary, but redact token-like values.

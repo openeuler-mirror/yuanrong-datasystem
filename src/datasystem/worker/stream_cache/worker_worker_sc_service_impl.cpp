@@ -17,6 +17,7 @@
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 
 #include <functional>
+#include <numeric>
 #include <utility>
 
 #include "datasystem/worker/stream_cache/stream_manager.h"
@@ -147,6 +148,16 @@ Status WorkerWorkerSCServiceImpl::ProcessRecvElementView(std::shared_ptr<BaseBuf
     std::shared_ptr<StreamManager> streamMgr;
     auto rc = CheckStreamState(data->StreamName(), accessor, streamMgr);
     if (streamMgr) {
+        if (streamMgr->CheckConsumerExist(sendWorkerAddr).IsError()) {
+            LOG(INFO) << FormatString(
+                "[S:%s, W:%s, seq:%zu] Discard remote element because no local consumer exists", streamName,
+                sendWorkerAddr, seqNo);
+            auto remainingLength = std::accumulate(data->sz_.begin() + data->idx_, data->sz_.end(), 0ul);
+            LOG_IF_ERROR(usageMonitor_.DecUsage(streamName, workerAddr, remainingLength),
+                         FormatString("%s:%s", __FUNCTION__, __LINE__));
+            baseBufferData.reset();
+            return Status::OK();
+        }
         if (streamMgr->IsProducerBlocked(sendWorkerAddr)) {
             isBlocked = true;
             return Status::OK();

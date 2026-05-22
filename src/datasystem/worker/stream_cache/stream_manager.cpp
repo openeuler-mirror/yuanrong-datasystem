@@ -122,7 +122,7 @@ void StreamManager::BlockMemoryReclaim()
 
 void StreamManager::UnblockMemoryReclaim()
 {
-    reclaimMutex_.unlock();
+    reclaimMutex_.unlock_shared();
 }
 
 Status StreamManager::AddCursorForProducer(const std::string &producerId, ShmView &shmView)

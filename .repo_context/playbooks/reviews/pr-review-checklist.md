@@ -16,7 +16,7 @@
   - `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md`
   - source and tests touched by the PR
 - Last verified against source:
-  - `2026-05-14`
+  - `2026-05-22`
 
 ## Review Stance
 
@@ -35,7 +35,30 @@ and missing tests. Keep style suggestions secondary unless style affects correct
 | compatibility | Does it alter public API, proto, persisted format, logs, metrics, or config semantics? |
 | tests | Are UT/ST/recovery/perf tests sufficient for the risk surface? |
 | observability | Are logs/metrics/inject points enough to diagnose failure without flooding hot paths? |
+| sensitive information | Do source code, tests, scripts, docs, PR descriptions, and commit messages avoid secrets, private endpoints, local paths, account data, and raw sensitive payloads? |
 | context | Did the PR update `.repo_context` when module behavior, commands, or workflows changed? |
+
+## Sensitive Information Review Gate
+
+Review every artifact in scope for accidental disclosure before approving:
+
+- source files, test data, generated examples, shell/Python/CMake/CI scripts, docs, and `.repo_context` updates;
+- PR title/body, verification notes, linked log snippets, reviewer-visible comments, and commit messages.
+
+Flag and request cleanup for:
+
+- passwords, tokens, private or SSH keys, AK/SK values, access keys, secret keys, tenant/system keys, or other usable
+  authentication material;
+- server IPs, host:port pairs, internal endpoints, private URLs, non-public service addresses, or environment-specific
+  ports;
+- local absolute paths, personal home directories, workspace paths, account names, user names, tenant identifiers, or raw
+  logs that expose private environment details;
+- logs, metrics, errors, tests, or scripts that newly print or persist sensitive request payloads, object data,
+  credentials, tokens, or account metadata.
+
+Do not copy the sensitive value into a finding or review comment. Cite the location and category only, then ask for a
+repo-relative path, sanitized placeholder, or redacted example. For exposed usable credentials or keys, require rotation
+in addition to redaction.
 
 ## Hot Path Review Gate
 
@@ -107,4 +130,5 @@ Severity guidance:
 - [ ] Shared state and async lifetimes are safe.
 - [ ] Durable state is crash-safe and recoverable.
 - [ ] Tests match the risk surface.
+- [ ] Source code, tests, scripts, docs, PR body, and commit messages do not expose sensitive information.
 - [ ] PR body includes verification and API/context impact when relevant.

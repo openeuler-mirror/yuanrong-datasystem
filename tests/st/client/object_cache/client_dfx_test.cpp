@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <ctime>
 #include <memory>
 #include <string>
@@ -40,6 +41,47 @@
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int kEventuallyWaitTimeoutMs = 15'000;
+constexpr int kEventuallyPollIntervalMs = 100;
+constexpr char kMasterCacheInvalidInject[] = "master.cache_invalid_failed";
+constexpr char kPersistentRpcDeadlineExceeded[] = "return(K_RPC_DEADLINE_EXCEEDED)";
+
+template <typename Operation>
+void AssertEventuallyNotOk(Operation operation, const std::string &operationName)
+{
+    Status rc;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventuallyWaitTimeoutMs);
+    do {
+        rc = operation();
+        if (rc.IsError()) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    } while (std::chrono::steady_clock::now() < deadline);
+    ASSERT_TRUE(rc.IsError()) << operationName << " stayed OK for " << kEventuallyWaitTimeoutMs
+                              << " ms, last status: " << rc.ToString();
+}
+
+template <typename Operation>
+void AssertEventuallyOk(Operation operation, const std::string &operationName)
+{
+    Status rc;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventuallyWaitTimeoutMs);
+    do {
+        rc = operation();
+        if (rc.IsOk()) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    } while (std::chrono::steady_clock::now() < deadline);
+    ASSERT_TRUE(rc.IsOk()) << operationName << " stayed non-OK for " << kEventuallyWaitTimeoutMs
+                           << " ms, last status: " << rc.ToString();
+}
+}  // namespace
+
 class WorkerDfxTest : public OCClientCommon {
 public:
     void TearDown() override
@@ -90,12 +132,12 @@ TEST_F(WorkerDfxTest, LEVEL1_TestWorkerCrashAndOperateBuffer)
 
     // Then we crash the worker and try to operate the shm pointer.
     cluster_->ShutdownNodes(WORKER);
-    sleep(2);  // The heartbeat interval is 0.5s, and the maximum number of worker disconnections is 1s.
     std::vector<uint8_t> data;
     data.resize(objSize);
     std::vector<std::string> failedObjectKeys;
     // Make sure the op below would be failed.
-    DS_ASSERT_NOT_OK(buffer->MemoryCopy(data.data(), data.size()));
+    AssertEventuallyNotOk([&buffer, &data] { return buffer->MemoryCopy(data.data(), data.size()); },
+                          "MemoryCopy after worker shutdown");
     DS_ASSERT_NOT_OK(buffer->Publish());
     DS_ASSERT_NOT_OK(client1->GIncreaseRef({ objKey }, failedObjectKeys));
     DS_ASSERT_NOT_OK(buffer->Seal());
@@ -255,7 +297,7 @@ TEST_F(WorkerDfxTest, TestGdecreaseWorkerClearFailed)
     std::string objectKey = "object1";
     std::shared_ptr<Buffer> buffer;
     DS_ASSERT_OK(client1->Create(objectKey, data.size(), CreateParam{}, buffer));
-    DS_ASSERT_OK(buffer->Publish());
+    AssertEventuallyOk([&buffer] { return buffer->Publish(); }, "initial publish after cluster startup");
     std::vector<Optional<Buffer>> buffers;
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client1->GIncreaseRef({ objectKey }, failedObjectKeys));
@@ -541,8 +583,7 @@ TEST_F(WorkerDfxTest, TestMasterCacheInvalidFailure)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerMasterOCApi.UpdateMeta.timeoutMs", "call(20)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.CreateMeta.timeoutMs", "call(20)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.UpdateMeta.timeoutMs", "call(20)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "master.cache_invalid_failed", "1*return(K_RPC_DEADLINE_EXCEEDED)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kMasterCacheInvalidInject, kPersistentRpcDeadlineExceeded));
     datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(1000)");
     DS_ASSERT_NOT_OK(buffer->Publish());
 
@@ -555,6 +596,7 @@ TEST_F(WorkerDfxTest, TestMasterCacheInvalidFailure)
               std::string(reinterpret_cast<const char *>((*buffers3[0]).ImmutableData()), (*buffers3[0]).GetSize()));
 
     // worker1 publish success
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, kMasterCacheInvalidInject));
     DS_ASSERT_OK(buffer->MemoryCopy((void *)data2.c_str(), data2.size()));
     DS_ASSERT_OK(buffer->Publish());
 
@@ -614,8 +656,7 @@ TEST_F(WorkerDfxTest, TestPublishFailReGet)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerMasterOCApi.UpdateMeta.timeoutMs", "call(20)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.CreateMeta.timeoutMs", "call(20)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.UpdateMeta.timeoutMs", "call(20)"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "master.cache_invalid_failed", "1*return(K_RPC_DEADLINE_EXCEEDED)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kMasterCacheInvalidInject, kPersistentRpcDeadlineExceeded));
     datasystem::inject::Set("rpc_util.retry_on_error_after_func", "1*sleep(1000)");
     DS_ASSERT_NOT_OK(buffer->Publish());
 
@@ -628,6 +669,7 @@ TEST_F(WorkerDfxTest, TestPublishFailReGet)
               std::string(reinterpret_cast<const char *>((*buffers4[0]).ImmutableData()), (*buffers4[0]).GetSize()));
 
     // worker2 retry publish success
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, kMasterCacheInvalidInject));
     DS_ASSERT_OK(buffer->MemoryCopy((void *)data2.c_str(), data2.size()));
     DS_ASSERT_OK(buffer->Publish());
 

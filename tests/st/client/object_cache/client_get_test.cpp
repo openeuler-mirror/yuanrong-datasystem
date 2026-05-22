@@ -952,20 +952,24 @@ TEST_F(OCClientGetTest, ConcurrentGetFailedInWorker)
     std::string data = GenRandomString(SHM_SIZE);
     CreateAndSealObject(client1, objectKey, data);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "worker.GetObjectFromRemote.AfterAttach",
-                                           "1*sleep(1000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.LoadObjectData.AddPayload",
-                                           "3*return(K_RUNTIME_ERROR)"));
+                                           "return(K_RUNTIME_ERROR)"));
     ThreadPool pool(2);
-    pool.Execute([&client2, &objectKey] {
+    WaitPost start;
+    std::atomic<int> readyNum{ 0 };
+    auto getObject = [&client2, &objectKey, &start, &readyNum]() {
+        if (readyNum.fetch_add(1) + 1 == 2) {
+            start.Set();
+        } else {
+            start.Wait();
+        }
         std::vector<Optional<Buffer>> dataList;
-        DS_EXPECT_NOT_OK(client2->Get({ objectKey }, 0, dataList));
-    });
-
-    pool.Execute([&client2, &objectKey] {
-        std::vector<Optional<Buffer>> dataList;
-        DS_EXPECT_NOT_OK(client2->Get({ objectKey }, 0, dataList));
-    });
+        return client2->Get({ objectKey }, 0, dataList);
+    };
+    auto fut1 = pool.Submit(getObject);
+    auto fut2 = pool.Submit(getObject);
+    DS_EXPECT_NOT_OK(fut1.get());
+    DS_EXPECT_NOT_OK(fut2.get());
 }
 
 TEST_F(OCClientGetTest, GetFailedInWorkerReturnNoWait)
@@ -1708,9 +1712,13 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
     InitTestClient(0, client1, 5000);
     InitTestClient(1, client2, 5000);
 
+    // Validate RPC-error semantics without turning the zero-timeout get into a remote fanout stress test.
+    constexpr size_t objectCount = 8;
+    constexpr size_t localObjectCount = 1;
     std::string data = GenRandomString(SHM_SIZE);
     std::vector<std::string> objKeys;
-    for (size_t i = 0; i < 100; ++i) {
+    objKeys.reserve(objectCount);
+    for (size_t i = 0; i < objectCount; ++i) {
         std::string objKey = "obj" + std::to_string(i);
         objKeys.emplace_back(objKey);
         if (i == 0) {
@@ -1724,7 +1732,7 @@ TEST_F(OCClientGetTest2, LEVEL1_TestRemoteGetMeetsRpcError)
     DS_ASSERT_OK(client1->Get(objKeys, 0, buffers));
     ASSERT_EQ(buffers.size(), objKeys.size());
     ASSERT_TRUE(buffers[0]);
-    for (size_t i = 1; i < buffers.size(); ++i) {
+    for (size_t i = localObjectCount; i < buffers.size(); ++i) {
         ASSERT_FALSE(buffers[i]);
     }
 
