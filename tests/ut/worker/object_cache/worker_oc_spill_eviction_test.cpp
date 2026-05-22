@@ -25,6 +25,7 @@
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -156,6 +157,87 @@ public:
         batchCount = batchTaskIds.size();
     }
 
+    void TestEvictionTraceAggregatorClassifiesSuccessAndFailedKeys()
+    {
+        WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
+        WorkerOcEvictionManager::EvictionTrace successTrace("batch_task_success");
+        successTrace.action = WorkerOcEvictionManager::Action::MIGRATE;
+        successTrace.rc = Status::OK();
+        successTrace.AddObjectKeySize("success_key_0", 1);
+        successTrace.AddObjectKeySize("success_key_1", 1);
+        aggregator.Add(successTrace);
+
+        WorkerOcEvictionManager::EvictionTrace failedTrace("batch_task_failed");
+        failedTrace.action = WorkerOcEvictionManager::Action::MIGRATE;
+        failedTrace.rc = Status(K_RUNTIME_ERROR, "migrate failed");
+        failedTrace.AddObjectKeySize("failed_key_0", 1);
+        aggregator.Add(failedTrace);
+
+        const auto &summaries = aggregator.GetSummaries();
+        const auto &summary = summaries.at(WorkerOcEvictionManager::Action::MIGRATE);
+        ASSERT_EQ(summary.successKeys.size(), size_t(2));
+        ASSERT_EQ(summary.failedKeys.size(), size_t(1));
+        ASSERT_TRUE(std::find(summary.successKeys.begin(), summary.successKeys.end(), "success_key_0")
+                    != summary.successKeys.end());
+        ASSERT_TRUE(std::find(summary.successKeys.begin(), summary.successKeys.end(), "success_key_1")
+                    != summary.successKeys.end());
+        ASSERT_TRUE(std::find(summary.failedKeys.begin(), summary.failedKeys.end(), "failed_key_0")
+                    != summary.failedKeys.end());
+    }
+
+    void TestEvictionTraceAggregatorTreatsWholeTraceAsFailedWhenNoFailedKeyDetails()
+    {
+        WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
+        WorkerOcEvictionManager::EvictionTrace trace("failed_task");
+        trace.action = WorkerOcEvictionManager::Action::DELETE;
+        trace.rc = Status(K_RUNTIME_ERROR, "delete failed");
+        trace.AddObjectKeySize("failed_key_0", 1);
+        trace.AddObjectKeySize("failed_key_1", 1);
+
+        aggregator.Add(trace);
+
+        const auto &summaries = aggregator.GetSummaries();
+        const auto &summary = summaries.at(WorkerOcEvictionManager::Action::DELETE);
+        ASSERT_EQ(summary.successKeys.size(), size_t(0));
+        ASSERT_EQ(summary.failedKeys.size(), size_t(2));
+        ASSERT_TRUE(std::find(summary.failedKeys.begin(), summary.failedKeys.end(), "failed_key_0")
+                    != summary.failedKeys.end());
+        ASSERT_TRUE(std::find(summary.failedKeys.begin(), summary.failedKeys.end(), "failed_key_1")
+                    != summary.failedKeys.end());
+    }
+
+    void TestEvictionTraceAggregatorFlushesWhenKeyCountExceedsThreshold()
+    {
+        WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
+        constexpr size_t threshold = 32;
+        for (size_t i = 0; i < threshold; ++i) {
+            WorkerOcEvictionManager::EvictionTrace trace("key_" + std::to_string(i));
+            trace.action = WorkerOcEvictionManager::Action::FREE_MEMORY;
+            trace.rc = Status::OK();
+            trace.AddObjectKeySize(trace.taskId, 1);
+            aggregator.Add(trace);
+        }
+
+        const auto &summaries = aggregator.GetSummaries();
+        const auto &summary = summaries.at(WorkerOcEvictionManager::Action::FREE_MEMORY);
+        ASSERT_EQ(summary.successKeys.size(), size_t(0));
+        ASSERT_EQ(summary.failedKeys.size(), size_t(0));
+    }
+
+    void TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName()
+    {
+        WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
+        WorkerOcEvictionManager::EvictionTrace trace("retry_key");
+        trace.action = WorkerOcEvictionManager::Action::SPILL;
+        trace.rc = Status(K_TRY_AGAIN, "retry later");
+        trace.AddObjectKeySize("retry_key", 1);
+
+        aggregator.Add(trace);
+
+        ASSERT_EQ(aggregator.GetSummaries().count(WorkerOcEvictionManager::Action::SPILL), size_t(0));
+        ASSERT_EQ(WorkerOcEvictionManager::GetActionName(WorkerOcEvictionManager::Action::MIGRATE), "migrate");
+    }
+
 protected:
     std::string GetModeName(WriteMode mode)
     {
@@ -281,6 +363,26 @@ TEST_F(SpillEvictionTest, DISABLED_TestEvictWaterMark)
     const int sleepUs = 10'000;
     usleep(sleepUs);
     ASSERT_FALSE(WorkerOcSpill::Instance()->IsSpaceExceedLWM());
+}
+
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorClassifiesSuccessAndFailedKeys)
+{
+    TestEvictionTraceAggregatorClassifiesSuccessAndFailedKeys();
+}
+
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorTreatsWholeTraceAsFailedWhenNoFailedKeyDetails)
+{
+    TestEvictionTraceAggregatorTreatsWholeTraceAsFailedWhenNoFailedKeyDetails();
+}
+
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorFlushesWhenKeyCountExceedsThreshold)
+{
+    TestEvictionTraceAggregatorFlushesWhenKeyCountExceedsThreshold();
+}
+
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName)
+{
+    TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName();
 }
 
 TEST_F(SpillEvictionTest, TestEvictObjectBatchMigrate)

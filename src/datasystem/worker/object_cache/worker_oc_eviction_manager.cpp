@@ -22,7 +22,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <sstream>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -68,6 +71,110 @@ static constexpr int BATCH_SPILL_THRESHOLD = 512;
 static constexpr int BATCH_DELETE_META_THRESHOLD = 300;
 static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
 thread_local std::string evictSpillTaskId;
+
+constexpr uint64_t EVICTION_TRACE_SUMMARY_INTERVAL_MS = 60 * SECS_TO_MS;
+constexpr size_t EVICTION_TRACE_SUMMARY_THRESHOLD = 32;
+namespace {
+std::string JoinKeys(const std::vector<std::string> &keys)
+{
+    std::stringstream ss;
+    ss << "[";
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (i != 0) {
+            ss << ", ";
+        }
+        ss << keys[i];
+    }
+    ss << "]";
+    return ss.str();
+}
+}  // namespace
+
+WorkerOcEvictionManager::EvictionTrace::~EvictionTrace()
+{
+    static thread_local EvictionTraceAggregator aggregator;
+    aggregator.Add(*this);
+}
+
+WorkerOcEvictionManager::EvictionTraceAggregator::~EvictionTraceAggregator()
+{
+    for (auto &item : summaries_) {
+        Flush(item.first, item.second);
+    }
+}
+
+void WorkerOcEvictionManager::EvictionTraceAggregator::Add(const EvictionTrace &trace)
+{
+    if (trace.rc.GetCode() == K_TRY_AGAIN || trace.rc.GetCode() == K_NOT_READY) {
+        return;
+    }
+    auto elapsed = trace.timer.ElapsedMilliSecond();
+    if (elapsed > 1 || trace.rc.IsError()) {
+        auto actionName = GetActionName(trace.action);
+        std::stringstream ss;
+        ss << "[TaskId " << trace.taskId << "] ";
+        if (!trace.info.empty()) {
+            ss << trace.info << ", ";
+        }
+        ss << "evict action " << actionName << ", total cost " << elapsed << " ms, "
+           << "obj size: " << trace.objectSize;
+        if (trace.action == Action::SPILL) {
+            ss << "spill cost " << trace.spillCost << " ms, ";
+        }
+        ss << "status:" << (trace.rc.IsOk() ? "OK" : trace.rc.GetMsg());
+        LOG(INFO) << ss.str();
+    }
+    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    auto &summary = summaries_[trace.action];
+    if (summary.lastLogTimeMs == 0) {
+        summary.lastLogTimeMs = nowMs;
+    }
+    if (!trace.objectKeySizeMap.empty()) {
+        auto &keys = trace.rc.IsOk() ? summary.successKeys : summary.failedKeys;
+        keys.reserve(keys.size() + trace.objectKeySizeMap.size());
+        for (const auto &item : trace.objectKeySizeMap) {
+            keys.emplace_back(item.first);
+        }
+    } else {
+        if (trace.rc.IsOk()) {
+            summary.successKeys.emplace_back(trace.taskId);
+        } else {
+            summary.failedKeys.emplace_back(trace.taskId);
+        }
+    }
+    FlushIfNeeded(trace.action, summary, nowMs);
+}
+
+void WorkerOcEvictionManager::EvictionTraceAggregator::FlushIfNeeded(Action action, ActionSummary &summary,
+                                                                     uint64_t nowMs)
+{
+    auto keyCount = summary.successKeys.size() + summary.failedKeys.size();
+    if (keyCount >= EVICTION_TRACE_SUMMARY_THRESHOLD
+        || nowMs - summary.lastLogTimeMs >= EVICTION_TRACE_SUMMARY_INTERVAL_MS) {
+        Flush(action, summary);
+    }
+}
+
+void WorkerOcEvictionManager::EvictionTraceAggregator::Flush(Action action, ActionSummary &summary)
+{
+    if (summary.successKeys.empty() && summary.failedKeys.empty()) {
+        return;
+    }
+    LOG(INFO) << "Evict summary, action " << GetActionName(action)
+              << ", success key count: " << summary.successKeys.size()
+              << ", success keys: " << JoinKeys(summary.successKeys)
+              << ", failed key count: " << summary.failedKeys.size()
+              << ", failed keys: " << JoinKeys(summary.failedKeys);
+    summary.successKeys.clear();
+    summary.failedKeys.clear();
+    summary.lastLogTimeMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+}
+
+const std::unordered_map<WorkerOcEvictionManager::Action, WorkerOcEvictionManager::ActionSummary>
+    &WorkerOcEvictionManager::EvictionTraceAggregator::GetSummaries() const
+{
+    return summaries_;
+}
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
                                                  HostPort masterAddress, master::MasterOCServiceImpl *masterOc)
@@ -204,7 +311,10 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
             addFailedObjects(currentObjectKeys, rc);
             continue;
         }
-        if (rsp.meta_is_moving()) { addFailedObjects(currentObjectKeys, { K_TRY_AGAIN, "Meta is moving." }); continue; }
+        if (rsp.meta_is_moving()) {
+            addFailedObjects(currentObjectKeys, { K_TRY_AGAIN, "Meta is moving." });
+            continue;
+        }
         if (!rsp.failed_ids().empty()) {
             std::vector<std::string> failedIds(rsp.failed_ids().begin(), rsp.failed_ids().end());
             addFailedObjects(failedIds, { K_TRY_AGAIN, "RemoveMeta returned failed ids." });
@@ -389,7 +499,9 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         GetObjectNextAction(*entry, trace, pendingSpillSize);
         bool wasDeletedObjectsEmpty = deletedObjects.empty();
         rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, &deletedObjects);
-        if (wasDeletedObjectsEmpty && !deletedObjects.empty()) { deletedObjectsFlushTimer.Reset(); }
+        if (wasDeletedObjectsEmpty && !deletedObjects.empty()) {
+            deletedObjectsFlushTimer.Reset();
+        }
         if (deletedObjects.size() >= BATCH_DELETE_META_THRESHOLD
             || (!deletedObjects.empty() && deletedObjectsFlushTimer.IsTimeout())) {
             flushDeletedObjects();
@@ -619,7 +731,7 @@ std::future<WorkerOcEvictionManager::SpillResult> WorkerOcEvictionManager::Submi
 
 Status WorkerOcEvictionManager::BatchSpillImpl(const std::string &taskId,
                                                const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
-                                               std::vector<std::string> failedKeys)
+                                               std::vector<std::string> &failedKeys)
 {
     if (FLAGS_spill_to_remote_worker) {
         return MigrateData(taskId, objectKeySizeMap, failedKeys);
@@ -926,6 +1038,8 @@ std::string WorkerOcEvictionManager::GetActionName(Action action)
             return "retain";
         case Action::END_LIFE:
             return "life end";
+        case Action::MIGRATE:
+            return "migrate";
         default:
             return "unknown";
     }
