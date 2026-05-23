@@ -1657,8 +1657,9 @@ TEST_F(STCScaleDownTest, ShutdownWorkerAndDelKeyInEtcdTest)
 TEST_F(STCScaleDownTest, LEVEL1_TestStartWorkerDuringScaleDown1)
 {
     DS_ASSERT_OK(cluster_->StartOBS());
-    int nodeTimeoutS = 2;
-    int nodeDeadTimeoutS = 5;
+    constexpr int nodeTimeoutS = 2;
+    constexpr int nodeDeadTimeoutS = 5;
+    constexpr int msPerSec = 1000;
     StartWorkerAndWaitReady(
         { 0, 1 }, FormatString(" -node_timeout_s=%d -node_dead_timeout_s=%d", nodeTimeoutS, nodeDeadTimeoutS));
 
@@ -1674,18 +1675,25 @@ TEST_F(STCScaleDownTest, LEVEL1_TestStartWorkerDuringScaleDown1)
     client_.reset();
 
     // During the scaling down period, the corresponding scaled-down node cannot be started.
-    int submitScaleDownTaskWaitTimeS = 10;
-    int S2Ms = 1000;
+    constexpr int submitScaleDownTaskWaitTimeS = 10;
+    constexpr int restartWaitTimeMs = 5'000;
+    HostPort scaleDownWorkerAddr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, scaleDownWorkerAddr));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "HashRingTaskExecutor.SubmitScaleDownTask.ProcessSlowly",
-                                           FormatString("1*sleep(%d)", submitScaleDownTaskWaitTimeS * S2Ms)));
+                                           FormatString("1*sleep(%d)", submitScaleDownTaskWaitTimeS * msPerSec)));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    // To make sure hashring has been changed and "SubmitScaleDownTask" is not finished.
-    sleep(nodeDeadTimeoutS - nodeTimeoutS + 1);
+    WaitHashRingChange(
+        [&scaleDownWorkerAddr](const HashRingPb &hashRing) {
+            return hashRing.del_node_info().find(scaleDownWorkerAddr.ToString()) != hashRing.del_node_info().end();
+        },
+        (nodeDeadTimeoutS + 1) * msPerSec);
     DS_ASSERT_OK(externalCluster_->StartWorker(
         0, HostPort(),
-        " -inject_actions=HashRing.InitRing.CheckQuickly:call(10);HashRing.InitWithEtcd.MotifyWaitTimeMs:call(5000)"));
-    sleep(submitScaleDownTaskWaitTimeS);  // wait scaling down finish.
-    AssertAllNodesJoinIntoHashRing(1);
+        FormatString(" -inject_actions=HashRing.InitRing.CheckQuickly:call(10);"
+                     "HashRing.InitWithEtcd.MotifyWaitTimeMs:call(%d)",
+                     restartWaitTimeMs)));
+    ASSERT_FALSE(cluster_->WaitNodeReady(WORKER, 0, restartWaitTimeMs / msPerSec + 1).IsOk());
+    WaitAllNodesJoinIntoHashRing(1, submitScaleDownTaskWaitTimeS + nodeDeadTimeoutS);
 
     // Anything is ok.
     InitTestKVClient(1, client1_);

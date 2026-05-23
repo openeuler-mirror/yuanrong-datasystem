@@ -130,5 +130,51 @@ class PullRequestBodyTemplateTest(unittest.TestCase):
         self.assertIn("PR body is required for this repository", str(exc.exception))
 
 
+class SensitiveContentValidationTest(unittest.TestCase):
+    def test_rejects_sensitive_pr_body_without_echoing_value(self) -> None:
+        body = "验证日志在 /home/example/workspace/project/logs/run.log，服务为 192.0.2.10:2222"
+        with self.assertRaises(SystemExit) as exc:
+            MODULE.validate_no_sensitive_content({"PR body": body})
+        message = str(exc.exception)
+        self.assertIn("Sensitive information is not allowed", message)
+        self.assertIn("PR body", message)
+        self.assertNotIn("/home/example/workspace", message)
+        self.assertNotIn("192.0.2.10", message)
+
+    def test_build_payload_rejects_sensitive_title_and_squash_commit_message(self) -> None:
+        args = argparse.Namespace(
+            owner="openeuler",
+            repo="another-repo",
+            title="fix: update token=abc123",
+            head="feature-branch",
+            base="master",
+            body="safe body",
+            body_file=None,
+            milestone_number=None,
+            labels=None,
+            issue=None,
+            assignees=None,
+            testers=None,
+            prune_source_branch=False,
+            draft=False,
+            squash=True,
+            squash_commit_message="fix: remove -----BEGIN OPENSSH PRIVATE KEY-----",
+            fork_path=None,
+            api_base="https://api.gitcode.com/api/v5",
+            token=None,
+            token_file=None,
+            body_template_file=None,
+            timeout=30,
+            check_conflicts=True,
+        )
+        with self.assertRaises(SystemExit) as exc:
+            MODULE.build_payload(args)
+        message = str(exc.exception)
+        self.assertIn("Sensitive information is not allowed", message)
+        self.assertIn("PR title", message)
+        self.assertIn("squash commit message", message)
+        self.assertNotIn("abc123", message)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -125,7 +125,8 @@ TEST_F(RpcStubCacheMgrTest, TestCacheFullAndCannotEvict)
 
 TEST_F(RpcStubCacheMgrTest, TestParallelGetStub)
 {
-    int cacheNum = 10, maxFdNum = 10, loopNum = 10000;
+    int threadNum = 20, cacheNum = threadNum, loopNum = 10000;
+    int maxFdNum = cacheNum + threadNum;
     DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().InitForTest(cacheNum, maxFdNum));
 
     auto func = [&loopNum](int threadNum) {
@@ -140,7 +141,6 @@ TEST_F(RpcStubCacheMgrTest, TestParallelGetStub)
     };
 
     std::vector<std::thread> threads;
-    int threadNum = 20;
     for (int i = 0; i < threadNum; i++) {
         threads.push_back(std::thread(func, i));
     }
