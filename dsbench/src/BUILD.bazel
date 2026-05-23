@@ -86,6 +86,7 @@ cc_binary(
     includes = [
         ".",
     ],
+    dynamic_deps = ["//:datasystem"],
     linkopts = [
         "-Wl,--disable-new-dtags",
         "-Wl,-rpath,$$ORIGIN/lib",
