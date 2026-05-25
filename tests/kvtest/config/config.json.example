@@ -1,48 +1,24 @@
 {
-  "instance_id": 0,
+  "mode": "pipeline",
 
-  "// === KVClient连接 ===": "",
+  "instance_id": 0,
   "etcd_address": "127.0.0.1:2379",
   "cluster_name": "",
   "host_id_env_name": "JD_HOST_IP",
-  "connect_timeout_ms": 1000,
-  "request_timeout_ms": 20,
-  "fast_transport_mem_size": "512MB",
   "listen_port": 9000,
 
-  "// === Pipeline配置 ===": "",
-  "role": "writer",
-  "pipeline": ["setStringView"],
-  "notify_pipeline": ["getBuffer"],
-  "data_sizes": ["8MB", "512KB"],
-  "target_qps": 100,
-  "stage_duration_seconds": 0,
-  "num_set_threads": 16,
-  "batch_keys_count": 1,
+  "connect_options": {
+    "connect_timeout_ms": 1000,
+    "request_timeout_ms": 20,
+    "enable_cross_node_connection": true,
+    "fast_transport_mem_size": "512MB"
+  },
 
-  "// === Peer通知 ===": "",
-  "notify_count": 10,
-  "notify_interval_us": 0,
-  "peers": ["http://host1:9000", "http://host2:9000"],
-
-  "// === 运行配置 ===": "",
-  "cpu_affinity": "",
+  "data_sizes": ["1MB"],
+  "set_param": {"ttl_second": 0},
+  "num_threads": 16,
   "metrics_interval_ms": 3000,
-  "metrics_file": "metrics_{instance_id}.csv",
-
-  "// === 环境变量 ===": "",
-  "// 在启动进程前设置的环境变量，会在 nohup 命令中 export": "",
-  "// 支持数字、布尔值、字符串，会自动转成字符串设置": "",
-  "env": {},
-
-  "// === 可靠性 ===": "",
-  "ttl_seconds": 5,
-  "enable_cross_node_connection": true,
-  "enable_jitter": true,
-
-  "// === Cache模式（key_pool_size > 0 时生效）===": "",
-  "key_pool_size": 0,
-  "target_hit_rate": 0,
-  "warmup_timeout_seconds": 60,
-  "inference_delay_ms": 0
+  "cpu_affinity": "",
+  "nodes": [],
+  "peers": []
 }

@@ -1,0 +1,24 @@
+{
+  "mode": "benchmark",
+  "etcd_address": "127.0.0.1:2379",
+  "cluster_name": "",
+  "test_mode": "set_local",
+  "worker_memory_mb": 4096,
+  "set_api": "string_view",
+  "cleanup_method": "del",
+  "total_rounds": 5,
+  "duration_seconds": 0,
+  "num_threads": 16,
+  "data_sizes": [
+    "1MB"
+  ],
+  "set_param": {
+    "ttl_second": 0
+  },
+  "connect_options": {
+    "connect_timeout_ms": 1000,
+    "request_timeout_ms": 20,
+    "enable_cross_node_connection": true,
+    "fast_transport_mem_size": "512MB"
+  }
+}

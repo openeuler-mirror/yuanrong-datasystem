@@ -101,7 +101,7 @@ TEST(LoadConfig_InvalidPort) {
 }
 
 TEST(LoadConfig_NegativeThreads) {
-    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"num_set_threads":0})");
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"num_threads":0})");
     Config cfg;
     ASSERT_FALSE(LoadConfig(path, cfg));
     std::remove(path.c_str());
@@ -203,7 +203,7 @@ TEST(LoadConfig_MaxKeyPoolSize_Auto) {
     auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"key_pool_size":100})");
     Config cfg;
     ASSERT_TRUE(LoadConfig(path, cfg));
-    ASSERT_EQ(cfg.maxKeyPoolSize, 1000);
+    ASSERT_EQ(cfg.maxKeyPoolSize, 2000);
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
 }
@@ -225,4 +225,245 @@ TEST(LoadConfig_BadJson) {
 TEST(LoadConfig_NonexistentFile) {
     Config cfg;
     ASSERT_FALSE(LoadConfig("/tmp/kvtest_nonexistent_xyz.json", cfg));
+}
+
+// --- TestMode tests ---
+
+TEST(ParseTestMode_Valid) {
+    ASSERT_EQ(ParseTestMode("set_local"), TestMode::SET_LOCAL);
+    ASSERT_EQ(ParseTestMode("set_remote"), TestMode::SET_REMOTE);
+    ASSERT_EQ(ParseTestMode("get_local"), TestMode::GET_LOCAL);
+    ASSERT_EQ(ParseTestMode("get_cross_node"), TestMode::GET_CROSS_NODE);
+    ASSERT_EQ(ParseTestMode("get_remote_direct"), TestMode::GET_REMOTE_DIRECT);
+    ASSERT_EQ(ParseTestMode("get_remote_cross"), TestMode::GET_REMOTE_CROSS);
+}
+
+TEST(ParseTestMode_Invalid) {
+    ASSERT_EQ(ParseTestMode("unknown"), TestMode::NONE);
+    ASSERT_EQ(ParseTestMode(""), TestMode::NONE);
+}
+
+TEST(ParseTestMode_NeedsRemoteWorker) {
+    ASSERT_FALSE(NeedsRemoteWorker(TestMode::SET_LOCAL));
+    ASSERT_FALSE(NeedsRemoteWorker(TestMode::GET_LOCAL));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::SET_REMOTE));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::GET_CROSS_NODE));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::GET_REMOTE_DIRECT));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::GET_REMOTE_CROSS));
+}
+
+TEST(ParseTestMode_IsGetMode) {
+    ASSERT_FALSE(IsGetMode(TestMode::SET_LOCAL));
+    ASSERT_FALSE(IsGetMode(TestMode::SET_REMOTE));
+    ASSERT_TRUE(IsGetMode(TestMode::GET_LOCAL));
+    ASSERT_TRUE(IsGetMode(TestMode::GET_CROSS_NODE));
+    ASSERT_TRUE(IsGetMode(TestMode::GET_REMOTE_DIRECT));
+    ASSERT_TRUE(IsGetMode(TestMode::GET_REMOTE_CROSS));
+}
+
+TEST(LoadConfig_TestMode_SetLocal) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,"num_threads":4
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.testMode, TestMode::SET_LOCAL);
+    ASSERT_EQ(cfg.workerMemoryMb, 4096);
+    ASSERT_EQ(cfg.numThreads, 4);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_TestMode_RemoteWorkerRequired) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_remote","worker_memory_mb":4096
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_TestMode_RemoteWorker) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_remote","worker_memory_mb":4096,
+        "remote_worker":{"host":"192.168.1.100","port":31501}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.remoteWorker.host, "192.168.1.100");
+    ASSERT_EQ(cfg.remoteWorker.port, 31501);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_SetApi) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "set_api":"create_buffer"
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.setApi, std::string("create_buffer"));
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CleanupMethod_TTL) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "cleanup_method":"ttl","set_param":{"ttl_second":10}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.cleanupMethod, std::string("ttl"));
+    ASSERT_EQ(cfg.ttlSeconds, 10u);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CleanupTTL_NoTTLSecond) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "cleanup_method":"ttl"
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_DurationAndRounds) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "duration_seconds":30,"total_rounds":5
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.durationSeconds, 30);
+    ASSERT_EQ(cfg.totalRounds, 5);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ConnectOptions) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "connect_options":{
+            "connect_timeout_ms":5000,
+            "request_timeout_ms":50,
+            "enable_cross_node_connection":false,
+            "fast_transport_mem_size":1073741824
+        }
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.connectTimeoutMs, 5000);
+    ASSERT_EQ(cfg.requestTimeoutMs, 50);
+    ASSERT_EQ(cfg.enableCrossNodeConnection, false);
+    ASSERT_EQ(cfg.fastTransportMemSize, 1073741824);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+// --- RunMode tests ---
+
+TEST(ParseRunMode_Valid) {
+    ASSERT_EQ(ParseRunMode("pipeline"), RunMode::PIPELINE);
+    ASSERT_EQ(ParseRunMode("cache"), RunMode::CACHE);
+    ASSERT_EQ(ParseRunMode("benchmark"), RunMode::BENCHMARK);
+}
+
+TEST(ParseRunMode_Invalid) {
+    ASSERT_EQ(ParseRunMode("unknown").has_value(), false);
+    ASSERT_EQ(ParseRunMode("").has_value(), false);
+}
+
+TEST(LoadConfig_ModeAutoInfer_Pipeline) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::PIPELINE);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeAutoInfer_Benchmark) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::BENCHMARK);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeAutoInfer_Cache) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"key_pool_size":100
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::CACHE);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeExplicit_Pipeline) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"pipeline"
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::PIPELINE);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeExplicit_Benchmark) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"benchmark",
+        "test_mode":"set_local","worker_memory_mb":4096
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::BENCHMARK);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeBenchmark_MissingTestMode) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"benchmark",
+        "worker_memory_mb":4096
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModeCache_MissingKeyPoolSize) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"cache"
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_ModePipeline_InvalidRole) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,"mode":"pipeline","role":"invalid"
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
 }

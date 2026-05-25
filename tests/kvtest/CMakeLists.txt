@@ -12,6 +12,19 @@ set(DATASYSTEM_SDK_DIR "" CACHE PATH "Path to datasystem SDK installation")
 file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" BUILD_VERSION LIMIT_COUNT 1)
 add_definitions(-DBUILD_VERSION="${BUILD_VERSION}")
 
+# Embed git commit hash at compile time
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE BUILD_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT BUILD_COMMIT)
+    set(BUILD_COMMIT "unknown")
+endif()
+add_definitions(-DBUILD_COMMIT="${BUILD_COMMIT}")
+
 add_executable(kvtest
     src/main.cpp
     src/common/config.cpp
@@ -20,7 +33,8 @@ add_executable(kvtest
     src/pipeline/kv_worker.cpp
     src/pipeline/cache_reader.cpp
     src/pipeline/stop.cpp
-    src/rpc/http_server.cpp)
+    src/rpc/http_server.cpp
+    src/benchmark/benchmark_runner.cpp)
 
 target_include_directories(kvtest PRIVATE
     ${DATASYSTEM_SDK_DIR}/include

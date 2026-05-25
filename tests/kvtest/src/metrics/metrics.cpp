@@ -381,3 +381,29 @@ double MetricsCollector::CacheHitRate() const {
     uint64_t total = hits + misses;
     return total > 0 ? static_cast<double>(hits) / total : 0.0;
 }
+
+BenchmarkMetrics::BenchmarkMetrics(const std::string &outputDir)
+    : csvPath_(outputDir + "/benchmark_phases.csv") {}
+
+void BenchmarkMetrics::RecordPhase(int round, const std::string &phase, int ops,
+                                    double avgMs, double p50Ms, double p90Ms,
+                                    double p99Ms, double maxMs, double totalMs,
+                                    double qps) {
+    records_.push_back({round, phase, ops, avgMs, p50Ms, p90Ms, p99Ms, maxMs, totalMs, qps});
+}
+
+void BenchmarkMetrics::Flush() {
+    auto mode = headerWritten_ ? std::ios::app : std::ios::trunc;
+    std::ofstream f(csvPath_, mode);
+    if (!headerWritten_) {
+        f << "round,phase,ops,avg_ms,p50_ms,p90_ms,p99_ms,max_ms,total_ms,qps\n";
+        headerWritten_ = true;
+    }
+    for (auto &r : records_) {
+        f << r.round << "," << r.phase << "," << r.ops << ","
+           << r.avgMs << "," << r.p50Ms << "," << r.p90Ms << ","
+           << r.p99Ms << "," << r.maxMs << "," << r.totalMs << "," << r.qps << "\n";
+    }
+    records_.clear();
+    f.close();
+}

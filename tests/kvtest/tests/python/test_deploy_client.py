@@ -158,7 +158,7 @@ class TestTransport(unittest.TestCase):
         d = _make_deployer([{'host': 'localhost', 'port': 9000, 'instance_id': 0}],
                            {'listen_port': 9000}, transport='ssh')
         node = {'host': 'localhost', 'port': 9000, 'instance_id': 0}
-        self.assertEqual(d._transport(node), 'ssh')
+        self.assertEqual(d._transport(node), 'localhost')
 
     def test_kubectl(self):
         d = _make_deployer([{'host': 'pod1', 'port': 9000, 'instance_id': 0,
@@ -188,6 +188,148 @@ class TestCommHost(unittest.TestCase):
                            {'listen_port': 9000})
         node = {'host': '192.168.1.10'}
         self.assertEqual(d._comm_host(node), '192.168.1.10')
+
+
+class TestGenConfig(unittest.TestCase):
+    """Tests for cmd_gen_config output correctness."""
+
+    def _run_gen_config(self, extra_args):
+        """Run gen-config with mocked _get_pods and return (deploy, config) dicts."""
+        import argparse
+        from deploy_client import cmd_gen_config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_args = [
+                '-o', tmpdir,
+                '-m', 'benchmark',
+                '--test-mode', 'set_local',
+                '--worker-memory-mb', '4096',
+            ]
+            base_args.extend(extra_args)
+
+            import deploy_client as dc
+            parser = argparse.ArgumentParser()
+            dc._add_gen_config_args(parser)
+
+            args = parser.parse_args(base_args)
+
+            # Mock _get_pods for kubectl tests
+            with patch.object(dc, '_get_pods', return_value=[
+                {'name': 'pod-0', 'ip': '10.0.0.1', 'node': 'node1'},
+                {'name': 'pod-1', 'ip': '10.0.0.2', 'node': 'node1'},
+            ]):
+                cmd_gen_config(args)
+
+            deploy_path = os.path.join(tmpdir, 'deploy.json')
+            config_path = os.path.join(tmpdir, 'config.json')
+
+            deploy = None
+            config = None
+            if os.path.exists(deploy_path):
+                with open(deploy_path) as f:
+                    deploy = json.load(f)
+            if os.path.exists(config_path):
+                with open(config_path) as f:
+                    config = json.load(f)
+            return deploy, config
+
+    # --- Benchmark mode ---
+
+    def test_benchmark_generates_deploy_json(self):
+        """Benchmark mode should generate deploy.json for deployment."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(deploy, "benchmark mode should generate deploy.json")
+        self.assertIn('nodes', deploy)
+        self.assertEqual(len(deploy['nodes']), 1)
+
+    def test_benchmark_config_no_listen_port(self):
+        """Benchmark config should NOT contain listen_port."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertNotIn('listen_port', config)
+
+    def test_benchmark_config_has_cleanup_method(self):
+        """Benchmark config should contain cleanup_method."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('cleanup_method', config)
+        self.assertEqual(config['cleanup_method'], 'del')
+
+    def test_benchmark_config_has_cluster_name(self):
+        """Benchmark config should always contain cluster_name."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('cluster_name', config)
+
+    def test_benchmark_with_multiple_nodes(self):
+        """Benchmark with --nodes "h1:p1,h2:p2" generates multi-node deploy.json."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '1.2.3.4:9000,5.6.7.8:9001',
+        ])
+        self.assertIsNotNone(deploy)
+        self.assertEqual(len(deploy['nodes']), 2)
+        self.assertEqual(deploy['nodes'][0]['host'], '1.2.3.4')
+        self.assertEqual(deploy['nodes'][1]['host'], '5.6.7.8')
+
+    def test_benchmark_default_localhost(self):
+        """Benchmark without --nodes generates localhost deploy.json."""
+        deploy, config = self._run_gen_config([])
+        self.assertIsNotNone(deploy)
+        self.assertEqual(len(deploy['nodes']), 1)
+        self.assertEqual(deploy['nodes'][0]['host'], 'localhost')
+
+    def test_benchmark_cleanup_ttl(self):
+        """Benchmark with --cleanup-method ttl sets it in config."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--cleanup-method', 'ttl',
+            '--ttl', '5',
+        ])
+        self.assertEqual(config['cleanup_method'], 'ttl')
+        self.assertIn('set_param', config)
+        self.assertEqual(config['set_param']['ttl_second'], 5)
+
+    # --- Pipeline mode with kubectl ---
+
+    def test_pipeline_generates_deploy_json(self):
+        """Pipeline mode with --prefix generates deploy.json with kubectl transport."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '-p', 'ds-worker',
+            '-n', 'datasystem',
+        ])
+        self.assertIsNotNone(deploy)
+        self.assertEqual(deploy['transport'], 'kubectl')
+        self.assertIn('nodes', deploy)
+
+    def test_pipeline_config_has_cluster_name(self):
+        """Pipeline config should always contain cluster_name."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '-p', 'ds-worker',
+            '-n', 'datasystem',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('cluster_name', config)
+
+    def test_nodes_with_writer_count(self):
+        """Pipeline with --nodes and --writer-count assigns roles correctly."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '1.2.3.4:9000,5.6.7.8:9001',
+            '-w', '1',
+        ])
+        self.assertIsNotNone(deploy)
+        self.assertEqual(deploy['nodes'][0]['role'], 'writer')
+        self.assertEqual(deploy['nodes'][1]['role'], 'reader')
 
 
 if __name__ == '__main__':

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <optional>
 
 struct NodeInfo {
     std::string host;
@@ -11,7 +12,25 @@ struct NodeInfo {
     std::string role;  // "writer" or "reader", empty = same as local role
 };
 
+enum class TestMode {
+    NONE = 0,
+    SET_LOCAL,
+    SET_REMOTE,
+    GET_LOCAL,
+    GET_CROSS_NODE,
+    GET_REMOTE_DIRECT,
+    GET_REMOTE_CROSS,
+};
+
+enum class RunMode { PIPELINE, CACHE, BENCHMARK };
+
+TestMode ParseTestMode(const std::string &s);
+bool NeedsRemoteWorker(TestMode mode);
+bool IsGetMode(TestMode mode);
+std::optional<RunMode> ParseRunMode(const std::string &s);
+
 struct Config {
+    RunMode runMode = RunMode::PIPELINE;
     int instanceId = 0;
     int listenPort = 9000;
     std::string etcdAddress;
@@ -19,13 +38,13 @@ struct Config {
     std::string hostIdEnvName = "JD_HOST_IP";
     int32_t connectTimeoutMs = 1000;
     int32_t requestTimeoutMs = 20;
-    int32_t fastTransportMemSize = 512 * 1024 * 1024;  // 512MB default
+    uint64_t fastTransportMemSize = 512ULL * 1024 * 1024;  // 512MB default
     std::vector<uint64_t> dataSizes;          // parsed bytes
-    uint32_t ttlSeconds = 5;
+    uint32_t ttlSeconds = 0;            // from set_param.ttl_second, 0 = no expiry
     int targetQps = 100; // 0 = unlimited
     std::vector<int> targetQpsStages;  // QPS stages (empty = single fixed QPS)
     int stageDurationSeconds = 0;      // seconds per stage, 0 = disabled
-    int numSetThreads = 16;
+    int numThreads = 16;
     int notifyCount = 10;
     int notifyIntervalUs = 0; // delay between peer notifications in microseconds, 0 = parallel
     bool enableJitter = true; // randomize sleep to stagger requests
@@ -48,8 +67,19 @@ struct Config {
     int warmupRetryCount = 3;        // retries per warmup key
     int warmupRetryDelayMs = 1000;   // delay between retries
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups
-    int maxKeyPoolSize = 0;          // 0 = auto (keyPoolSize * 10)
+    int maxKeyPoolSize = 0;          // 0 = auto (keyPoolSize * 20)
     double targetHitRate = 0.0;      // 0 = fixed pool, 0.01-1.0 = auto-adjust pool to target hit rate
+    // Benchmark mode fields (test_mode != NONE)
+    TestMode testMode = TestMode::NONE;
+    int workerMemoryMb = 0;
+    int durationSeconds = 0;
+    int totalRounds = 0;
+    std::string setApi = "string_view";
+    std::string cleanupMethod = "del";
+    struct {
+        std::string host;
+        int port = 31501;
+    } remoteWorker;
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024

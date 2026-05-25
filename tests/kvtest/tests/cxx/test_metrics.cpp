@@ -258,3 +258,39 @@ TEST(FlushWindow_QpsStages) {
     ASSERT_TRUE(found);
     std::filesystem::remove_all(dir);
 }
+
+TEST(BenchmarkMetrics_RecordAndFlush) {
+    std::string dir = "/tmp/kvtest_bench_metrics_" + std::to_string(getpid());
+    std::filesystem::create_directories(dir);
+    {
+        BenchmarkMetrics bm(dir);
+        bm.RecordPhase(0, "set", 100, 3.2, 2.8, 4.1, 5.8, 12.1, 320.0, 31250.0);
+        bm.RecordPhase(0, "get", 100, 1.1, 0.9, 1.5, 2.3, 5.2, 110.0, 90909.0);
+        bm.RecordPhase(1, "set", 100, 3.0, 2.6, 3.8, 5.5, 11.0, 300.0, 33333.0);
+        bm.Flush();
+        bm.RecordPhase(1, "get", 100, 1.0, 0.8, 1.4, 2.1, 4.8, 100.0, 100000.0);
+        bm.Flush();
+    }
+    std::string csvPath = dir + "/benchmark_phases.csv";
+    std::ifstream f(csvPath);
+    ASSERT_TRUE(f.is_open());
+    std::string line;
+    // Header
+    std::getline(f, line);
+    ASSERT_TRUE(line.find("round,phase,ops") == 0);
+    // First record
+    std::getline(f, line);
+    ASSERT_TRUE(line.find("0,set,100,") == 0);
+    // Second record
+    std::getline(f, line);
+    ASSERT_TRUE(line.find("0,get,100,") == 0);
+    // Third record (round 1 set, flushed with round 1 get)
+    std::getline(f, line);
+    ASSERT_TRUE(line.find("1,set,100,") == 0);
+    // Fourth record
+    std::getline(f, line);
+    ASSERT_TRUE(line.find("1,get,100,") == 0);
+    // No more lines
+    ASSERT_TRUE(!std::getline(f, line));
+    std::filesystem::remove_all(dir);
+}

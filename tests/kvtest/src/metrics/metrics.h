@@ -79,3 +79,30 @@ private:
     std::thread flushThread_;
     std::atomic<bool> started_{false};
 };
+
+// Per-phase benchmark metrics (simple CSV output)
+struct BenchmarkPhaseRecord {
+    int round;
+    std::string phase;  // "set", "get", "del"
+    int ops;
+    double avgMs;
+    double p50Ms;
+    double p90Ms;
+    double p99Ms;
+    double maxMs;
+    double totalMs;
+    double qps;
+};
+
+class BenchmarkMetrics {
+public:
+    explicit BenchmarkMetrics(const std::string &outputDir);
+    void RecordPhase(int round, const std::string &phase, int ops,
+                     double avgMs, double p50Ms, double p90Ms, double p99Ms,
+                     double maxMs, double totalMs, double qps);
+    void Flush();
+private:
+    std::string csvPath_;
+    std::vector<BenchmarkPhaseRecord> records_;
+    bool headerWritten_ = false;
+};

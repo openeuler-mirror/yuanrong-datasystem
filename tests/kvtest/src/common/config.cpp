@@ -10,6 +10,33 @@
 
 using json = nlohmann::json;
 
+TestMode ParseTestMode(const std::string &s) {
+    if (s == "set_local") return TestMode::SET_LOCAL;
+    if (s == "set_remote") return TestMode::SET_REMOTE;
+    if (s == "get_local") return TestMode::GET_LOCAL;
+    if (s == "get_cross_node") return TestMode::GET_CROSS_NODE;
+    if (s == "get_remote_direct") return TestMode::GET_REMOTE_DIRECT;
+    if (s == "get_remote_cross") return TestMode::GET_REMOTE_CROSS;
+    return TestMode::NONE;
+}
+
+bool NeedsRemoteWorker(TestMode mode) {
+    return mode == TestMode::SET_REMOTE || mode == TestMode::GET_CROSS_NODE
+        || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS;
+}
+
+bool IsGetMode(TestMode mode) {
+    return mode == TestMode::GET_LOCAL || mode == TestMode::GET_CROSS_NODE
+        || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS;
+}
+
+std::optional<RunMode> ParseRunMode(const std::string &s) {
+    if (s == "pipeline") return RunMode::PIPELINE;
+    if (s == "cache") return RunMode::CACHE;
+    if (s == "benchmark") return RunMode::BENCHMARK;
+    return std::nullopt;
+}
+
 uint64_t ParseSize(const std::string &str) {
     if (str.empty()) return 0;
 
@@ -47,11 +74,10 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("cluster_name")) cfg.clusterName = j["cluster_name"];
         if (j.contains("host_id_env_name")) cfg.hostIdEnvName = j["host_id_env_name"];
         if (j.contains("connect_timeout_ms")) cfg.connectTimeoutMs = j["connect_timeout_ms"];
-        if (j.contains("request_timeout_ms")) cfg.requestTimeoutMs = j["request_timeout_ms"];
         if (j.contains("fast_transport_mem_size")) {
-            cfg.fastTransportMemSize = ParseSize(j["fast_transport_mem_size"].get<std::string>());
+            const auto &ftm = j["fast_transport_mem_size"];
+            cfg.fastTransportMemSize = ftm.is_string() ? ParseSize(ftm.get<std::string>()) : ftm.get<uint64_t>();
         }
-        if (j.contains("ttl_seconds")) cfg.ttlSeconds = j["ttl_seconds"];
         if (j.contains("target_qps")) {
             if (j["target_qps"].is_array()) {
                 for (auto &v : j["target_qps"]) {
@@ -67,7 +93,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("stage_duration_seconds")) {
             cfg.stageDurationSeconds = j["stage_duration_seconds"];
         }
-        if (j.contains("num_set_threads")) cfg.numSetThreads = j["num_set_threads"];
+        if (j.contains("num_threads")) cfg.numThreads = j["num_threads"];
         if (j.contains("notify_count")) cfg.notifyCount = j["notify_count"];
         if (j.contains("notify_interval_us")) cfg.notifyIntervalUs = j["notify_interval_us"];
         if (j.contains("enable_jitter")) cfg.enableJitter = j["enable_jitter"];
@@ -148,6 +174,35 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             }
         }
 
+        // Benchmark mode fields
+        if (j.contains("test_mode")) cfg.testMode = ParseTestMode(j["test_mode"].get<std::string>());
+        if (j.contains("worker_memory_mb")) cfg.workerMemoryMb = j["worker_memory_mb"];
+        if (j.contains("duration_seconds")) cfg.durationSeconds = j["duration_seconds"];
+        if (j.contains("total_rounds")) cfg.totalRounds = j["total_rounds"];
+        if (j.contains("set_api")) cfg.setApi = j["set_api"].get<std::string>();
+        if (j.contains("cleanup_method")) cfg.cleanupMethod = j["cleanup_method"].get<std::string>();
+        if (j.contains("remote_worker") && j["remote_worker"].is_object()) {
+            const auto &rw = j["remote_worker"];
+            if (rw.contains("host")) cfg.remoteWorker.host = rw["host"].get<std::string>();
+            if (rw.contains("port")) cfg.remoteWorker.port = rw["port"];
+        }
+        if (j.contains("connect_options") && j["connect_options"].is_object()) {
+            const auto &co = j["connect_options"];
+            if (co.contains("connect_timeout_ms")) cfg.connectTimeoutMs = co["connect_timeout_ms"];
+            if (co.contains("request_timeout_ms")) cfg.requestTimeoutMs = co["request_timeout_ms"];
+            if (co.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = co["enable_cross_node_connection"];
+            if (co.contains("fast_transport_mem_size")) {
+                const auto &ftm = co["fast_transport_mem_size"];
+                cfg.fastTransportMemSize = ftm.is_string() ? ParseSize(ftm.get<std::string>()) : ftm.get<uint64_t>();
+            }
+        }
+        if (j.contains("set_param") && j["set_param"].is_object()) {
+            const auto &sp = j["set_param"];
+            if (sp.contains("ttl_second")) {
+                cfg.ttlSeconds = sp["ttl_second"];
+            }
+        }
+
         // Generate output directory: metrics_{ip}_{timestamp}
         if (cfg.outputDir.empty()) {
             std::string ip = cfg.etcdAddress;
@@ -174,7 +229,29 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         // else: absolute or relative path with directory → use as-is
 
         if (cfg.maxKeyPoolSize == 0 && cfg.keyPoolSize > 0) {
-            cfg.maxKeyPoolSize = cfg.keyPoolSize * 10;
+            cfg.maxKeyPoolSize = cfg.keyPoolSize * 20;
+        }
+
+        // Mode: explicit or auto-infer
+        bool modeExplicit = false;
+        if (j.contains("mode") && j["mode"].is_string()) {
+            auto parsed = ParseRunMode(j["mode"].get<std::string>());
+            if (!parsed.has_value()) {
+                SLOG_ERROR("Unknown mode '" << j["mode"].get<std::string>()
+                          << "', must be pipeline/cache/benchmark");
+                return false;
+            }
+            cfg.runMode = parsed.value();
+            modeExplicit = true;
+        }
+        if (!modeExplicit) {
+            if (cfg.testMode != TestMode::NONE) {
+                cfg.runMode = RunMode::BENCHMARK;
+            } else if (cfg.keyPoolSize > 0) {
+                cfg.runMode = RunMode::CACHE;
+            } else {
+                cfg.runMode = RunMode::PIPELINE;
+            }
         }
 
     } catch (const std::exception &e) {
@@ -190,8 +267,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_ERROR("Invalid listen_port: " << cfg.listenPort);
         return false;
     }
-    if (cfg.numSetThreads <= 0) {
-        SLOG_ERROR("num_set_threads must be > 0, got " << cfg.numSetThreads);
+    if (cfg.numThreads <= 0) {
+        SLOG_ERROR("num_threads must be > 0, got " << cfg.numThreads);
         return false;
     }
     if (cfg.targetQps < 0) {
@@ -230,17 +307,61 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_ERROR("metrics_interval_ms must be > 0, got " << cfg.metricsIntervalMs);
         return false;
     }
-    if (cfg.ttlSeconds == 0) {
-        SLOG_WARN("ttl_seconds is 0, data will not expire");
-    }
-    if (cfg.keyPoolSize > 0 && cfg.ttlSeconds > 0) {
-        SLOG_WARN("Cache mode with ttl_seconds=" << cfg.ttlSeconds
-                  << ": data may expire before LRU evicts it, affecting hit rate accuracy");
+    if (cfg.ttlSeconds == 0 && cfg.keyPoolSize == 0) {
+        SLOG_INFO("TTL is 0, data will not expire");
     }
     if (cfg.maxKeyPoolSize > 0 && cfg.maxKeyPoolSize < static_cast<uint64_t>(cfg.keyPoolSize)) {
         SLOG_ERROR("max_key_pool_size (" << cfg.maxKeyPoolSize
                   << ") must be >= key_pool_size (" << cfg.keyPoolSize << ")");
         return false;
+    }
+
+    // Mode-specific validation
+    if (cfg.runMode == RunMode::PIPELINE || cfg.runMode == RunMode::CACHE) {
+        if (cfg.role != "writer" && cfg.role != "reader") {
+            SLOG_ERROR("role must be 'writer' or 'reader', got '" << cfg.role << "'");
+            return false;
+        }
+        if (cfg.pipeline.empty()) {
+            SLOG_ERROR("pipeline must not be empty");
+            return false;
+        }
+    }
+    if (cfg.runMode == RunMode::CACHE) {
+        if (cfg.keyPoolSize <= 0) {
+            SLOG_ERROR("key_pool_size must be > 0 for cache mode");
+            return false;
+        }
+        if (cfg.targetHitRate < 0.0 || cfg.targetHitRate > 1.0) {
+            SLOG_ERROR("target_hit_rate must be in [0, 1.0], got " << cfg.targetHitRate);
+            return false;
+        }
+    }
+    if (cfg.runMode == RunMode::BENCHMARK) {
+        if (cfg.testMode == TestMode::NONE) {
+            SLOG_ERROR("test_mode is required for benchmark mode");
+            return false;
+        }
+        if (cfg.workerMemoryMb <= 0) {
+            SLOG_ERROR("worker_memory_mb required for benchmark mode");
+            return false;
+        }
+        if (NeedsRemoteWorker(cfg.testMode) && cfg.remoteWorker.host.empty()) {
+            SLOG_ERROR("remote_worker required for test_mode " << static_cast<int>(cfg.testMode));
+            return false;
+        }
+        if (cfg.cleanupMethod == "ttl" && cfg.ttlSeconds == 0) {
+            SLOG_ERROR("set_param.ttl_second must be > 0 when cleanup_method=ttl");
+            return false;
+        }
+        if (cfg.setApi != "string_view" && cfg.setApi != "create_buffer") {
+            SLOG_ERROR("set_api must be 'string_view' or 'create_buffer'");
+            return false;
+        }
+        if (cfg.cleanupMethod != "del" && cfg.cleanupMethod != "ttl") {
+            SLOG_ERROR("cleanup_method must be 'del' or 'ttl'");
+            return false;
+        }
     }
 
     auto joinStr = [](const std::vector<std::string> &v) -> std::string {
@@ -252,22 +373,41 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         return r;
     };
 
-    SLOG_INFO("Config loaded: instance_id=" << cfg.instanceId
-              << ", port=" << cfg.listenPort
-              << ", etcd=" << cfg.etcdAddress
-              << ", role=" << cfg.role
-              << ", pipeline=[" << joinStr(cfg.pipeline) << "]"
-              << ", notify_pipeline=[" << joinStr(cfg.notifyPipeline) << "]"
-              << ", nodes=" << cfg.nodes.size()
-              << ", peers=" << cfg.peers.size()
-              << ", data_sizes_count=" << cfg.dataSizes.size()
-              << ", target_qps=" << cfg.targetQps
-              << (cfg.targetQpsStages.empty() ? "" :
-                  " [" + std::to_string(cfg.targetQpsStages.size()) + " stages x "
-                  + std::to_string(cfg.stageDurationSeconds) + "s]")
-              << ", threads=" << cfg.numSetThreads
-              << ", batch_keys_count=" << cfg.batchKeysCount
-              << ", key_pool_size=" << cfg.keyPoolSize
-              << ", output_dir=" << cfg.outputDir);
+    std::ostringstream log;
+    const char *runModeNames[] = {"pipeline", "cache", "benchmark"};
+    log << "Config loaded: mode=" << runModeNames[static_cast<int>(cfg.runMode)]
+        << ", instance_id=" << cfg.instanceId
+        << ", port=" << cfg.listenPort
+        << ", etcd=" << cfg.etcdAddress;
+    if (cfg.testMode != TestMode::NONE) {
+        const char *modeNames[] = {"none", "set_local", "set_remote", "get_local",
+                                   "get_cross_node", "get_remote_direct", "get_remote_cross"};
+        log << ", test_mode=" << modeNames[static_cast<int>(cfg.testMode)]
+            << ", worker_memory_mb=" << cfg.workerMemoryMb
+            << ", num_threads=" << cfg.numThreads
+            << ", total_rounds=" << cfg.totalRounds
+            << ", duration_seconds=" << cfg.durationSeconds
+            << ", set_api=" << cfg.setApi
+            << ", cleanup_method=" << cfg.cleanupMethod;
+        if (NeedsRemoteWorker(cfg.testMode)) {
+            log << ", remote_worker=" << cfg.remoteWorker.host << ":" << cfg.remoteWorker.port;
+        }
+    } else {
+        log << ", role=" << cfg.role
+            << ", pipeline=[" << joinStr(cfg.pipeline) << "]"
+            << ", notify_pipeline=[" << joinStr(cfg.notifyPipeline) << "]"
+            << ", nodes=" << cfg.nodes.size()
+            << ", peers=" << cfg.peers.size()
+            << ", target_qps=" << cfg.targetQps
+            << (cfg.targetQpsStages.empty() ? "" :
+                " [" + std::to_string(cfg.targetQpsStages.size()) + " stages x "
+                + std::to_string(cfg.stageDurationSeconds) + "s]")
+            << ", threads=" << cfg.numThreads
+            << ", batch_keys_count=" << cfg.batchKeysCount
+            << ", key_pool_size=" << cfg.keyPoolSize;
+    }
+    log << ", data_sizes_count=" << cfg.dataSizes.size()
+        << ", output_dir=" << cfg.outputDir;
+    SLOG_INFO(log.str());
     return true;
 }
