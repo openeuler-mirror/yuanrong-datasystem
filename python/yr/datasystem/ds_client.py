@@ -20,6 +20,7 @@ from yr.datasystem.util import Validator as validator
 from yr.datasystem.object_client import ObjectClient
 from yr.datasystem.kv_client import KVClient
 from yr.datasystem.hetero_client import HeteroClient
+from yr.datasystem.service_discovery import ServiceDiscovery
 
 
 class DsClient:
@@ -29,8 +30,8 @@ class DsClient:
 
     def __init__(
         self,
-        host,
-        port,
+        host="",
+        port=0,
         connect_timeout_ms=60000,
         token="",
         client_public_key="",
@@ -41,12 +42,14 @@ class DsClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        enable_exclusive_connection=False
+        enable_exclusive_connection=False,
+        service_discovery=None
     ):
         """Constructor of the DsClient class
 
         Args:
-            host(str): The host of the worker address.
+            host(str): The host of the worker address. If host and port are not provided,
+                       service_discovery must be provided to discover worker addresses.
             port(int): The port of the worker address.
             connect_timeout_ms(int): The timeout_ms interval for the connection between the client and worker.
             token(str): A string used for authentication.
@@ -63,13 +66,15 @@ class DsClient:
             datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
             `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
             the system will throw a request exception.
+            service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
+                If provided, the client will use service discovery to find worker addresses instead of
+                using the provided host and port.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
+            RuntimeError: Raise a runtime error if neither host/port nor service_discovery is provided.
         """
         args = [
-            ["host", host, str],
-            ["port", port, int],
             ["connect_timeout_ms", connect_timeout_ms, int],
             ["token", token, str],
             ["client_public_key", client_public_key, str],
@@ -81,7 +86,26 @@ class DsClient:
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
             ["req_timeout_ms", req_timeout_ms, int],
         ]
+
+        if service_discovery is not None:
+            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery])
+            if host or port:
+                import warnings
+                warnings.warn("host and port are ignored when service_discovery is provided")
+        else:
+            args.insert(0, ["host", host, str])
+            args.insert(1, ["port", port, int])
+
         validator.check_args_types(args)
+
+        if service_discovery is not None:
+            _, host, port, _ = service_discovery.select_worker()
+        else:
+            host_provided = bool(host)
+            port_provided = port > 0
+            if host_provided != port_provided:
+                raise RuntimeError("host and port must be provided together, or use service_discovery")
+
         self._kv_client = KVClient(
             host,
             port,

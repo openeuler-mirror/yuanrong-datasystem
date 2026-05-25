@@ -38,6 +38,9 @@ __all__ = [
     "CopyRange",
     "MetaInfo",
     "Future",
+    "ServiceDiscovery",
+    "ServiceDiscoveryOptions",
+    "ServiceAffinityPolicy",
 ]
 
 from yr.datasystem.object_client import Buffer, ConsistencyType
@@ -48,6 +51,7 @@ from yr.datasystem.ds_client import DsClient
 from yr.datasystem.kv_client import KVClient
 from yr.datasystem.hetero_client import HeteroClient, Blob, DeviceBlobList, MetaInfo, Future
 from yr.datasystem.util import Status, Context
+from yr.datasystem.service_discovery import ServiceDiscovery, ServiceDiscoveryOptions, ServiceAffinityPolicy
 
 
 def _preload_transfer_engine_runtime_shared_libs(pkg_dir: Path) -> None:

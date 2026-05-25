@@ -26,6 +26,7 @@ pybind_library(
         "pybind_register_hetero.cpp",
         "pybind_register_kv.cpp",
         "pybind_register_object.cpp",
+        "pybind_register_service_discovery.cpp",
         "pybind_register_stream.cpp",
     ],
     hdrs = [
