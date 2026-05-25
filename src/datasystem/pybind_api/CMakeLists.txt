@@ -5,7 +5,8 @@ add_library(ds_client_py MODULE
         pybind_register_stream.cpp
         pybind_register_kv.cpp
         pybind_register_hetero.cpp
-        pybind_register_context.cpp)
+        pybind_register_context.cpp
+        pybind_register_service_discovery.cpp)
 
 target_link_libraries(ds_client_py PRIVATE
         datasystem

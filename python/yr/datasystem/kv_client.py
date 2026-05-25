@@ -23,6 +23,7 @@ from typing import List
 from yr.datasystem.lib import libds_client_py as ds
 from yr.datasystem.object_client import WriteMode, CacheType
 from yr.datasystem.util import Validator as validator
+from yr.datasystem.service_discovery import ServiceDiscovery
 
 DEFAULT_FAST_TRANSPORT_MEM_SIZE = 256 * 1024 * 1024
 MAX_FAST_TRANSPORT_MEM_SIZE = 2 * 1024 * 1024 * 1024
@@ -163,7 +164,8 @@ class KVClient:
         enable_cross_node_connection=False,
         req_timeout_ms=0,
         enable_exclusive_connection=False,
-        fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE
+        fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE,
+        service_discovery=None
     ):
         """Constructor of the KVClient class
 
@@ -188,25 +190,50 @@ class KVClient:
             the system will throw a request exception.
             fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
             256MB. The valid range is [1, 2GB].
+            service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
+                If provided, the client will use service discovery to find worker addresses instead of
+                using the provided host and port.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
             TypeError: Raise a type error if the input parameter is invalid.
         """
         args = [
-            ["host", host, str], ["port", port, int], ["connect_timeout_ms", connect_timeout_ms, int],
-            ["client_public_key", client_public_key, str], ["client_private_key", client_private_key, str],
-            ["server_public_key", server_public_key, str], ["access_key", access_key, str],
+            ["connect_timeout_ms", connect_timeout_ms, int],
+            ["client_public_key", client_public_key, str],
+            ["client_private_key", client_private_key, str],
+            ["server_public_key", server_public_key, str],
+            ["access_key", access_key, str],
             ["secret_key", secret_key, str],
-            ["tenant_id", tenant_id, str], ["enable_cross_node_connection", enable_cross_node_connection, bool],
+            ["tenant_id", tenant_id, str],
+            ["enable_cross_node_connection", enable_cross_node_connection, bool],
             ["enable_exclusive_connection", enable_exclusive_connection, bool],
             ["fast_transport_mem_size", fast_transport_mem_size, int]
         ]
+
+        if service_discovery is not None:
+            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery])
+            if host or port:
+                import warnings
+                warnings.warn("host and port are ignored when service_discovery is provided")
+        else:
+            args.insert(0, ["host", host, str])
+            args.insert(1, ["port", port, int])
+
         validator.check_args_types(args)
         validator.check_param_range("connect_timeout_ms", connect_timeout_ms, 0, validator.INT32_MAX_SIZE)
         validator.check_param_range(
             "fast_transport_mem_size", fast_transport_mem_size, 1, MAX_FAST_TRANSPORT_MEM_SIZE
         )
+
+        if service_discovery is not None:
+            _, host, port, _ = service_discovery.select_worker()
+        else:
+            host_provided = bool(host)
+            port_provided = port > 0
+            if host_provided != port_provided:
+                raise RuntimeError("host and port must be provided together, or use service_discovery")
+
         self._client = ds.KVClient(
             host,
             port,
