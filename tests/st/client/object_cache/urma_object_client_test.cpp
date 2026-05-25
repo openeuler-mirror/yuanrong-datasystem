@@ -71,9 +71,7 @@ public:
 #else
         opts.workerGflagParams += " -arena_per_tenant=1 -enable_urma=false ";
 #endif
-#ifdef URMA_OVER_UB
-        opts.workerGflagParams += " -urma_mode=UB -ipc_through_shared_memory=false ";
-#endif
+        opts.workerGflagParams += " -ipc_through_shared_memory=false ";
     }
 
     void SetUp() override
@@ -1153,7 +1151,7 @@ public:
     {
         UrmaObjectClientTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams +=
-            " -urma_mode=UB -ipc_through_shared_memory=true --enable_data_replication=false "
+            " -ipc_through_shared_memory=true --enable_data_replication=false "
             "-inject_actions=worker.bind_unix_path:return(K_OK) ";
     }
 };
@@ -1274,7 +1272,7 @@ public:
         opts.numWorkers -= 1;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams +=
-            " -urma_mode=UB -ipc_through_shared_memory=true --enable_data_replication=false"
+            " -ipc_through_shared_memory=true --enable_data_replication=false"
             " --enable_transport_fallback=false"
             " -inject_actions=worker.bind_unix_path:return(K_OK) ";
     }

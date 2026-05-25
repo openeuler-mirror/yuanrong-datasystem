@@ -237,11 +237,10 @@ public:
      * @brief Create a JFC for completion polling or event notification.
      * @param[in] context Local Urma context.
      * @param[in] deviceAttr Attributes of the selected Urma device.
-     * @param[in] jfce Event channel used by the JFC.
      * @param[out] jfc Created JFC wrapper.
      * @return Status of the call.
      */
-    static Status Create(urma_context_t *context, const urma_device_attr_t &deviceAttr, urma_jfce_t *jfce,
+    static Status Create(urma_context_t *context, const urma_device_attr_t &deviceAttr,
                          std::unique_ptr<UrmaJfc> &jfc);
 
     /**

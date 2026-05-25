@@ -171,21 +171,6 @@ Status GetDevNameFromDestIp(const std::string &ipAddr, std::string &devName);
  */
 int GetDevNameFromLocalIp(const std::string &ipAddr, std::string &devName);
 
-/**
- * @brief Get the RDMA device name from the Ethernet device name.
- * @note If there is no RDMA device for the input device name, it will search and return other RDMA device if possible.
- * @param[in] ethDevName The Ethernet device name.
- * @param[out] rdmaDevName The RDMA device name.
- * @return Status of the call.
- */
-Status EthToRdmaDevName(std::string ethDevName, std::string &rdmaDevName);
-
-enum class UrmaMode { IB = 0, UB = 1, UNKNOWN };
-/**
- * @brief Check the URMA mode.
- * @return The urma mode, valid options are IB or UB.
- */
-UrmaMode GetUrmaMode();
 
 /**
  * @brief Fill the urma_info fields in the request protobuf.

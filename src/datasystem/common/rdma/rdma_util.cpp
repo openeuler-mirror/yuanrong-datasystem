@@ -25,9 +25,6 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
-#include <dirent.h>
-
-#include <fstream>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -38,7 +35,6 @@ static constexpr int RDMA_LOG_LEVEL = 3;
 const int OCTET = 8;
 const int IP_NUM_OCTETS = 4;
 const int IPV4_MAX_LENGTH = 16;
-const std::string IB_PATH = "/sys/class/infiniband/";
 Status GetDevNameFromDestIp(const std::string &ipAddr, std::string &devName)
 {
     std::istringstream iss(ipAddr);
@@ -144,93 +140,4 @@ int GetDevNameFromLocalIp(const std::string &ipAddr, std::string &devName)
     }
     return 0;
 }
-
-static void ReadGids(struct dirent *devEnt, struct dirent *portEnt,
-                     std::unordered_map<std::string, std::string> &results)
-{
-    std::string portsPath = IB_PATH + devEnt->d_name + "/ports/";
-    std::string gidsPath = portsPath + portEnt->d_name + "/gids/";
-    DIR *gids = opendir(gidsPath.c_str());
-    if (gids == nullptr) {
-        return;
-    }
-    struct dirent *gidEnt;
-    // for each port read gids
-    while ((gidEnt = readdir(gids)) != nullptr) {
-        if (strcmp(gidEnt->d_name, ".") == 0 || strcmp(gidEnt->d_name, "..") == 0) {
-            continue;
-        }
-        std::ifstream gidFile(gidsPath + gidEnt->d_name);
-        std::string gid;
-        std::getline(gidFile, gid);
-        gidFile.close();
-        // check if gid is valid
-        if (gid == "0000:0000:0000:0000:0000:0000:0000:0000" || gid == "fe80:0000:0000:0000:0000:0000:0000:0000") {
-            continue;
-        }
-        // read ndev from port and gid
-        std::string ndevPath = portsPath + portEnt->d_name + "/gid_attrs/ndevs/" + gidEnt->d_name;
-        std::string ndevName;
-        std::ifstream ndevFile(ndevPath);
-        if (!std::getline(ndevFile, ndevName)) {
-            VLOG(RDMA_LOG_LEVEL) << "Read ndev file failed on path: " << ndevPath;
-        } else if (ndevName == "") {
-            VLOG(RDMA_LOG_LEVEL) << "ndev name empty on path: " << ndevPath;
-        } else {
-            results.emplace(ndevName, devEnt->d_name);
-        }
-        ndevFile.close();
-    }
-    closedir(gids);
-}
-
-Status EthToRdmaDevName(std::string ethDevName, std::string &rdmaDevName)
-{
-    std::unordered_map<std::string, std::string> results;
-    DIR *devs = opendir(IB_PATH.c_str());
-    CHECK_FAIL_RETURN_STATUS(devs != nullptr, K_RUNTIME_ERROR, "Unable to open directory: " + IB_PATH);
-    struct dirent *devEnt;
-    // read devs
-    while ((devEnt = readdir(devs)) != nullptr) {
-        if (strcmp(devEnt->d_name, ".") == 0 || strcmp(devEnt->d_name, "..") == 0) {
-            continue;
-        }
-        std::string portsPath = IB_PATH + devEnt->d_name + "/ports/";
-        DIR *ports = opendir(portsPath.c_str());
-        if (ports == nullptr) {
-            continue;
-        }
-        struct dirent *portEnt;
-        // read ports
-        while ((portEnt = readdir(ports)) != nullptr) {
-            if (strcmp(portEnt->d_name, ".") == 0 || strcmp(portEnt->d_name, "..") == 0) {
-                continue;
-            }
-            ReadGids(devEnt, portEnt, results);
-        }
-        closedir(ports);
-    }
-    closedir(devs);
-
-    rdmaDevName.clear();
-    if (results.find(ethDevName) != results.end()) {
-        rdmaDevName = std::move(results[ethDevName]);
-    } else if (!results.empty()) {
-        LOG(WARNING) << "Unable to determine the exact RDMA device from eth device name, use any RDMA device name";
-        rdmaDevName = std::move(results.begin()->second);
-    }
-    CHECK_FAIL_RETURN_STATUS(!rdmaDevName.empty(), K_RUNTIME_ERROR, "Unable to find any RDMA device name.");
-    VLOG(RDMA_LOG_LEVEL) << "Result RdmaDevName is " << rdmaDevName;
-    return Status::OK();
-}
-
-UrmaMode GetUrmaMode()
-{
-    if (FLAGS_urma_mode == "IB") {
-        return UrmaMode::IB;
-    } else if (FLAGS_urma_mode == "UB") {
-        return UrmaMode::UB;
-    }
-    return UrmaMode::UNKNOWN;
-};
 }  // namespace datasystem

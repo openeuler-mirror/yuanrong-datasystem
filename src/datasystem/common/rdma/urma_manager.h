@@ -461,12 +461,11 @@ private:
 
     /**
      * @brief Get Urma device name and eid index for a given hostport
-     * @param[in] hostport HostPort of the remote device
      * @param[out] urmaDeviceName Urma device name
      * @param[out] eidIndex Eid index to use for the device
      * @return Status of the call.
      */
-    Status GetUrmaDeviceName(const HostPort &hostport, std::string &urmaDeviceName, int &eidIndex);
+    Status GetUrmaDeviceName(std::string &urmaDeviceName, int &eidIndex);
 
     /**
      * @brief Gets Urma effective device from devList
