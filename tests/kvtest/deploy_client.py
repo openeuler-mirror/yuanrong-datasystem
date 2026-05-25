@@ -25,7 +25,7 @@ class Deployer:
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.nodes = self.deploy.get('nodes', [])
         self.remote_work_dir = self.deploy.get('remote_work_dir', '')
-        self.binary_path = os.path.join(self.base_dir, 'build', 'kvtest')
+        self.binary_path = None  # resolved in main() via --kvtest-binary-path or deploy.json
         self.datasystem_sdk_dir = os.path.join(self.base_dir, 'lib')
         version_file = os.path.join(self.base_dir, 'VERSION')
         self.version = open(version_file).read().strip() if os.path.isfile(version_file) else '?'
@@ -61,11 +61,9 @@ class Deployer:
         return node.get('ssh_user', self.default_ssh_user)
 
     def _transport(self, node):
-        t = node.get('transport', self.default_transport)
-        if t == 'ssh' and node.get('host') == 'localhost':
-            return 'ssh'
         if node.get('host') == 'localhost':
             return 'localhost'
+        t = node.get('transport', self.default_transport)
         return t
 
     def _exec_target(self, node):
@@ -690,145 +688,208 @@ def _parse_pipeline(s):
     return [op.strip() for op in s.split(',') if op.strip()] if s else []
 
 
-def cmd_gen_config(args):
-    pods = _get_pods(args.namespace, args.prefix)
-    if not pods:
-        print(f'No running pods found with prefix "{args.prefix}" '
-              f'in namespace "{args.namespace}"')
-        sys.exit(1)
-
-    if args.writer_count < 0 or args.writer_count > len(pods):
-        print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}',
-              file=sys.stderr)
-        sys.exit(1)
-
-    node_pods = {}
-    for i, pod in enumerate(pods):
-        node_pods.setdefault(pod['node'], []).append(i)
-
-    writer_indices = set()
-    sorted_nodes = sorted(node_pods.keys())
-    pod_queues = {n: list(node_pods[n]) for n in sorted_nodes}
-    assigned = 0
-    while assigned < args.writer_count:
-        for node in sorted_nodes:
-            if assigned >= args.writer_count:
-                break
-            if pod_queues[node]:
-                writer_indices.add(pod_queues[node].pop(0))
-                assigned += 1
-
-    writer_pipeline = _parse_pipeline(args.pipeline)
-    notify_pipeline = _parse_pipeline(args.notify_pipeline)
-
-    nodes = []
-    for i, pod in enumerate(pods):
-        is_writer = i in writer_indices
-        node = {
-            'pod_name': pod['name'],
-            'pod_ip': pod['ip'],
-            'namespace': args.namespace,
+def _parse_manual_nodes(nodes_str):
+    """Parse "--nodes h1:p1,h2:p2" into deploy node dicts."""
+    if not nodes_str:
+        return []
+    result = []
+    for i, entry in enumerate(nodes_str.split(',')):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ':' in entry:
+            host, port = entry.rsplit(':', 1)
+            try:
+                port = int(port)
+            except ValueError:
+                print(f'ERROR: invalid port in --nodes entry: {entry}', file=sys.stderr)
+                sys.exit(1)
+        else:
+            host = entry
+            port = 9000
+        result.append({
+            'host': host,
+            'port': port,
             'instance_id': i,
-            'role': 'writer' if is_writer else 'reader',
-            'pipeline': writer_pipeline if is_writer else [],
-            'notify_pipeline': notify_pipeline,
-        }
-        if args.batch_keys_count > 1:
-            node['batch_keys_count'] = args.batch_keys_count
-        nodes.append(node)
+        })
+    return result
 
+
+def cmd_gen_config(args):
+    mode = args.mode
+
+    # --- Validation ---
+    if mode == 'benchmark':
+        if not args.test_mode:
+            print('ERROR: --test-mode is required for benchmark mode', file=sys.stderr)
+            sys.exit(1)
+        if args.worker_memory_mb <= 0:
+            print('ERROR: --worker-memory-mb is required for benchmark mode', file=sys.stderr)
+            sys.exit(1)
+    if mode == 'cache':
+        if args.key_pool_size <= 0:
+            print('ERROR: --key-pool-size is required for cache mode', file=sys.stderr)
+            sys.exit(1)
+
+    # --- Node discovery ---
+    if args.prefix:
+        # Pod discovery via kubectl (all modes)
+        pods = _get_pods(args.namespace, args.prefix)
+        if not pods:
+            print(f'No running pods found with prefix "{args.prefix}" '
+                  f'in namespace "{args.namespace}"', file=sys.stderr)
+            sys.exit(1)
+        if mode != 'benchmark' and (args.writer_count < 0 or args.writer_count > len(pods)):
+            print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(pods)}',
+                  file=sys.stderr)
+            sys.exit(1)
+
+        node_pods = {}
+        for i, pod in enumerate(pods):
+            node_pods.setdefault(pod['node'], []).append(i)
+
+        writer_indices = set()
+        if mode != 'benchmark':
+            sorted_nodes = sorted(node_pods.keys())
+            pod_queues = {n: list(node_pods[n]) for n in sorted_nodes}
+            assigned = 0
+            while assigned < args.writer_count:
+                for node in sorted_nodes:
+                    if assigned >= args.writer_count:
+                        break
+                    if pod_queues[node]:
+                        writer_indices.add(pod_queues[node].pop(0))
+                        assigned += 1
+
+        writer_pipeline = _parse_pipeline(args.pipeline)
+        notify_pipeline = _parse_pipeline(args.notify_pipeline)
+
+        nodes = []
+        for i, pod in enumerate(pods):
+            is_writer = i in writer_indices if mode != 'benchmark' else True
+            node = {
+                'pod_name': pod['name'],
+                'pod_ip': pod['ip'],
+                'namespace': args.namespace,
+                'instance_id': i,
+                'role': 'writer' if is_writer else 'reader',
+                'pipeline': writer_pipeline if is_writer else [],
+                'notify_pipeline': notify_pipeline,
+            }
+            if args.batch_keys_count > 1:
+                node['batch_keys_count'] = args.batch_keys_count
+            nodes.append(node)
+        transport = 'kubectl'
+    else:
+        # Manual nodes via --nodes or default localhost
+        nodes = _parse_manual_nodes(args.nodes)
+        if not nodes:
+            nodes = [{'host': 'localhost', 'instance_id': 0}]
+        transport = 'ssh'
+
+        # Assign writer/reader roles using --writer-count (consistent with kubectl mode)
+        writer_indices = set()
+        if mode != 'benchmark':
+            if args.writer_count < 0 or args.writer_count > len(nodes):
+                print(f'ERROR: --writer-count ({args.writer_count}) must be 0..{len(nodes)}',
+                      file=sys.stderr)
+                sys.exit(1)
+            for i in range(min(args.writer_count, len(nodes))):
+                writer_indices.add(i)
+
+            writer_pipeline = _parse_pipeline(args.pipeline)
+            notify_pipeline = _parse_pipeline(args.notify_pipeline)
+            for i, node in enumerate(nodes):
+                is_writer = i in writer_indices
+                node['role'] = 'writer' if is_writer else 'reader'
+                node['pipeline'] = writer_pipeline if is_writer else []
+                node['notify_pipeline'] = notify_pipeline
+                if args.batch_keys_count > 1:
+                    node['batch_keys_count'] = args.batch_keys_count
+
+    # --- Build deploy.json ---
     deploy = {
         'remote_work_dir': args.remote_work_dir,
-        'transport': 'kubectl',
+        'transport': transport,
         'enable_procmon': True,
         'nodes': nodes,
     }
     if args.remote_sdk_dir:
         deploy['remote_sdk_dir'] = args.remote_sdk_dir
 
+    # --- Build config.json ---
+    cfg = {
+        'mode': mode,
+        'etcd_address': args.etcd_address or '127.0.0.1:2379',
+        'cluster_name': args.cluster_name or '',
+        'num_threads': args.num_threads,
+        'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
+        'connect_options': {
+            'connect_timeout_ms': 1000,
+            'request_timeout_ms': 20,
+            'enable_cross_node_connection': True,
+            'fast_transport_mem_size': '512MB',
+        },
+    }
+
+    # Mode-specific config fields
+    if mode == 'benchmark':
+        cfg['test_mode'] = args.test_mode
+        cfg['worker_memory_mb'] = args.worker_memory_mb
+        cfg['set_api'] = args.set_api
+        cfg['cleanup_method'] = args.cleanup_method
+        if args.total_rounds > 0:
+            cfg['total_rounds'] = args.total_rounds
+        if args.duration > 0:
+            cfg['duration_seconds'] = args.duration
+        if args.ttl > 0:
+            cfg['set_param'] = {'ttl_second': args.ttl}
+    else:
+        # Pipeline / Cache
+        writer_pipeline = _parse_pipeline(args.pipeline)
+        notify_pipeline = _parse_pipeline(args.notify_pipeline)
+        cfg['listen_port'] = 9000
+        cfg['role'] = 'writer'
+        cfg['pipeline'] = writer_pipeline
+        cfg['notify_pipeline'] = notify_pipeline
+        cfg['target_qps'] = args.target_qps
+        if args.batch_keys_count > 1:
+            cfg['batch_keys_count'] = args.batch_keys_count
+        if args.ttl > 0:
+            cfg['set_param'] = {'ttl_second': args.ttl}
+        if mode == 'cache':
+            cfg['key_pool_size'] = args.key_pool_size
+            if args.target_hit_rate > 0:
+                cfg['target_hit_rate'] = args.target_hit_rate
+            if args.warmup_timeout != 60:
+                cfg['warmup_timeout_seconds'] = args.warmup_timeout
+            if args.inference_delay > 0:
+                cfg['inference_delay_ms'] = args.inference_delay
+
+    # --- Write files ---
     os.makedirs(args.output_dir, exist_ok=True)
 
     deploy_path = os.path.join(args.output_dir, 'deploy.json')
     with open(deploy_path, 'w') as f:
         json.dump(deploy, f, indent=2)
         f.write('\n')
-    print(f'Generated {deploy_path} ({len(nodes)} pods)')
+    print(f'Generated {deploy_path} ({len(nodes)} nodes, transport={transport})')
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    src = os.path.join(script_dir, 'config', 'config.json.example')
-    dst = os.path.join(args.output_dir, 'config.json')
-    if os.path.exists(src):
-        shutil.copy2(src, dst)
-        overrides = {}
-        if args.etcd_address:
-            overrides['etcd_address'] = args.etcd_address
-        if args.cluster_name:
-            overrides['cluster_name'] = args.cluster_name
-        if writer_pipeline:
-            overrides['pipeline'] = writer_pipeline
-        if notify_pipeline:
-            overrides['notify_pipeline'] = notify_pipeline
-        if args.batch_keys_count > 1:
-            overrides['batch_keys_count'] = args.batch_keys_count
-        if args.key_pool_size > 0:
-            overrides['key_pool_size'] = args.key_pool_size
-        if args.target_hit_rate > 0:
-            overrides['target_hit_rate'] = args.target_hit_rate
-        if args.warmup_timeout != 60:
-            overrides['warmup_timeout_seconds'] = args.warmup_timeout
-        if args.inference_delay > 0:
-            overrides['inference_delay_ms'] = args.inference_delay
-        if overrides:
-            with open(dst) as f:
-                cfg = json.load(f)
-            cfg.update(overrides)
-            with open(dst, 'w') as f:
-                json.dump(cfg, f, indent=2)
-                f.write('\n')
-            for k, v in overrides.items():
-                print(f'  {k} set to {v}')
-        print(f'Copied {src} -> {dst}')
-    else:
-        print(f'WARNING: {src} not found, skipping config.json')
+    cfg_path = os.path.join(args.output_dir, 'config.json')
+    with open(cfg_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+        f.write('\n')
+    print(f'Generated {cfg_path} (mode={mode})')
 
     for node in nodes:
-        print(f'  {node["pod_name"]} -> {node["pod_ip"]} '
-              f'(instance_id={node["instance_id"]}, role={node["role"]})')
+        target = node.get('pod_name', node.get('host', '?'))
+        print(f'  {target} -> instance_id={node["instance_id"]}, role={node.get("role", "writer")}')
 
 
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description='Deploy kvtest to remote nodes via SSH or kubectl.')
-    sub = parser.add_subparsers(dest='command')
-
-    # deploy
-    p = sub.add_parser('deploy', help='Deploy + start (auto stop+collect if duration set)')
-    p.add_argument('deploy_json', help='Path to deploy.json')
-    p.add_argument('config_template', nargs='?', default='config/config.json.example',
-                   help='Config template (default: config/config.json.example)')
-
-    # stop
-    p = sub.add_parser('stop', help='Stop all instances via HTTP /stop')
-    p.add_argument('deploy_json')
-    p.add_argument('config_template', nargs='?', default='config/config.json.example')
-
-    # collect
-    p = sub.add_parser('collect', help='Collect output files to collected/')
-    p.add_argument('deploy_json')
-    p.add_argument('config_template', nargs='?', default='config/config.json.example')
-
-    # clean
-    p = sub.add_parser('clean', help='Kill processes and remove remote work dirs')
-    p.add_argument('deploy_json')
-    p.add_argument('config_template', nargs='?', default='config/config.json.example')
-
-    # gen-config
-    p = sub.add_parser('gen-config',
-                       help='Generate deploy.json from k8s Pod names')
-    p.add_argument('-p', '--prefix', required=True,
-                   help='Pod name prefix to match')
+def _add_gen_config_args(p):
+    """Add gen-config arguments to an argparse subparser."""
+    p.add_argument('-p', '--prefix',
+                   help='Pod name prefix to match (kubectl discovery)')
     p.add_argument('-n', '--namespace', default='default',
                    help='k8s namespace (default: default)')
     p.add_argument('-r', '--remote-work-dir',
@@ -842,6 +903,14 @@ def main():
                    help='Set cluster_name in generated config.json')
     p.add_argument('--remote-sdk-dir',
                    help='SDK lib path inside containers')
+    p.add_argument('-m', '--mode', default='pipeline',
+                   choices=['pipeline', 'cache', 'benchmark'],
+                   help='Run mode (default: pipeline)')
+    # Node specification (for benchmark without Pod discovery)
+    p.add_argument('--nodes',
+                   help='Manual node list for deployment, comma-separated host:port pairs '
+                        '(e.g. "1.2.3.4:9000,5.6.7.8:9001"). Default: localhost single node')
+    # Pipeline / Cache common
     p.add_argument('-w', '--writer-count', type=int, default=1,
                    help='Number of writer instances (default: 1)')
     p.add_argument('--pipeline', default='setStringView',
@@ -850,6 +919,16 @@ def main():
                    help='Comma-separated notify pipeline ops (default: getBuffer)')
     p.add_argument('--batch-keys-count', type=int, default=1,
                    help='batch_keys_count for batch ops (default: 1)')
+    p.add_argument('--target-qps', type=int, default=100,
+                   help='Target QPS, 0=unlimited (default: 100)')
+    p.add_argument('--data-sizes', default='1MB',
+                   help='Comma-separated data sizes, e.g. "1MB,512KB" (default: 1MB)')
+    p.add_argument('--num-threads', type=int, default=16,
+                   help='Number of worker threads (default: 16)')
+    p.add_argument('--cleanup-method', default='del',
+                   choices=['del', 'ttl'],
+                   help='Cleanup method: del (delete keys) or ttl (auto-expire, default: del)')
+    # Cache mode
     p.add_argument('--key-pool-size', type=int, default=0,
                    help='Cache mode key pool size (0 = disabled)')
     p.add_argument('--target-hit-rate', type=float, default=0,
@@ -858,6 +937,61 @@ def main():
                    help='Reader warmup timeout in seconds (default: 60)')
     p.add_argument('--inference-delay', type=int, default=0,
                    help='Reader inference delay in ms (default: 0)')
+    # Benchmark mode
+    p.add_argument('--test-mode',
+                   choices=['set_local', 'set_remote', 'get_local',
+                            'get_cross_node', 'get_remote_direct', 'get_remote_cross'],
+                   help='Benchmark test mode (required for benchmark mode)')
+    p.add_argument('--worker-memory-mb', type=int, default=0,
+                   help='Worker shared memory in MB (required for benchmark mode)')
+    p.add_argument('--set-api', default='string_view',
+                   choices=['string_view', 'create_buffer'],
+                   help='Set API path (default: string_view)')
+    p.add_argument('--duration', type=int, default=0,
+                   help='Benchmark duration in seconds (0 = infinite)')
+    p.add_argument('--total-rounds', type=int, default=0,
+                   help='Benchmark total rounds (0 = infinite)')
+    p.add_argument('--ttl', type=int, default=0,
+                   help='TTL in seconds via set_param.ttl_second (default: 0, no expiry)')
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Deploy kvtest to remote nodes via SSH or kubectl.')
+    sub = parser.add_subparsers(dest='command')
+
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument('--kvtest-binary-path',
+                        help='Path to kvtest binary (default: output/kvtest, or deploy.json kvtest_binary_path)')
+
+    # deploy
+    p = sub.add_parser('deploy', help='Deploy + start (auto stop+collect if duration set)',
+                       parents=[shared])
+    p.add_argument('deploy_json', help='Path to deploy.json')
+    p.add_argument('config_template', nargs='?', default='config/config.json.example',
+                   help='Config template (default: config/config.json.example)')
+
+    # stop
+    p = sub.add_parser('stop', help='Stop all instances via HTTP /stop', parents=[shared])
+    p.add_argument('deploy_json')
+    p.add_argument('config_template', nargs='?', default='config/config.json.example')
+
+    # collect
+    p = sub.add_parser('collect', help='Collect output files to collected/', parents=[shared])
+    p.add_argument('deploy_json')
+    p.add_argument('config_template', nargs='?', default='config/config.json.example')
+
+    # clean
+    p = sub.add_parser('clean', help='Kill processes and remove remote work dirs', parents=[shared])
+    p.add_argument('deploy_json')
+    p.add_argument('config_template', nargs='?', default='config/config.json.example')
+
+    # gen-config
+    p = sub.add_parser('gen-config',
+                       help='Generate deploy.json + config.json')
+    _add_gen_config_args(p)
 
     args = parser.parse_args()
     if not args.command:
@@ -869,6 +1003,10 @@ def main():
         return
 
     deployer = Deployer(args.deploy_json, args.config_template)
+
+    # Resolve binary path: CLI --kvtest-binary-path > deploy.json "kvtest_binary_path" > output/kvtest
+    default_binary = os.path.join(deployer.base_dir, 'output', 'kvtest')
+    deployer.binary_path = getattr(args, 'kvtest_binary_path', None) or deployer.deploy.get('kvtest_binary_path') or default_binary
 
     if args.command == 'deploy':
         deployer.do_deploy()

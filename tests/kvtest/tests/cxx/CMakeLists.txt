@@ -45,6 +45,13 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.cpp")
     )
 endif()
 
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_benchmark.cpp")
+    list(APPEND PHASE4_SOURCES
+        test_benchmark.cpp
+        ${KVTEST_ROOT}/src/benchmark/benchmark_runner.cpp
+    )
+endif()
+
 add_executable(kvtest_tests
     ${PHASE1_SOURCES}
     ${PHASE2_SOURCES}

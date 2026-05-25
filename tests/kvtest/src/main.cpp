@@ -7,6 +7,8 @@
 #include "pipeline/cache_reader.h"
 #include "rpc/http_server.h"
 #include "pipeline/stop.h"
+#include "benchmark/benchmark_runner.h"
+#include "benchmark/kv_client_adapter.h"
 
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/connection.h>
@@ -16,9 +18,11 @@
 #include <string>
 #include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <fstream>
 #include <memory>
 #include <thread>
+#include <algorithm>
 
 using namespace datasystem;
 
@@ -29,7 +33,268 @@ static void SignalHandler(int sig) {
     gRunning = false;
 }
 
-static int RunMode(const Config &cfg) {
+static int RunBenchmarkMode(Config &cfg) {
+    SLOG_INFO("Benchmark mode: test_mode=" << static_cast<int>(cfg.testMode));
+
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = cfg.etcdAddress;
+    sdOpts.clusterName = cfg.clusterName;
+    sdOpts.hostIdEnvName = cfg.hostIdEnvName;
+    auto sd = std::make_shared<ServiceDiscovery>(sdOpts);
+    Status rc = sd->Init();
+    if (!rc.IsOk()) {
+        SLOG_ERROR("ServiceDiscovery init failed: " << rc.GetMsg());
+        return 1;
+    }
+
+    ConnectOptions connOpts;
+    connOpts.serviceDiscovery = sd;
+    connOpts.connectTimeoutMs = cfg.connectTimeoutMs;
+    connOpts.requestTimeoutMs = cfg.requestTimeoutMs;
+    connOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
+    connOpts.fastTransportMemSize = cfg.fastTransportMemSize;
+
+    auto localClient = std::make_shared<KVClient>(connOpts);
+    rc = localClient->Init();
+    if (!rc.IsOk()) {
+        SLOG_ERROR("Local client init failed: " << rc.GetMsg());
+        return 1;
+    }
+    SLOG_INFO("Local client initialized");
+
+    std::shared_ptr<KVClient> remoteClient;
+    if (NeedsRemoteWorker(cfg.testMode)) {
+        ConnectOptions remoteOpts;
+        remoteOpts.host = cfg.remoteWorker.host;
+        remoteOpts.port = cfg.remoteWorker.port;
+        remoteOpts.connectTimeoutMs = cfg.connectTimeoutMs;
+        remoteOpts.requestTimeoutMs = cfg.requestTimeoutMs;
+        remoteOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
+        remoteOpts.fastTransportMemSize = cfg.fastTransportMemSize;
+        remoteClient = std::make_shared<KVClient>(remoteOpts);
+        rc = remoteClient->Init();
+        if (!rc.IsOk()) {
+            SLOG_ERROR("Remote client init failed: " << rc.GetMsg());
+            return 1;
+        }
+        SLOG_INFO("Remote client initialized: " << cfg.remoteWorker.host << ":" << cfg.remoteWorker.port);
+    }
+
+    // Determine which client does Set vs Get based on test_mode
+    std::shared_ptr<KVClient> setClient, getClient;
+    switch (cfg.testMode) {
+        case TestMode::SET_LOCAL:
+        case TestMode::GET_LOCAL:
+            setClient = localClient; getClient = localClient; break;
+        case TestMode::SET_REMOTE:
+            setClient = remoteClient; getClient = remoteClient; break;
+        case TestMode::GET_CROSS_NODE:
+            setClient = remoteClient; getClient = localClient; break;
+        case TestMode::GET_REMOTE_DIRECT:
+            setClient = remoteClient; getClient = remoteClient; break;
+        case TestMode::GET_REMOTE_CROSS:
+            setClient = localClient; getClient = remoteClient; break;
+        default:
+            SLOG_ERROR("Unknown test_mode"); return 1;
+    }
+
+    SetParam param;
+    param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
+    if (cfg.ttlSeconds > 0) {
+        param.ttlSecond = cfg.ttlSeconds;
+    }
+
+    KVClientAdapter setAdapter(setClient, param);
+    KVClientAdapter getAdapter(getClient, param);
+
+    // Del client: separate KVClient with 5s timeout to avoid cleanup failures
+    // affecting the next round's Set/Get latency measurements.
+    // For remote modes, delClient must connect to the same worker as setClient.
+    std::shared_ptr<KVClient> delClient;
+    KVClientAdapter delAdapter(setClient, param);  // fallback: reuse setClient
+    try {
+        ConnectOptions delConnOpts;
+        if (setClient == remoteClient) {
+            delConnOpts.host = cfg.remoteWorker.host;
+            delConnOpts.port = cfg.remoteWorker.port;
+        } else {
+            delConnOpts.serviceDiscovery = sd;
+        }
+        delConnOpts.connectTimeoutMs = cfg.connectTimeoutMs;
+        delConnOpts.requestTimeoutMs = 5000;
+        delConnOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
+        delConnOpts.fastTransportMemSize = cfg.fastTransportMemSize;
+        delClient = std::make_shared<KVClient>(delConnOpts);
+        rc = delClient->Init();
+        if (!rc.IsOk()) {
+            SLOG_WARN("Del client init failed (fallback to set client): " << rc.GetMsg());
+            delClient.reset();
+        } else {
+            delAdapter = KVClientAdapter(delClient, param);
+        }
+    } catch (const std::exception &e) {
+        SLOG_WARN("Del client exception (fallback to set client): " << e.what());
+        delClient.reset();
+    }
+
+    uint64_t dataSize = cfg.dataSizes[0];
+    int keysPerRound = CalcKeysPerRound(cfg.workerMemoryMb, dataSize);
+    int numThreads = cfg.numThreads;
+    bool isGetMode = IsGetMode(cfg.testMode);
+
+    SLOG_INFO("Benchmark config: keys_per_round=" << keysPerRound
+              << ", threads=" << numThreads
+              << ", data_size=" << dataSize
+              << ", set_api=" << cfg.setApi
+              << ", cleanup=" << cfg.cleanupMethod
+              << ", is_get_mode=" << isGetMode);
+
+    std::string data(dataSize, 'A');
+
+    BenchmarkStats stats;
+    BenchmarkMetrics benchMetrics(cfg.outputDir);
+    int64_t maxDurationMs = static_cast<int64_t>(cfg.durationSeconds) * 1000;
+
+    auto benchStart = std::chrono::steady_clock::now();
+
+    for (int round = 0; cfg.totalRounds == 0 || round < cfg.totalRounds; round++) {
+        if (maxDurationMs > 0) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - benchStart).count();
+            if (elapsed >= maxDurationMs) break;
+        }
+
+        SLOG_INFO("Round " << round << " starting");
+
+        // Per-thread latency storage
+        std::vector<std::vector<double>> setLatencies(numThreads);
+        std::vector<std::vector<double>> getLatencies(numThreads);
+        std::vector<int> setOks(numThreads, 0);
+        std::vector<int> getOks(numThreads, 0);
+        std::vector<int> delOks(numThreads, 0);
+        std::vector<std::vector<double>> delLatencies(numThreads);
+
+        Barrier barrier(numThreads);
+        std::vector<std::thread> threads;
+
+        auto roundStart = std::chrono::steady_clock::now();
+
+        for (int t = 0; t < numThreads; t++) {
+            threads.emplace_back([&, t]() {
+                auto range = ThreadKeyRange(keysPerRound, numThreads, t);
+                int startKey = range.first;
+                int numKeys = range.second;
+
+                if (numKeys == 0) {
+                    barrier.Wait();  // Set phase barrier
+                    if (isGetMode) barrier.Wait();  // Get phase barrier
+                    if (cfg.cleanupMethod == "del") barrier.Wait();  // Del phase barrier
+                    return;
+                }
+
+                // Set phase (all threads share setAdapter)
+                auto setResult = RunSetPhase(&setAdapter, round, startKey, numKeys, cfg.setApi, data);
+                setOks[t] = setResult.successCount;
+                setLatencies[t] = std::move(setResult.latenciesMs);
+
+                barrier.Wait();
+
+                // Get phase (all threads share getAdapter)
+                if (isGetMode) {
+                    auto getResult = RunGetPhase(&getAdapter, round, startKey, numKeys);
+                    getOks[t] = getResult.successCount;
+                    getLatencies[t] = std::move(getResult.latenciesMs);
+                    barrier.Wait();
+                }
+
+                // Cleanup phase (use delAdapter with 5s timeout, 1K keys/batch)
+                if (cfg.cleanupMethod == "del") {
+                    auto delResult = RunDelPhase(&delAdapter, round, startKey, numKeys);
+                    delOks[t] = delResult.successCount;
+                    delLatencies[t] = std::move(delResult.latenciesMs);
+                    barrier.Wait();
+                }
+            });
+        }
+
+        for (auto &t : threads) t.join();
+        auto roundEnd = std::chrono::steady_clock::now();
+        double roundTotalMs = std::chrono::duration<double, std::milli>(roundEnd - roundStart).count();
+
+        // Merge set latencies and record
+        {
+            std::vector<double> allLat;
+            int totalOk = 0;
+            for (int t = 0; t < numThreads; t++) {
+                totalOk += setOks[t];
+                allLat.insert(allLat.end(), setLatencies[t].begin(), setLatencies[t].end());
+            }
+            stats.totalSet += totalOk;
+            auto pct = ComputePercentiles(std::move(allLat));
+            double qps = roundTotalMs > 0 ? totalOk * 1000.0 / roundTotalMs : 0;
+            double totalSetMs = 0;
+            for (int t = 0; t < numThreads; t++) {
+                for (auto v : setLatencies[t]) totalSetMs += v;
+            }
+            benchMetrics.RecordPhase(round, "set", totalOk, pct.avg, pct.p50, pct.p90, pct.p99, pct.max, totalSetMs, qps);
+        }
+
+        // Merge get latencies and record
+        if (isGetMode) {
+            std::vector<double> allLat;
+            int totalOk = 0;
+            for (int t = 0; t < numThreads; t++) {
+                totalOk += getOks[t];
+                allLat.insert(allLat.end(), getLatencies[t].begin(), getLatencies[t].end());
+            }
+            stats.totalGet += totalOk;
+            auto pct = ComputePercentiles(std::move(allLat));
+            double qps = roundTotalMs > 0 ? totalOk * 1000.0 / roundTotalMs : 0;
+            double totalGetMs = 0;
+            for (int t = 0; t < numThreads; t++) {
+                for (auto v : getLatencies[t]) totalGetMs += v;
+            }
+            benchMetrics.RecordPhase(round, "get", totalOk, pct.avg, pct.p50, pct.p90, pct.p99, pct.max, totalGetMs, qps);
+        }
+
+        // Del phase stats
+        if (cfg.cleanupMethod == "del") {
+            std::vector<double> allDelLat;
+            int totalDelOk = 0;
+            for (int t = 0; t < numThreads; t++) {
+                totalDelOk += delOks[t];
+                allDelLat.insert(allDelLat.end(), delLatencies[t].begin(), delLatencies[t].end());
+            }
+            stats.totalDel += totalDelOk;
+            auto delPct = ComputePercentiles(std::move(allDelLat));
+            double qps = roundTotalMs > 0 ? totalDelOk * 1000.0 / roundTotalMs : 0;
+            double totalDelMs = 0;
+            for (int t = 0; t < numThreads; t++) {
+                for (auto v : delLatencies[t]) totalDelMs += v;
+            }
+            benchMetrics.RecordPhase(round, "del", totalDelOk, delPct.avg, delPct.p50, delPct.p90, delPct.p99, delPct.max, totalDelMs, qps);
+        }
+
+        stats.roundsCompleted++;
+
+        if (cfg.cleanupMethod == "ttl" && cfg.ttlSeconds > 0) {
+            SLOG_INFO("Waiting for TTL " << cfg.ttlSeconds << "s...");
+            std::this_thread::sleep_for(std::chrono::seconds(cfg.ttlSeconds));
+        }
+
+        SLOG_INFO("Round " << round << " complete");
+    }
+
+    benchMetrics.Flush();
+
+    SLOG_INFO("Benchmark finished: rounds=" << stats.roundsCompleted.load()
+              << ", set=" << stats.totalSet.load()
+              << ", get=" << stats.totalGet.load()
+              << ", del=" << stats.totalDel.load());
+    return 0;
+}
+
+static int RunServerMode(const Config &cfg) {
     std::cerr << "kvtest v" BUILD_VERSION << std::endl;
     std::cerr << "Output directory: " << cfg.outputDir << std::endl;
 
@@ -195,8 +460,16 @@ static int StopMode(const Config &cfg) {
 }
 
 int main(int argc, char *argv[]) {
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--version" || arg == "-v") {
+            std::cout << "kvtest " << BUILD_VERSION << " (commit: " << BUILD_COMMIT << ")" << std::endl;
+            return 0;
+        }
+    }
+
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " [--stop] <config.json>\n";
+        std::cerr << "Usage: " << argv[0] << " [--stop|--version] <config.json>\n";
         return 1;
     }
 
@@ -207,7 +480,7 @@ int main(int argc, char *argv[]) {
         std::string arg = argv[i];
         if (arg == "--stop") {
             stopMode = true;
-        } else {
+        } else if (arg != "--version" && arg != "-v") {
             configPath = arg;
         }
     }
@@ -230,5 +503,13 @@ int main(int argc, char *argv[]) {
         std::cerr.rdbuf(logStream.rdbuf());
     }
 
-    return RunMode(cfg);
+    if (cfg.runMode == RunMode::BENCHMARK) {
+        // Log to terminal BEFORE redirect takes effect for SLOG (SLOG uses std::cout)
+        // This printf goes to the original fd 1, not the redirected rdbuf
+        fprintf(stderr, "[INFO] Entering benchmark mode, detailed logs: %s/run.log\n",
+                cfg.outputDir.c_str());
+        return RunBenchmarkMode(cfg);
+    }
+
+    return RunServerMode(cfg);
 }

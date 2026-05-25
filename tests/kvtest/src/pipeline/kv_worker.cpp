@@ -97,7 +97,7 @@ void KVWorker::Start() {
         }
     }
 
-    SLOG_INFO("Starting " << cfg_.numSetThreads << " pipeline threads"
+    SLOG_INFO("Starting " << cfg_.numThreads << " pipeline threads"
               << (cfg_.targetQps > 0 ? "" : " (unlimited QPS)")
               << (cfg_.targetQpsStages.empty() ? "" :
                   " [" + std::to_string(cfg_.targetQpsStages.size()) + " stages x "
@@ -106,7 +106,7 @@ void KVWorker::Start() {
         stageStartTime_ = std::chrono::steady_clock::now();
     }
 
-    for (int i = 0; i < cfg_.numSetThreads; i++) {
+    for (int i = 0; i < cfg_.numThreads; i++) {
         threads_.emplace_back(&KVWorker::PipelineLoop, this, i);
     }
 }
@@ -122,9 +122,9 @@ void KVWorker::Stop() {
 
 void KVWorker::PipelineLoop(int threadId) {
     auto calcMyQps = [&](int totalQps) -> int {
-        if (totalQps <= 0 || cfg_.numSetThreads <= 0) return 0;
-        int base = totalQps / cfg_.numSetThreads;
-        int rem = totalQps % cfg_.numSetThreads;
+        if (totalQps <= 0 || cfg_.numThreads <= 0) return 0;
+        int base = totalQps / cfg_.numThreads;
+        int rem = totalQps % cfg_.numThreads;
         return base + (threadId < rem ? 1 : 0);
     };
 
@@ -154,7 +154,7 @@ void KVWorker::PipelineLoop(int threadId) {
 
     int64_t phaseUs = intervalUs > 0
         ? static_cast<int64_t>(
-            static_cast<double>(threadId) / cfg_.numSetThreads * intervalUs)
+            static_cast<double>(threadId) / cfg_.numThreads * intervalUs)
         : 0;
     auto nextSlot = std::chrono::steady_clock::now()
                    + std::chrono::microseconds(phaseUs);
@@ -365,7 +365,7 @@ void KVWorker::AdjustPoolSize() {
     double currentRate = metrics_.CacheHitRate();
     uint64_t poolSize = currentPoolSize_.load();
     uint64_t minSize = std::max<uint64_t>(10, cfg_.keyPoolSize / 10);
-    uint64_t maxSize = static_cast<uint64_t>(cfg_.keyPoolSize) * 20;
+    uint64_t maxSize = static_cast<uint64_t>(cfg_.maxKeyPoolSize);
 
     if (currentRate > cfg_.targetHitRate + 0.02) {
         // Hit rate too high → increase pool to add pressure

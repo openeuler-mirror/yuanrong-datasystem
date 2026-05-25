@@ -1,0 +1,42 @@
+{
+  "mode": "cache",
+  "etcd_address": "127.0.0.1:2379",
+  "cluster_name": "",
+  "instance_id": 1,
+  "listen_port": 9001,
+  "role": "reader",
+  "notify_pipeline": [],
+  "key_pool_size": 100,
+  "target_hit_rate": 0.8,
+  "inference_delay_ms": 10,
+  "warmup_timeout_seconds": 60,
+  "num_threads": 16,
+  "data_sizes": [
+    "1MB"
+  ],
+  "nodes": [
+    {
+      "host": "127.0.0.1",
+      "port": 9000,
+      "instance_id": 0,
+      "role": "writer"
+    },
+    {
+      "host": "127.0.0.1",
+      "port": 9001,
+      "instance_id": 1,
+      "role": "reader"
+    }
+  ],
+  "connect_options": {
+    "connect_timeout_ms": 1000,
+    "request_timeout_ms": 20,
+    "enable_cross_node_connection": true,
+    "fast_transport_mem_size": "512MB"
+  },
+  "set_param": {
+    "ttl_second": 0
+  },
+  "max_key_pool_size": 2000,
+  "metrics_interval_ms": 3000
+}

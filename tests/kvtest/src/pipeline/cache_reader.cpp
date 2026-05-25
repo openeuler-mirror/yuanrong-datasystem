@@ -37,11 +37,11 @@ void CacheReader::Start() {
             SLOG_WARN("CacheReader: no writers configured, warmup done immediately");
             warmupDone_ = true;
         }
-        SLOG_INFO("CacheReader starting " << cfg_.numSetThreads << " reader threads"
+        SLOG_INFO("CacheReader starting " << cfg_.numThreads << " reader threads"
                   << ", waiting for " << pendingWarmupWriters_.size() << " writers");
     }
 
-    for (int i = 0; i < cfg_.numSetThreads; i++) {
+    for (int i = 0; i < cfg_.numThreads; i++) {
         threads_.emplace_back(&CacheReader::ReaderLoop, this, i);
     }
 }
@@ -116,9 +116,9 @@ void CacheReader::ReaderLoop(int threadId) {
 
     // QPS control (same logic as KVWorker::PipelineLoop)
     int64_t intervalUs = 0;
-    if (cfg_.targetQps > 0 && cfg_.numSetThreads > 0) {
-        int base = cfg_.targetQps / cfg_.numSetThreads;
-        int rem = cfg_.targetQps % cfg_.numSetThreads;
+    if (cfg_.targetQps > 0 && cfg_.numThreads > 0) {
+        int base = cfg_.targetQps / cfg_.numThreads;
+        int rem = cfg_.targetQps % cfg_.numThreads;
         int myQps = base + (threadId < rem ? 1 : 0);
         intervalUs = myQps > 0 ? 1000000 / myQps : 1000000000;
     }
@@ -127,7 +127,7 @@ void CacheReader::ReaderLoop(int threadId) {
 
     int64_t phaseUs = intervalUs > 0
         ? static_cast<int64_t>(
-            static_cast<double>(threadId) / cfg_.numSetThreads * intervalUs)
+            static_cast<double>(threadId) / cfg_.numThreads * intervalUs)
         : 0;
     auto nextSlot = std::chrono::steady_clock::now()
                    + std::chrono::microseconds(phaseUs);
