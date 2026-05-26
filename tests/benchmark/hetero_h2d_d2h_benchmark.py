@@ -25,7 +25,7 @@ import time
 import argparse
 import json
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import acl
 import numpy as np
@@ -35,6 +35,11 @@ from yr.datasystem.hetero_client import (
     Blob,
     DeviceBlobList,
 )
+
+try:
+    from yr.datasystem import PerfClient
+except ImportError:
+    PerfClient = None
 
 # log config
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -48,6 +53,7 @@ TOTAL_NPU_COUNT = 8
 
 timestamp_sec = int(time.time())
 RESULT_FILENAME = f"perf_result_{timestamp_sec}.csv"
+PERF_RESULT_FILENAME = f"datasystem_perf_{timestamp_sec}.csv"
 
 config_map = {
 
@@ -103,7 +109,11 @@ config_map = {
     '1process_1key_256blob_512KB': {'num_processes': 1, 'key_num': 1, 'blob_nums': [256], 'blob_sizes': [512 * 1024],
                                'iterations': 80, 'thread_number': 1},
     '1process_1key_512blob_256KB': {'num_processes': 1, 'key_num': 1, 'blob_nums': [512], 'blob_sizes': [256 * 1024],
-                               'iterations': 80, 'thread_number': 1}
+                               'iterations': 80, 'thread_number': 1},
+
+    # Tensor query benchmark cases
+    'tq_medium': {'num_processes': 1, 'key_num': 8192, 'blob_nums': [1], 'blob_sizes': [128 * 1024],
+                  'iterations': 8, 'thread_number': 1}
 }
 
 mode = "all"
@@ -117,6 +127,15 @@ def init_test_hetero_client():
     return client
 
 
+def init_test_perf_client():
+    """Initialize perf client."""
+    if PerfClient is None:
+        return None
+    client = PerfClient(args.ip, args.port)
+    client.init()
+    return client
+
+
 def random_str(slen=10):
     """Get rendom string by lens"""
     seed = "1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-"
@@ -124,6 +143,11 @@ def random_str(slen=10):
     for _ in range(slen):
         sa.append(random.choice(seed))
     return "".join(sa)
+
+
+def deterministic_suffixes(test_name: str, device_id: int, thread_number: int, key_seed: str) -> List[str]:
+    """Generate deterministic suffixes so set/get can run on different nodes without sharing keys.json."""
+    return [f"{key_seed}_{test_name}_dev{device_id}_thr{thread_id}" for thread_id in range(thread_number)]
 
 
 def init_file(filename):
@@ -140,6 +164,18 @@ def write_data(data, filename):
     # write with add
     with open(filename, 'a') as f:
         f.write(data + '\n')
+
+
+def write_perf_log_records(test_name: str, perf_type: str, source: str, perf_log: Dict[str, Dict[str, int]], filename: str):
+    """Persist datasystem perf log records."""
+    for perf_key, details in perf_log.items():
+        record = (
+            f"{test_name},{perf_type},{source},{perf_key},"
+            f"{details.get('avg_time', 0)},{details.get('count', 0)},"
+            f"{details.get('min_time', 0)},{details.get('max_time', 0)},"
+            f"{details.get('total_time', 0)},{details.get('max_frequency', 0)}"
+        )
+        write_data(record, filename)
 
 
 def check_ptr_content(dev_ptr: int, check_value: str):
@@ -228,6 +264,26 @@ def blocking_wait_sync(barrier, op_name, device_id):
         logging.info("Some processes failed to reach the synchronization point on time!")
 
 
+def reset_perf_after_warmup(perf_client: Optional["PerfClient"], barrier, device_id: int):
+    """Reset client/worker perf logs after warmup and before measured traffic."""
+    blocking_wait_sync(barrier, "perf_reset_before_run", device_id)
+    if perf_client is not None:
+        if device_id == args.deviceid:
+            perf_client.reset_perf_log("worker")
+        perf_client.reset_perf_log("client")
+    blocking_wait_sync(barrier, "perf_reset_done", device_id)
+
+
+def collect_perf_before_cleanup(perf_client: Optional["PerfClient"], barrier, device_id: int, metrics_data: Dict):
+    """Collect perf logs before delete/cleanup traffic pollutes the measured window."""
+    blocking_wait_sync(barrier, "perf_collect_before_cleanup", device_id)
+    if perf_client is not None:
+        metrics_data["client_perf_logs"] = perf_client.get_perf_log("client")
+        if device_id == args.deviceid:
+            metrics_data["worker_perf_logs"] = perf_client.get_perf_log("worker")
+    blocking_wait_sync(barrier, "perf_collect_done", device_id)
+
+
 def operate_thread(op_name, client, device_id, key_num, iterations, suffix, blob_list, shared_matrix):
     """worker threads : execute benchmark by op_name and wait each thread result"""
     threads_list = []
@@ -264,7 +320,12 @@ def worker_process(
     acl.init()
     acl.rt.set_device(device_id)
     client = init_test_hetero_client()
+    perf_client = init_test_perf_client()
     logging.info(f"[Dev {device_id}]Success init hetero client ")
+    if perf_client is None:
+        logging.info("PerfClient is unavailable in this build, skip datasystem perf collection.")
+    else:
+        perf_client.reset_perf_log("client")
 
     # record the time point
     metrics_data = {"mset_times": [], "mget_times": []}
@@ -283,6 +344,7 @@ def worker_process(
 
     # warm up
     warmup(client, device_id, key_num, all_in_data_blob_list, all_out_data_blob_list)
+    reset_perf_after_warmup(perf_client, barrier, device_id)
 
     list_random_suffix = []
     key_dict = {}
@@ -330,6 +392,9 @@ def worker_process(
         if mode in ["all"]:
             batch_data_check(all_out_data_blob_list[0], test_value)
 
+    collect_perf_before_cleanup(perf_client, barrier, device_id, metrics_data)
+
+    if mode in ["get", "all"]:
         # clear data
         for thread_id in range(thread_number):
             for i in range(iterations):
@@ -342,7 +407,6 @@ def worker_process(
     for i, blob_num in enumerate(blob_nums_per_key):
         metrics_data["total_data_bytes"] += key_num * blob_num * blob_sizes[i] * iterations * thread_number
 
-    # construct the record points
     result_queue.put(metrics_data)
 
     logging.info(f"[Dev {device_id}]Success test performance")
@@ -366,6 +430,10 @@ def read_write_keys(
     thread_number: int,
     device_id: int):
     """If --set-only on, write keys to keys.json file. If --get-only on, read keys from keys.json file"""
+    if args.key_seed:
+        list_random_suffix.extend(deterministic_suffixes(current_test, device_id, thread_number, args.key_seed))
+        return
+
     # Deserialize keys.json to access previously set data
     try:
         with open(args.keys, 'r') as json_file:
@@ -467,13 +535,22 @@ def run_benchmark(
     for p in processes:
         p.join()
 
+    results = collect_results(result_queue)
+
     # Calculate individual request size for metrics
     request_size = 0
     for i, blob_num in enumerate(blob_nums):
         request_size += (key_num * blob_num * blob_sizes[i] * thread_number) / (1024 * 1024)
     
     # Processing data
-    handle_metrics(result_queue, iterations, key_num, num_processes, request_size)
+    handle_metrics(results, iterations, key_num, num_processes, request_size)
+    for index, result in enumerate(results):
+        write_perf_log_records(
+            current_test, "worker", f"{args.ip}:{args.port}", result.get("worker_perf_logs", {}), args.perf_path
+        )
+        write_perf_log_records(
+            current_test, "client", f"process_{index}", result.get("client_perf_logs", {}), args.perf_path
+        )
 
 
 def print_performance_result(operate, ops_times, metrics, stats):
@@ -496,13 +573,16 @@ def print_performance_result(operate, ops_times, metrics, stats):
     write_data(record_data, RESULT_FILENAME)
 
 
-def handle_metrics(result_queue, iterations, key_num, num_processes, request_size):
-    """Process time point into performance information"""
-    # Collected results
+def collect_results(result_queue):
+    """Collect all process results from queue."""
     results = []
     while not result_queue.empty():
         results.append(result_queue.get())
+    return results
 
+
+def handle_metrics(results, iterations, key_num, num_processes, request_size):
+    """Process time point into performance information"""
     # Calculate overall performance metrics
     all_mset_times = []
     all_mget_times = []
@@ -515,9 +595,6 @@ def handle_metrics(result_queue, iterations, key_num, num_processes, request_siz
 
     # total data size
     total_data_bytes = 0
-
-    # Total number of times for each operation
-    total_ops = 0
 
     for res in results:
         all_mset_times.extend(res["mset_times"])
@@ -536,10 +613,6 @@ def handle_metrics(result_queue, iterations, key_num, num_processes, request_siz
         total_data_bytes += res["total_data_bytes"]
         if mode in ["all"] and len(res["mset_times"]) != len(res["mget_times"]):
             raise RuntimeError(f"The number of set length not equal as get length")
-
-        total_ops += len(res["mset_times"])
-        if mode in ["get"]:
-            total_ops += len(res["mget_times"])
 
     # Show individual request latencies if requested
     if args.show_all_request_times:
@@ -566,10 +639,10 @@ def handle_metrics(result_queue, iterations, key_num, num_processes, request_siz
     logging.info(f"\n{'>' * 50}\nTest finish! ")
     if mode in ["set", "all"]:
         stats = (total_data_bytes, mset_duration, mset_throughput, mset_per_req, request_size)
-        print_performance_result("mset_d2h", total_ops, calculate_metrics(all_mset_times, mset_duration), stats)
+        print_performance_result("mset_d2h", len(all_mset_times), calculate_metrics(all_mset_times, mset_duration), stats)
     if mode in ["get", "all"]:
         stats = (total_data_bytes, mget_duration, mget_throughput, mget_per_req, request_size)
-        print_performance_result("mget_h2d", total_ops, calculate_metrics(all_mget_times, mget_duration), stats)
+        print_performance_result("mget_h2d", len(all_mget_times), calculate_metrics(all_mget_times, mget_duration), stats)
 
 
 if __name__ == "__main__":
@@ -586,6 +659,9 @@ if __name__ == "__main__":
                         help=f"Port of the worker (Default {DEFAULT_WORKER_PORT})")
     parser.add_argument("-k", "--keys", type=str, default="./keys.json",
                         help="File path of keys.json to write or read from (Default ./keys.json)")
+    parser.add_argument("--key-seed", type=str, default="",
+                        help="Deterministic key seed for cross-node set/get. When set, both nodes generate the same "
+                             "keys without sharing keys.json.")
     parser.add_argument("--no-warmup", action="store_true", dest="no_warmup", help="Skip the initial warmup")
     parser.add_argument("-n", "--name", type=str, default="", help="Name of test to run")
     parser.add_argument("-d", "--deviceid", type=int, default=3,
@@ -594,7 +670,10 @@ if __name__ == "__main__":
                         help="Multiply the amount of get requests by x amount")
     parser.add_argument("--show-all-request-times", action="store_true", dest="show_all_request_times",
                         help="Show the individual latency of each request")
+    parser.add_argument("--perf-path", type=str, default=PERF_RESULT_FILENAME,
+                        help=f"Output path for datasystem perf log records (Default {PERF_RESULT_FILENAME})")
     args = parser.parse_args()
+    init_file(args.perf_path)
 
     if args.set_only and not args.get_only:
         mode = "set"
@@ -622,6 +701,8 @@ if __name__ == "__main__":
             for i in range(len(CONFIG["blob_nums"])):
                 total_size += CONFIG['num_processes'] * CONFIG['key_num'] * CONFIG['blob_nums'][i] *\
                               CONFIG['blob_sizes'][i] * CONFIG['iterations'] * CONFIG['thread_number'] / (1024 * 1024)
+            if mode in ["get", "all"]:
+                total_size *= args.get_multiplier
             logging.info(
                 f"Perf conf : num_processes: {CONFIG['num_processes']} | thread_num: {CONFIG['thread_number']} | "
                 f"key_num: {CONFIG['key_num']} | blob_nums: {CONFIG['blob_nums']} | blob_sizes: {CONFIG['blob_sizes']}"

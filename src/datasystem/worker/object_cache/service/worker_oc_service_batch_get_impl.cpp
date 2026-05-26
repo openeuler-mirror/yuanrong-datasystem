@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -45,6 +46,7 @@
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
 DS_DEFINE_validator(batch_get_threshold_mb, &Validator::ValidateBatchGetThreshold);
 DS_DECLARE_bool(enable_data_replication);
+DS_DECLARE_int32(oc_worker_worker_parallel_min);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -61,6 +63,16 @@ void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
     if (inflightCount > logLimit) {
         LOG_EVERY_T(INFO, logInterval) << "inflight remote get request: " << inflightCount;
     }
+}
+
+constexpr size_t MAX_REMOTE_H2D_BATCH_GET_OBJECTS = 1024;
+
+size_t RemoteH2DBatchGetChunkSize()
+{
+    // Reuse oc_worker_worker_parallel_min as a lower bound for each remote H2D chunk size.
+    // A larger value here means more objects per task and therefore fewer parallel tasks.
+    const auto parallelMin = FLAGS_oc_worker_worker_parallel_min > 0 ? FLAGS_oc_worker_worker_parallel_min : 0;
+    return std::max<size_t>(MAX_REMOTE_H2D_BATCH_GET_OBJECTS, static_cast<size_t>(parallelMin));
 }
 }  // namespace
 
@@ -133,7 +145,9 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     // First group queried meta by address, take out the ones that are problematic.
     // And also take out the ones that got their payload from QueryMeta already.
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> groupedQueryMetas;
+    groupedQueryMetas.reserve(queryMetas.size());
     std::vector<master::QueryMetaInfoPb> payloadIndexMetas;
+    payloadIndexMetas.reserve(queryMetas.size());
     for (auto &queryMeta : queryMetas) {
         const auto &meta = queryMeta.meta();
         const auto &objectKey = meta.object_key();
@@ -170,55 +184,63 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
         GetObjectsFromAnywhereSerially(payloadIndexMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_BEFORE_RUN);
     // And then deal with the requests that can be batched.
+    struct BatchRemoteGetTask {
+        const std::string *address;
+        std::list<GetObjectInfo> *infos;
+    };
+    std::vector<BatchRemoteGetTask> tasks;
+    for (auto &groupedQueryMeta : groupedQueryMetas) {
+        for (auto &infoPair : groupedQueryMeta.second) {
+            tasks.emplace_back(BatchRemoteGetTask{ &groupedQueryMeta.first, &infoPair.first });
+        }
+    }
+
     std::vector<std::future<Status>> futures;
+    futures.reserve(tasks.size());
     std::list<GetObjectInfo> failedMetas;
-    std::vector<std::list<GetObjectInfo>> tempFailedMetas(groupedQueryMetas.size());
-    std::vector<std::vector<std::string>> tempSuccessIds(groupedQueryMetas.size());
-    std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
-    std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
-    size_t index = 0;
+    std::vector<std::list<GetObjectInfo>> tempFailedMetas(tasks.size());
+    std::vector<std::vector<std::string>> tempSuccessIds(tasks.size());
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(tasks.size());
+    std::vector<std::unordered_set<std::string>> tempFailedIds(tasks.size());
     auto traceContext = Trace::Instance().GetContext();
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_RUN);
     std::mutex lastRcMutex;
+    auto mergeLastRc = [&lastRc, &lastRcMutex](const Status &rc) {
+        if (rc.IsError()) {
+            std::lock_guard<std::mutex> lock(lastRcMutex);
+            lastRc = rc;
+        }
+    };
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-    for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
-        auto &address = queryMeta->first;
-        auto &infoList = queryMeta->second;
-
-        auto func = [this, &lastRc, address, &infoList, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer, &lastRcMutex] {
+    for (size_t index = 0; index < tasks.size(); ++index) {
+        auto *infos = tasks[index].infos;
+        const auto address = *tasks[index].address;
+        auto func = [this, address, infos, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
+                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer] {
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             CHECK_FAIL_RETURN_STATUS(realTimeoutMs > elapsed, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
-            Status tmpRc = Status::OK();
-            for (auto &infoPair : infoList) {
-                auto &infos = infoPair.first;
-                tmpRc = BatchGetObjectFromRemoteOnLock(address, infos, request, tempSuccessIds[index],
-                                                       tempNeedRetryIds[index], tempFailedIds[index],
-                                                       tempFailedMetas[index]);
-            }
-            {
-                std::lock_guard<std::mutex> lock(lastRcMutex);
-                lastRc = tmpRc;
-            }
-            return tmpRc;
+            return BatchGetObjectFromRemoteOnLock(address, *infos, request, tempSuccessIds[index],
+                                                 tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index]);
         };
-        if (index + 1 == groupedQueryMetas.size()) {
-            LOG_IF_ERROR(func(), "BatchGetObjectFromRemoteOnLock failed");
+        if (index + 1 == tasks.size()) {
+            auto rc = func();
+            LOG_IF_ERROR(rc, "BatchGetObjectFromRemoteOnLock failed");
+            mergeLastRc(rc);
         } else {
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
     for (auto &fut : futures) {
-        if (!fut.get().IsOk()) {
-            LOG(ERROR) << "BatchGetObjectFromRemoteOnLock failed";
-        }
+        auto rc = fut.get();
+        LOG_IF_ERROR(rc, "BatchGetObjectFromRemoteOnLock failed");
+        mergeLastRc(rc);
     }
-    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_AFTER_RUN);
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_WAIT_REMOTE_TASKS);
 
-    for (uint64_t i = 0; i < groupedQueryMetas.size(); ++i) {
+    for (uint64_t i = 0; i < tasks.size(); ++i) {
         if (!tempSuccessIds[i].empty()) {
             successIds.insert(successIds.end(), std::make_move_iterator(tempSuccessIds[i].begin()),
                               std::make_move_iterator(tempSuccessIds[i].end()));
@@ -248,6 +270,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
                    << VectorToString(successIds) << "], meta data num: " << queryMetas.size()
                    << " lastRc: " << lastRc.ToString();
     }
+    point.RecordAndReset(PerfKey::WORKER_GET_BATCH_UPDATE_LOCATION);
     BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
     point.RecordAndReset(PerfKey::WORKER_GET_BATCH_OTHER);
     return lastRc;
@@ -288,13 +311,16 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
                                      static_cast<uint32_t>(queryMeta.meta().config().data_format()) });
         }
     } else {
+        std::unordered_set<std::string> successIdSet;
+        successIdSet.reserve(successIds.size());
+        successIdSet.insert(successIds.begin(), successIds.end());
         for (auto &queryMeta : queryMetas) {
             if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
                 continue;
             }
             const auto &meta = queryMeta.meta();
             const auto &objectKey = meta.object_key();
-            if (std::find(successIds.begin(), successIds.end(), objectKey) != successIds.end()) {
+            if (successIdSet.find(objectKey) != successIdSet.end()) {
                 asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
                     objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format()) });
             }
@@ -358,6 +384,9 @@ void WorkerOcServiceGetImpl::GroupQueryMeta(
     const auto &meta = info.queryMeta->meta();
     auto &splitList = groupedQueryMetas[info.queryMeta->address()];
     if (splitList.empty()) {
+        splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
+    }
+    if (IsRemoteH2DEnabled() && splitList.back().first.size() >= RemoteH2DBatchGetChunkSize()) {
         splitList.emplace_back(std::make_pair(std::list<GetObjectInfo>{}, 0));
     }
     if (!IsFastTransportEnabled() && !IsRemoteH2DEnabled() && (FLAGS_batch_get_threshold_mb != 0)) {
@@ -492,6 +521,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     uint64_t payloadIndex = 0;
     auto iter = infos.begin();
     std::vector<std::string> needEvictObjs;
+    needEvictObjs.reserve(infos.size());
     std::shared_ptr<std::string> commId = nullptr;
     if (IsRemoteH2DEnabled() && request != nullptr) {
         commId = std::make_shared<std::string>(request->GetClientCommUuid());
@@ -548,13 +578,16 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_UPDATA_REQUEST);
             subRc = UpdateRequestForSuccess(objectKV, request);
         }
+        const bool needFailureCleanup = !dataSizeChanged && subRc.IsError();
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_STATUS);
-        if (!dataSizeChanged && subRc.IsError()) {
-            failedInfos.emplace_back(*iter);
-        }
         BatchGetObjectHandleIndividualStatus(subRc, *readKey, successIds, needRetryIds, failedIds);
         if (!dataSizeChanged) {
-            iter = infos.erase(iter);
+            auto current = iter++;
+            if (needFailureCleanup) {
+                failedInfos.splice(failedInfos.end(), infos, current);
+            } else {
+                infos.erase(current);
+            }
         } else {
             dataSizeChange = true;
             iter++;
@@ -576,6 +609,9 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
 {
     bool isMigrateData = request == nullptr;
     const int64_t migrateDataTimeoutMs = 200;
+    successIds.reserve(successIds.size() + infos.size());
+    needRetryIds.reserve(needRetryIds.size() + infos.size());
+    failedIds.reserve(failedIds.size() + infos.size());
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;

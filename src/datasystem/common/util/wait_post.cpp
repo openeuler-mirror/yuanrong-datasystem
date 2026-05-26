@@ -64,6 +64,7 @@ void WaitPost::Set()
 {
     std::unique_lock<std::mutex> lock(mux_);
     val_ = 1;
+    status_ = Status::OK();
     cv_.notify_all();
 }
 
@@ -71,6 +72,7 @@ void WaitPost::Clear()
 {
     std::unique_lock<std::mutex> lock(mux_);
     val_ = 0;
+    status_ = Status::OK();
 }
 
 void Barrier::Wait()

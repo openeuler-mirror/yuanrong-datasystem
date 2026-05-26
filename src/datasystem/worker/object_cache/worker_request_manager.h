@@ -208,12 +208,12 @@ private:
                          std::shared_ptr<ShmUnit> shmUnit, GetObjInfo &objectInfo, size_t objectIndex,
                          uint64_t &ubWriteOffset, GetRspPb &resp);
 
-    void SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
+    void SetShmObjectInfoPb(const ObjectKey &, size_t objectIndex, GetObjEntryParams &safeEntry,
                             GetRspPb::ObjectInfoPb &info);
 
-    void SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
+    void SetNoShmObjectInfoPb(const ObjectKey &, size_t objectIndex, const GetObjInfo &objectInfo,
                               GetRspPb::PayloadInfoPb &info);
-    void SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
+    void SetDefaultObjectInfoPb(const ObjectKey &, size_t objectIndex, GetRspPb::ObjectInfoPb &info);
     bool Registered() const;
 
     // the mutex protect GetObjInfo and lastRc_
@@ -224,6 +224,10 @@ private:
     std::shared_ptr<SharedMemoryRefTable> shmRefTable_;
     ClientKey clientId_;
     std::vector<ObjectKey> rawObjectKeys_;
+    std::vector<ObjectKey> responseObjectKeys_;
+    // Points to values stored in objects_. These pointers are only valid from Init() through
+    // ConstructResponse(); objects_ entries must not be erased during that interval.
+    std::vector<GetObjInfo *> orderedObjectInfos_;
     std::unordered_map<ObjectKey, GetObjInfo> objects_;
     std::atomic<size_t> readyCount_{ 0 };
     AccessRecorder recorder_;

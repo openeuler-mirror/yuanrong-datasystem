@@ -27,6 +27,7 @@ pybind_library(
         "pybind_register_kv.cpp",
         "pybind_register_object.cpp",
         "pybind_register_service_discovery.cpp",
+        "pybind_register_perf.cpp",
         "pybind_register_stream.cpp",
     ],
     hdrs = [
@@ -35,6 +36,7 @@ pybind_library(
     strip_include_prefix = "/src",
     deps = [
         "//src/datasystem/client:datasystem",
+        "//src/datasystem/client/perf_client:perf_client_lib",
         "//src/datasystem/client/object_cache/device:page_attn_utils",
         "//src/datasystem/client/stream_cache:consumer",
         "//src/datasystem/common/perf:common_perf",

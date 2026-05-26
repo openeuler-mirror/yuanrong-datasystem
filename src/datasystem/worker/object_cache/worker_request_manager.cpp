@@ -76,6 +76,8 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
     noQueryL2Cache_ = req.no_query_l2cache();
     enableReturnObjectIndex_ = req.return_object_index();
     clientCommId_ = req.comm_id();
+    const bool isPipelineH2D = OsXprtPipln::IsPiplnH2DRequest(req);
+    const bool needResponseObjectKeys = !enableReturnObjectIndex_ && !isPipelineH2D;
     hasUbGetInfo_ = req.has_urma_info();
     if (hasUbGetInfo_) {
         ubUrmaInfo_ = req.urma_info();
@@ -84,6 +86,11 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
             LOG(WARNING) << "Disable UB Get for client " << clientId_ << " due to empty ub_buffer_size.";
             hasUbGetInfo_ = false;
         }
+    }
+    objects_.reserve(objectsCount);
+    orderedObjectInfos_.reserve(objectsCount);
+    if (needResponseObjectKeys) {
+        responseObjectKeys_.reserve(objectsCount);
     }
     for (size_t i = 0; i < objectsCount; i++) {
         const auto &objectKey = rawObjectKeys_[i];
@@ -98,7 +105,13 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(iter->second.offsetInfo == offsetInfo, K_INVALID,
                                                  FormatString("Duplicate offset read for objectKey %s", objectKey));
         }
-        if (OsXprtPipln::IsPiplnH2DRequest(req)) {
+        orderedObjectInfos_.emplace_back(&(iter->second));
+        if (needResponseObjectKeys) {
+            ObjectKey responseObjectKey;
+            TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKey, responseObjectKey);
+            responseObjectKeys_.emplace_back(std::move(responseObjectKey));
+        }
+        if (isPipelineH2D) {
             std::shared_ptr<worker::ClientInfo> clientInfo;
             clientInfo = worker::ClientManager::Instance().GetClientInfo(ClientKey::Intern(req.client_id()));
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(clientInfo, K_RUNTIME_ERROR,
@@ -293,7 +306,6 @@ bool GetRequest::Registered() const
 Status GetRequest::ReturnToClient(const Status &rc)
 {
     INJECT_POINT("worker.Get.beforeReturn");
-    PerfPoint point(PerfKey::WORKER_RETURN_TO_CLIENT_PRE);
     bool expected = false;
     RETURN_OK_IF_TRUE(!isReturn_.compare_exchange_strong(expected, true));
     VLOG(1) << "Begin to ReturnToClient, client id: " << clientId_;
@@ -330,15 +342,17 @@ Status GetRequest::ReturnToClient(const Status &rc)
     }
     GetRspPb resp;
     std::vector<RpcMessage> payloads;
-    point.RecordAndReset(PerfKey::WORKER_RETURN_TO_CLIENT_CONSTRUCT_RESPONSE);
+    PerfPoint constructPoint(PerfKey::WORKER_RETURN_TO_CLIENT_CONSTRUCT_RESPONSE);
     auto constructRc = ConstructResponse(totalSize, resp, payloads, needDeleteObjects);
-    point.RecordAndReset(PerfKey::WORKER_RETURN_TO_CLIENT_OTHER);
+    constructPoint.Record();
     if (constructRc.IsError() && lastRc.GetCode() != K_OUT_OF_MEMORY) {
         lastRc = constructRc;
     }
     // Remove the get request from each of the relevant object_get_requests hash
     // tables if it is present there. It should only be present there if the get request timed out.
+    PerfPoint unregisterPoint(PerfKey::WORKER_RETURN_TO_CLIENT_UNREGISTER);
     UnRegister();
+    unregisterPoint.Record();
 
     {
         // Close the request time out event.
@@ -352,9 +366,11 @@ Status GetRequest::ReturnToClient(const Status &rc)
     }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
+    PerfPoint writePoint(PerfKey::WORKER_RETURN_TO_CLIENT_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->Write(resp), "Write reply to client stream failed.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->SendPayload(payloads), "SendPayload to client stream failed");
     this->GetServerApi()->SetRequestComplete();
+    writePoint.Record();
     return Status::OK();
 }
 
@@ -369,24 +385,27 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_))
         return OsXprtPipln::ConstructPipelineRH2DResponse(resp, chunkManager_, rawObjectKeys_);
 
-    if (shmEnabled && !rawObjectKeys_.empty()) {
-        // avoid per key allocation. pre-allocate all the required space
+    if (!rawObjectKeys_.empty()) {
+        // Avoid per-key protobuf repeated-field growth for large batch get responses.
         resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));
+        if (!shmEnabled) {
+            resp.mutable_payload_info()->Reserve(static_cast<int>(rawObjectKeys_.size()));
+        }
     }
     Status lastRc;
     for (size_t objectIndex = 0; objectIndex < rawObjectKeys_.size(); objectIndex++) {
         auto &objectKeyUri = rawObjectKeys_[objectIndex];
         Status rc;
-        auto iter = objects_.find(objectKeyUri);
-        if (iter == objects_.cend() || iter->second.params == nullptr) {
+        auto *objectInfo = orderedObjectInfos_[objectIndex];
+        if (objectInfo == nullptr || objectInfo->params == nullptr) {
             LOG(INFO) << FormatString("Can't find object %s, clientId %s", objectKeyUri, clientId_);
             CacheHitInfo::Instance().IncMissHit(1);
             SetDefaultObjectInfoPb(objectKeyUri, objectIndex, *resp.add_objects());
             continue;
         }
-        const auto &params = iter->second.params;
+        const auto &params = objectInfo->params;
         totalSize += params->dataSize;
-        rc = AddObjectToResponse(iter->first, iter->second, objectIndex, shmEnabled, useUbGet, ubWriteOffset, resp,
+        rc = AddObjectToResponse(objectKeyUri, *objectInfo, objectIndex, shmEnabled, useUbGet, ubWriteOffset, resp,
                                  payloads);
         if (shmEnabled
             && !(IsRemoteH2DEnabled() && params->shmUnit == nullptr && params->remoteH2DHostInfo
@@ -511,15 +530,13 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
     return Status::OK();
 }
 
-void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetObjEntryParams &safeEntry,
+void GetRequest::SetShmObjectInfoPb(const ObjectKey &, size_t objectIndex, GetObjEntryParams &safeEntry,
                                     GetRspPb::ObjectInfoPb &info)
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
     } else {
-        ObjectKey objectKey;
-        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
-        info.set_object_key(objectKey);
+        info.set_object_key(responseObjectKeys_[objectIndex]);
     }
     // The existence should have been checked at MarkSuccessImpl.
     RemoteH2DHostInfoMap::const_accessor constAccessor;
@@ -546,15 +563,13 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t object
     info.set_consistency_type(static_cast<uint32_t>(safeEntry.objectMode.GetConsistencyType()));
 }
 
-void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, const GetObjInfo &objectInfo,
+void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &, size_t objectIndex, const GetObjInfo &objectInfo,
                                       GetRspPb::PayloadInfoPb &info)
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
     } else {
-        ObjectKey objectKey;
-        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
-        info.set_object_key(objectKey);
+        info.set_object_key(responseObjectKeys_[objectIndex]);
     }
     const auto &safeEntry = *objectInfo.params;
     info.set_data_size(static_cast<int64_t>(objectInfo.offsetInfo.readSize));
@@ -564,14 +579,12 @@ void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &objectKeyUri, size_t obje
     info.set_consistency_type(static_cast<uint32_t>(safeEntry.objectMode.GetConsistencyType()));
 }
 
-void GetRequest::SetDefaultObjectInfoPb(const ObjectKey &objectKeyUri, size_t objectIndex, GetRspPb::ObjectInfoPb &info)
+void GetRequest::SetDefaultObjectInfoPb(const ObjectKey &, size_t objectIndex, GetRspPb::ObjectInfoPb &info)
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
     } else {
-        ObjectKey objectKey;
-        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKeyUri, objectKey);
-        info.set_object_key(objectKey);
+        info.set_object_key(responseObjectKeys_[objectIndex]);
     }
     info.set_store_fd(-1);
     info.set_offset(-1);
