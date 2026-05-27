@@ -108,6 +108,8 @@ Detailed follow-up docs now exist for:
 MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when the mapping is not using
     `MAP_HUGETLB`.
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
+  - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
+    to `2` MB and is validated in the range `[1, 2048]` MB.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - `os_transport_pipeline` is optional and only exists when pipeline H2D support is enabled.
 

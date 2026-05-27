@@ -19,6 +19,8 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/validator.h"
 
+DS_DECLARE_uint64(urma_max_write_size_mb);
+
 namespace {
 bool ValidateEnableUrma(const char *flagName, bool value)
 {
@@ -100,6 +102,18 @@ bool ValidateZmqClientIoThread(const char *flagName, int32_t value)
     }
     return true;
 }
+
+bool ValidateUrmaMaxWriteSize(const char *flagName, uint64_t value)
+{
+    constexpr uint64_t kMinWriteSizeMb = 1;
+    constexpr uint64_t kMaxWriteSizeMb = 2 * 1024;
+    if (value < kMinWriteSizeMb || value > kMaxWriteSizeMb) {
+        LOG(ERROR) << "The " << flagName << " flag is " << value << " MB, which must be between " << kMinWriteSizeMb
+                   << " MB and " << kMaxWriteSizeMb << " MB.";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
@@ -109,6 +123,7 @@ DS_DEFINE_validator(zmq_chunk_sz, &Validator::ValidateInt32);
 DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
+DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);

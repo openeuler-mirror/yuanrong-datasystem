@@ -813,7 +813,6 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
     INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
-    METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY);
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
     // use this unique request id as key to wait
@@ -828,12 +827,17 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     }
 
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
-    Timer timer;
+    auto startWaitTimeUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
-    auto elapsedMs = timer.ElapsedMilliSecond();
-    PLOG_IF_OR_VLOG(INFO, elapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError(), 1,
-                    "[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr cost "
-                        << elapsedMs << "ms, request id:" << requestId
+    auto endWaitTimeUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    constexpr double US_TO_MS = 1000.0;
+    auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
+    auto totalElapsedMs = static_cast<double>(totalElapsedUs) / US_TO_MS;
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
+    auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
+    PLOG_IF_OR_VLOG(INFO, totalElapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError(), 1,
+                    "[URMA_ELAPSED_TOTAL]: Time from before urma_post_jetty_send_wr to write completion cost "
+                        << totalElapsedMs << "ms, wait time: " << waitElapsedMs << "ms, request id:" << requestId
                         << ", src address:" << localUrmaInfo_.localAddress.ToString()
                         << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
                         << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
@@ -841,10 +845,10 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
                         << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
-                      FormatString("urma write deadline exceeded: %fms, %s", elapsedMs, waitRc.GetMsg()));
+                      FormatString("urma write deadline exceeded: %fms, %s", totalElapsedMs, waitRc.GetMsg()));
     }
     RETURN_IF_NOT_OK(waitRc);
-    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(elapsedMs));
+    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     return Status::OK();
