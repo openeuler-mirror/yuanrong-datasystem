@@ -488,6 +488,20 @@ docs/source_zh_cn/
 - ds-pr-review/
   - agents/
     - openai.yaml
+  - assets/
+    - default_config.toml
+  - scripts/
+    - comment_formatter.py
+    - common.py
+    - context_builder.py
+    - dedupe.py
+    - diff_position.py
+    - gitcode_api.py
+    - language_detect.py
+    - review_pr.py
+  - tests/
+    - test_common.py
+    - test_diff_position.py
   - SKILL.md
 - ds-refresh-docs/
   - agents/

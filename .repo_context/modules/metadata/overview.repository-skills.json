@@ -23,6 +23,8 @@
     "docs/README_CN.md"
   ],
   "key_tests": [
+    ".skills/ds-pr-review/tests/test_common.py",
+    ".skills/ds-pr-review/tests/test_diff_position.py",
     ".skills/ds-create-pr/tests/test_create_pr.py",
     ".skills/ds-refresh-docs/tests/test_refresh_online_docs.py"
   ],

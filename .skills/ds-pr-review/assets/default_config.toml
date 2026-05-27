@@ -1,0 +1,22 @@
+[gitcode]
+owner = "openeuler"
+repo = "yuanrong-datasystem"
+api_base_url = "https://api.gitcode.com/api/v5"
+fallback_api_base_url = "https://api.atomgit.com/api/v5"
+token_file = "~/.local/gitcode_token"
+pr_url_prefix = "https://gitcode.com/openeuler/yuanrong-datasystem/pull/"
+
+[repo]
+local_path = "~/.codex/yuanrong-datasystem-pr-review"
+clone_url = "https://gitcode.com/openeuler/yuanrong-datasystem.git"
+sync_on_prepare = true
+
+[review]
+snippet_radius = 18
+max_snippets_per_file = 3
+max_chars_per_snippet = 2500
+suggestion_limit_per_file = 2
+need_to_resolve = true
+
+[cache]
+root = "/tmp/yuanrong-pr-review-cache"

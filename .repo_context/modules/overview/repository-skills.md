@@ -16,7 +16,7 @@ when a natural-language request should invoke one of them.
 - Key verification paths:
   - `.skills/ds-infra-engineering/SKILL.md`
   - `.skills/ds-pr-review/SKILL.md`
-  - `~/workspace/oh-my-codex/plugins/yuanrong-pr-review/skills/yuanrong-pr-review/scripts/review_pr.py`
+  - `.skills/ds-pr-review/scripts/review_pr.py`
   - `.skills/ds-self-verify/SKILL.md`
   - `.skills/ds-create-pr/SKILL.md`
   - `.skills/ds-create-pr/scripts/create_pr.py`
@@ -25,7 +25,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-log-analysis/SKILL.md`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
 - Last verified against source:
-  - `2026-05-22`
+  - `2026-05-27`
 
 ## Purpose
 
@@ -58,6 +58,11 @@ Each repository-maintained skill should stay within this package shape unless a 
 - `scripts/`: deterministic helpers used by the workflow
 - `references/`: detailed repo-specific rules loaded on demand
 - `tests/`: focused validation for skill scripts when behavior is easy to regress
+
+All source and verification paths recorded in this document must be repository-relative, checked-in paths under the
+source roots above. Do not reference personal home directories, local plugin workspaces, or machine-specific absolute
+paths from this official repo context; move reusable workflow logic into `.skills/` or leave it out of the repository
+skill registry.
 
 ## Trigger Routing Model
 
