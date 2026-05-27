@@ -89,6 +89,13 @@ private:
     Status SpyOnRemoteRemainBytes(CacheType type);
 
     /**
+     * @brief Spy on remote node remain bytes through migrate RPC.
+     * @param[in] type The cache type.
+     * @return K_OK if success, the error otherwise.
+     */
+    Status SpyOnRemoteRemainBytesByRpc(CacheType type);
+
+    /**
      * @brief Adjust max batch size via size.
      * @param[in] size New size.
      */
@@ -192,10 +199,6 @@ private:
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi_;
 
     uint64_t maxBatchSize_;
-    uint64_t remoteMemoryRemainSize_;
-    uint64_t remoteDiskRemainSize_;
-    uint64_t currentMemorySize_;
-    uint64_t currentDiskSize_;
     uint64_t currBatchSize_;
     uint64_t currBatchCount_;
 

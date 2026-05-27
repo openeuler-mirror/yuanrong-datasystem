@@ -76,6 +76,14 @@ public:
     size_t GetAvailableMemory(const std::string &address);
 
     /**
+     * @brief Try to get the available memory size from the target worker.
+     * @param[in] address The address that the target worker is.
+     * @param[out] availableMemory The available memory size from the address worker.
+     * @return K_OK if the resource snapshot has a ready target worker, otherwise the error status.
+     */
+    Status TryGetAvailableMemory(const std::string &address, size_t &availableMemory);
+
+    /**
      * @brief Has enough available memory from all workers.
      * @brief[in] needMemory the need  memory.
      * @return If the sum available memory from all workers is larger than the needMemory, return true, else false.
@@ -114,6 +122,16 @@ protected:
      * @return Status of this call.
      */
     Status GetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode);
+
+    /**
+     * @brief Try to get available memory from the current resource snapshot.
+     * @param[in] address The address that the target worker is.
+     * @param[out] availableMemory The available memory size from the address worker.
+     * @param[out] hasSnapshot Whether the resource snapshot already has any node information.
+     * @return K_OK if the snapshot has a ready target worker, otherwise the error status.
+     */
+    Status TryGetAvailableMemoryFromSnapshot(const std::string &address, size_t &availableMemory,
+                                             bool &hasSnapshot) const;
 
     mutable std::shared_timed_mutex  nodeInfosMutex_;
     std::vector<NodeInfo> rankList_;

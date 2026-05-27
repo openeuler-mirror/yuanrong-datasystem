@@ -689,6 +689,41 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestMigrateObjectsByFastTransport)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
+TEST_F(MigrateDataHandlerTest, TestFastTransportProbeFallback)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillOnce(Return(Status(K_NOT_FOUND, "resource snapshot not ready")));
+
+    MigrateDataRspPb probeRsp;
+    probeRsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+    probeRsp.set_available_ratio(85.0);
+    probeRsp.set_limit_rate(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(1)
+        .WillOnce(DoAll(SetArgReferee<2>(probeRsp), Return(Status::OK())));
+
+    constexpr uint64_t size = 100;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("FastTransportFallback", size, 1, objectKeys);
+    {
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKeys[0], entry));
+        DS_ASSERT_OK(entry->WLock());
+        (*entry)->stateInfo.SetCacheInvalid(true);
+        entry->WUnlock();
+    }
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+    DS_ASSERT_OK(result.status);
+    ASSERT_TRUE(result.successIds.empty());
+    ASSERT_EQ(result.skipIds.size(), 1);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
 TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestReleaseFailEnqueueTask)
 {
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));

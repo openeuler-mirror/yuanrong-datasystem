@@ -167,24 +167,49 @@ Status NodeSelector::GetStandbyWorker(const std::unordered_set<std::string> &exc
 
 size_t NodeSelector::GetAvailableMemory(const std::string &address)
 {
+    size_t availableMemory = 0;
+    Status rc = TryGetAvailableMemory(address, availableMemory);
+    return rc.IsOk() ? availableMemory : 0;
+}
+
+Status NodeSelector::TryGetAvailableMemory(const std::string &address, size_t &availableMemory)
+{
+    availableMemory = 0;
     const int waitReadyTimeoutMs = 1000;
+    bool hasSnapshot = false;
+    Status rc = TryGetAvailableMemoryFromSnapshot(address, availableMemory, hasSnapshot);
+    if (rc.IsOk() || hasSnapshot) {
+        // A non-empty snapshot is authoritative for the current selection round; callers can fall back to remote probe.
+        return rc;
+    }
     if (!subSuccess_.load() && running_.load()) {
         subReadyPost_.WaitFor(waitReadyTimeoutMs);
-        if (!subSuccess_.load()) {
-            return 0;
-        }
     }
+    return TryGetAvailableMemoryFromSnapshot(address, availableMemory, hasSnapshot);
+}
+
+Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &address, size_t &availableMemory,
+                                                       bool &hasSnapshot) const
+{
+    availableMemory = 0;
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
+    hasSnapshot = !rankList_.empty();
+    if (!hasSnapshot) {
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
+                                                localAddress_));
+    }
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
-                           [&address](NodeInfo info) {return info.nodeId == address; });
+                           [&address](const NodeInfo &info) { return info.nodeId == address; });
     if (it == rankList_.end()) {
-        return 0;
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
+                                                localAddress_));
     }
     if (!it->isReady) {
-        return 0;
+        RETURN_STATUS(K_NOT_READY, FormatString("Remote node %s is not ready for resource selection, local node %s",
+                                                address, localAddress_));
     }
-    
-    return it->availableMemory;
+    availableMemory = it->availableMemory;
+    return Status::OK();
 }
 
 bool NodeSelector::HasEnoughAvailableMemory(size_t needMemory)
