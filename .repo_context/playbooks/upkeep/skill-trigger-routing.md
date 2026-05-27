@@ -87,7 +87,7 @@ Examples that should not trigger:
 | Skill | Trigger now | Confirm first when |
 | --- | --- | --- |
 | `ds-infra-engineering` | implementation, debugging, refactor, design, or codebase Q&A touches runtime/client/worker/master/common infra, performance, concurrency, or recovery-sensitive code | user only asks broad engineering philosophy unrelated to the repository |
-| `ds-pr-review` | user asks to review a diff, PR, commit, code change, or design | user asks only how review policy works |
+| `ds-pr-review` | user asks to review a diff, PR, commit, code change, or design; for GitCode PR/MR numbers or URLs, use the prepare -> JSON findings -> publish workflow and post high-confidence findings back to the PR page | user asks only how review policy works, or explicitly asks for local-only review |
 | `ds-self-verify` | Codex changed files and is preparing to claim completion, or user explicitly asks for completion self-check using the shared AI self-verification playbook | user asks only what self-verification means |
 | `ds-log-analysis` | user asks to analyze KVCache access/resource logs or generate a report | user only asks about log format or script internals |
 | `rdma-ucx-perf-debug` | user asks to diagnose RDMA/UCX/P2P throughput, latency, flush, submit, or resource lifetime issues | user only asks where RDMA code lives |
