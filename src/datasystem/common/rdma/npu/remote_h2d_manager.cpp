@@ -31,6 +31,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -43,6 +44,39 @@ DS_DEFINE_string(remote_h2d_device_ids, "",
 namespace datasystem {
 bool RemoteH2DManager::enableRemoteH2D_ = false;
 constexpr uint32_t P2P_SCATTER_MAX_BATCH_BLOBS = 128 * 128;
+
+namespace {
+const char *InitStateToString(RemoteH2DContext::InitState state)
+{
+    switch (state) {
+        case RemoteH2DContext::InitState::UNINITIALIZED:
+            return "UNINITIALIZED";
+        case RemoteH2DContext::InitState::INITIALIZING:
+            return "INITIALIZING";
+        case RemoteH2DContext::InitState::INITIALIZED:
+            return "INITIALIZED";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+const char *P2pKindToString(P2pKind kind)
+{
+    switch (kind) {
+        case P2P_SENDER:
+            return "SENDER";
+        case P2P_RECEIVER:
+            return "RECEIVER";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+std::string CommKeyForLog(const std::string &key)
+{
+    return FormatString("len=%zu hash=%u", key.size(), MurmurHash3_32(key));
+}
+}  // namespace
 
 HostSegment::HostSegment(std::byte *data, std::uint64_t dataSize, P2pSegmentInfo segmentInfo,
                          P2pSegmentPermissions permissions)
@@ -202,62 +236,100 @@ Status RemoteH2DManager::P2PGetRootInfo(const std::string &key, RemoteH2DRootInf
     return Status::OK();
 }
 
-Status RemoteH2DManager::HandleConnection(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
-                                          std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId)
+Status RemoteH2DManager::CompleteConnectionInit(const std::string &key, P2pKind kind,
+                                                std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId)
 {
-    // If communicator already created and initialized, then do not need to initialize again.
-    // Otherwise if the initialization fails, will remove the communicator from list.
+    std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
     CommunicatorMap::Accessor accessor;
-    if (communicatorMap_->Insert(accessor, key)) {
-        accessor.entry->data = std::make_shared<RemoteH2DContext>();
-    }
+    CHECK_FAIL_RETURN_STATUS(communicatorMap_->Find(accessor, key), K_NOT_FOUND,
+                             "Communicator context not found for key");
     p2pComm = accessor.entry->data;
-    RETURN_OK_IF_TRUE(p2pComm->initialized != RemoteH2DContext::InitState::UNINITIALIZED);
+    if (p2pComm->initialized == RemoteH2DContext::InitState::INITIALIZED) {
+        LOG_EVERY_N(INFO, 200) << "RemoteH2D communicator already initialized before async run, key("
+                               << CommKeyForLog(key) << "), kind=" << P2pKindToString(kind) << ", devId=" << devId;
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(p2pComm->initialized == RemoteH2DContext::InitState::INITIALIZING, K_RUNTIME_ERROR,
+                             "Communicator context has unexpected init state");
 
     bool needRollback = true;
-    Raii eraseRaii([this, &needRollback, &key, &p2pComm]() {
+    Status rollbackStatus = Status(K_RUNTIME_ERROR, "RemoteH2D communicator init failed");
+    Raii eraseRaii([this, &needRollback, &key, &p2pComm, &rollbackStatus, kind, devId]() {
         if (needRollback) {
+            auto failedComm = p2pComm;
+            LOG(WARNING) << "RemoteH2D comm init rollback, key(" << CommKeyForLog(key) << "), kind="
+                         << P2pKindToString(kind) << ", devId=" << devId;
             CommunicatorMap::Accessor accessor;
             if (communicatorMap_->Find(accessor, key)) {
                 communicatorMap_->BlockingErase(accessor);
             }
+            if (failedComm != nullptr) {
+                failedComm->waitPost.SetWithStatus(rollbackStatus);
+            }
             p2pComm = nullptr;
         }
     });
-    LOG(INFO) << "Initialize new p2p communicator";
+    LOG(INFO) << "RemoteH2D start communicator init, key(" << CommKeyForLog(key) << "), kind="
+              << P2pKindToString(kind) << ", devId=" << devId;
     auto &rootInfo = p2pComm->rootInfo;
-    const std::string &rootInfoStr = p2pRootInfo.internal();
-    auto ret = memcpy_s(static_cast<void *>(rootInfo.internal), HCCL_ROOT_INFO_BYTES,
-                        static_cast<const void *>(rootInfoStr.c_str()), HCCL_ROOT_INFO_BYTES);
-    CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
-                             FormatString("Copy root info failed, the memcpy_s return: %d", ret));
-    // Always use ROCE for RDMA, even for data transfer between 2 NPUs on the same server.
-    p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZING;
-    p2pComm->waitPost.Clear();
     accessor.Release();
     P2pLink link = P2P_LINK_ROCE;
     std::shared_ptr<std::function<int()>> p2pCallback = std::make_shared<std::function<int()>>();
     P2PCommInitOptions p2pCommInitOptions(false, p2pCallback.get());
     Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&rootInfo, kind, link, &p2pComm->p2pComm,
                                                                          &p2pCommInitOptions);
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(rc, K_RUNTIME_ERROR, FormatString("Failed to initialize communicator"));
+    if (rc.IsError()) {
+        rollbackStatus = Status(K_RUNTIME_ERROR, FormatString("Failed to initialize communicator: %s", rc.ToString()));
+        return rollbackStatus;
+    }
     if (kind == P2P_RECEIVER) {
-        clientPingFunctions_.insert({ key, p2pCallback });
+        clientPingFunctions_.insert({key, p2pCallback});
     } else if (kind == P2P_SENDER) {
-        clientDisconnectChecks_.insert({ key, p2pCallback });
+        clientDisconnectChecks_.insert({key, p2pCallback});
     }
     p2pComm->stream = std::make_shared<aclrtStream>();
-    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get()));
+    rc = acl::AclDeviceManager::Instance()->RtCreateStream(p2pComm->stream.get());
+    if (rc.IsError()) {
+        rollbackStatus = rc;
+        return rc;
+    }
     if (devId == -1) {
-        RETURN_IF_NOT_OK(GetClientDeviceId(p2pComm->devId));
+        rc = GetClientDeviceId(p2pComm->devId);
+        if (rc.IsError()) {
+            rollbackStatus = rc;
+            return rc;
+        }
     } else {
         p2pComm->devId = devId;
     }
-    communicatorMap_->Find(accessor, key);
+    CHECK_FAIL_RETURN_STATUS(communicatorMap_->Find(accessor, key), K_NOT_FOUND,
+                             "Communicator context disappeared before init completion");
     p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZED;
     p2pComm->waitPost.Set();
     needRollback = false;
+    LOG(INFO) << "RemoteH2D communicator init done, key(" << CommKeyForLog(key) << "), kind="
+              << P2pKindToString(kind) << ", devId=" << p2pComm->devId;
     return Status::OK();
+}
+
+void RemoteH2DManager::SubmitConnectionInitTask(const std::string &key, P2pKind kind, int32_t devId,
+                                                const std::shared_ptr<ThreadPool> &threadPool)
+{
+    auto traceId = Trace::Instance().GetTraceID();
+    LOG(INFO) << "RemoteH2D enqueue async comm init, key(" << CommKeyForLog(key) << "), kind="
+              << P2pKindToString(kind) << ", devId=" << devId;
+    threadPool->Execute([this, traceId, key, kind, devId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        LOG_EVERY_N(INFO, 200) << "RemoteH2D async comm init worker start, key(" << CommKeyForLog(key)
+                               << "), kind=" << P2pKindToString(kind) << ", devId=" << devId;
+        LOG_IF_ERROR(SetDeviceIdx(devId), "SetDeviceId failed.");
+        std::shared_ptr<RemoteH2DContext> p2pComm;
+        auto rc = CompleteConnectionInit(key, kind, p2pComm, devId);
+        if (rc.IsError() && p2pComm != nullptr) {
+            p2pComm->waitPost.SetWithStatus(rc);
+        }
+        LOG_IF_ERROR(rc, "Create p2p communicator connection failed in thread");
+    });
 }
 
 Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo,
@@ -269,28 +341,40 @@ Status RemoteH2DManager::P2PCommInitRootInfo(const std::string &key, const Remot
     PerfPoint point(PerfKey::P2P_COMM_INIT_ROOT);
 
     std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
-    CommunicatorMap::ConstAccessor constAccessor;
-    if (communicatorMap_->Find(constAccessor, key)) {
-        // Fast path: already initialized
-        p2pComm = constAccessor.entry->data;
-        RETURN_OK_IF_TRUE(p2pComm->initialized != RemoteH2DContext::InitState::UNINITIALIZED);
+    CommunicatorMap::Accessor accessor;
+    bool inserted = communicatorMap_->Insert(accessor, key);
+    if (inserted) {
+        accessor.entry->data = std::make_shared<RemoteH2DContext>();
+        LOG(INFO) << "RemoteH2D comm reserve new context before init, key(" << CommKeyForLog(key) << "), kind="
+                  << P2pKindToString(kind) << ", devId=" << devId;
     }
+    p2pComm = accessor.entry->data;
+    auto state = p2pComm->initialized.load();
+    if (state != RemoteH2DContext::InitState::UNINITIALIZED) {
+        LOG_EVERY_N(INFO, 500) << "RemoteH2D comm init cache hit, key(" << CommKeyForLog(key) << "), state="
+                               << InitStateToString(state) << ", kind=" << P2pKindToString(kind)
+                               << ", devId=" << devId;
+        return Status::OK();
+    }
+
+    auto &rootInfo = p2pComm->rootInfo;
+    const std::string &rootInfoStr = p2pRootInfo.internal();
+    auto ret = memcpy_s(static_cast<void *>(rootInfo.internal), HCCL_ROOT_INFO_BYTES,
+                        static_cast<const void *>(rootInfoStr.c_str()), HCCL_ROOT_INFO_BYTES);
+    CHECK_FAIL_RETURN_STATUS(ret == EOK, K_RUNTIME_ERROR,
+                             FormatString("Copy root info failed, the memcpy_s return: %d", ret));
+    p2pComm->initialized = RemoteH2DContext::InitState::INITIALIZING;
+    p2pComm->waitPost.Clear();
+    accessor.Release();
 
     INJECT_POINT("RemoteH2DManager.P2PCommInitRootInfo.delay");
     if (threadPool) {
-        p2pComm = nullptr;
-        auto traceId = Trace::Instance().GetTraceID();
         l.unlock();
-        threadPool->Execute([this, traceId, key, p2pRootInfo, kind, devId]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            LOG_IF_ERROR(SetDeviceIdx(devId), "SetDeviceId failed.");
-            std::shared_lock<std::shared_timed_mutex> l(communicatorMutex_);
-            std::shared_ptr<RemoteH2DContext> p2pComm;
-            LOG_IF_ERROR(HandleConnection(key, p2pRootInfo, kind, p2pComm, devId),
-                         "Create p2p communicator connection failed in thread");
-        });
+        SubmitConnectionInitTask(key, kind, devId, threadPool);
     } else {
-        RETURN_IF_NOT_OK(HandleConnection(key, p2pRootInfo, kind, p2pComm, devId));
+        LOG(INFO) << "RemoteH2D do sync comm init, key(" << CommKeyForLog(key) << "), kind="
+                  << P2pKindToString(kind) << ", devId=" << devId;
+        RETURN_IF_NOT_OK(CompleteConnectionInit(key, kind, p2pComm, devId));
     }
 
     // Note: 2 threads cannot launch ops on the same comm at the same time, so client side is currently not thread safe.
@@ -470,7 +554,9 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
 
     // Thread safety needs to be ensured for the p2p communicator.
     std::lock_guard<std::mutex> lock(p2pComm->mutex);
-    p2pComm->waitPost.Wait();
+    PerfPoint waitPoint(PerfKey::P2P_COMM_INIT_WAIT_READY);
+    RETURN_IF_NOT_OK(p2pComm->waitPost.WaitAndGetStatus());
+    waitPoint.Record();
 
     auto submitBatch = [&p2pComm](P2pScatterEntry *batchEntries, uint32_t batchSize) {
         RETURN_OK_IF_TRUE(batchSize == 0);
@@ -509,7 +595,6 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
 
 Status RemoteH2DManager::GetDevIdForComm(const std::string &commId, int32_t &devId)
 {
-    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_DEV_ID_FAST);
     devId = -1;
     {
         // fast path: use const accessor
@@ -520,7 +605,6 @@ Status RemoteH2DManager::GetDevIdForComm(const std::string &commId, int32_t &dev
     }
     if (devId == -1) {
         // slow path
-        pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_DEV_ID_SLOW);
         std::vector<int32_t> devIds;
         RETURN_IF_NOT_OK(GetWorkerDeviceIds(&devIds));
         tbb::concurrent_hash_map<std::string, int32_t>::accessor acc;

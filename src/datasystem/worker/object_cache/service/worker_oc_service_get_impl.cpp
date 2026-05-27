@@ -1549,22 +1549,25 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
     std::vector<std::future<Status>> futures;
-    auto traceContext = Trace::Instance().GetContext();
+    futures.reserve(objKeysGrpByMaster.size());
+    std::string traceID = Trace::Instance().GetTraceID();
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     std::vector<BatchQueryMetaResult> batchQueryResults;
     batchQueryResults.resize(objKeysGrpByMaster.size());
     size_t idx = 0;
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
+    queryMetas.reserve(queryMetas.size() + objectKeys.size());
     for (auto &item : objKeysGrpByMaster) {
         BatchQueryMetaResult &res = batchQueryResults[idx++];
-        auto func = [&res, realTimeoutMs, subTimeout, item, traceContext, &timer, this]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
+        auto *itemPtr = &item;
+        auto func = [&res, realTimeoutMs, subTimeout, itemPtr, &traceID, &timer, this]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
-            HostPort masterAddr = item.first.GetAddressAndSaveDbName();
-            const std::vector<std::string> &currentIds = item.second;
-            bool isFromOtherAz = item.first.IsFromOtherAz();
+            HostPort masterAddr = itemPtr->first.GetAddressAndSaveDbName();
+            const std::vector<std::string> &currentIds = itemPtr->second;
+            bool isFromOtherAz = itemPtr->first.IsFromOtherAz();
             datasystem::master::QueryMetaRspPb &rsp = res.rsp;
             Timer queryMetaTimer;
             auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, isFromOtherAz, rsp, res.payloads);
@@ -1597,6 +1600,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
     auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
     std::vector<std::string> absentObjectKeys;
+    absentObjectKeys.reserve(objectKeys.size());
     std::map<std::string, uint64_t> deletingObjectsWithVersion;
     for (auto &res : batchQueryResults) {
         if (!res.failedKeys.empty()) {
@@ -1786,9 +1790,9 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
 {
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
-    LOG(INFO) << "Query metadata from master: " << masterAddr << ", objects: " << VectorToString(objectKeys)
-              << ", request id: " << queryReqId << ", remainingTime:" << reqTimeoutDuration.CalcRealRemainingTime()
-              << "ms";
+    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    LOG(INFO) << "Query metadata from master: " << masterAddr << ", object_count: " << objectKeys.size()
+              << ", request id: " << queryReqId << ", remainingTime: " << remainingTime;
     *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
     req.set_request_id(queryReqId);
     req.set_redirect(redirect);
@@ -1831,9 +1835,12 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhere(std::vector<master::QueryM
                                                       std::unordered_set<std::string> &failedIds,
                                                       std::set<ReadKey> &needRetryIds)
 {
+    PerfPoint totalPoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE);
     if (FLAGS_enable_worker_worker_batch_get) {
+        PerfPoint stagePoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE_BATCH);
         return GetObjectsFromAnywhereBatched(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
+    PerfPoint stagePoint(PerfKey::WORKER_GET_OBJECTS_FROM_ANYWHERE_PARALLEL);
     return GetObjectsFromAnywhereParallelly(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
 }
 

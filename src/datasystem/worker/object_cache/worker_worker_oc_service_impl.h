@@ -142,6 +142,11 @@ private:
         uint64_t subIndex = 0;
     };
 
+    struct BatchRh2dContext {
+        bool prepared = false;
+        int32_t devId = -1;
+    };
+
     /**
      * @brief Load object data in remote get provider mode.
      * @param[in] req Pb Request for RemoteGet rpc.
@@ -156,7 +161,9 @@ private:
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
                                std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                               RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr);
+                               RemoteH2DRootInfoPb *batchRootInfo = nullptr,
+                               Status *fallbackStatus = nullptr,
+                               BatchRh2dContext *batchRh2dContext = nullptr);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
@@ -171,7 +178,8 @@ private:
      */
     Status GetObjectRemoteBatchWrite(uint32_t subIndex, const GetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
                                      std::vector<ParallelRes> &parallelRes,
-                                     std::shared_ptr<AggregateMemory> batchPtr = nullptr);
+                                     std::shared_ptr<AggregateMemory> batchPtr = nullptr,
+                                     BatchRh2dContext *batchRh2dContext = nullptr);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to process batched requests and wait fast transport events.
@@ -263,7 +271,9 @@ private:
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr);
+                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr,
+                                  Status *fallbackStatus = nullptr,
+                                  BatchRh2dContext *batchRh2dContext = nullptr);
 
     /**
      * @brief Get the safe object entry.
@@ -288,7 +298,10 @@ private:
     Status EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
                                    const uint64_t &localSegSize, std::shared_ptr<ShmUnit> shmUnit,
                                    uint64_t metadataSize, GetObjectRemoteRspPb &rsp,
-                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr);
+                                   RemoteH2DRootInfoPb *batchRootInfo = nullptr,
+                                   BatchRh2dContext *batchRh2dContext = nullptr);
+
+    Status PrepareBatchRh2dContext(const GetObjectRemoteReqPb &req, BatchRh2dContext &batchRh2dContext);
 
     /**
      * @brief Check if the fast transport connection is stable.

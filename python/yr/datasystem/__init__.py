@@ -45,13 +45,57 @@ __all__ = [
 
 from yr.datasystem.object_client import Buffer, ConsistencyType
 from yr.datasystem.object_client import ObjectClient, WriteMode
+from yr.datasystem.lib import libds_client_py as _ds
 from yr.datasystem.lib.libds_client_py import FutureTimeoutException
 from yr.datasystem.stream_client import SubconfigType, StreamClient
 from yr.datasystem.ds_client import DsClient
 from yr.datasystem.kv_client import KVClient
 from yr.datasystem.hetero_client import HeteroClient, Blob, DeviceBlobList, MetaInfo, Future
-from yr.datasystem.util import Status, Context
+from yr.datasystem.util import Status, Context, Validator as validator
 from yr.datasystem.service_discovery import ServiceDiscovery, ServiceDiscoveryOptions, ServiceAffinityPolicy
+if hasattr(_ds, "PerfClient"):
+    class PerfClient:
+        """Data system perf client for resetting and fetching perf logs.
+
+        PerfClient is only available when the Python bindings are built with
+        ENABLE_PERF enabled.
+        """
+
+        def __init__(
+            self,
+            host,
+            port,
+            connect_timeout_ms=60000,
+            access_key="",
+            secret_key="",
+        ):
+            args = [
+                ["host", host, str],
+                ["port", port, int],
+                ["connect_timeout_ms", connect_timeout_ms, int],
+                ["access_key", access_key, str],
+                ["secret_key", secret_key, str],
+            ]
+            validator.check_args_types(args)
+            self._client = _ds.PerfClient(host, port, connect_timeout_ms, access_key, secret_key)
+
+        def init(self):
+            init_status = self._client.init()
+            if init_status.is_error():
+                raise RuntimeError(init_status.to_string())
+
+        def reset_perf_log(self, perf_type: str):
+            status = self._client.reset_perf_log(perf_type)
+            if status.is_error():
+                raise RuntimeError(status.to_string())
+
+        def get_perf_log(self, perf_type: str):
+            status, perf_log = self._client.get_perf_log(perf_type)
+            if status.is_error():
+                raise RuntimeError(status.to_string())
+            return perf_log
+
+    __all__.append("PerfClient")
 
 
 def _preload_transfer_engine_runtime_shared_libs(pkg_dir: Path) -> None:

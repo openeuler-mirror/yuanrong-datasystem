@@ -52,6 +52,7 @@
   - obtains `KV()`, `Object()`, and `Hetero()`
 - C++ direct clients:
   - `KVClient`
+  - `PerfClient`
   - `ObjectClient`
   - `StreamClient`
   - `HeteroClient`
@@ -68,6 +69,7 @@
 | --- | --- | --- |
 | `DsClient` | `src/datasystem/client/datasystem.cpp` | convenience wrapper only |
 | `KVClient` | `src/datasystem/client/kv_cache/kv_client.cpp` -> `object_cache::ObjectClientImpl` | KV create/set/get path is layered over object-cache client backend |
+| `PerfClient` | `src/datasystem/client/perf_client/perf_client.cpp` | perf log reset/get helper for worker/client performance diagnostics |
 | `ObjectClient` | `src/datasystem/client/object_cache/object_client.cpp` -> `object_cache::ObjectClientImpl` | object semantics are thin wrappers around shared implementation |
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |

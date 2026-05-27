@@ -4,6 +4,7 @@ add_library(ds_client_py MODULE
         pybind_register_object.cpp
         pybind_register_stream.cpp
         pybind_register_kv.cpp
+        pybind_register_perf.cpp
         pybind_register_hetero.cpp
         pybind_register_context.cpp
         pybind_register_service_discovery.cpp)

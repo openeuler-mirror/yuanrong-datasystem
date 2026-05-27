@@ -218,8 +218,10 @@ public:
 
 private:
     RemoteH2DManager();
-    Status HandleConnection(const std::string &key, const RemoteH2DRootInfoPb &p2pRootInfo, P2pKind kind,
-                            std::shared_ptr<RemoteH2DContext> &p2pComm, int32_t devId);
+    Status CompleteConnectionInit(const std::string &key, P2pKind kind, std::shared_ptr<RemoteH2DContext> &p2pComm,
+                                  int32_t devId);
+    void SubmitConnectionInitTask(const std::string &key, P2pKind kind, int32_t devId,
+                                  const std::shared_ptr<ThreadPool> &threadPool);
     void ManageHeartbeats();
 
     // Root info string to p2p communicator mapping.

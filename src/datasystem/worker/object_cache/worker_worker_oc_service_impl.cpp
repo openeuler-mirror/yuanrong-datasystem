@@ -132,6 +132,7 @@ WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
 
 WorkerWorkerOCServiceImpl::~WorkerWorkerOCServiceImpl()
 {
+    communicatorThreadPool_.reset();
     LOG(INFO) << "WorkerWorkerOCServiceImpl exit";
 }
 
@@ -139,8 +140,7 @@ Status WorkerWorkerOCServiceImpl::Init()
 {
     CHECK_FAIL_RETURN_STATUS(ocClientWorkerSvc_ != nullptr, StatusCode::K_NOT_READY,
                              "ClientWorkerService must be initialized before WorkerWorkerService construction");
-    constexpr uint32_t commThrdNum = 4;
-    RETURN_IF_EXCEPTION_OCCURS(communicatorThreadPool_ = std::make_shared<ThreadPool>(0, commThrdNum, "CommInit"));
+    RETURN_IF_EXCEPTION_OCCURS(communicatorThreadPool_ = std::make_shared<ThreadPool>(0, 4, "CommInit"));
     return WorkerWorkerOCService::Init();
 }
 
@@ -204,8 +204,10 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, const GetObjectRemoteReqPb &subReq,
                                                             BatchGetObjectRemoteRspPb &rsp,
                                                             std::vector<ParallelRes> &parallelRes,
-                                                            std::shared_ptr<AggregateMemory> batchPtr)
+                                                            std::shared_ptr<AggregateMemory> batchPtr,
+                                                            BatchRh2dContext *batchRh2dContext)
 {
+    PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_BATCH_WRITE);
     GetObjectRemoteRspPb &subRsp = parallelRes[paraIndex].respPbs.emplace_back();
     uint64_t &subIndex = parallelRes[paraIndex].subIndex;
 
@@ -218,7 +220,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
                                   callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
     auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
-                                         rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus);
+                                         rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus,
+                                         batchRh2dContext);
     // payload means need to FallbackTcp/NormalTcp transport
     if ((status.IsError() && subPayload.empty()) || (status.IsError() && !FLAGS_enable_transport_fallback)) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
@@ -239,6 +242,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
     parallelRes[paraIndex].kps.emplace_back(subIndex, std::make_pair(std::move(requestIds), std::move(subPayload)));
     parallelRes[paraIndex].fallbackStatuses.emplace_back(fallbackStatus);
     subIndex++;
+    point.Record();
     return Status::OK();
 }
 
@@ -345,19 +349,40 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
     return Status::OK();
 }
 
+Status WorkerWorkerOCServiceImpl::PrepareBatchRh2dContext(const GetObjectRemoteReqPb &req,
+                                                          BatchRh2dContext &batchRh2dContext)
+{
+#ifdef BUILD_HETERO
+    if (!IsRemoteH2DEnabled() || req.comm_id().empty()) {
+        return Status::OK();
+    }
+
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetDevIdForComm(req.comm_id(), batchRh2dContext.devId));
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx(batchRh2dContext.devId));
+    batchRh2dContext.prepared = true;
+#else
+    (void)req;
+    (void)batchRh2dContext;
+#endif
+    return Status::OK();
+}
+
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
                                                          std::shared_ptr<AggregateMemory> batchPtr,
-                                                         RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus)
+                                                         RemoteH2DRootInfoPb *batchRootInfo,
+                                                         Status *fallbackStatus,
+                                                         BatchRh2dContext *batchRh2dContext)
 {
+    PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_HANDLER);
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status =
-        GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo, fallbackStatus);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
+                                        fallbackStatus, batchRh2dContext);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -369,6 +394,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         status, FormatString("[ObjectKey %s] Get object remote failed, requestId: %s, workerAddr: %s", objectKey,
                              requestId, localAddress_.ToString()));
+    point.Record();
     return Status::OK();
 }
 
@@ -405,7 +431,8 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
 Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &commId, const uint64_t &localSegAddress,
                                                           const uint64_t &localSegSize,
                                                           std::shared_ptr<ShmUnit> shmUnit, uint64_t metadataSize,
-                                                          GetObjectRemoteRspPb &rsp, RemoteH2DRootInfoPb *batchRootInfo)
+                                                          GetObjectRemoteRspPb &rsp, RemoteH2DRootInfoPb *batchRootInfo,
+                                                          BatchRh2dContext *batchRh2dContext)
 {
     (void)commId;
     (void)localSegAddress;
@@ -414,17 +441,19 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     (void)metadataSize;
     (void)rsp;
     (void)batchRootInfo;
+    (void)batchRh2dContext;
 #ifdef BUILD_HETERO
-    PerfPoint point(PerfKey::WORKER_REMOTE_GET_RH2D);
+    PerfPoint point(PerfKey::WORKER_REMOTE_GET_PREPARE_RH2D_HOST_INFO);
 
-    int32_t devId;
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetDevIdForComm(commId, devId));
-
-    PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_P2P_SET_DEV);
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx(devId));
+    int32_t devId = -1;
+    if (batchRh2dContext != nullptr && batchRh2dContext->prepared) {
+        devId = batchRh2dContext->devId;
+    } else {
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetDevIdForComm(commId, devId));
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx(devId));
+    }
 
     // Send root info to client
-    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_GET_ROOT);
     auto *rootInfo = batchRootInfo ? batchRootInfo : rsp.mutable_host_info()->mutable_root_info();
     if (rootInfo->internal().empty()) {
         RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PGetRootInfo(commId, rootInfo));
@@ -432,22 +461,20 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
 
     // Initialize communicator connection (accept client).
     // Fixme: error handling
-    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_COMM_INIT);
     std::shared_ptr<RemoteH2DContext> p2pComm;
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, *rootInfo, P2P_SENDER, p2pComm, devId,
                                                                       communicatorThreadPool_));
 
     // Send segment info to client
-    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_SEG);
     auto *segmentPb = rsp.mutable_host_info()->mutable_remote_host_segment();
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
                                                                   localSegAddress, *segmentPb, devId));
 
     // Send offset info to client
-    pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_P2P_FILL_DATA);
     auto *dataInfoPb = rsp.mutable_host_info()->mutable_data_info();
     uint64_t *dataPtr = reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(shmUnit->GetPointer()) + metadataSize);
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillDataInfo(dataPtr, *dataInfoPb));
+    point.Record();
 #endif
     return Status::OK();
 }
@@ -456,8 +483,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
                                                       std::vector<uint64_t> &eventKeys,
                                                       std::shared_ptr<AggregateMemory> batchPtr,
-                                                      RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus)
+                                                      RemoteH2DRootInfoPb *batchRootInfo,
+                                                      Status *fallbackStatus,
+                                                      BatchRh2dContext *batchRh2dContext)
 {
+    PerfPoint batchImplPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL);
     (void)eventKeys;
     (void)blocking;
     const std::string &objectKey = req.object_key();
@@ -521,7 +551,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                 FormatString("[ObjectKey %s] data size mismatch, actual = %zu, expected = %zu",
                                              objectKey, entry->GetDataSize(), expectedDataSize));
     }
-    PerfPoint point(PerfKey::WORKER_LOAD_OBJECT_DATA);
+    PerfPoint loadDataPoint(PerfKey::WORKER_LOAD_OBJECT_DATA);
     PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_READ_KEY);
     ReadObjectKV objKv(ReadKey(objectKey, offset, size), entry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objKv.CheckReadOffset(), "Read offset verify failed");
@@ -591,7 +621,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         if (IsRemoteH2DEnabled() && !req.comm_id().empty()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 EstablishConnAndFillSeg(req.comm_id(), localSegAddress, localSegSize, shmUnit, entry->GetMetadataSize(),
-                                        rsp, batchRootInfo),
+                                        rsp, batchRootInfo, batchRh2dContext),
                 "");
             rsp.set_data_source(datasystem::DataTransferSource::DATA_DELAY_TRANSFER);
         }
@@ -627,10 +657,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     }
 
     pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_RESP);
+    PerfPoint fillRspPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_FILL_RESPONSE);
     rsp.mutable_error()->set_error_code(StatusCode::K_OK);  // No size change
     rsp.set_data_size(static_cast<int64_t>(entry->GetDataSize()));
     rsp.set_create_time(static_cast<int64_t>(entry->GetCreateTime()));
     rsp.set_life_state(static_cast<uint32_t>(entry->GetLifeState()));
+    fillRspPoint.Record();
+    loadDataPoint.Record();
+    batchImplPoint.Record();
     return Status::OK();
 }
 
@@ -761,11 +795,19 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
     } else {
         uint32_t parallelSize = 1;
         parallelRes.resize(parallelSize);
+        PerfPoint loopPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL_LOOP_SERIAL);
+        BatchRh2dContext batchRh2dContext;
+        if (req.requests_size() > 0) {
+            auto *firstReq = req.mutable_requests(0);
+            *(firstReq->mutable_comm_id()) = req.comm_id();
+            RETURN_IF_NOT_OK(PrepareBatchRh2dContext(*firstReq, batchRh2dContext));
+        }
         for (int i = 0; i < req.requests_size(); i++) {
             auto *subReq = req.mutable_requests(i);
             *(subReq->mutable_comm_id()) = req.comm_id();
-            (void)GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr);
+            (void)GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr, &batchRh2dContext);
         }
+        loopPoint.Record();
     }
 
     // pipeline h2d don't need wait and retry, just fill in response
@@ -779,7 +821,6 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
         return Status::OK();
     }
 
-    point.RecordAndReset(PerfKey::FAST_TRANSPORT_TOTAL_EVENT_WAIT);
     return MergeParallelBatchGetResult(req, parallelRes, rsp, payload);
 }
 
@@ -919,10 +960,17 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(BatchGetObjectRemoteReq
                     batchPtr = std::make_shared<AggregateMemory>();
                     batchPtr->localSgeInfos.reserve(endPos - startPos);
                 }
+                BatchRh2dContext batchRh2dContext;
+                auto *firstReq = req.mutable_requests(startPos);
+                *(firstReq->mutable_comm_id()) = req.comm_id();
+                LOG_IF_ERROR(PrepareBatchRh2dContext(*firstReq, batchRh2dContext), "PrepareBatchRh2dContext failed");
+                PerfPoint loopPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL_LOOP_PARALLEL);
                 for (uint64_t j = startPos; j < endPos; ++j) {
                     auto *subReq = req.mutable_requests(j);
-                    GetObjectRemoteBatchWrite(i, *subReq, rsp, parallelRes, batchPtr);
+                    *(subReq->mutable_comm_id()) = req.comm_id();
+                    GetObjectRemoteBatchWrite(i, *subReq, rsp, parallelRes, batchPtr, &batchRh2dContext);
                 }
+                loopPoint.Record();
                 PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
                 LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req), "gather write error!");
             }

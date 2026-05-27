@@ -1311,7 +1311,9 @@ Status ObjectClientImpl::MGetH2DImpl(const std::vector<std::string> &objectKeys,
 
     // MGetH2D supports RH2D transfer, so if RH2D feature is enabled, it can trigger RH2D.
     bool isRH2DSupported = true;
+    PerfPoint stagePoint(PerfKey::CLIENT_MGET_H2D_GET);
     RETURN_IF_NOT_OK(Get(objectKeys, timeoutMs, bufferList, false, isRH2DSupported));
+    stagePoint.RecordAndReset(PerfKey::CLIENT_MGET_H2D_COPY);
 
     CHECK_FAIL_RETURN_STATUS(objectKeys.size() == bufferList.size(), K_INVALID,
                              "The size of objectKeys and bufferList does not match");
@@ -1332,7 +1334,9 @@ Status ObjectClientImpl::MGetH2DImpl(const std::vector<std::string> &objectKeys,
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckDeviceValid(devices), "Check device failed.");
     std::vector<DeviceBlobList> devBlobListCopy = devBlobList;
-    return HostDataCopy2Device(devBlobListCopy, existBufferList);
+    auto rc = HostDataCopy2Device(devBlobListCopy, existBufferList);
+    stagePoint.Record();
+    return rc;
 }
 
 Status ObjectClientImpl::CheckMGetH2DInput(const std::vector<std::string> &objectKeys,
@@ -1427,9 +1431,12 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
                                              std::vector<Buffer *> &existBufferList)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY);
+    PerfPoint stagePoint(PerfKey::CLIENT_H2D_GROUP_SOURCES);
     if (!IsRemoteH2DEnabled()) {
+        stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_LOCAL_COPY);
         RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(devBlobList, existBufferList, MemcpyKind::HOST_TO_DEVICE,
                                                               workerApi_[LOCAL_WORKER]->enableHugeTlb_));
+        stagePoint.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
     } else {
         // Group buffers by data source in RH2D scenario
         std::vector<DeviceBlobList> localSourceDevBlobList;
@@ -1458,19 +1465,23 @@ Status ObjectClientImpl::HostDataCopy2Device(std::vector<DeviceBlobList> &devBlo
             remoteSourceDevBlobList[iter->second].emplace_back(&devBlobList[i]);
             remoteSourceBufferList[iter->second].emplace_back(buffer);
         }
+        stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_LOCAL_COPY);
         if (!localSourceDevBlobList.empty()) {
             RETURN_IF_NOT_OK(devOcImpl_->MemCopyBetweenDevAndHost(localSourceDevBlobList, localSourceBufferList,
                                                                   MemcpyKind::HOST_TO_DEVICE,
                                                                   workerApi_[LOCAL_WORKER]->enableHugeTlb_));
         }
+        stagePoint.RecordAndReset(PerfKey::CLIENT_H2D_REMOTE_COPY);
         for (size_t i = 0; i < remoteSourceDevBlobList.size(); i++) {
             RETURN_IF_NOT_OK(ImportSegAndReadHostMemory(remoteSourceDevBlobList[i], remoteSourceBufferList[i]));
         }
+        stagePoint.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
     }
 
     // existBufferList same as bufferList
-    point.RecordAndReset(PerfKey::CLIENT_BATCH_BUFFER_DESTRUCT_GET);
     existBufferList.clear();
+    stagePoint.Record();
+    point.Record();
     return Status::OK();
 }
 
@@ -2406,13 +2417,16 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
 Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                               std::vector<std::shared_ptr<Buffer>> &buffers)
 {
+    PerfPoint totalPoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER);
+    PerfPoint stagePoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_RPC);
     const std::vector<std::string> &objectsNeedToGet = getParam.objectKeys;
     const std::vector<ReadParam> &readParams = getParam.readParams;
     CHECK_FAIL_RETURN_STATUS(buffers.size() == objectsNeedToGet.size(), K_INVALID, "buffers size does not match");
 
 #ifdef USE_URMA
     // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
-    if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()) {
+    if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()
+        && !(getParam.isRH2DSupported && IsRemoteH2DEnabled())) {
         std::vector<ObjMetaInfo> objMetas;
         std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
         Timer metaTimer;
@@ -2447,14 +2461,20 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     uint32_t version = 0;
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Get(getParam, version, rsp, payloads), "Get error");
+    stagePoint.RecordAndReset(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_PROCESS_RESPONSE);
 
     std::vector<std::string> failedObjectKey;
+    failedObjectKey.reserve(objectsNeedToGet.size());
     RETURN_IF_NOT_OK(
         ProcessGetResponse(objectsNeedToGet, readParams, rsp, version, payloads, buffers, failedObjectKey));
 
-    RETURN_OK_IF_TRUE(objectsNeedToGet.size() > failedObjectKey.size());
+    if (objectsNeedToGet.size() > failedObjectKey.size()) {
+        totalPoint.Record();
+        return Status::OK();
+    }
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    totalPoint.Record();
     return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : recvRc;
 }
 
@@ -2506,6 +2526,7 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
                                                      std::vector<std::shared_ptr<Buffer>> &buffers,
                                                      const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize)
 {
+    PerfPoint totalPoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER);
     const auto &objectKeys = getParam.objectKeys;
     const auto &readParams = getParam.readParams;
 
@@ -2545,14 +2566,17 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
         std::vector<RpcMessage> payloads;
         uint32_t version = 0;
 
+        PerfPoint stagePoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_RPC);
         Status rc = workerApi->Get(subGetParam, version, rsp, payloads);
         if (rc.IsError()) {
             LOG(WARNING) << "Batch Get failed for " << subKeys.size() << " objects: " << rc.ToString();
             lastError = rc;
             continue;
         }
+        stagePoint.RecordAndReset(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_PROCESS_RESPONSE);
 
         std::vector<std::string> failedObjectKey;
+        failedObjectKey.reserve(subKeys.size());
         rc = ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, subBuffers, failedObjectKey);
         if (rc.IsError()) {
             LOG(WARNING) << "ProcessGetResponse failed in batch: " << rc.ToString();
@@ -2566,7 +2590,11 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
         totalSuccessCount += (subKeys.size() - failedObjectKey.size());
     }
 
-    RETURN_OK_IF_TRUE(totalSuccessCount > 0);
+    if (totalSuccessCount > 0) {
+        totalPoint.Record();
+        return Status::OK();
+    }
+    totalPoint.Record();
     return lastError.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : lastError;
 }
 #endif
