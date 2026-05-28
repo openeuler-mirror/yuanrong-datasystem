@@ -28,6 +28,7 @@
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_int32(v);
+DS_DECLARE_bool(enable_perf_trace_log);
 
 namespace datasystem {
 static constexpr uint32_t LOG_ROLLING_COMPRESS_SECS = 30;  // Log rolling or compress interval seconds.

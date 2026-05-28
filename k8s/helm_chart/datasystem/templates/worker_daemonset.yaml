@@ -89,6 +89,7 @@ spec:
         - -log_monitor={{ $.Values.global.observability.logMonitor }}
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
+        - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
         - -enable_meta_replica={{ $.Values.global.metadata.enableMetaReplica }}
         - -enable_redirect={{ $.Values.global.metadata.enableRedirect }}
         - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}

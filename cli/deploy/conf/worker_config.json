@@ -584,7 +584,7 @@
         "description": "Number of complete record to poll at a time, 16 is the max this device can poll"
     },
     "urma_max_write_size_mb": {
-        "value": "2",
+        "value": "4",
         "description": "Maximum URMA write size, unit is MB. Valid range is [1, 2048]."
     },
     "urma_register_whole_arena": {
@@ -598,6 +598,10 @@
     "logfile_mode": {
         "value": "416",
         "description": "Log file mode/permissions."
+    },
+    "enable_perf_trace_log": {
+        "value": "false",
+        "description": "Enable perf trace log output."
     },
     "oc_shm_transfer_threshold_kb": {
         "value": "500",
