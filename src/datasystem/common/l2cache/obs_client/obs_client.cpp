@@ -64,6 +64,30 @@ const size_t CONFIG_VALID_STRING_LEN = 128;
 const int64_t OBS_DEFAULT_TIMEOUT_MS = 30000;    // 30 seconds default timeout for OBS requests.
 
 namespace datasystem {
+namespace {
+std::string BuildObsErrorResponseSummary(const std::shared_ptr<HttpResponse> &response)
+{
+    if (response == nullptr) {
+        return "";
+    }
+    auto &body = response->GetBody();
+    if (body == nullptr) {
+        return "";
+    }
+    auto stream = std::dynamic_pointer_cast<std::stringstream>(body);
+    if (stream == nullptr) {
+        return "";
+    }
+    constexpr size_t maxLogBodySize = 512;
+    std::string text = stream->str();
+    if (text.size() > maxLogBodySize) {
+        text.resize(maxLogBodySize);
+        text.append("...(truncated)");
+    }
+    return text;
+}
+}  // namespace
+
 inline bool ValidateConfigString(const std::string &key, const std::string &value)
 {
     if (value.size() > CONFIG_VALID_STRING_LEN || !Validator::ValidateEligibleChar(key.c_str(), value)) {
@@ -458,6 +482,13 @@ Status ObsClient::StreamingUpload(const std::shared_ptr<std::iostream> &body, si
         LOG(INFO) << FormatString("Putting object to OBS is done. Object path: %s", objPath);
         return Status::OK();
     }
+    LOG(ERROR) << FormatString("OBS PUT request failed. objectPath=%s, url=%s, signature=%s, httpStatus=%d, "
+                               "responseBody=%s",
+                               objPath, request->GetUrl().c_str(),
+                               signatureProvider_ != nullptr
+                                   ? (signatureProvider_->GetType() == SignatureType::AWS_V4 ? "AWS_V4" : "OBS_V2")
+                                   : "UNKNOWN",
+                               httpStatus, BuildObsErrorResponseSummary(response).c_str());
     RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
                             FormatString("Failed to put object: %s, buffer size: %zu, http status: %d", objPath, size,
                                          httpStatus));
