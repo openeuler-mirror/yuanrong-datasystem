@@ -21,6 +21,10 @@
 #include "datasystem/utils/service_discovery.h"
 
 namespace datasystem {
+PybindDefineRegisterer g_pybind_define_f_SensitiveValue("SensitiveValue", PRIORITY_LOW, [](const py::module *m) {
+    py::class_<SensitiveValue>(*m, "SensitiveValue").def(py::init<>()).def(py::init<const std::string &>());
+});
+
 PybindDefineRegisterer g_pybind_define_f_ServiceAffinityPolicy(
     "ServiceAffinityPolicy", PRIORITY_LOW, [](const py::module *m) {
         py::enum_<ServiceAffinityPolicy>(*m, "ServiceAffinityPolicy")
@@ -36,22 +40,30 @@ PybindDefineRegisterer g_pybind_define_f_ServiceDiscoveryOptions(
             .def(py::init<>())
             .def_readwrite("etcd_address", &ServiceDiscoveryOptions::etcdAddress)
             .def_readwrite("cluster_name", &ServiceDiscoveryOptions::clusterName)
-            .def_readwrite("etcd_ca", &ServiceDiscoveryOptions::etcdCa)
-            .def_readwrite("etcd_cert", &ServiceDiscoveryOptions::etcdCert)
-            .def_readwrite("etcd_key", &ServiceDiscoveryOptions::etcdKey)
+            .def_property("etcd_ca",
+                [](ServiceDiscoveryOptions &opt) -> std::string {
+                    return std::string(opt.etcdCa.GetData(), opt.etcdCa.GetSize());
+                }, [](ServiceDiscoveryOptions &opt, const std::string &val) { opt.etcdCa = val; })
+            .def_property("etcd_cert",
+                [](ServiceDiscoveryOptions &opt) -> std::string {
+                    return std::string(opt.etcdCert.GetData(), opt.etcdCert.GetSize());
+                }, [](ServiceDiscoveryOptions &opt, const std::string &val) { opt.etcdCert = val; })
+            .def_property("etcd_key",
+                [](ServiceDiscoveryOptions &opt) -> std::string {
+                    return std::string(opt.etcdKey.GetData(), opt.etcdKey.GetSize());
+                }, [](ServiceDiscoveryOptions &opt, const std::string &val) { opt.etcdKey = val; })
             .def_readwrite("etcd_dns_name", &ServiceDiscoveryOptions::etcdDNSName)
             .def_readwrite("username", &ServiceDiscoveryOptions::username)
-            .def_readwrite("password", &ServiceDiscoveryOptions::password)
-            .def_readwrite("token_refresh_interval_sec",
-                           &ServiceDiscoveryOptions::tokenRefreshIntervalSec)
-            .def_readwrite("host_id_env_name",
-                           &ServiceDiscoveryOptions::hostIdEnvName)
-            .def_readwrite("affinity_policy",
-                           &ServiceDiscoveryOptions::affinityPolicy);
+            .def_property("password",
+                [](ServiceDiscoveryOptions &opt) -> std::string {
+                    return std::string(opt.password.GetData(), opt.password.GetSize());
+                }, [](ServiceDiscoveryOptions &opt, const std::string &val) { opt.password = val; })
+            .def_readwrite("token_refresh_interval_sec", &ServiceDiscoveryOptions::tokenRefreshIntervalSec)
+            .def_readwrite("host_id_env_name", &ServiceDiscoveryOptions::hostIdEnvName)
+            .def_readwrite("affinity_policy", &ServiceDiscoveryOptions::affinityPolicy);
     });
 
-PybindDefineRegisterer g_pybind_define_f_ServiceDiscovery(
-    "ServiceDiscovery", PRIORITY_LOW, [](const py::module *m) {
+PybindDefineRegisterer g_pybind_define_f_ServiceDiscovery("ServiceDiscovery", PRIORITY_LOW, [](const py::module *m) {
     py::class_<ServiceDiscovery, std::shared_ptr<ServiceDiscovery>>(*m, "ServiceDiscovery")
         .def(py::init<const ServiceDiscoveryOptions &>())
         .def("init", &ServiceDiscovery::Init)
