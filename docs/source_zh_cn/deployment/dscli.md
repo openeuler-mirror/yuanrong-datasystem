@@ -785,6 +785,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_monitor_interval_ms | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | logfile_mode | int | `416` | 设置日志文件模式/权限，值为八进制数 |
+| enable_perf_trace_log | bool | `false` | 是否打开性能trace日志 |
 
 #### 二级缓存相关配置
 
@@ -869,7 +870,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| urma_max_wirte_size_mb | int | `2` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
+| urma_max_write_size_mb | int | `4` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
 | urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |

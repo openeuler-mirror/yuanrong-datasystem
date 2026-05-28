@@ -89,6 +89,7 @@ spec:
         - -log_monitor={{ $.Values.global.observability.logMonitor }}
         - -log_monitor_exporter={{ $.Values.global.observability.logMonitorExporter }}
         - -log_monitor_interval_ms={{ $.Values.global.observability.logMonitorIntervalMs }}
+        - -enable_perf_trace_log={{ $.Values.global.log.enablePerfTraceLog }}
         - -enable_meta_replica={{ $.Values.global.metadata.enableMetaReplica }}
         - -enable_redirect={{ $.Values.global.metadata.enableRedirect }}
         - -enable_metadata_recovery={{ $.Values.global.metadata.enableMetadataRecovery }}
@@ -240,7 +241,7 @@ spec:
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
-        - -urma_max_wirte_size_mb={{ $.Values.global.performance.urmaMaxWirteSizeMb }}
+        - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}

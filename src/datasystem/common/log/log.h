@@ -35,6 +35,7 @@
 DS_DECLARE_int32(v);
 DS_DECLARE_int32(minloglevel);
 DS_DECLARE_int32(log_monitor_interval_ms);
+DS_DECLARE_bool(enable_perf_trace_log);
 
 namespace datasystem {
 

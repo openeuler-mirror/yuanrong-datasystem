@@ -20,11 +20,17 @@ ds_cc_library(
 ds_cc_library(
     name = "common_shared_memory",
     srcs = glob(
-        ["*.cpp", "mmap/*.cpp"],
+        [
+            "*.cpp",
+            "mmap/*.cpp",
+        ],
         exclude = ["shm_unit_info.cpp"],
     ),
     hdrs = glob(
-        ["*.h", "mmap/*.h"],
+        [
+            "*.h",
+            "mmap/*.h",
+        ],
         exclude = ["shm_unit_info.h"],
     ),
     linkopts = ["-ldl"],
@@ -34,6 +40,7 @@ ds_cc_library(
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_base_header",
+        "//src/datasystem/common/rdma/npu:remote_h2d_manager",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:common_util_base",
         "//src/datasystem/common/util:file_util",
@@ -42,7 +49,7 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/util/gflag:common_util_gflag_header",
-        "@re2",
         "@jemalloc_kvc//:jemalloc",
+        "@re2",
     ],
 )
