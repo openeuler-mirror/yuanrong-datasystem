@@ -11,18 +11,13 @@ When the review target is a GitCode PR/MR number or URL for `openeuler/yuanrong-
 `yuanrong-pr-review` workflow as part of this skill. Do not stop after producing local findings unless the user
 explicitly asks for local-only review or publishing is blocked by missing credentials/API failure.
 
-1. Run prepare first:
+1. Run prepare first with the repository-maintained review helper:
 
 ```bash
-python3 ~/workspace/oh-my-codex/plugins/yuanrong-pr-review/skills/yuanrong-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
+python3 .skills/ds-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
 ```
 
-2. Read the generated bundle path from the command output, then load only the needed review inputs:
-   - `references/review_policy.md`
-   - `references/language_policy.md`
-   - `references/repo_focus.md`
-   - `references/output_contract.md`
-   - the generated `bundle.json`
+2. Read the generated bundle path from the command output, then load the generated `bundle.json`.
 3. Review changed files first using the bundle's annotated patch. Prefer `diff_line_index` from the bundle for comment
    anchoring. Open repository source only when the diff and snippets are not enough for a high-confidence finding.
 4. Write findings as JSON matching the output contract. Each finding must include:
@@ -36,7 +31,7 @@ python3 ~/workspace/oh-my-codex/plugins/yuanrong-pr-review/skills/yuanrong-pr-re
 5. Publish findings back to GitCode:
 
 ```bash
-python3 ~/workspace/oh-my-codex/plugins/yuanrong-pr-review/skills/yuanrong-pr-review/scripts/review_pr.py publish \
+python3 .skills/ds-pr-review/scripts/review_pr.py publish \
   --bundle <BUNDLE_JSON> \
   --findings <FINDINGS_JSON>
 ```
@@ -57,7 +52,7 @@ Publishing rules:
 1. `AGENTS.md`
 2. `.repo_context/modules/overview/engineering-principles.md`
 3. `.repo_context/playbooks/reviews/pr-review-checklist.md`
-4. For GitCode PR/MR review targets, the prepared `yuanrong-pr-review` bundle and references listed above
+4. For GitCode PR/MR review targets, the prepared `yuanrong-pr-review` bundle
 5. The touched module docs from `.repo_context/index.md`
 6. The actual diff and source code being reviewed
 7. PR descriptions and commit messages when they are part of the review scope
