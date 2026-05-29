@@ -82,6 +82,15 @@ public:
     ~UrmaEvent() = default;
 
     /**
+     * @brief Get the event creation timestamp used for end-to-end event lifetime timing.
+     * @return Event creation timestamp in microseconds from a monotonic clock.
+     */
+    uint64_t GetCreateTimeUs() const
+    {
+        return createTimeUs_;
+    }
+
+    /**
      * @brief Mark the event as failed and store the completion status code.
      * @param[in] statusCode Completion status code returned by Urma.
      */
@@ -155,6 +164,7 @@ private:
     std::string remoteInstanceId_;
     uint64_t dataSize_{ 0 };
     OperationType operationType_{ OperationType::UNKNOWN };
+    uint64_t createTimeUs_{ static_cast<uint64_t>(GetSteadyClockTimeStampUs()) };
 };
 
 class UrmaContext {

@@ -19,7 +19,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/validator.h"
 
-DS_DECLARE_uint64(urma_max_wirte_size_mb);
+DS_DECLARE_uint64(urma_max_write_size_mb);
 
 namespace {
 bool ValidateEnableUrma(const char *flagName, bool value)
@@ -143,7 +143,7 @@ DS_DEFINE_validator(node_timeout_s, &Validator::ValidateNodeTimeout);
 DS_DEFINE_validator(eviction_reserve_mem_threshold_mb, &Validator::ValidateEvictReserveMemThreshold);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(urma_mode, &ValidateUrmaMode);
-DS_DEFINE_validator(urma_max_wirte_size_mb, &ValidateUrmaMaxWriteSize);
+DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);

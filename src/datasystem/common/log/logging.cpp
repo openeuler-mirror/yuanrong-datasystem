@@ -57,6 +57,7 @@ constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
 constexpr bool DEFAULT_LOG_COMPRESS = true;
 constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
 constexpr bool DEFAULT_LOG_TO_STDERR = false;
+constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
@@ -93,6 +94,8 @@ DS_DEFINE_int32(log_rate_limit, 0,
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
                "log files.");
+DS_DEFINE_bool(enable_perf_trace_log, DEFAULT_ENABLE_PERF_TRACE_LOG,
+               "Enable perf log output, When true always output perf related log.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(log_only_write_info_file);
