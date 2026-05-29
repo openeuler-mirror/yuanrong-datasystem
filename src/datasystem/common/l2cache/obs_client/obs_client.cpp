@@ -31,6 +31,7 @@
 #include "datasystem/common/httpclient/curl_http_client.h"
 #include "datasystem/common/l2cache/obs_client/aws_v4_signature.h"
 #include "datasystem/common/l2cache/obs_client/obs_service_detector.h"
+#include "datasystem/common/l2cache/obs_client/obs_xml_util.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -78,13 +79,14 @@ std::string BuildObsErrorResponseSummary(const std::shared_ptr<HttpResponse> &re
     if (stream == nullptr) {
         return "";
     }
-    constexpr size_t maxLogBodySize = 512;
     std::string text = stream->str();
-    if (text.size() > maxLogBodySize) {
-        text.resize(maxLogBodySize);
-        text.append("...(truncated)");
+    std::string errCode;
+    std::string errMsg;
+    ObsXmlUtil::ParseErrorResponse(text, errCode, errMsg);
+    if (errCode.empty()) {
+        errCode = "UNKNOW";
     }
-    return text;
+    return FormatString("errorCode=%s, errorMessage=%s", errCode, errMsg);
 }
 }  // namespace
 
@@ -482,9 +484,8 @@ Status ObsClient::StreamingUpload(const std::shared_ptr<std::iostream> &body, si
         LOG(INFO) << FormatString("Putting object to OBS is done. Object path: %s", objPath);
         return Status::OK();
     }
-    LOG(ERROR) << FormatString("OBS PUT request failed. objectPath=%s, url=%s, signature=%s, httpStatus=%d, "
-                               "responseBody=%s",
-                               objPath, request->GetUrl().c_str(),
+    LOG(ERROR) << FormatString("OBS PUT request failed. objectPath=%s, signature=%s, httpStatus=%d, %s",
+                               objPath,
                                signatureProvider_ != nullptr
                                    ? (signatureProvider_->GetType() == SignatureType::AWS_V4 ? "AWS_V4" : "OBS_V2")
                                    : "UNKNOWN",
