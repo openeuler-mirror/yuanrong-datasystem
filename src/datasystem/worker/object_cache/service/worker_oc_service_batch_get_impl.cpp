@@ -31,6 +31,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -649,7 +650,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             INJECT_POINT("worker.remote_get_failed");
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
             std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, akSkManager_, workerStub),
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
                                              "Create remote worker api failed.");
             std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
             // If getting data from other AZ, then we leave 3/4 remain time to query from L2 cache in case getting
@@ -672,10 +673,17 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                     RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb));
 
                     auto rc = clientApi->Read(rspPb);
+                    if (rc.IsError()) {
+                        rc = WithRpcDiag(rc, "BatchGetObjectRemote", localAddress_, address);
+                    }
                     RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                     // Fallback to downlevel client as multiple objects can be contained in the payload.
                     // Only spill case would actually send payload via RPC, so performance-wise it would be acceptable.
-                    RETURN_IF_NOT_OK(clientApi->ReceivePayload(payloads));
+                    rc = clientApi->ReceivePayload(payloads);
+                    if (rc.IsError()) {
+                        rc = WithRpcDiag(rc, "BatchGetObjectRemote", localAddress_, address);
+                    }
+                    RETURN_IF_NOT_OK(rc);
                     return Status::OK();
                 },
                 []() { return Status::OK(); },

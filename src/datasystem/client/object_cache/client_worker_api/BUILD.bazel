@@ -83,6 +83,7 @@ ds_cc_library(
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",

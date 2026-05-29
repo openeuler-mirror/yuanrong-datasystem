@@ -760,7 +760,7 @@ TEST_F(MigrateL2DataTest, MigrateL2Data)
     BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
         .WillRepeatedly(Invoke([this](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                                const HostPort &workerAddr) {
-            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, localAddr_, akSkManager_);
             return Status::OK();
         }));
     DS_ASSERT_OK(migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds));
@@ -782,7 +782,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataSameNodeRetryMax)
     BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
         .WillRepeatedly(Invoke([this](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                       const HostPort &workerAddr) {
-            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, localAddr_, akSkManager_);
             return Status::OK();
         }));
 
@@ -844,7 +844,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataPartialSuccessThenNoSpaceKeepSameNode)
         .WillRepeatedly(Invoke([this, &connectedAddrs](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                                        const HostPort &workerAddr) {
             connectedAddrs.insert(workerAddr.ToString());
-            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, localAddr_, akSkManager_);
             return Status::OK();
         }));
 
@@ -910,7 +910,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataAllFailedThenRedirectRetry)
         .WillRepeatedly(Invoke([this, &connectedAddrs](std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                                        const HostPort &workerAddr) {
             connectedAddrs.insert(workerAddr.ToString());
-            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, akSkManager_);
+            remoteWorkerStub = std::make_shared<WorkerRemoteWorkerOCApi>(workerAddr, localAddr_, akSkManager_);
             return Status::OK();
         }));
 

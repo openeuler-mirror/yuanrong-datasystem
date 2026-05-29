@@ -102,6 +102,7 @@ ds_cc_library(
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:meta_route_tool",
         "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",

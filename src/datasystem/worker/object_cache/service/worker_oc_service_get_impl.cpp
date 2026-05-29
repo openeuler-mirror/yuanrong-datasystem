@@ -49,6 +49,7 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -1193,7 +1194,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         localAddress_.ToString(), address);
     INJECT_POINT("worker.remote_get_failed");
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, akSkManager_, workerStub),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
                                      "Create remote worker api failed.");
     PerfPoint rpcPoint(PerfKey::WORKER_PULL_FROM_REMOTE);
     GetObjectRemoteReqPb reqPb;
@@ -1237,6 +1238,9 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                 RETURN_IF_NOT_OK(workerStub->GetObjectRemoteWrite(clientApi, reqPb));
 
                 auto rc = clientApi->Read(rspPb);
+                if (rc.IsError()) {
+                    rc = WithRpcDiag(rc, "GetObjectRemote", localAddress_, address);
+                }
                 RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
                 return Status::OK();
             },
@@ -1266,7 +1270,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     // the payload in ZMQ private memory
     if (rspPb.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
         PerfPoint retrieveRemotePayloadPoint(PerfKey::WORKER_RETRIEVE_REMOTE_PAYLOAD);
-        RETURN_IF_NOT_OK(RetrieveRemotePayload(objectKV, clientApi, rspPb));
+        RETURN_IF_NOT_OK(RetrieveRemotePayload(address, objectKV, clientApi, rspPb));
     }
 
     if (IsRemoteH2DEnabled() && (rspPb.data_source() == DataTransferSource::DATA_DELAY_TRANSFER)
@@ -1294,7 +1298,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
 }
 
 Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
-    ReadObjectKV &objectKV,
+    const std::string &address, ReadObjectKV &objectKV,
     std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> &clientApi,
     GetObjectRemoteRspPb &rspPb)
 {
@@ -1323,11 +1327,18 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
     // and is able to write directly into shared memory.
     if (clientApi->IsV2Client()) {
         status = clientApi->ReceivePayload(dest, needReceiveSz);
+        if (status.IsError()) {
+            status = WithRpcDiag(status, "GetObjectRemote", localAddress_, address);
+        }
     } else {
         // Downlevel client.
-        auto f = [this, &clientApi, &entry, &needReceiveSz, &metaSz, offset]() {
+        auto f = [this, &address, &clientApi, &entry, &needReceiveSz, &metaSz, offset]() {
             std::vector<RpcMessage> payloads;
-            RETURN_IF_NOT_OK(clientApi->ReceivePayload(payloads));
+            auto rc = clientApi->ReceivePayload(payloads);
+            if (rc.IsError()) {
+                rc = WithRpcDiag(rc, "GetObjectRemote", localAddress_, address);
+            }
+            RETURN_IF_NOT_OK(rc);
             PerfPoint copyPoint(PerfKey::WORKER_MEMORY_COPY);
             size_t payloadLen = 0;
             std::vector<std::pair<const uint8_t *, uint64_t>> payloadData;

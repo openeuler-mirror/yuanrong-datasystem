@@ -305,7 +305,8 @@ public:
         std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
         HostPort workerAddr;
         cluster_->GetWorkerAddr(0, workerAddr);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), akSkManager_, workerStub),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), worker2Addr_, akSkManager_,
+                                                               workerStub),
                                          "Create remote worker api failed.");
         GetObjectRemoteReqPb reqPb;
         GetObjectRemoteRspPb rspPb;

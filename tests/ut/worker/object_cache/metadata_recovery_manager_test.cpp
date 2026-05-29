@@ -29,6 +29,7 @@
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/util/thread_local.h"
 #define private public
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
@@ -102,6 +103,27 @@ private:
     std::vector<int> batchSizes_;
     std::vector<bool> isRecoveredFlags_;
 };
+
+class WorkerRemoteMasterRpcDiagnosticTest : public CommonTest {};
+
+TEST_F(WorkerRemoteMasterRpcDiagnosticTest, SealCreateMetaTimeoutReportsRpcDiagnostic)
+{
+    HostPort local("127.0.0.1", 18500);
+    HostPort master("127.0.0.1", 18501);
+    worker::WorkerRemoteMasterOCApi api(master, local, nullptr);
+    master::CreateMetaReqPb req;
+    master::CreateMetaRspPb rsp;
+    req.mutable_meta()->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
+
+    reqTimeoutDuration.Init(0);
+    Status rc = api.CreateMeta(req, rsp);
+    reqTimeoutDuration.Init();
+
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-CreateMeta->[" + master.ToString() + "]"),
+              std::string::npos)
+        << rc.ToString();
+}
 
 class MetaDataRecoveryManagerTest : public CommonTest {
 public:

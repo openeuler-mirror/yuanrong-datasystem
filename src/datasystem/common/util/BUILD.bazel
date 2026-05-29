@@ -143,6 +143,7 @@ ds_cc_library(
 alias(name = "bitmask_enum", actual = ":common_util_impl")
 alias(name = "event_subscribers", actual = ":common_util_impl")
 alias(name = "raii", actual = ":common_util_impl")
+alias(name = "rpc_diagnostic", actual = ":common_util_impl")
 alias(name = "rpc_util", actual = ":common_util_impl")
 alias(name = "file_util", actual = ":common_util_impl")
 alias(name = "thread_pool", actual = ":common_util_impl")

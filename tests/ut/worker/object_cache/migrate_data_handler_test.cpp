@@ -34,6 +34,7 @@
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/object/object_enum.h"
@@ -57,6 +58,44 @@ namespace datasystem {
 namespace ut {
 
 class ScaleDownNodeSelectorTest : public CommonTest {};
+
+class WorkerRemoteWorkerRpcDiagnosticTest : public CommonTest {};
+
+TEST_F(WorkerRemoteWorkerRpcDiagnosticTest, MigrateDataSessionNullReportsRpcDiagnostic)
+{
+    HostPort local("127.0.0.1", 18480);
+    HostPort remote("127.0.0.1", 18481);
+    WorkerRemoteWorkerOCApi api(remote, local, nullptr);
+    MigrateDataReqPb req;
+    MigrateDataRspPb rsp;
+    std::vector<MemView> payloads;
+
+    Status rc = api.MigrateData(req, payloads, rsp);
+
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-MigrateData->[" + remote.ToString() + "]"),
+              std::string::npos)
+        << rc.ToString();
+}
+
+TEST_F(WorkerRemoteWorkerRpcDiagnosticTest, MigrateDataDirectSessionNullReportsRpcDiagnostic)
+{
+    constexpr int32_t testRpcTimeoutMs = 1000;
+    HostPort local("127.0.0.1", 18480);
+    HostPort remote("127.0.0.1", 18481);
+    WorkerRemoteWorkerOCApi api(remote, local, nullptr);
+    MigrateDataDirectReqPb req;
+    MigrateDataDirectRspPb rsp;
+
+    reqTimeoutDuration.Init(testRpcTimeoutMs);
+    Status rc = api.MigrateDataDirect(req, rsp);
+    reqTimeoutDuration.Init();
+
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-MigrateDataDirect->[" + remote.ToString() + "]"),
+              std::string::npos)
+        << rc.ToString();
+}
 
 TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
 {
@@ -196,7 +235,7 @@ public:
     virtual void Init()
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
-        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, nullptr);
+        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
         objectTable_ = std::make_shared<ObjectTable>();
         strategy_ = std::make_shared<ScaleDownNodeSelector>(nullptr, hostPort_);
     }
@@ -629,7 +668,7 @@ public:
     void Init() override
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
-        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, nullptr);
+        remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
         objectTable_ = std::make_shared<ObjectTable>();
         strategy_ = std::make_shared<SpillNodeSelector>(nullptr, hostPort_);
         type_ = MigrateType::SPILL;
