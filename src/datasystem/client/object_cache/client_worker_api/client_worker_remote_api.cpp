@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -44,7 +45,7 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
-constexpr uint64_t CLIENT_WORKER_RPC_SLOW_US = 2000;
+const uint64_t CLIENT_WORKER_RPC_SLOW_US = GetClientSlowUs();
 
 namespace {
 bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)

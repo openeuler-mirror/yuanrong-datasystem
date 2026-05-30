@@ -98,7 +98,7 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
-constexpr uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = 1000;
+const uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = datasystem::GetClientSlowUs();
 constexpr double US_PER_MS = 1000.0;
 thread_local bool g_isThroughUb = false;
 
