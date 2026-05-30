@@ -151,6 +151,12 @@ Status LogManager::FetchLogWithPattern(std::vector<std::string> &files, bool isR
     pattern = dsClientAccessFile.str();
     RETURN_IF_NOT_OK(Glob(pattern, files));
 
+    std::stringstream dsClientAccessPidFile;
+    dsClientAccessPidFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\." << "*[0-9]\\.log"
+                          << suffix;
+    pattern = dsClientAccessPidFile.str();
+    RETURN_IF_NOT_OK(Glob(pattern, files));
+
     std::stringstream resourceFile;
     resourceFile << FLAGS_log_dir.c_str() << "/" << RESOURCE_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
     pattern = resourceFile.str();

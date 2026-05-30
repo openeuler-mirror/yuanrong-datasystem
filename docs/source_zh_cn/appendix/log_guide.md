@@ -23,8 +23,8 @@ openYuanrong datasystem 的日志分为以下类型：
 | 4 | datasystem_worker | `/path/yr_datasystem/logs/request_out.log` | 访问第三方（当前主要为 ETCD）接口日志 |
 | 5 | datasystem_worker | `/path/yr_datasystem/logs/sc_metrics.log` | 流缓存运行数据；由 `log_monitor` 控制是否开启 |
 | 6 | datasystem_worker | `/path/yr_datasystem/logs/container.log` | 容器运行日志，管理和监控worker进程的生命周期 |
-| 7 | Client | `/path/client/ds_client_{pid}.INFO.log`（及 `.WARNING`、`.ERROR` 等；`{pid}` 为进程号） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
-| 8 | Client | `/path/client/ds_client_access_{pid}.log` | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
+| 7 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
+| 8 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
 
 ---
 
