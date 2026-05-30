@@ -31,6 +31,7 @@
 #include "datasystem/common/httpclient/curl_http_client.h"
 #include "datasystem/common/l2cache/obs_client/aws_v4_signature.h"
 #include "datasystem/common/l2cache/obs_client/obs_service_detector.h"
+#include "datasystem/common/l2cache/obs_client/obs_xml_util.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -64,6 +65,31 @@ const size_t CONFIG_VALID_STRING_LEN = 128;
 const int64_t OBS_DEFAULT_TIMEOUT_MS = 30000;    // 30 seconds default timeout for OBS requests.
 
 namespace datasystem {
+namespace {
+std::string BuildObsErrorResponseSummary(const std::shared_ptr<HttpResponse> &response)
+{
+    if (response == nullptr) {
+        return "";
+    }
+    auto &body = response->GetBody();
+    if (body == nullptr) {
+        return "";
+    }
+    auto stream = std::dynamic_pointer_cast<std::stringstream>(body);
+    if (stream == nullptr) {
+        return "";
+    }
+    std::string text = stream->str();
+    std::string errCode;
+    std::string errMsg;
+    ObsXmlUtil::ParseErrorResponse(text, errCode, errMsg);
+    if (errCode.empty()) {
+        errCode = "UNKNOW";
+    }
+    return FormatString("errorCode=%s, errorMessage=%s", errCode, errMsg);
+}
+}  // namespace
+
 inline bool ValidateConfigString(const std::string &key, const std::string &value)
 {
     if (value.size() > CONFIG_VALID_STRING_LEN || !Validator::ValidateEligibleChar(key.c_str(), value)) {
@@ -458,6 +484,12 @@ Status ObsClient::StreamingUpload(const std::shared_ptr<std::iostream> &body, si
         LOG(INFO) << FormatString("Putting object to OBS is done. Object path: %s", objPath);
         return Status::OK();
     }
+    LOG(ERROR) << FormatString("OBS PUT request failed. objectPath=%s, signature=%s, httpStatus=%d, %s",
+                               objPath,
+                               signatureProvider_ != nullptr
+                                   ? (signatureProvider_->GetType() == SignatureType::AWS_V4 ? "AWS_V4" : "OBS_V2")
+                                   : "UNKNOWN",
+                               httpStatus, BuildObsErrorResponseSummary(response).c_str());
     RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
                             FormatString("Failed to put object: %s, buffer size: %zu, http status: %d", objPath, size,
                                          httpStatus));

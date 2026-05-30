@@ -193,15 +193,25 @@ std::string AwsV4Signature::BuildAuthorizationHeader(
 
 std::string AwsV4Signature::UriEncode(const std::string &input, bool encodeSlash)
 {
+    constexpr size_t percentEncodedOctetTailLen = 2;
+    constexpr size_t percentEncodedOctetLen = 3;
     std::string result;
-    for (char c : input) {
-        if (isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') {
-            result += c;
-        } else if (c == '/' && !encodeSlash) {
-            result += c;
+    for (size_t i = 0; i < input.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(input[i]);
+        if (input[i] == '%' && i + percentEncodedOctetTailLen < input.size()
+            && std::isxdigit(static_cast<unsigned char>(input[i + 1]))
+            && std::isxdigit(static_cast<unsigned char>(input[i + percentEncodedOctetTailLen]))) {
+            result.append(input, i, percentEncodedOctetLen);
+            i += percentEncodedOctetTailLen;
+            continue;
+        }
+        if (std::isalnum(c) || input[i] == '-' || input[i] == '.' || input[i] == '_' || input[i] == '~') {
+            result += input[i];
+        } else if (input[i] == '/' && !encodeSlash) {
+            result += input[i];
         } else {
             char buf[4];
-            sprintf_s(buf, sizeof(buf), "%%%02X", static_cast<unsigned char>(c));
+            sprintf_s(buf, sizeof(buf), "%%%02X", c);
             result += buf;
         }
     }

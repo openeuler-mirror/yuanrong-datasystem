@@ -58,6 +58,13 @@ TEST_F(AwsV4SignatureTest, TestUriEncodeSpecialChars)
     EXPECT_EQ("test%3Dfile", AwsV4Signature::UriEncode("test=file"));
 }
 
+TEST_F(AwsV4SignatureTest, TestUriEncodePreservesEscapedOctets)
+{
+    EXPECT_EQ("/bucket/object%3Bkey/1", AwsV4Signature::UriEncode("/bucket/object%3Bkey/1", false));
+    EXPECT_EQ("/bucket/object%EF%BF%A53Bkey/1",
+              AwsV4Signature::UriEncode("/bucket/object%EF%BF%A53Bkey/1", false));
+}
+
 TEST_F(AwsV4SignatureTest, TestUriEncodeUnreservedChars)
 {
     // Unreserved chars should not be encoded: A-Z a-z 0-9 - . _ ~
