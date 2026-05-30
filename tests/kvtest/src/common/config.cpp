@@ -354,8 +354,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             SLOG_ERROR("set_param.ttl_second must be > 0 when cleanup_method=ttl");
             return false;
         }
-        if (cfg.setApi != "string_view" && cfg.setApi != "create_buffer") {
-            SLOG_ERROR("set_api must be 'string_view' or 'create_buffer'");
+        if (cfg.setApi != "string_view" && cfg.setApi != "create_buffer" && cfg.setApi != "create_buffer_raw") {
+            SLOG_ERROR("set_api must be 'string_view', 'create_buffer', or 'create_buffer_raw'");
             return false;
         }
         if (cfg.cleanupMethod != "del" && cfg.cleanupMethod != "ttl") {

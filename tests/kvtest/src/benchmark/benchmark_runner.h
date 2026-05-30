@@ -118,6 +118,8 @@ PhaseResult RunSetPhase(Client *client, int round, int startKey, int numKeys,
             ok = client->Set(key, data);
         } else if (setApi == "create_buffer") {
             ok = client->CreateAndSet(key, data.size(), data);
+        } else if (setApi == "create_buffer_raw") {
+            ok = client->CreateAndSetRaw(key, data.size(), data);
         }
         auto end = std::chrono::steady_clock::now();
         if (ok) {

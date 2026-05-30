@@ -1,6 +1,7 @@
 #pragma once
 #include <datasystem/kv_client.h>
 #include <datasystem/utils/string_view.h>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,16 @@ public:
         buffer->WLatch();
         buffer->MemoryCopy(data.data(), size);
         buffer->UnWLatch();
+        rc = client_->Set(buffer);
+        return rc.IsOk();
+    }
+
+    bool CreateAndSetRaw(const std::string &key, uint64_t size, const std::string &data) {
+        datasystem::SetParam cparam = param_;
+        std::shared_ptr<datasystem::Buffer> buffer;
+        auto rc = client_->Create(key, size, cparam, buffer);
+        if (!rc.IsOk()) return false;
+        memcpy(buffer->MutableData(), data.data(), size);
         rc = client_->Set(buffer);
         return rc.IsOk();
     }

@@ -52,7 +52,7 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/bench.json
 
 **测试模式：** `set_local` / `set_remote` / `get_local` / `get_cross_node` / `get_remote_direct` / `get_remote_cross`
 
-**Set API：** `string_view`（直接写入）或 `create_buffer`（SHM Buffer 路径）
+**Set API：** `string_view`（直接写入）/ `create_buffer`（SHM Buffer + latch）/ `create_buffer_raw`（SHM Buffer，无锁 memcpy）
 
 **输出：** `benchmark_phases.csv`（per-round per-phase 延迟和 QPS）
 
