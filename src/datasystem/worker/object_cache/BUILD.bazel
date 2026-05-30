@@ -515,6 +515,7 @@ ds_cc_library(
     deps = [
         ":worker_oc_service_impl",
         ":worker_worker_oc_service_impl_header",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/metrics:common_metrics",
     ],
     alwayslink = True,

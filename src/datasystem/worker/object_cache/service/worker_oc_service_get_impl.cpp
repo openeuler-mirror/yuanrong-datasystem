@@ -90,10 +90,10 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
-static constexpr uint64_t GET_LOCAL_PROCESSING_SLOW_US = 1000;
-static constexpr uint64_t GET_QUERY_META_RPC_SLOW_US = 1000;
-static constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
-static constexpr uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = 1000;
+static const uint64_t GET_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
+static const uint64_t GET_QUERY_META_RPC_SLOW_US = GetWorkerSlowUs();
+static const uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = GetWorkerSlowUs();
+static const uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,

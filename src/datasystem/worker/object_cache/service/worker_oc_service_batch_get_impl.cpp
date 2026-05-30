@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -53,7 +54,7 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 namespace {
-constexpr uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = 2000;
+const uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = GetWorkerSlowUs();
 constexpr double US_PER_MS = 1000.0;
 
 void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
