@@ -32,6 +32,7 @@ DS_DECLARE_int32(v);
 namespace datasystem {
 static constexpr uint32_t LOG_ROLLING_COMPRESS_SECS = 30;  // Log rolling or compress interval seconds.
 static const std::string LOG_NAME_ENV = "DATASYSTEM_CLIENT_LOG_NAME";
+static const std::string CLIENT_LOG_WITHOUT_PID_ENV = "DATASYSTEM_CLIENT_LOG_WITHOUT_PID";
 static const std::string ACCESS_LOG_NAME_ENV = "DATASYSTEM_CLIENT_ACCESS_LOG_NAME";
 static const std::string LOG_DIR_ENV = "DATASYSTEM_CLIENT_LOG_DIR";
 static const std::string MAX_LOG_SIZE_ENV = "DATASYSTEM_CLIENT_MAX_LOG_SIZE";
@@ -112,6 +113,9 @@ public:
     }
 
     static bool ValidateLogName(const std::string &logName);
+
+    static std::string GetClientLogName(const std::string &baseName, int pid);
+    static bool IsClientLogWithoutPidEnabled();
 
 protected:
     /**

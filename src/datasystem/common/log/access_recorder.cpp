@@ -25,6 +25,8 @@
 #include <string>
 #include <utility>
 
+#include <unistd.h>
+
 #include "datasystem/common/constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
@@ -145,7 +147,7 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
 
     std::vector<std::pair<AccessKeyType, std::string>> typeList;
     if (isClient_) {
-        std::string clientAccessLogName = CLIENT_ACCESS_LOG_NAME;
+        std::string clientAccessLogName = Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid());
 
         // Allow overriding client log filename via environment variable
         std::string accessLogName = GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
