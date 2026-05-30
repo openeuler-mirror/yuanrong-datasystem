@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <unistd.h>
 
 #include "re2/re2.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -53,6 +54,7 @@ constexpr uint32_t DEFAULT_MAX_LOG_FILE_NUM = 5;
 constexpr uint32_t HIGHEST_MAX_LOG_SIZE = 4096;
 constexpr bool DEFAULT_ALSO_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_CLIENT_LOG_MONITOR = true;
+constexpr bool DEFAULT_CLIENT_LOG_WITHOUT_PID = true;
 constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
 constexpr bool DEFAULT_LOG_COMPRESS = true;
 constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
@@ -336,6 +338,19 @@ void Logging::InitClientConfig()
     InitClientAdvancedConfig();
 }
 
+std::string Logging::GetClientLogName(const std::string &baseName, int pid)
+{
+    if (IsClientLogWithoutPidEnabled()) {
+        return baseName;
+    }
+    return FormatString("%s_%d", baseName, pid);
+}
+
+bool Logging::IsClientLogWithoutPidEnabled()
+{
+    return GetBoolFromEnv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), DEFAULT_CLIENT_LOG_WITHOUT_PID);
+}
+
 Logging::Logging() : init_(false)
 {
 }
@@ -360,7 +375,8 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     if (isClient_) {
         GetInstance()->InitClientConfig();
 
-        clientLogName = logFilename;
+        const std::string defaultClientLogName = GetClientLogName(logFilename, getpid());
+        clientLogName = defaultClientLogName;
 
         // Allow overriding client log filename via environment variable
         std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
