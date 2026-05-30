@@ -166,35 +166,18 @@ class Deployer:
                 self._build_scp_cmd(node) + ['-r', src, f'{user}@{target}:{dst}'],
                 check=True, timeout=120)
 
-    def collect_files(self, node, local_dir):
-        """Collect output files from node."""
+    def _collect_remote_files(self, node, local_dir, files, file_label='files', remote_dir=None, tar_pattern=None):
+        """Collect remote files to local directory (internal helper)."""
         transport = self._transport(node)
         target = self._exec_target(node)
 
         os.makedirs(local_dir, exist_ok=True)
 
-        # Collect from metrics_* output directories + top-level logs
-        ls = self.run_on(node,
-            f'ls -d {self.remote_work_dir}/metrics_* 2>/dev/null',
-            check=False)
-        metrics_dirs = [d.strip() for d in (ls.stdout or '').splitlines() if d.strip()]
-
-        files = []
-        for mdir in metrics_dirs:
-            fls = self.run_on(node,
-                f'ls {mdir}/*.csv {mdir}/*.txt {mdir}/*.log 2>/dev/null',
-                check=False)
-            files.extend(f.strip() for f in (fls.stdout or '').splitlines() if f.strip())
-        # Also collect top-level run.log and resource_monitor.log
-        run_log = self.run_on(node,
-            f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.log 2>/dev/null',
-            check=False)
-        files.extend(f.strip() for f in (run_log.stdout or '').splitlines() if f.strip())
         if not files:
-            print(f'  {target} -> no output files')
+            print(f'  {target} -> no {file_label}')
             return
 
-        print(f'  {target} -> {len(files)} files')
+        print(f'  {target} -> {len(files)} {file_label}')
 
         if transport == 'kubectl':
             # kubectl cp requires tar inside container; use cat instead
@@ -216,13 +199,21 @@ class Deployer:
         else:
             # SSH: tar + scp
             iid = node['instance_id']
-            tar_remote = f'/tmp/collect_{iid}.tar.gz'
-            tar_local = f'/tmp/collect_{iid}.tar.gz'
+            tar_suffix = file_label.replace(' ', '_')
+            tar_remote = f'/tmp/collect_{tar_suffix}_{iid}.tar.gz'
+            tar_local = f'/tmp/collect_{tar_suffix}_{iid}.tar.gz'
             self.run_on(node, f'rm -f {tar_remote}', check=False)
-            self.run_on(node,
-                f'cd {self.remote_work_dir} && '
-                f'tar czf {tar_remote} metrics_* *.csv *.txt *.log run.log resource_monitor.log 2>/dev/null',
-                check=False)
+            if remote_dir and tar_pattern:
+                self.run_on(node,
+                    f'cd {remote_dir} && '
+                    f'tar czf {tar_remote} {tar_pattern} 2>/dev/null',
+                    check=False)
+            else:
+                # If no remote_dir and tar_pattern, use individual files
+                file_list = ' '.join(shlex.quote(f) for f in files)
+                self.run_on(node,
+                    f'tar czf {tar_remote} {file_list} 2>/dev/null',
+                    check=False)
             check = self.run_on(node, f'test -f {tar_remote}', check=False)
             if check.returncode == 0:
                 try:
@@ -237,6 +228,59 @@ class Deployer:
                     if os.path.exists(tar_local):
                         os.unlink(tar_local)
                     self.run_on(node, f'rm -f {tar_remote}', check=False)
+
+    def collect_files(self, node, local_dir):
+        """Collect output files from node."""
+        target = self._exec_target(node)
+
+        # Collect from metrics_* output directories + top-level logs
+        ls = self.run_on(node,
+            f'ls -d {self.remote_work_dir}/metrics_* 2>/dev/null',
+            check=False)
+        metrics_dirs = [d.strip() for d in (ls.stdout or '').splitlines() if d.strip()]
+
+        files = []
+        for mdir in metrics_dirs:
+            fls = self.run_on(node,
+                f'ls {mdir}/*.csv {mdir}/*.txt {mdir}/*.log 2>/dev/null',
+                check=False)
+            files.extend(f.strip() for f in (fls.stdout or '').splitlines() if f.strip())
+        # Also collect top-level run.log and resource_monitor.log
+        run_log = self.run_on(node,
+            f'ls {self.remote_work_dir}/run.log {self.remote_work_dir}/resource_monitor.log 2>/dev/null',
+            check=False)
+        files.extend(f.strip() for f in (run_log.stdout or '').splitlines() if f.strip())
+
+        self._collect_remote_files(
+            node, local_dir, files,
+            file_label='output files',
+            remote_dir=self.remote_work_dir,
+            tar_pattern='metrics_* *.csv *.txt *.log run.log resource_monitor.log'
+        )
+
+    def collect_sdk_logs(self, node, local_dir, sdk_log_dir='/root/.datasystem/logs'):
+        """Collect SDK logs from node."""
+        target = self._exec_target(node)
+
+        # Collect all log files from SDK log directory
+        ls = self.run_on(node,
+            f'ls -d {sdk_log_dir} 2>/dev/null',
+            check=False)
+        if ls.returncode != 0:
+            print(f'  {target} -> SDK log dir {sdk_log_dir} does not exist')
+            return
+
+        fls = self.run_on(node,
+            f'ls {sdk_log_dir}/*.log {sdk_log_dir}/*.txt 2>/dev/null',
+            check=False)
+        files = [f.strip() for f in (fls.stdout or '').splitlines() if f.strip()]
+
+        self._collect_remote_files(
+            node, local_dir, files,
+            file_label='SDK log files',
+            remote_dir=sdk_log_dir,
+            tar_pattern='*.log *.txt'
+        )
 
     # --- Config generation ---
 
@@ -582,21 +626,41 @@ class Deployer:
         time.sleep(1)
 
         # Phase 2: collect files
+        self._collect_from_all_nodes(
+            collect_dir,
+            lambda node, local_dir: self.collect_files(node, local_dir),
+            file_label='files',
+            result_label='Collect result'
+        )
+
+    def do_collect_logs(self, sdk_log_dir='/root/.datasystem/logs'):
+        collect_dir = 'collected_sdk_logs'
+        self._collect_from_all_nodes(
+            collect_dir,
+            lambda node, local_dir: self.collect_sdk_logs(node, local_dir, sdk_log_dir),
+            file_label='SDK log files',
+            result_label='Collect SDK logs result'
+        )
+
+    def _collect_from_all_nodes(self, collect_dir, collect_fn, file_label='files', result_label='Collect result'):
+        """Collect files from all nodes (internal helper)."""
+        results = []
+
         def collect_node(node):
             instance_id = node['instance_id']
             target = self._exec_target(node)
             local_dir = os.path.join(collect_dir, f'{target}_{instance_id}')
-            print(f'Collecting from {target} (instance_id={instance_id})...')
+            print(f'Collecting {file_label} from {target} (instance_id={instance_id})...')
             try:
-                self.collect_files(node, local_dir)
+                collect_fn(node, local_dir)
                 if not os.path.isdir(local_dir):
                     return 'empty'
                 count = len([f for f in os.listdir(local_dir)
                              if os.path.isfile(os.path.join(local_dir, f))])
                 if count == 0:
-                    print(f'  {target} -> 0 files')
+                    print(f'  {target} -> 0 {file_label}')
                     return 'empty'
-                print(f'  {target} -> {count} files collected to {local_dir}/')
+                print(f'  {target} -> {count} {file_label} collected to {local_dir}/')
                 return 'ok'
             except Exception as e:
                 print(f'  {target} -> FAILED ({e})')
@@ -611,7 +675,7 @@ class Deployer:
         empty = sum(1 for r in results if r == 'empty')
         fail = sum(1 for r in results if r == 'fail')
         total = len(results)
-        print(f'\nCollect result: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
+        print(f'\n{result_label}: {ok} collected, {empty} empty, {fail} failed / {total} total -> {collect_dir}/')
 
     def do_run(self, duration):
         """Wait duration then auto stop + collect."""
@@ -983,6 +1047,13 @@ def main():
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
 
+    # collect-logs
+    p = sub.add_parser('collect-logs', help='Collect SDK logs to collected_sdk_logs/', parents=[shared])
+    p.add_argument('deploy_json')
+    p.add_argument('config_template', nargs='?', default='config/config.json.example')
+    p.add_argument('--sdk-log-dir', default='/root/.datasystem/logs',
+                   help='SDK log directory on remote nodes (default: /root/.datasystem/logs)')
+
     # clean
     p = sub.add_parser('clean', help='Kill processes and remove remote work dirs', parents=[shared])
     p.add_argument('deploy_json')
@@ -1017,6 +1088,8 @@ def main():
         deployer.do_stop()
     elif args.command == 'collect':
         deployer.do_collect()
+    elif args.command == 'collect-logs':
+        deployer.do_collect_logs(getattr(args, 'sdk_log_dir', '/root/.datasystem/logs'))
     elif args.command == 'clean':
         deployer.do_clean()
 
