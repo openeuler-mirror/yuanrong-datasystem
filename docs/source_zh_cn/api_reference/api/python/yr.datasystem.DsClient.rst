@@ -9,6 +9,8 @@ yr.datasystem.DsClient
     :doc:`HeteroClient <yr.datasystem.hetero_client.HeteroClient>` 和
     :doc:`ObjectClient <yr.datasystem.object_client.ObjectClient>` 3 个客户端实例，并统一提供初始化、关闭和访问入口。
 
+    **使用约束**：启用 fast transport（URMA）时，单个进程内只能初始化一个 client 实例。若需要同时使用多种语义能力，请在同一进程内复用同一个 ``DsClient`` 实例，并通过 ``kv()``、``object()``、``hetero()`` 获取对应客户端能力。
+
     参数：
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
         - **port** (int) - 数据系统 Worker 的端口号。

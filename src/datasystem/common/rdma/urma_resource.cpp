@@ -33,6 +33,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
@@ -248,6 +249,7 @@ UrmaJetty::~UrmaJetty()
 
 Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::shared_ptr<UrmaJetty> &jetty)
 {
+    METRIC_TIMER(metrics::KvMetricId::URMA_JETTY_CREATE_LATENCY);
     const bool isSendJetty = (jettyType == JettyType::SEND);
     std::shared_ptr<UrmaJfr> sharedJfr;
     if (isSendJetty) {
@@ -450,6 +452,7 @@ Status UrmaConnection::ReCreateJetty(UrmaResource &resource, const std::shared_p
                 << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
+        METRIC_TIMER(metrics::KvMetricId::URMA_JETTY_RECREATE_LATENCY);
         std::shared_ptr<UrmaJetty> newJetty;
         RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJetty(newJetty), "Failed to recreate Jetty");
         newJetty->BindConnection(shared_from_this());

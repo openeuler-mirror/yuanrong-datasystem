@@ -99,6 +99,9 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 70, "worker_get_post_query_meta_phase_latency", MetricType::HISTOGRAM, "us" },
     { 71, "worker_inflight_remote_get_request", MetricType::GAUGE, "count" },
     { 72, "zmq_server_poll_handle_latency", MetricType::HISTOGRAM, "us" },
+    { 73, "urma_connection_setup_latency", MetricType::HISTOGRAM, "us" },
+    { 74, "urma_jetty_create_latency", MetricType::HISTOGRAM, "us" },
+    { 75, "urma_jetty_recreate_latency", MetricType::HISTOGRAM, "us" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
