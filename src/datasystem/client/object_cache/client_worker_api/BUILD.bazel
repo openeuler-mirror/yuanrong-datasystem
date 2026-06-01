@@ -43,6 +43,7 @@ ds_cc_library(
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:embedded_client_worker_api",
         #"//src/datasystem/client/hetero_cache:hetero_client",

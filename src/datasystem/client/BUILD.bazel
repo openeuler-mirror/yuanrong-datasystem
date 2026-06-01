@@ -31,6 +31,7 @@ CLIENT_DEPS = [
     "//src/datasystem/common/log:common_log",
     "//src/datasystem/common/metrics:common_metrics",
     "//src/datasystem/common/ak_sk:common_ak_sk",
+    "//src/datasystem/common/flags:ds_flags",
     #"//src/datasystem/common/stream_cache:common_sc",
     "//src/datasystem/common/shared_memory:common_shm_unit_info",
     "//src/datasystem/common/util:common_util",
