@@ -39,7 +39,6 @@
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -85,8 +84,6 @@ public:
     {
         LOG(INFO) << "WorkerOcEvictionManager exit";
         // Wait for the thread execution to complete first to avoid releasing other variables.
-        isScheduleEvictThreadExit_ = true;
-        scheduleEvictThreadPool_.reset();
         memEvictTaskThreadPool_.reset();
         spillEvictTaskThreadPool_.reset();
         spillTaskThreadPool_.reset();
@@ -369,14 +366,6 @@ private:
     bool IsSpilledObjectEvictable(const std::shared_ptr<SafeObjType> &entry);
 
     /**
-     * @brief Get master metadata address for an object.
-     * @param[in] objectKey The object key.
-     * @param[out] metaAddrInfo The metadata address info.
-     * @return Status of the call.
-     */
-    Status GetMetaAddressForObject(const std::string &objectKey, MetaAddrInfo &metaAddrInfo);
-
-    /**
      * @brief Delete write back/through object if evictable.
      * @param[in] objectKV The object entry that need to evict and its corresponding objectKey.
      * @return Status of the call.
@@ -452,7 +441,6 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
-    std::atomic<bool> isScheduleEvictThreadExit_{ false };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     friend class ::datasystem::ut::SpillEvictionTest;
 };
