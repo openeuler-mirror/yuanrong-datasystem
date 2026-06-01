@@ -108,8 +108,8 @@ def start_procmon(pod, namespace, worker_pid, remote_dir='/tmp',
     """Start procmon monitoring for a worker process."""
     log_path = f'{remote_dir}/resource_monitor.log'
     cmd = (f'cd {remote_dir} && '
-           f'nohup python3 procmon.py --pid {worker_pid} -i {interval} '
-           f'> {log_path} 2>&1 </dev/null & echo $!')
+           f'(nohup python3 procmon.py --pid {worker_pid} -i {interval} '
+           f'> {log_path} 2>&1 & echo $!) <&-')
     try:
         result = kubectl_exec(pod['name'], namespace, cmd, timeout=timeout)
         return result.stdout.strip() if result.returncode == 0 else None
@@ -395,6 +395,81 @@ def cmd_exec(args, pods):
     return do_for_all_pods(pods, do_op, f'Executing command: {cmd}')
 
 
+def collect_logs_from_pod(pod, namespace, log_dir, local_dir, timeout=DEFAULT_TIMEOUT):
+    """Collect log files from a single pod."""
+    pod_name = pod['name']
+    pod_ip = pod['ip']
+    local_pod_dir = os.path.join(local_dir, f'{pod_name}')
+    os.makedirs(local_pod_dir, exist_ok=True)
+
+    try:
+        # Check if log directory exists
+        ls_result = kubectl_exec(pod_name, namespace, f'ls -d {log_dir} 2>/dev/null', check=False, timeout=timeout)
+        if ls_result.returncode != 0:
+            print(f'  {pod_name} ({pod_ip}) -> log dir {log_dir} does not exist')
+            return True
+
+        # List log files
+        ls_result = kubectl_exec(pod_name, namespace, f'ls {log_dir}/*.log {log_dir}/*.txt 2>/dev/null', check=False, timeout=timeout)
+        log_files = [f.strip() for f in (ls_result.stdout or '').splitlines() if f.strip()]
+
+        if not log_files:
+            print(f'  {pod_name} ({pod_ip}) -> no log files found')
+            return True
+
+        print(f'  {pod_name} ({pod_ip}) -> found {len(log_files)} log files')
+
+        # Collect each log file using cat
+        for remote_path in log_files:
+            try:
+                fname = os.path.basename(remote_path)
+                local_path = os.path.join(local_pod_dir, fname)
+                result = kubectl_exec(pod_name, namespace, f'cat {remote_path}', check=True, timeout=timeout)
+                with open(local_path, 'w', encoding='utf-8') as f:
+                    f.write(result.stdout)
+            except Exception as e:
+                print(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
+
+        return True
+    except subprocess.TimeoutExpired:
+        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        return False
+    except Exception as e:
+        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        return False
+
+
+def cmd_collect(args, pods):
+    """Collect worker logs from pods."""
+    # First, try to get log_dir from one of the pods' config file
+    log_dir = None
+    if pods:
+        try:
+            # Read remote config from first pod
+            result = kubectl_exec(pods[0]['name'], args.namespace, f'cat {args.remote_config}', check=True, timeout=args.timeout)
+            config = json.loads(result.stdout)
+            
+            log_dir_entry = config.get('log_dir', {})
+            if isinstance(log_dir_entry, dict):
+                log_dir = log_dir_entry.get('value', None)
+            else:
+                log_dir = log_dir_entry or None
+        except Exception as e:
+            print(f'WARNING: Failed to read remote config from pod: {e}', file=sys.stderr)
+    
+    if not log_dir:
+        print('ERROR: log_dir not found in remote config', file=sys.stderr)
+        return 1
+
+    print(f'Using log directory from remote config: {log_dir}')
+    local_dir = args.output or 'collected_worker_logs'
+
+    def do_op(pod):
+        return collect_logs_from_pod(pod, args.namespace, log_dir, local_dir, args.timeout)
+
+    return do_for_all_pods(pods, do_op, 'Collecting worker logs')
+
+
 def main():
     default_whl = find_default_whl()
 
@@ -465,6 +540,14 @@ def main():
     parser_exec.add_argument('--cmd', '-c', required=True,
                              help='Command to execute (required)')
 
+    # Collect subcommand
+    parser_collect = subparsers.add_parser('collect', parents=[parent_parser],
+                                           help='Collect worker logs from pods')
+    parser_collect.add_argument('--remote-config', default='/tmp/worker.config',
+                                help='Config path inside pod (default: /tmp/worker.config)')
+    parser_collect.add_argument('-o', '--output', default='collected_worker_logs',
+                                help='Local output directory (default: collected_worker_logs)')
+
     args = parser.parse_args()
 
     if not args.action:
@@ -495,6 +578,8 @@ def main():
         return cmd_install(args, pods)
     elif args.action == 'exec':
         return cmd_exec(args, pods)
+    elif args.action == 'collect':
+        return cmd_collect(args, pods)
 
     return 0
 
