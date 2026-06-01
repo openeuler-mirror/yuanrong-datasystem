@@ -28,7 +28,7 @@
 | 序号 | 名称 | 默认值 | 含义/用途 |
 |------|------|--------|-----------|
 | 1 | `DATASYSTEM_CLIENT_LOG_DIR` | `~/.datasystem/logs` | 数据系统SDK日志的输出文件夹。 |
-| 11 | `DATASYSTEM_LOG_V` | `0` | 数据系统SDK的日志级别。 |
+| 11 | `DATASYSTEM_LOG_V` | `0` | 数据系统SDK的 `VLOG` 级别。数值越大，输出的调试日志越详细；一般用于排查内部细节，默认值为0。 |
 | 12 | `DATASYSTEM_CLIENT_MAX_LOG_SIZE` | `100MB` | 日志文件最大大小,默认100MB。 |
 | 13 | `DATASYSTEM_LOG_TO_STDERR` | `false` | 为true时,日志信息输出到stderr而不是log_file。 |
 | 14 | `DATASYSTEM_ALSO_LOG_TO_STDERR` | `false` | 为true时,日志信息输出到stderr,同时输出到文件。 |
@@ -37,9 +37,10 @@
 | 17 | `DATASYSTEM_LOG_ASYNC_BUFFER_MB` | `2` | 异步日志缓冲区大小,单位为MB,默认2MB。 |
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
 | 19 | `DATASYSTEM_LOG_COMPRESS` | `true` | 日志文件是否压缩,默认压缩。 |
-| 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 用于设置日志记录的最低级别,默认是0。 |
+| 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 数据系统SDK的最小日志级别。数值越大，输出的日志越少；默认值为0，通常表示INFO级别及以上日志都可输出。 |
 | 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。 |
 | 26 | `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | `true` | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
+| 28 | `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` | `true` | 是否让客户端日志文件名不带进程号。默认`true`时输出为`ds_client.log`、`ds_client_access.log`；设置为`false`时恢复为带`<pid>`后缀的命名，适合多client进程同时运行且不希望覆盖日志的场景。 |
 
 ## 运行时环境配置
 
@@ -58,6 +59,7 @@
 
 1.环境变量的优先级低于SDK内部配置。如果SDK中已经配置了某个参数,则不会读取该环境变量;只有当SDK中没有配置该参数时,才会从环境变量中读取对应的值。
 2.日志配置相关环境变量只有配置了某个参数后，才会从环境变量中读取对应的值。
+3.`DATASYSTEM_LOG_V` 控制 VLOG 详细程度，`DATASYSTEM_MIN_LOG_LEVEL` 控制常规日志最低输出级别，两者分别影响不同日志通道。
 
 设置环境变量的示例:
 

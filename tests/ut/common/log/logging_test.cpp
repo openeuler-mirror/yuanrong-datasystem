@@ -263,6 +263,35 @@ TEST_F(LoggingTest, TestFlagsLogDirEmpty)
     DS_EXPECT_OK(DeleteFile(FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log"));
 }
 
+TEST_F(LoggingTest, TestClientLogWithoutPidByDefault)
+{
+    const char *oldValue = getenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());
+    (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), "true", 1);
+    ASSERT_EQ(Logging::GetClientLogName(CLIENT_LOG_FILENAME, 12345), CLIENT_LOG_FILENAME);
+    ASSERT_EQ(Logging::GetClientLogName("ds_llt", 12345), "ds_llt");
+    ASSERT_EQ(Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, 12345), CLIENT_ACCESS_LOG_NAME);
+    if (oldValue != nullptr) {
+        (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), oldValue, 1);
+    } else {
+        (void)unsetenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());
+    }
+}
+
+TEST_F(LoggingTest, TestClientLogWithPidWhenEnvDisabled)
+{
+    const char *oldValue = getenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());
+    constexpr int replace = 1;
+    (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), "false", replace);
+    ASSERT_EQ(Logging::GetClientLogName(CLIENT_LOG_FILENAME, 12345), CLIENT_LOG_FILENAME + "_12345");
+    ASSERT_EQ(Logging::GetClientLogName("ds_llt", 12345), "ds_llt_12345");
+    ASSERT_EQ(Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, 12345), CLIENT_ACCESS_LOG_NAME + "_12345");
+    if (oldValue != nullptr) {
+        (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), oldValue, 1);
+    } else {
+        (void)unsetenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str());
+    }
+}
+
 TEST_F(LoggingTest, TestCompressFiles)
 {
     FLAGS_log_compress = true;
@@ -801,6 +830,7 @@ TEST_F(LoggingTest, TestLogName)
     int replace = 1;
     (void)setenv(LOG_NAME_ENV.c_str(), "test_client", replace);
     (void)setenv(ACCESS_LOG_NAME_ENV.c_str(), "test_client_access", replace);
+    (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), "false", replace);
     Logging::GetInstance()->Start("ds_llt", true, 1);
     auto interval = std::chrono::milliseconds(100);
     std::this_thread::sleep_for(interval);
