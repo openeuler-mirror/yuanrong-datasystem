@@ -30,6 +30,7 @@
 #include <numeric>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -297,6 +298,10 @@ void NotifySwitchToExpectedWorker(const HostPort &target)
         return true;
     });
 }
+
+static constexpr int32_t INIT_SELECT_WORKER_RETRY_INTERVAL_MS = 100;
+static constexpr int32_t INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS = 500;
+static constexpr int32_t INIT_SELECT_WORKER_TRIES = 6;
 }  // namespace
 
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
@@ -451,15 +456,16 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
 }
 
-Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker)
+Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs)
 {
-    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
-    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, initWithWorker));
+    int32_t timeoutMs = connectTimeoutMs >= 0 ? connectTimeoutMs : connectTimeoutMs_;
+    CHECK_FAIL_RETURN_STATUS(timeoutMs >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(LOCAL_WORKER, ipAddress_, enableHeartbeat, initWithWorker, timeoutMs));
     return InitClientRuntimeAt(LOCAL_WORKER, initWithWorker, true);
 }
 
 Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
-                                                   bool initWithWorker)
+                                                   bool initWithWorker, int32_t connectTimeoutMs)
 {
     HeartbeatType heartbeatType = enableHeartbeat ? HeartbeatType::RPC_HEARTBEAT : HeartbeatType::NO_HEARTBEAT;
     workerApi_.resize(STANDBY2_WORKER + 1);
@@ -472,7 +478,9 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
                                                                   heartbeatType, signature_.get(), false, deviceId_);
     }
     workerApi_[node]->isUseStandbyWorker_ = node != LOCAL_WORKER;
-    RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
+    int32_t initAttemptTimeoutMs = connectTimeoutMs == connectTimeoutMs_ ? -1 : connectTimeoutMs;
+    RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_,
+                                            initAttemptTimeoutMs));
     ConfigureUrmaDataPlaneFailureCallback(node, workerApi_[node]);
     return Status::OK();
 }
@@ -589,15 +597,60 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
     return Status::OK();
 }
 
-Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat)
+Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat,
+                                                     int32_t connectTimeoutMs)
 {
-    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
-    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, false));
+    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    RETURN_IF_NOT_OK(InitClientWorkerConnectAt(STANDBY1_WORKER, remoteAddress, enableHeartbeat, false,
+                                               connectTimeoutMs));
     currentNode_ = STANDBY1_WORKER;
     RETURN_IF_NOT_OK(InitClientRuntimeAt(STANDBY1_WORKER, false, false));
     LOG(INFO) << "[Switch] Preferred same-node local worker is absent, use remote fallback "
               << remoteAddress.ToString();
     return Status::OK();
+}
+
+bool ObjectClientImpl::ShouldRetryInit(const Status &status) const
+{
+    switch (status.GetCode()) {
+        case K_CLIENT_WORKER_DISCONNECT:
+        case K_TRY_AGAIN:
+        case K_RPC_UNAVAILABLE:
+        case K_RPC_DEADLINE_EXCEEDED:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void ObjectClientImpl::ClearFailedInitAttempt()
+{
+    ShutdownMetricsThread(false);
+    ShutdownPerfThread();
+    ShutdownShmRefReconcileThread();
+    for (auto &listener : listenWorker_) {
+        if (listener != nullptr) {
+            listener->StopListenWorker(true);
+        }
+    }
+    for (auto &api : workerApi_) {
+        if (api != nullptr) {
+            LOG_IF_ERROR(api->Disconnect(false), "Disconnect failed init worker.");
+        }
+    }
+    listenWorker_.clear();
+    workerApi_.clear();
+    currentNode_ = LOCAL_WORKER;
+    switchInProgress_ = false;
+    workerSwitchState_ = WorkerSwitchState::AVAILABLE;
+    mmapManager_.reset();
+    devOcImpl_.reset();
+    asyncSetRPCPool_ = nullptr;
+    asyncGetRPCPool_ = nullptr;
+    asyncGetCopyPool_ = nullptr;
+    asyncSwitchWorkerPool_ = nullptr;
+    asyncDevDeletePool_ = nullptr;
+    asyncReleasePool_ = nullptr;
 }
 
 Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, const KVClientConfig *clientConfig)
@@ -614,24 +667,15 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     }
 
     if (serviceDiscovery_ != nullptr) {
-        std::string workerIp;
-        int workerPort;
-        bool isSameNode = false;
-        RETURN_IF_NOT_OK(serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode));
-        HostPort selectedAddress(workerIp, workerPort);
-        if (!isSameNode && serviceDiscovery_->HasHostAffinity()) {
-            std::string hostPortStr = selectedAddress.ToString();
-            CHECK_FAIL_RETURN_STATUS(Validator::ValidateHostPortString("HostPort", hostPortStr), K_INVALID,
-                                     FormatString("Invalid IP address/port. Host %s, port: %d", selectedAddress.Host(),
-                                                  selectedAddress.Port()));
-
-            LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
-            RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-            RETURN_IF_NOT_OK(InitPreferredRemoteFallback(selectedAddress, enableHeartbeat));
-            return Status::OK();
-        }
-        ipAddress_ = selectedAddress;
+        return InitWithServiceDiscovery(enableHeartbeat);
     }
+
+    return InitWorkerClientAtCurrentAddress(enableHeartbeat, true);
+}
+
+Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, bool isSameNode,
+                                                          int32_t connectTimeoutMs)
+{
     std::string hostPortStr = ipAddress_.ToString();
     if (hostPortStr.empty()) {
         return Status(K_INVALID, "ConnectOptions was not configured with a host and port or serviceDiscovery.");
@@ -643,9 +687,71 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
 
     LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
-    RETURN_IF_NOT_OK(InitClientWorkerConnect(enableHeartbeat, false));
+
+    Status rc;
+    if (!isSameNode && serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
+        LOG(INFO) << "Start to init preferred remote fallback worker client at address: " << hostPortStr;
+        rc = InitPreferredRemoteFallback(ipAddress_, enableHeartbeat, connectTimeoutMs);
+    } else {
+        rc = InitClientWorkerConnect(enableHeartbeat, false, connectTimeoutMs);
+    }
+    RETURN_IF_NOT_OK(rc);
     OsXprtPipln::SwitchToAndGetGpuId(deviceId_);
-    return Status::OK();
+    return rc;
+}
+
+Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
+{
+    CHECK_FAIL_RETURN_STATUS(connectTimeoutMs_ >= 0, K_INVALID, "The connection timeout must be a positive integer.");
+    CHECK_FAIL_RETURN_STATUS(
+        connectTimeoutMs_ >= RPC_MINIMUM_TIMEOUT, K_INVALID,
+        FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs_,
+                     RPC_MINIMUM_TIMEOUT));
+    Timer timer(connectTimeoutMs_);
+    int32_t remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+    int32_t retryTimes = 0;
+    while (remainTimeMs > 0) {
+        std::string workerIp;
+        int workerPort;
+        bool isSameNode = false;
+        bool isNoAvailableWorker = false;
+        Status selectRc = serviceDiscovery_->SelectWorker(workerIp, workerPort, &isSameNode, &isNoAvailableWorker);
+        if (selectRc.GetCode() == K_TRY_AGAIN) {
+            CHECK_FAIL_RETURN_STATUS(++retryTimes < INIT_SELECT_WORKER_TRIES, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+            CHECK_FAIL_RETURN_STATUS(remainTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(
+                    std::min(remainTimeMs, isNoAvailableWorker ? INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS
+                                                               : INIT_SELECT_WORKER_RETRY_INTERVAL_MS)));
+            remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+            continue;
+        }
+        RETURN_IF_NOT_OK(selectRc);
+        ipAddress_ = HostPort(workerIp, workerPort);
+
+        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+        CHECK_FAIL_RETURN_STATUS(remainTimeMs >= RPC_MINIMUM_TIMEOUT, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        int32_t singleInitTimeoutMs = CalculateConnectAttemptTimeoutMs(connectTimeoutMs_);
+        int32_t initTimeoutMs = std::min(remainTimeMs, singleInitTimeoutMs);
+        Status rc = InitWorkerClientAtCurrentAddress(enableHeartbeat, isSameNode, initTimeoutMs);
+        if (rc.IsOk()) {
+            return Status::OK();
+        }
+
+        ClearFailedInitAttempt();
+        if (!ShouldRetryInit(rc)) {
+            return rc;
+        }
+        CHECK_FAIL_RETURN_STATUS(++retryTimes < INIT_SELECT_WORKER_TRIES, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+
+        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+        CHECK_FAIL_RETURN_STATUS(remainTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(std::min(remainTimeMs, INIT_SELECT_WORKER_RETRY_INTERVAL_MS)));
+        remainTimeMs = static_cast<int32_t>(timer.GetRemainingTimeMs());
+    }
+    return Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
 }
 
 void ObjectClientImpl::InitParallelFor()

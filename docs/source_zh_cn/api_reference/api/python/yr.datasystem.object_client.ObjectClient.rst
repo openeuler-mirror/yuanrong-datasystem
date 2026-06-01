@@ -1,14 +1,14 @@
 yr.datasystem.object_client.ObjectClient
 ========================================
 
-.. py:class:: yr.datasystem.object_client.ObjectClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="")
+.. py:class:: yr.datasystem.object_client.ObjectClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="")
 
     对象缓存客户端。
 
     参数：
         - **host** (str) - 数据系统Worker的主机IP地址。
         - **port** (int) - 数据系统Worker的主机IP端口号。
-        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``60000`` 。
+        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
         - **client_public_key** (str) - 用于curve认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于curve认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于curve认证的服务端公钥。默认值： ``""`` 。

@@ -30,6 +30,7 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/utils/service_discovery.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
@@ -59,6 +60,13 @@ public:
         }
         opts.workerGflagParams = FormatString(
             " -shared_memory_size_mb=5120 -v=2 -payload_nocopy_threshold=1000000 -max_client_num=%d", maxClientNum);
+        for (size_t i = 0; i < opts.workerConfigs.size(); ++i) {
+            std::string envName = FormatString("object_client_sd_host_id_env_%zu", i);
+            std::string envValue = FormatString("object_client_sd_host_id_%zu", i);
+            ASSERT_EQ(setenv(envName.c_str(), envValue.c_str(), 1), 0);
+            opts.workerSpecifyGflagParams[static_cast<uint32_t>(i)] = FormatString("-host_id_env_name=%s", envName);
+        }
+        ASSERT_EQ(setenv("object_client_sd_host_id_env_n", "object_client_sd_host_id_n", 1), 0);
     }
 
     void EndToEndSuccess(int64_t size, bool isSeal);
@@ -1817,6 +1825,75 @@ TEST_F(ObjectClientTest, TestInitDFXWithRegister)
     client = std::make_shared<ObjectClient>(connectOptions);
     DS_ASSERT_OK(datasystem::inject::Set("client.register.fail", "1*return(K_TRY_AGAIN)"));
     DS_ASSERT_OK(client->Init());
+}
+
+TEST_F(ObjectClientTest, TestInitRetryWithServiceDiscoveryRegisterFailure)
+{
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_0", "object_client_sd_host_id_0", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::REQUIRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = 60000;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerServiceImpl.RegisterClient.AboveAddClient",
+                                           "1*return(K_TRY_AGAIN)"));
+    DS_ASSERT_OK(client->Init());
+
+    uint64_t executeCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerServiceImpl.RegisterClient.AboveAddClient",
+                                                      executeCount));
+    ASSERT_EQ(executeCount, 1);
+}
+
+TEST_F(ObjectClientTest, TestInitNoRetryOnNonRetryableServiceDiscoveryRegisterFailure)
+{
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_0", "object_client_sd_host_id_0", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = 60000;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerServiceImpl.RegisterClient.AboveAddClient",
+                                           "1*return(K_INVALID)"));
+    auto rc = client->Init();
+    ASSERT_EQ(rc.GetCode(), K_INVALID);
+}
+
+TEST_F(ObjectClientTest, TestInitServiceDiscoveryInvalidConnectTimeout)
+{
+    ASSERT_EQ(setenv("object_client_sd_host_id_env_0", "object_client_sd_host_id_0", 1), 0);
+    std::string etcdAddress = cluster_->GetEtcdAddrs();
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = etcdAddress;
+    sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions);
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    connectOptions.connectTimeoutMs = -1;
+    auto client = std::make_shared<ObjectClient>(connectOptions);
+    auto rc = client->Init();
+    ASSERT_EQ(rc.GetCode(), K_INVALID);
 }
 
 TEST_F(ObjectClientTest, TestFdNotLeakWhenRegisterFailed)

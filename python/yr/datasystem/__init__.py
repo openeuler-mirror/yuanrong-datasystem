@@ -65,7 +65,7 @@ if hasattr(_ds, "PerfClient"):
             self,
             host,
             port,
-            connect_timeout_ms=60000,
+            connect_timeout_ms=9000,
             access_key="",
             secret_key="",
         ):

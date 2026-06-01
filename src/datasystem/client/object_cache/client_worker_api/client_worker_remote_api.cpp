@@ -165,9 +165,11 @@ ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cr
     }
 }
 
-Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
+Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
+                                   int32_t initAttemptTimeoutMs)
 {
-    RETURN_IF_NOT_OK(ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize));
+    RETURN_IF_NOT_OK(
+        ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
     std::shared_ptr<RpcChannel> channel;
     channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     // We will enable uds after handshaking with the worker.

@@ -105,7 +105,7 @@ class HeteroClient:
         self,
         host,
         port,
-        connect_timeout_ms=60000,
+        connect_timeout_ms=9000,
         token="",
         client_public_key="",
         client_private_key="",

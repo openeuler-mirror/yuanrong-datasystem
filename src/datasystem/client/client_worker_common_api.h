@@ -57,9 +57,18 @@ static constexpr int MIN_HEARTBEAT_TIMEOUT_MS = 15 * 1000;
 static constexpr int MAX_HEARTBEAT_TIMEOUT_MS = 60 * 1000;  // 60s, Maintain compatibility of EDA scenarios.
 static constexpr int MIN_HEARTBEAT_INTERVAL_MS = 3 * 1000;
 static constexpr int MAX_HEARTBEAT_INTERVAL_MS = 30 * 1000;  // 30s, Maintain compatibility of EDA scenarios.
+static constexpr int32_t CONNECT_ATTEMPT_TIMEOUT_THRESHOLD_MS = 3 * 1000;
+static constexpr int32_t CONNECT_ATTEMPT_TIMEOUT_RATIO = 3;
 constexpr int INVALID_SOCKET_FD = -1;
 enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 2 };
 enum class ShmEnableType { NONE, UDS, SCMTCP };
+
+inline int32_t CalculateConnectAttemptTimeoutMs(int32_t connectTimeoutMs)
+{
+    return connectTimeoutMs > CONNECT_ATTEMPT_TIMEOUT_THRESHOLD_MS ? connectTimeoutMs / CONNECT_ATTEMPT_TIMEOUT_RATIO
+                                                                   : connectTimeoutMs;
+}
+
 namespace client {
 
 struct ClientWorkerCommonApiAttribute {
@@ -192,12 +201,15 @@ public:
     /**
      * @brief Initialize the ClientWorkerApi Object.
      * @param[in] requestTimeoutMs The request timeout.
-     * @param[in] connectTimeoutMs The connec timeout.
+     * @param[in] connectTimeoutMs The connect timeout.
      * @param[in] fastTransportSize The transport pool mem size.
+     * @param[in] initAttemptTimeoutMs Timeout for this init attempt only. If it is not positive, connectTimeoutMs is
+     * used.
      * @return K_OK on success; the error code otherwise.
      *         K_INVALID: the input ip or port is invalid.
      */
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) = 0;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0,
+                        int32_t initAttemptTimeoutMs = -1) = 0;
 
     /**
      * @brief Send heartbeat messages periodically.
@@ -321,7 +333,8 @@ protected:
      * @param[in] reconnection Check whether the connection is reconnection..
      * @return Status of the call.
      */
-    virtual Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) = 0;
+    virtual Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,
+                           int32_t stateTimeoutMs = -1) = 0;
 };
 
 class ClientWorkerLocalCommonApi : virtual public IClientWorkerCommonApi {
@@ -334,7 +347,8 @@ public:
 
     virtual ~ClientWorkerLocalCommonApi() = default;
 
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) override;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0,
+                        int32_t initAttemptTimeoutMs = -1) override;
     Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
                          const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
     Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
@@ -361,7 +375,8 @@ protected:
         (void)tenantId;
     }
 
-    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) override;
+    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,
+                   int32_t stateTimeoutMs = -1) override;
 
     std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api_{ nullptr };
     void *worker_{ nullptr };
@@ -391,7 +406,8 @@ public:
 
     virtual ~ClientWorkerRemoteCommonApi();
 
-    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0) override;
+    virtual Status Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize = 0,
+                        int32_t initAttemptTimeoutMs = -1) override;
     Status SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTime, bool &isWorkerVoluntaryScaleDown,
                          const std::vector<int64_t> &releasedFds, std::vector<int64_t> &expiredWorkerFds) override;
     Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
@@ -438,7 +454,8 @@ protected:
         tenantId = g_ContextTenantId;
     }
 
-    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false) override;
+    Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,
+                   int32_t stateTimeoutMs = -1) override;
 
     /**
      * @brief Used to receive the fd of the shared memory.
@@ -536,7 +553,7 @@ protected:
 private:
     /**
      * @brief Called after RegisterClient succeeds.
-     * @param[in] timeoutMs Timeout used for register.
+     * @param[in] timeoutMs Timeout used for client connection state after register.
      * @param[in] rsp Register response.
      */
     virtual void PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp);
@@ -545,9 +562,10 @@ private:
      * @brief Registering the client with the worker
      * @param[in] req The register client request pb.
      * @param[in] timeoutMs Register request timeout interval.
+     * @param[in] stateTimeoutMs Timeout used for client connection state after register.
      * @return Status of the call.
      */
-    Status RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs);
+    Status RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs, int32_t stateTimeoutMs = -1);
 
     /**
      * @brief Create a function of handshake.
@@ -593,9 +611,9 @@ private:
     void ConstructPipelineShmUnit(const RegisterClientRspPb &rsp);
 
     /**
-    * @brief Construct pipeline data shm units after register. These units are used as H2D sources.
-    * @param[in] rsp Register respond.
-    */
+     * @brief Construct pipeline data shm units after register. These units are used as H2D sources.
+     * @param[in] rsp Register respond.
+     */
     void ConstructPipelineDataShmUnits(const RegisterClientRspPb &rsp);
 
     /**

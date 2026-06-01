@@ -161,8 +161,10 @@ ClientWorkerLocalCommonApi::ClientWorkerLocalCommonApi(
     (void)enableCrossNodeConnection;
 }
 
-Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
+Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
+                                        int32_t initAttemptTimeoutMs)
 {
+    (void)initAttemptTimeoutMs;
     (void)fastTransportSize;
     requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
@@ -244,9 +246,11 @@ Status ClientWorkerLocalCommonApi::Reconnect()
     RETURN_STATUS(K_RUNTIME_ERROR, "Not support Reconnect in embedded scenario");
 }
 
-Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
+Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
+                                           int32_t stateTimeoutMs)
 {
     (void)reconnection;
+    (void)stateTimeoutMs;
     shmEnableType_ = ShmEnableType::UDS;
     heartbeatType_ = HeartbeatType::RPC_HEARTBEAT;
     req.set_server_fd(INVALID_SOCKET_FD);
@@ -316,12 +320,18 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
     LOG(INFO) << "The total timeout is " << timeout << " ms, single rpc timeout is " << rpcTimeoutMs_ << " ms";
 }
 
-Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize)
+Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
+                                         int32_t initAttemptTimeoutMs)
 {
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
         FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs,
                      RPC_MINIMUM_TIMEOUT));
+    int32_t attemptTimeoutMs = initAttemptTimeoutMs > 0 ? initAttemptTimeoutMs : connectTimeoutMs;
+    CHECK_FAIL_RETURN_STATUS(
+        attemptTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
+        FormatString("The initAttemptTimeoutMs(%d) should be greater than or equal to %d milliseconds.",
+                     attemptTimeoutMs, RPC_MINIMUM_TIMEOUT));
     CHECK_FAIL_RETURN_STATUS(
         requestTimeoutMs >= 0, StatusCode::K_INVALID,
         FormatString("The requestTimeoutMs(%d) should be greater than or equal to 0 milliseconds.", requestTimeoutMs));
@@ -333,12 +343,13 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
     VLOG(1) << "Client start to connect worker";
     CHECK_FAIL_RETURN_STATUS(TimerQueue::GetInstance()->Initialize(), K_RUNTIME_ERROR, "TimerQueue init failed!");
     RegisterClientReqPb req;
-    RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
+    RETURN_IF_NOT_OK(Connect(req, attemptTimeoutMs, false, connectTimeoutMs));
     VLOG(1) << "The new client id is: " << clientId_;
     return Status::OK();
 }
 
-Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection)
+Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
+                                            int32_t stateTimeoutMs)
 {
     auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
     commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
@@ -370,7 +381,7 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         heartbeatType_ = heartbeatType_ == HeartbeatType::NO_HEARTBEAT ? HeartbeatType::RPC_HEARTBEAT : heartbeatType_;
     }
     req.set_server_fd(serverFd);
-    RETURN_IF_NOT_OK(RegisterClient(req, timeoutMs));
+    RETURN_IF_NOT_OK(RegisterClient(req, timeoutMs, stateTimeoutMs));
     LOG(INFO) << FormatString("Register client to worker through the %s successfully, client id: %s",
                               ShmEnableTypeName(shmEnableType_), clientId_);
     return Status::OK();
@@ -637,8 +648,9 @@ void ClientWorkerRemoteCommonApi::CloseSocketFd()
     socketFd_ = INVALID_SOCKET_FD;
 }
 
-Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs)
+Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int32_t timeoutMs, int32_t stateTimeoutMs)
 {
+    int32_t registerStateTimeoutMs = stateTimeoutMs > 0 ? stateTimeoutMs : timeoutMs;
     RETURN_IF_NOT_OK(SetToken(req));
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
@@ -680,7 +692,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Register client failed");
     VLOG(1) << "Register response: " << rsp.DebugString();
-    PostRegisterClient(timeoutMs, rsp);
+    PostRegisterClient(registerStateTimeoutMs, rsp);
     return Status::OK();
 }
 
@@ -912,9 +924,8 @@ void ClientWorkerRemoteCommonApi::RecvPageFd()
 
 Status ClientWorkerRemoteCommonApi::Reconnect()
 {
-    LOG(INFO) << "Reconnect starting...";
-    // Avoid waiting too long to reconnect.
-    const int32_t reconnectTimeout = 1 * 1000;  // 1s for reconnect.
+    const int32_t reconnectTimeout = connectTimeoutMs_;
+    LOG(INFO) << "Reconnect starting, timeout: " << reconnectTimeout << " ms";
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, reconnectTimeout, true));
     RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());

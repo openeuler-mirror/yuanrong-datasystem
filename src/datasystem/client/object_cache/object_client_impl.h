@@ -1290,10 +1290,10 @@ private:
 
     void ConstructTreadPool();
 
-    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker);
+    Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1);
 
     Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
-                                     bool initWithWorker);
+                                     bool initWithWorker, int32_t connectTimeoutMs);
 
     Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker);
 
@@ -1325,7 +1325,15 @@ private:
 
     Status InitListenWorkerAt(WorkerNode node, bool isLocalWorker);
 
-    Status InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat);
+    Status InitPreferredRemoteFallback(const HostPort &remoteAddress, bool enableHeartbeat, int32_t connectTimeoutMs);
+
+    Status InitWorkerClientAtCurrentAddress(bool enableHeartbeat, bool isSameNode, int32_t connectTimeoutMs = -1);
+
+    Status InitWithServiceDiscovery(bool enableHeartbeat);
+
+    bool ShouldRetryInit(const Status &status) const;
+
+    void ClearFailedInitAttempt();
 
     bool RecoverPreferredLocalWorker();
 

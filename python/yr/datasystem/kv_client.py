@@ -153,7 +153,7 @@ class KVClient:
         self,
         host: str = "",
         port: int = 0,
-        connect_timeout_ms=60000,
+        connect_timeout_ms=9000,
         token: str = '',
         client_public_key: str = "",
         client_private_key: str = "",
