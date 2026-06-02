@@ -30,6 +30,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/strings_util.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
@@ -101,6 +102,24 @@ void LogClientWorkerRpcDone(const char *operation, size_t count, const char *pat
     PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || status.IsError(), 1,
                     FormatString("[Client/WorkerRpc] %s done, count: %zu, path: %s, costUs: %zu, rc: %s", operation,
                                  count, path, elapsedUs, status.ToString()));
+}
+
+void FillCreateUrmaInfo(bool isUrmaEnabled, const CreateRspPb &rsp,
+                        std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo)
+{
+#ifdef USE_URMA
+    if (!isUrmaEnabled || !rsp.has_urma_info()) {
+        return;
+    }
+    if (urmaDataInfo == nullptr) {
+        urmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    }
+    urmaDataInfo->CopyFrom(rsp.urma_info());
+#else
+    (void)isUrmaEnabled;
+    (void)rsp;
+    (void)urmaDataInfo;
+#endif
 }
 }  // namespace
 
@@ -198,7 +217,6 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
-    (void)urmaDataInfo;
     VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
         hostPort_.ToString());
@@ -227,6 +245,9 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             return stub_->Create(opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "Create", hostPort_);
+    }
     LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     RETURN_IF_NOT_OK(status);
@@ -239,15 +260,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     shmBuf->id = ShmKey::Intern(rsp.shm_id());
     metadataSize = rsp.metadata_size();
     version = workerVersion_.load(std::memory_order_relaxed);
-#ifdef USE_URMA
-    // Extract URMA info from response when enabled (for Create+MemoryCopy+Publish path).
-    if (IsUrmaEnabled() && rsp.has_urma_info()) {
-        if (urmaDataInfo == nullptr) {
-            urmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
-        }
-        urmaDataInfo->CopyFrom(rsp.urma_info());
-    }
-#endif
+    FillCreateUrmaInfo(IsUrmaEnabled(), rsp, urmaDataInfo);
     return Status::OK();
 }
 
@@ -270,7 +283,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
 
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_IPC);
     MultiCreateRspPb rsp;
-    RETURN_IF_NOT_OK(RetryOnError(
+    auto status = RetryOnError(
         requestTimeoutMs_,
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
@@ -280,7 +293,10 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
                                              "Fail to generate signature when create date.");
             return stub_->MultiCreate(opts, req, rsp);
         },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_));
+        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    if (status.IsError()) {
+        return WithRpcDiag(status, "MultiCreate", hostPort_);
+    }
 
     CHECK_FAIL_RETURN_STATUS(
         createParams.size() == static_cast<size_t>(rsp.results().size()), K_INVALID,
@@ -410,6 +426,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                 hostPort_.ToString());
             Timer timer;
             getStatus = stub_->Get(opts, req, rsp, payloads);
+            if (getStatus.IsError()) {
+                getStatus = WithRpcDiag(getStatus, "Get", hostPort_);
+            }
             const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
             PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || getStatus.IsError(), 1,
                             AppendSrcDstForLog(
@@ -491,6 +510,9 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
             },
             []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     const auto *path = isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP");
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "Publish", hostPort_);
+    }
     LogClientWorkerRpcDone("Publish", 1, path, static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send Publish request error");
 
@@ -529,7 +551,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+    auto status =
         RetryOnError(
             requestTimeoutMs_,
             [this, &req, &rsp, &payloads](int32_t realRpcTimeout) {
@@ -542,8 +564,11 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
             []() { return Status::OK(); },
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
               StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY, StatusCode::K_SCALING },
-            rpcTimeoutMs_),
-        "Send multi publish request error");
+            rpcTimeoutMs_);
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "MultiPublish", hostPort_);
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send multi publish request error");
     METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
     return Status::OK();
 }
@@ -722,13 +747,12 @@ Status ClientWorkerRemoteApi::PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp)
                                              "Fail to generate signature when sending H2D request.");
             VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
             std::vector<RpcMessage> payloads;
-            RETURN_IF_NOT_OK(stub_->Get(opts, req, rsp, payloads));
-            return Status::OK();
+            return stub_->Get(opts, req, rsp, payloads);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     perfPoint.Record();
 
-    return status;
+    return WithRpcDiag(status, "Get", hostPort_);
 #else
     (void)h2DParam;
     (void)rsp;
@@ -755,7 +779,8 @@ Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> 
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            return stub_->GIncreaseRef(opts, req, rsp);
+            auto rc = stub_->GIncreaseRef(opts, req, rsp);
+            return WithRpcDiag(rc, "GIncreaseRef", hostPort_);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -795,6 +820,9 @@ Status ClientWorkerRemoteApi::GDecreaseWorkerRef(const std::vector<std::string> 
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             Status rc = stub_->GDecreaseRef(opts, req, rsp);
             if (rc.IsError()) {
+                rc = WithRpcDiag(rc, "GDecreaseRef", hostPort_);
+            }
+            if (rc.IsError()) {
                 LOG(ERROR) << "[Ref] GDecreaseWorkerRef failed with " << rc.ToString();
                 failedObjectKeys = failedObjectKeys.empty() ? finishDecIds : failedObjectKeys;
                 return rc;
@@ -828,7 +856,8 @@ Status ClientWorkerRemoteApi::ReleaseGRefs(const std::string &remoteClientId)
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            return stub_->ReleaseGRefs(opts, req, rsp);
+            auto rc = stub_->ReleaseGRefs(opts, req, rsp);
+            return WithRpcDiag(rc, "ReleaseGRefs", hostPort_);
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -871,6 +900,9 @@ Status ClientWorkerRemoteApi::Delete(const std::vector<std::string> &objectKeys,
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to delete object: " << VectorToString(objectKeys);
             Status status = stub_->DeleteAllCopy(opts, req, rsp);
+            if (status.IsError()) {
+                status = WithRpcDiag(status, "DeleteAllCopy", hostPort_);
+            }
             if (status.IsError()) {
                 LOG(ERROR) << "DeleteAllCopy failed with " << status.ToString();
                 failedObjectKeys = objectKeys;
@@ -1144,6 +1176,9 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
             return stub_->GetObjMetaInfo(opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "GetObjMetaInfo", hostPort_);
+    }
     LogClientWorkerRpcDone("GetObjMetaInfo", objectKeys.size(), "UB",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send GetObjMetaInfo failed.");
@@ -1171,7 +1206,10 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys());
-            RETURN_IF_NOT_OK(stub_->QuerySize(opts, req, rsp));
+            auto rc = stub_->QuerySize(opts, req, rsp);
+            if (rc.IsError()) {
+                return WithRpcDiag(rc, "QuerySize", hostPort_);
+            }
             Status recvStatus = Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
             if (IsRpcTimeoutOrTryAgain(recvStatus)) {
                 return recvStatus;
@@ -1179,6 +1217,9 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
             return Status::OK();
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "QuerySize", hostPort_);
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send QuerySize failed.");
     LOG(INFO) << "Finish QuerySize success.";
     return Status::OK();
@@ -1212,6 +1253,9 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
             return stub_->Exist(opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+    if (status.IsError()) {
+        status = WithRpcDiag(status, "Exist", hostPort_);
+    }
     LogClientWorkerRpcDone("Exist", keys.size(), "RPC", static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     if (status.IsError()) {
         LOG(ERROR) << "Exist resp error, msg:" << status.ToString();
@@ -1248,6 +1292,7 @@ Status ClientWorkerRemoteApi::Expire(const std::vector<std::string> &keys, uint3
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
+        status = WithRpcDiag(status, "Expire", hostPort_);
         LOG(ERROR) << "Expire resp error, msg:" << status.ToString();
         return status;
     }
@@ -1278,6 +1323,7 @@ Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, 
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
+        status = WithRpcDiag(status, "GetMetaInfo", hostPort_);
         LOG(ERROR) << "GetMetaInfo resp error, msg:" << status.ToString();
         return status;
     }

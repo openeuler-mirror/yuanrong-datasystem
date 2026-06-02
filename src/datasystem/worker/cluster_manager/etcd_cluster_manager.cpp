@@ -1783,7 +1783,7 @@ bool EtcdClusterManager::CheckEtcdStateWhenNetworkFailed()
     size_t curWorkerNum = 0;
     for (const auto &workerAddr : activeOtherNodes) {
         std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> remoteWorkerApi;
-        if (CreateRemoteWorkerApi(workerAddr, akSkManager_, remoteWorkerApi).IsOk()) {
+        if (CreateRemoteWorkerApi(workerAddr, workerAddress_, akSkManager_, remoteWorkerApi).IsOk()) {
             remoteWorkerApiTable.emplace_back(std::move(remoteWorkerApi));
             ++curWorkerNum;
         }

@@ -69,6 +69,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
@@ -114,6 +115,7 @@ void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
     std::mt19937 generator(static_cast<uint32_t>(RandomData::GetRandomSeed()));
     std::shuffle(candidates.begin(), candidates.end(), generator);
 }
+
 }  // namespace
 
 inline void ReadFromEnv(std::string &param, std::string env)
@@ -2475,7 +2477,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     totalPoint.Record();
-    return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : recvRc;
+    return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker")
+                         : WithRpcDiag(recvRc, "Get", workerApi->hostPort_);
 }
 
 #ifdef USE_URMA

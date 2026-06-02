@@ -24,6 +24,7 @@
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/object_cache/master_worker_oc_local_api.h"
@@ -74,7 +75,7 @@ Status MasterRemoteWorkerOCApi::ClearData(ClearDataReqPb &req, ClearDataRspPb &r
 {
     RpcOptions opts;
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return RetryOnErrorRepent(
+    auto status = RetryOnErrorRepent(
         timeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &req, &rsp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
@@ -84,13 +85,14 @@ Status MasterRemoteWorkerOCApi::ClearData(ClearDataReqPb &req, ClearDataRspPb &r
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+    return WithRpcDiag(status, "ClearData", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRspPb &resp)
 {
     RpcOptions opts;
     SET_RPC_TIMEOUT(timeoutDuration, opts);
-    return RetryOnErrorRepent(
+    auto status = RetryOnErrorRepent(
         timeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &req, &resp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
@@ -103,6 +105,7 @@ Status MasterRemoteWorkerOCApi::PublishMeta(PublishMetaReqPb &req, PublishMetaRs
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+    return WithRpcDiag(status, "PublishMeta", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::UpdateNotification(UpdateObjectReqPb &req, UpdateObjectRspPb &rsp)
@@ -114,7 +117,7 @@ Status MasterRemoteWorkerOCApi::UpdateNotification(UpdateObjectReqPb &req, Updat
         timeoutMs = time;
         return Status::OK();
     });
-    return RetryOnErrorRepent(
+    auto status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &req, &rsp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
@@ -127,6 +130,7 @@ Status MasterRemoteWorkerOCApi::UpdateNotification(UpdateObjectReqPb &req, Updat
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+    return WithRpcDiag(status, "UpdateNotification", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectReqPb> req, DeleteObjectRspPb &rsp)
@@ -137,7 +141,7 @@ Status MasterRemoteWorkerOCApi::DeleteNotification(std::unique_ptr<DeleteObjectR
     Timer timer;
     Status rc = rpcSession_->DeleteNotification(opts, *req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc DeleteNotification", timer.ElapsedMilliSecond());
-    return rc;
+    return WithRpcDiag(rc, "DeleteNotification", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePersistenceObjectReqPb> req,
@@ -149,7 +153,7 @@ Status MasterRemoteWorkerOCApi::DeletePersistenceObject(std::unique_ptr<DeletePe
     Timer timer;
     Status rc = rpcSession_->DeletePersistenceObject(opts, *req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc DeletePersistenceObject", timer.ElapsedMilliSecond());
-    return rc;
+    return WithRpcDiag(rc, "DeletePersistenceObject", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObjectReqPb> req, int64_t &tag)
@@ -160,7 +164,7 @@ Status MasterRemoteWorkerOCApi::DeleteNotificationSend(std::unique_ptr<DeleteObj
     Timer timer;
     Status rc = rpcSession_->DeleteNotificationAsyncWrite(opts, *req, tag);
     masterOperationTimeCost.Append("Master to worker rpc DeleteNotificationSend", timer.ElapsedMilliSecond());
-    return rc;
+    return WithRpcDiag(rc, "DeleteNotificationSend", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::DeleteNotificationReceive(int64_t tag, DeleteObjectRspPb &rsp)
@@ -168,7 +172,7 @@ Status MasterRemoteWorkerOCApi::DeleteNotificationReceive(int64_t tag, DeleteObj
     Timer timer;
     Status rc = rpcSession_->DeleteNotificationAsyncRead(tag, rsp);
     masterOperationTimeCost.Append("Master to worker rpc DeleteNotificationReceive", timer.ElapsedMilliSecond());
-    return rc;
+    return WithRpcDiag(rc, "DeleteNotificationReceive", masterHostPort_, workerHostPort_);
 }
 
 Status MasterRemoteWorkerOCApi::QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp)
@@ -200,6 +204,9 @@ Status MasterRemoteWorkerOCApi::PushMetaToWorker(PushMetaToWorkerReqPb &req, Pus
     Timer timer;
     Status rc = rpcSession_->PushMetaToWorker(opts, req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc PushMetaToWorker", timer.ElapsedMilliSecond());
+    if (rc.IsError()) {
+        rc = WithRpcDiag(rc, "PushMetaToWorker", masterHostPort_, workerHostPort_);
+    }
     LOG(INFO) << "Send PushMetaToWorker to worker " << workerHostPort_.ToString() << " " << rc.ToString()
               << LogHelper::IgnoreSensitive(rsp);
     return rc;
@@ -214,6 +221,9 @@ Status MasterRemoteWorkerOCApi::RequestMetaFromWorker(RequestMetaFromWorkerReqPb
     Timer timer;
     Status rc = rpcSession_->RequestMetaFromWorker(opts, req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc RequestMetaFromWorker", timer.ElapsedMilliSecond());
+    if (rc.IsError()) {
+        rc = WithRpcDiag(rc, "RequestMetaFromWorker", masterHostPort_, workerHostPort_);
+    }
     LOG(INFO) << "Send RequestMetaFromWorker to worker " << workerHostPort_.ToString() << " " << rc.ToString()
               << LogHelper::IgnoreSensitive(rsp);
     return rc;
@@ -229,6 +239,9 @@ Status MasterRemoteWorkerOCApi::ChangePrimaryCopy(ChangePrimaryCopyReqPb &req, C
     Timer timer;
     Status rc = rpcSession_->ChangePrimaryCopy(opts, req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc ChangePrimaryCopy", timer.ElapsedMilliSecond());
+    if (rc.IsError()) {
+        rc = WithRpcDiag(rc, "ChangePrimaryCopy", masterHostPort_, workerHostPort_);
+    }
     LOG(INFO) << "Send ChangePrimaryCopy to worker " << workerHostPort_.ToString() << " " << rc.ToString()
               << LogHelper::IgnoreSensitive(rsp);
     return rc;
@@ -245,6 +258,9 @@ Status MasterRemoteWorkerOCApi::NotifyMasterIncNestedRefs(NotifyMasterIncNestedR
     Timer timer;
     Status rc = rpcSession_->NotifyMasterIncNestedRefs(opts, req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc NotifyMasterIncNestedRefs", timer.ElapsedMilliSecond());
+    if (rc.IsError()) {
+        rc = WithRpcDiag(rc, "NotifyMasterIncNestedRefs", masterHostPort_, workerHostPort_);
+    }
     LOG(INFO) << "Send NotifyMasterIncNestedRefs to worker " << workerHostPort_.ToString() << " " << rc.ToString()
               << LogHelper::IgnoreSensitive(rsp);
     return rc;
@@ -261,6 +277,9 @@ Status MasterRemoteWorkerOCApi::NotifyMasterDecNestedRefs(NotifyMasterDecNestedR
     Timer timer;
     Status rc = rpcSession_->NotifyMasterDecNestedRefs(opts, req, rsp);
     masterOperationTimeCost.Append("Master to worker rpc NotifyMasterDecNestedRefs", timer.ElapsedMilliSecond());
+    if (rc.IsError()) {
+        rc = WithRpcDiag(rc, "NotifyMasterDecNestedRefs", masterHostPort_, workerHostPort_);
+    }
     LOG(INFO) << "Send NotifyMasterDecNestedRefs to worker " << workerHostPort_.ToString() << " " << rc.ToString()
               << LogHelper::IgnoreSensitive(rsp);
     return rc;

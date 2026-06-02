@@ -824,7 +824,7 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
     size_t curWorkerNum = 0;
     for (const auto &activeNode : activeNodesInLocalCluster) {
         std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> remoteWorkerApi;
-        auto rc = CreateRemoteWorkerApi(activeNode, akSkManager_, remoteWorkerApi);
+        auto rc = CreateRemoteWorkerApi(activeNode, hostPort_, akSkManager_, remoteWorkerApi);
         if (rc.IsError()) {
             LOG(WARNING) << "CreateRemoteWorkerApi failed, dest addr: " << activeNode << ", rc: " << rc.ToString();
             continue;

@@ -20,6 +20,8 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_OC_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_OC_API_H
 
+#include <string>
+
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_constants.h"
@@ -129,7 +131,7 @@ public:
      * @param[in] localHostPort The address of local worker node.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerRemoteWorkerOCApi(HostPort hostPort, std::shared_ptr<AkSkManager> akSkManager);
+    WorkerRemoteWorkerOCApi(HostPort hostPort, HostPort localHostPort, std::shared_ptr<AkSkManager> akSkManager);
 
     ~WorkerRemoteWorkerOCApi() override = default;
 
@@ -195,6 +197,8 @@ public:
 private:
     // The HostPort of the remote worker node.
     HostPort hostPort_;
+    // The HostPort of the local worker node.
+    HostPort localHostPort_;
     // session to the worker rpc service.
     std::shared_ptr<WorkerWorkerOCService_Stub> rpcSession_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
@@ -203,11 +207,13 @@ private:
 /**
  * @brief Create a worker to worker api object to connect remote worker rpc server.
  * @param[in] endPoint The remote worker end point.
+ * @param[in] localHostPort The address of local worker node.
  * @param[in] akSkManager Used to do AK/SK authenticate.
  * @param[out] workerOcApi The WorkerRemoteWorkerOCApi ptr.
  * @return Status of the call.
  */
-Status CreateRemoteWorkerApi(const std::string &endPoint, const std::shared_ptr<AkSkManager> &akSkManager,
+Status CreateRemoteWorkerApi(const std::string &endPoint, const HostPort &localHostPort,
+                             const std::shared_ptr<AkSkManager> &akSkManager,
                              std::shared_ptr<WorkerRemoteWorkerOCApi> &workerOcApi);
 }  // namespace object_cache
 }  // namespace datasystem

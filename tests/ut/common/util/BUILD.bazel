@@ -167,6 +167,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "rpc_diagnostic_test",
+    srcs = ["rpc_diagnostic_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:rpc_diagnostic",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "rpc_util_test",
     srcs = ["rpc_util_test.cpp"],
     deps = [
@@ -302,6 +311,7 @@ test_suite(
         "protobuf_util_test",
         "queue_test",
         "random_data_test",
+        "rpc_diagnostic_test",
         "rpc_util_test",
         "safe_object_test",
         "shm_lock_test",

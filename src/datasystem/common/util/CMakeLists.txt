@@ -24,6 +24,7 @@ set(UTIL_SRCS
         meta_route_tool.cpp
         safe_shm_lock.cpp
         locks.cpp
+        rpc_diagnostic.cpp
         string_util.cpp)
 
 set(UTIL_LIBS

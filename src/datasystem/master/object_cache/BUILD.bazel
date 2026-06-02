@@ -84,6 +84,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:bitmask_enum",
         "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",

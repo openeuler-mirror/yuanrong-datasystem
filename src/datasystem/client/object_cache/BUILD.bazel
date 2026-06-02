@@ -37,6 +37,7 @@ ds_cc_library(
         "//src/datasystem/common/util:fd_pass",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:locks",
+        "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:share_memory_cc_proto",
         "@tbb",

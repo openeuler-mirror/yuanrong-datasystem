@@ -39,6 +39,7 @@ CLIENT_DEPS = [
     "//src/datasystem/common/shared_memory:common_shared_memory",
     "//src/datasystem/common/parallel:common_parallel",
     "//src/datasystem/common/rpc:rpc_sdk_deps",
+    "//src/datasystem/common/util:rpc_diagnostic",
     "//src/datasystem/protos:posix_protos",
     "//src/datasystem/protos:share_memory_protos",
     "//src/datasystem/protos:worker_object_protos",

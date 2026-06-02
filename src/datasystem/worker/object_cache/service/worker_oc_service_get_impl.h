@@ -448,7 +448,7 @@ private:
      * @return Status of the call.
      */
     Status RetrieveRemotePayload(
-        ReadObjectKV &objKV,
+        const std::string &address, ReadObjectKV &objKV,
         std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> &clientApi,
         GetObjectRemoteRspPb &rspPb);
 
