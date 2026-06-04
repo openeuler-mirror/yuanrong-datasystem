@@ -136,23 +136,18 @@ Status ClientWorkerSCServiceImpl::CreateProducer(
     CreateProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
 
-    auto recorder = std::make_shared<AccessRecorderStreamWrap>(AccessRecorderKey::DS_POSIX_CREATE_PRODUCER);
-    recorder->reqParam.streamName = req.stream_name();
-    recorder->reqParam.producerId = req.producer_id();
-    recorder->reqParam.pageSize = Optional<int64_t>(req.page_size());
-    recorder->reqParam.maxStreamSize = Optional<uint64_t>(req.max_stream_size());
-    recorder->reqParam.autoCleanup = Optional<bool>(req.auto_cleanup());
-    recorder->reqParam.retainForNumConsumers = Optional<uint64_t>(req.retain_num_consumer());
-    recorder->reqParam.encryptStream = Optional<bool>(req.encrypt_stream());
-    recorder->reqParam.reserveSize = Optional<uint64_t>(req.reserve_size());
-    recorder->reqParam.streamMode = Optional<int32_t>(req.stream_mode());
+    auto recorder = std::make_shared<StreamAccessRecorder>(
+        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CREATE_PRODUCER));
+    recorder->StreamName(req.stream_name()).ProducerId(req.producer_id()).PageSize(req.page_size())
+        .MaxStreamSize(req.max_stream_size()).AutoCleanup(req.auto_cleanup())
+        .RetainForNumConsumers(req.retain_num_consumer()).EncryptStream(req.encrypt_stream())
+        .ReserveSize(req.reserve_size()).StreamMode(req.stream_mode());
     auto rc = CreateProducerInternal(req, recorder, serverApi);
-    recorder->SetStatus(rc);
     return rc;
 }
 
 Status ClientWorkerSCServiceImpl::CreateProducerInternal(
-    const CreateProducerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+    const CreateProducerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
     std::shared_ptr<ServerUnaryWriterReader<CreateProducerRspPb, CreateProducerReqPb>> serverApi)
 {
     std::string tenantId;
@@ -176,15 +171,13 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
         CreateProducerRspPb rsp;
         Status rc = CreateProducerImpl(namespaceUri, req, rsp);
         CheckErrorReturn(rc, rsp, FormatString("[S:%s] CreateProducerImpl failed with rc ", namespaceUri), serverApi);
-        recorder->SetStatus(rc);
+        recorder->Result(rc);
         if (rc.IsOk()) {
-            recorder->rspParam.senderProducerNo = Optional<uint64_t>(rsp.sender_producer_no());
-            recorder->rspParam.enableDataVerification = Optional<bool>(rsp.enable_data_verification());
-            recorder->rspParam.streamNo = Optional<uint64_t>(rsp.stream_no());
-            recorder->rspParam.sharedPageSize = Optional<uint64_t>(rsp.shared_page_size());
-            recorder->rspParam.enableSharedPage = Optional<bool>(rsp.enable_shared_page());
+            recorder->SenderProducerNo(rsp.sender_producer_no()).EnableDataVerification(rsp.enable_data_verification())
+                .StreamNo(rsp.stream_no()).SharedPageSize(rsp.shared_page_size())
+                .EnableSharedPage(rsp.enable_shared_page());
         }
-        // recorder should destroy before traceGuard, otherwise, the traceid will be cleaned up
+        recorder->Record();
         recorder.reset();
     });
 
@@ -361,17 +354,15 @@ Status ClientWorkerSCServiceImpl::CloseProducer(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<AccessRecorderStreamWrap>(AccessRecorderKey::DS_POSIX_CLOSE_PRODUCER);
-    recorder->reqParam.streamName = req.stream_name();
-    recorder->reqParam.producerId = req.producer_id();
-    recorder->reqParam.clientId = req.client_id();
+    auto recorder = std::make_shared<StreamAccessRecorder>(
+        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_PRODUCER));
+    recorder->StreamName(req.stream_name()).ProducerId(req.producer_id()).ClientId(req.client_id());
     auto rc = CloseProducerInternal(req, recorder, serverApi);
-    recorder->SetStatus(rc);
     return rc;
 }
 
 Status ClientWorkerSCServiceImpl::CloseProducerInternal(
-    const CloseProducerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+    const CloseProducerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
     std::shared_ptr<ServerUnaryWriterReader<CloseProducerRspPb, CloseProducerReqPb>> serverApi)
 {
     std::string tenantId;
@@ -404,8 +395,8 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
         LOG(INFO) << FormatString("[%s, S:%s, P:%s] CloseProducer finish with %s", LogPrefix(), namespaceUri,
                                   producerId, rc.ToString());
         CheckErrorReturn(rc, rsp, FormatString("[S:%s] CloseProducerImpl failed with rc ", namespaceUri), serverApi);
-        recorder->SetStatus(rc);
-        // recorder should destroy before traceGuard, otherwise, the traceid will be cleaned up
+        recorder->Result(rc);
+        recorder->Record();
         recorder.reset();
     });
 
@@ -657,17 +648,15 @@ Status ClientWorkerSCServiceImpl::Subscribe(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     SubscribeReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<AccessRecorderStreamWrap>(AccessRecorderKey::DS_POSIX_SUBSCRIBE);
-    recorder->reqParam.streamName = req.stream_name();
-    recorder->reqParam.consumerId = req.consumer_id();
-    recorder->reqParam.clientId = req.client_id();
+    auto recorder = std::make_shared<StreamAccessRecorder>(
+        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_SUBSCRIBE));
+    recorder->StreamName(req.stream_name()).ConsumerId(req.consumer_id()).ClientId(req.client_id());
     auto rc = SubscribeInternal(req, recorder, serverApi);
-    recorder->SetStatus(rc);
     return rc;
 }
 
 Status ClientWorkerSCServiceImpl::SubscribeInternal(
-    const SubscribeReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+    const SubscribeReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
     std::shared_ptr<ServerUnaryWriterReader<SubscribeRspPb, SubscribeReqPb>> serverApi)
 {
     LOG(INFO) << "Worker received Subscribe request:" << LogHelper::IgnoreSensitive(req);
@@ -691,8 +680,8 @@ Status ClientWorkerSCServiceImpl::SubscribeInternal(
         SubscribeRspPb rsp;
         Status rc = SubscribeImpl(namespaceUri, req, rsp);
         CheckErrorReturn(rc, rsp, "SubscribeImpl failed with rc ", serverApi);
-        recorder->SetStatus(rc);
-        // recorder should destroy before traceGuard, otherwise, the traceid will be cleaned up
+        recorder->Result(rc);
+        recorder->Record();
         recorder.reset();
     });
 
@@ -851,18 +840,16 @@ Status ClientWorkerSCServiceImpl::CloseConsumer(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseConsumerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<AccessRecorderStreamWrap>(AccessRecorderKey::DS_POSIX_CLOSE_CONSUMER);
-    recorder->reqParam.streamName = req.stream_name();
-    recorder->reqParam.consumerId = req.consumer_id();
-    recorder->reqParam.subscriptionName = req.subscription_name();
-    recorder->reqParam.clientId = req.client_id();
+    auto recorder = std::make_shared<StreamAccessRecorder>(
+        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_CONSUMER));
+    recorder->StreamName(req.stream_name()).ConsumerId(req.consumer_id())
+        .SubscriptionName(req.subscription_name()).ClientId(req.client_id());
     auto rc = CloseConsumerInternal(req, recorder, serverApi);
-    recorder->SetStatus(rc);
     return rc;
 }
 
 Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
-    const CloseConsumerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+    const CloseConsumerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
     std::shared_ptr<ServerUnaryWriterReader<CloseConsumerRspPb, CloseConsumerReqPb>> serverApi)
 {
     std::string tenantId;
@@ -901,8 +888,8 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
             // Error case, flow the rc back to client
             LOG_IF_ERROR(serverApi->SendStatus(rc), "Write reply to client stream failed");
         }
-        recorder->SetStatus(rc);
-        // recorder should destroy before traceGuard, otherwise, the traceid will be cleaned up
+        recorder->Result(rc);
+        recorder->Record();
         recorder.reset();
     });
 
@@ -1125,14 +1112,9 @@ Status ClientWorkerSCServiceImpl::DeleteStreamLocally(StreamManagerMap::accessor
 
 Status ClientWorkerSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, DeleteStreamRspPb &rsp)
 {
-    AccessRecorder recorder(AccessRecorderKey::DS_POSIX_DELETE_STREAM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_DELETE_STREAM);
     auto rc = DeleteStreamImpl(req, rsp);
-    StreamRequestParam reqParam;
-    reqParam.streamName = req.stream_name();
-    reqParam.clientId = req.client_id();
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(req.stream_name()).ClientId(req.client_id()).Result(rc).Record();
     return rc;
 }
 
@@ -1230,15 +1212,9 @@ Status ClientWorkerSCServiceImpl::DeleteStreamHandleSend(const std::string &stre
 
 Status ClientWorkerSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
-    AccessRecorder recorder(AccessRecorderKey::DS_POSIX_QUERY_PRODUCERS_NUM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_QUERY_PRODUCERS_NUM);
     auto rc = QueryGlobalProducersNumImpl(req, rsp);
-    StreamRequestParam reqParam;
-    reqParam.streamName = req.stream_name();
-    reqParam.clientId = req.client_id();
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    rspParam.count = Optional<uint64_t>(rsp.global_count());
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(req.stream_name()).ClientId(req.client_id()).Result(rc).Count(rsp.global_count()).Record();
     return rc;
 }
 
@@ -1276,15 +1252,9 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
 
 Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
-    AccessRecorder recorder(AccessRecorderKey::DS_POSIX_QUERY_CONSUMERS_NUM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_QUERY_CONSUMERS_NUM);
     auto rc = QueryGlobalConsumersNumImpl(req, rsp);
-    StreamRequestParam reqParam;
-    reqParam.streamName = req.stream_name();
-    reqParam.clientId = req.client_id();
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    rspParam.count = Optional<uint64_t>(rsp.global_count());
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(req.stream_name()).ClientId(req.client_id()).Result(rc).Count(rsp.global_count()).Record();
     return rc;
 }
 

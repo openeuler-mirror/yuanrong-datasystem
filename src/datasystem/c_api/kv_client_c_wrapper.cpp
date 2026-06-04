@@ -109,17 +109,12 @@ struct StatusC SCSet(KVClient_p clientPtr, const char *cKey, size_t keyLen, cons
                      const char *cWriteMode, uint32_t ttlSecond, const char *cExistenceOpt)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
     StatusC rc = SCExecuteSet(clientPtr, cKey, keyLen, cVal, valLen, cWriteMode, ttlSecond, cExistenceOpt);
-    std::string s(cKey, keyLen);
-    datasystem::RequestParam reqParam;
-    if (cKey != nullptr) {
-        std::string s(cKey);
-        reqParam.objectKey = s.substr(0, datasystem::LOG_OBJECT_KEY_SIZE_LIMIT);
-    }
-    reqParam.writeMode = cWriteMode;
-    reqParam.ttlSecond = std::to_string(ttlSecond);
-    accessPoint.Record(rc.code, std::to_string(valLen), reqParam, rc.errMsg);
+    std::string_view keyView = (cKey != nullptr) ? std::string_view(cKey, keyLen) : std::string_view("", 0);
+    std::string_view writeModeView = (cWriteMode != nullptr) ? std::string_view(cWriteMode) : std::string_view("", 0);
+    access.ObjectKeyRef(keyView).WriteModeText(writeModeView).TtlSecond(ttlSecond)
+        .Result(rc.code, rc.errMsg).DataSize(valLen).Record();
     return rc;
 }
 
@@ -159,17 +154,12 @@ struct StatusC SCSetValue(KVClient_p clientPtr, char **cKey, size_t *keyLen, con
                           const char *cWriteMode, uint32_t ttlSecond, const char *cExistenceOpt)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_SET);
     StatusC rc = SCExecuteSetValue(clientPtr, cKey, keyLen, cVal, valLen, cWriteMode, ttlSecond, cExistenceOpt);
-    datasystem::RequestParam reqParam;
-    reqParam.objectKey = "";
-    if (cKey != nullptr && *cKey != nullptr) {
-        std::string s(*cKey);
-        reqParam.objectKey = s.substr(0, datasystem::LOG_OBJECT_KEY_SIZE_LIMIT);
-    }
-    reqParam.writeMode = cWriteMode;
-    reqParam.ttlSecond = std::to_string(ttlSecond);
-    accessPoint.Record(rc.code, std::to_string(valLen), reqParam, rc.errMsg);
+    std::string_view objKey(cKey != nullptr && *cKey != nullptr ? *cKey : "");
+    std::string_view writeModeView = (cWriteMode != nullptr) ? std::string_view(cWriteMode) : std::string_view("", 0);
+    access.ObjectKeyRef(objKey).WriteModeText(writeModeView).TtlSecond(ttlSecond)
+        .Result(rc.code, rc.errMsg).DataSize(valLen).Record();
     return rc;
 }
 
@@ -201,17 +191,17 @@ struct StatusC SCGet(KVClient_p clientPtr, const char *cKey, const size_t keyLen
                      size_t *valLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
     StatusC rc = SCExecuteGet(clientPtr, cKey, keyLen, ctimeoutms, cVal, valLen);
-    std::string s(cKey, keyLen);
-    datasystem::RequestParam reqParam;
-    reqParam.objectKey = s.substr(0, datasystem::LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.timeout = std::to_string(ctimeoutms);
-    if (rc.code == datasystem::K_NOT_FOUND) {
-        accessPoint.Record(datasystem::K_OK, std::to_string(*valLen), reqParam, rc.errMsg);
-    } else {
-        accessPoint.Record(rc.code, std::to_string(*valLen), reqParam, rc.errMsg);
-    }
+    datasystem::Status accessRc = (rc.code == datasystem::K_NOT_FOUND) ? datasystem::Status::OK()
+        : datasystem::Status(static_cast<datasystem::StatusCode>(rc.code), rc.errMsg);
+    uint64_t dataLen = (rc.code == datasystem::K_OK && valLen != nullptr) ? *valLen : 0;
+    std::string_view keyView = (cKey != nullptr) ? std::string_view(cKey, keyLen) : std::string_view("", 0);
+    access.ObjectKeyRef(keyView)
+        .TimeoutMs(ctimeoutms)
+        .Result(accessRc)
+        .DataSize(dataLen)
+        .Record();
     return rc;
 }
 
@@ -239,12 +229,10 @@ struct StatusC SCExecuteDel(KVClient_p clientPtr, const char *cKey, const size_t
 struct StatusC SCDel(KVClient_p clientPtr, const char *cKey, const size_t keyLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
     StatusC rc = SCExecuteDel(clientPtr, cKey, keyLen);
-    std::string s(cKey, keyLen);
-    datasystem::RequestParam reqParam;
-    reqParam.objectKey = s.substr(0, datasystem::LOG_OBJECT_KEY_SIZE_LIMIT);
-    accessPoint.Record(rc.code, "0", reqParam, rc.errMsg);
+    std::string_view keyView = (cKey != nullptr) ? std::string_view(cKey, keyLen) : std::string_view("", 0);
+    access.ObjectKeyRef(keyView).Result(rc.code, rc.errMsg).Record();
     return rc;
 }
 
@@ -252,15 +240,15 @@ struct StatusC SCGetArray(KVClient_p clientPtr, const char **cKeys, const size_t
                           uint32_t ctimeoutms, char **cVals, size_t *valsLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_GET);
     size_t totalSize = 0;
-    datasystem::RequestParam reqParam;
-    StatusC rc = ExecuteGetArray(clientPtr, cKeys, keysLen, keysNum, ctimeoutms, cVals, valsLen, &totalSize, &reqParam);
-    if (rc.code == datasystem::K_NOT_FOUND) {
-        accessPoint.Record(datasystem::K_OK, std::to_string(totalSize), reqParam, rc.errMsg);
-    } else {
-        accessPoint.Record(rc.code, std::to_string(totalSize), reqParam, rc.errMsg);
+    StatusC rc = ExecuteGetArray(clientPtr, cKeys, keysLen, keysNum, ctimeoutms, cVals, valsLen, &totalSize);
+    datasystem::Status accessRc = (rc.code == datasystem::K_NOT_FOUND) ? datasystem::Status::OK()
+        : datasystem::Status(static_cast<datasystem::StatusCode>(rc.code), rc.errMsg);
+    if (cKeys != nullptr) {
+        access.ObjectKeysRef(cKeys, keysLen, keysNum);
     }
+    access.TimeoutMs(ctimeoutms).Result(accessRc).DataSize(totalSize).Record();
     return rc;
 }
 
@@ -295,13 +283,12 @@ struct StatusC SCDelArray(KVClient_p clientPtr, const char **cKeys, uint64_t num
                           uint64_t *failedCount)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_KV_CLIENT_DELETE);
     StatusC rc = SCExecuteDelArray(clientPtr, cKeys, numObjs, cFailedKeys, failedCount);
-    datasystem::RequestParam reqParam;
-    if (cKeys != nullptr && *cKeys != nullptr) {
-        reqParam.objectKey = datasystem::objectKeysToString(cKeys, numObjs);
+    if (cKeys != nullptr) {
+        access.ObjectKeysRef(cKeys, nullptr, numObjs);
     }
-    accessPoint.Record(rc.code, "0", reqParam, rc.errMsg);
+    access.Result(rc.code, rc.errMsg).Record();
     return rc;
 }
 

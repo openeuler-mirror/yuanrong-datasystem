@@ -71,3 +71,55 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+# LogSampler测试
+ds_cc_test(
+    name = "log_sampler_test",
+    srcs = ["log_sampler_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# LogSampler与LOG/PLOG宏集成测试
+ds_cc_test(
+    name = "log_sampler_integration_test",
+    srcs = ["log_sampler_integration_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# LogSampler access guard测试 (Step 4)
+ds_cc_test(
+    name = "log_sampler_access_test",
+    srcs = ["log_sampler_access_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# LogSampler config integration测试 (Step 5)
+ds_cc_test(
+    name = "log_sampler_config_test",
+    srcs = ["log_sampler_config_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:log_sampler",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# AccessRecorder facade测试 (Object/Stream/RequestOut)
+ds_cc_test(
+    name = "log_access_facade_test",
+    srcs = ["log_access_facade_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)

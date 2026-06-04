@@ -6,11 +6,13 @@
   - `src/datasystem/common/log`
   - `src/datasystem/common/log/spdlog`
 - Why this module exists:
-  - provide repository-wide structured logging, trace propagation, access/performance recording, and failure-signal logging;
-  - centralize log file lifecycle management and client-side log configuration overrides.
+  - provide repository-wide structured logging, trace propagation, access/performance recording, failure-signal logging, and unified random log sampling;
+  - centralize log file lifecycle management, client-side log configuration overrides, and per-request sampling decisions.
 - Primary source files to verify against:
   - `src/datasystem/common/log/CMakeLists.txt`
   - `src/datasystem/common/log/log.h`
+  - `src/datasystem/common/log/log_sampler.h`
+  - `src/datasystem/common/log/log_sampler.cpp`
   - `src/datasystem/common/log/logging.h`
   - `src/datasystem/common/log/logging.cpp`
   - `src/datasystem/common/log/log_manager.h`
@@ -33,6 +35,8 @@
   - read `access-recorder.md`
 - If the question is about Set/Get slow logs that must bypass request sampling:
   - read `plog-slow-request-plan.md`
+- If the question is about unified class-based random log sampling:
+  - read `log-sampler-design.md`
 - If the question is about the implemented Get slow-log change or validation result:
   - read `plog-slow-get-implementation-summary.md`
 - If the question is about startup, file rotation, compression, monitor flush, or crash log output:
@@ -46,7 +50,9 @@
   - `Logging` is the main lifecycle singleton that initializes log directories, configures the spdlog-backed provider, starts background maintenance, and creates the access-recorder manager.
   - `LogManager` runs background work for log rolling, compression, and periodic monitor-log flush.
   - `Trace` is thread-local and is used pervasively to attach trace IDs to logs and cross-thread work.
-  - `AccessRecorder` records API/request performance and request/response metadata for client, access, and outbound-request style events.
+- `AccessRecorder` records API/request performance and request/response metadata for client, access, and outbound-request style events.
+- `LogSampler` provides unified random hash-threshold sampling across request/access/diagnostic dimensions, with per-request granularity and low-overhead hot-path decisions.
+- `AccessRecorder::Object`, `AccessRecorder::Stream`, and `AccessRecorder::RequestOut` are the recommended access-log facades. Call sites describe fields and call `Record()`; sampling, lazy field materialization, elapsed time, formatting, and exporter writes are owned by `AccessRecorder`.
   - `FailureWriter` and `InstallFailureSignalHandler` integrate absl failure-signal handling with repository log files.
 - Pending verification:
   - whether all runtime startup paths install the failure signal handler consistently;
@@ -62,6 +68,8 @@
   - access/performance recorder lifecycle, operation-key mapping, and exporter coupling
 - `plog-slow-request-plan.md`
   - English PLOG slow Set/Get request design, first-pass thresholds, and production `v=0` constraints
+- `log-sampler-design.md`
+  - production design for class-based random sampling coefficients and strict hot-path performance constraints
 - `plog-slow-get-implementation-summary.md`
   - implementation scope, changed slow Get segments, remote validation commands, and remaining validation blocker
 - `log-lifecycle-and-rotation.md`
@@ -75,8 +83,9 @@
 | `Logging` | central lifecycle and configuration singleton | `log-lifecycle-and-rotation.md` |
 | `LogManager` | background rolling/compression/flush manager | `log-lifecycle-and-rotation.md` |
 | `Trace` | thread-local trace ID management | `trace-and-context.md` |
-| `AccessRecorder` | structured performance/access logging | `access-recorder.md` |
+| `AccessRecorder` | structured performance/access logging and lazy sampled-out skip through Object/Stream/RequestOut facades | `access-recorder.md` and `log-sampler-design.md` |
 | `AccessRecorderManager` | exporter owner for monitor/access logs | `access-recorder.md` and `log-lifecycle-and-rotation.md` |
+| `LogSampler` | per-request random hash-threshold sampling | `log-sampler-design.md` |
 | `failure_handler.*` | crash/backtrace logging | `log-lifecycle-and-rotation.md` |
 
 ## Cross-Module Coupling

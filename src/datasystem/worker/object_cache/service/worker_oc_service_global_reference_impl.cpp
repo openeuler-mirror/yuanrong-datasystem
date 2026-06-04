@@ -19,6 +19,7 @@
  */
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -53,12 +54,13 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     }
     workerOperationTimeCost.Clear();
     Timer timer;
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_GINCREASEREF);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
                                          StatusCode::K_INVALID, "invalid object size");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
+    access.ObjectKeysRef(objectKeys);
     LOG(INFO) << "[Ref] GIncreaseRef client id: " << req.address() << ", object list: " << VectorToString(objectKeys);
     INJECT_POINT("worker.GIncrease_ref_failure");
     std::vector<std::string> failIncIds;
@@ -75,7 +77,6 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
         if (status.IsError()) {
             lastErr = status;
         } else if (!failIncIds.empty()) {
-            // Need modify later
             lastErr = Status(StatusCode::K_RUNTIME_ERROR, "failIncIds is not empty.");
         }
     }
@@ -88,9 +89,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     }
     resp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(objectKeys);
-    posixPoint.Record(lastErr.GetCode(), std::to_string(0), reqParam, lastErr.GetMsg());
+    access.Result(lastErr).Record();
     workerOperationTimeCost.Append("Total GIncreaseRef", timer.ElapsedMilliSecond());
 
     bool partlySuccess = !failIncIds.empty() && (objectKeys.size() > failIncIds.size());
@@ -109,7 +108,8 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     LOG(INFO) << "[Ref] GDecreaseRef client id: " << req.address() << ", object list: " << VectorToString(objectKeys);
     INJECT_POINT("worker.GDecreaseRef.before");
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_GDECREASEREF);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GDECREASEREF);
+    access.ObjectKeysRef(objectKeys).RemoteClientId(req.remote_client_id());
     std::vector<std::string> failedObjectKeys;
     Status rc = RetryWhenDeadlock([this, &objectKeys, &req, &failedObjectKeys] {
         if (!failedObjectKeys.empty()) {
@@ -131,10 +131,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
     }
     resp.mutable_last_rc()->set_error_code(rc.GetCode());
     resp.mutable_last_rc()->set_error_msg(rc.GetMsg());
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(objectKeys);
-    reqParam.remoteClientId = req.remote_client_id();
-    posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     LOG(INFO) << FormatString("[Ref] GDecreaseRef finish with status: %s. The operations %s", rc.ToString(),
                               workerOperationTimeCost.GetInfo());
     return Status::OK();
@@ -145,7 +142,8 @@ Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb 
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     LOG(INFO) << "[Ref] ReleaseGRefs object list: " << req.remote_client_id();
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_RELEASEGREFS);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_RELEASEGREFS);
+    access.RemoteClientId(req.remote_client_id());
     HostPort masterAddr;
     if (etcdCM_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
@@ -164,9 +162,7 @@ Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb 
     Status rc = api->ReleaseGRefs(releaseReq, releaseRsp);
     resp.mutable_last_rc()->set_error_code(rc.GetCode());
     resp.mutable_last_rc()->set_error_msg(rc.GetMsg());
-    RequestParam reqParam;
-    reqParam.remoteClientId = req.remote_client_id();
-    posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     LOG(INFO) << FormatString("[Ref] ReleaseGRefs finish with status: %s", rc.ToString());
     return Status::OK();
 }
@@ -182,9 +178,8 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
                                          StatusCode::K_INVALID, "invalid object size");
     auto namespaceUris = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     LOG(INFO) << "worker qurey global ref number begin, namespaceUris: " << VectorToString(namespaceUris);
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_QUERY_GLOBAL_REF_NUM);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(namespaceUris);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_QUERY_GLOBAL_REF_NUM);
+    access.ObjectKeysRef(namespaceUris);
     // Group ObjectKeys by master
     auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(namespaceUris);
     // Send requests for each master
@@ -207,12 +202,12 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
             };
         Status rc = WaitForRedirectWhenRefMoving(currentReq, rsp, workerMasterApi, func, mergeFunc);
         if (rc.IsError()) {
-            posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
+            access.Result(rc).Record();
             LOG(ERROR) << "workerMasterApi qurey global ref number failed. master addr: " << masterAddr.ToString();
             return rc;
         }
     }
-    posixPoint.Record(StatusCode::K_OK, std::to_string(0), reqParam);
+    access.Result(StatusCode::K_OK).Record();
     workerOperationTimeCost.Append("Total QueryGlobalRefNum", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString(
         "worker query global ref number end, namespaceUris: %s. The operations of worker QueryGlobalRefNum %s",
@@ -226,9 +221,10 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRefWithRemoteClientId(const 
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     workerOperationTimeCost.Clear();
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_GINCREASEREF);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     INJECT_POINT("worker.GIncrease_ref_failure");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
+    access.ObjectKeysRef(objectKeys).RemoteClientId(req.remote_client_id());
     LOG(INFO) << "[Ref] GIncreaseRefWithRemoteClientId object list: " << VectorToString(objectKeys)
               << ", remoteClientId:" << req.remote_client_id();
     std::vector<std::string> failIncIds;
@@ -250,10 +246,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRefWithRemoteClientId(const 
     resp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
 
     bool partlySuccess = !failIncIds.empty() && (objectKeys.size() > failIncIds.size());
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(objectKeys);
-    reqParam.remoteClientId = req.remote_client_id();
-    posixPoint.Record(lastErr.GetCode(), std::to_string(0), reqParam, lastErr.GetMsg());
+    access.Result(lastErr).Record();
     LOG(INFO) << FormatString("[Ref] GIncreaseRefWithRemoteClientId finish with status: %s, The operations %s",
                               lastErr.ToString(), workerOperationTimeCost.GetInfo());
     return partlySuccess ? Status::OK() : lastErr;

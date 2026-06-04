@@ -54,104 +54,97 @@ JNIEXPORT jlong JNICALL Java_org_yuanrong_datasystem_kv_KVClient_init(JNIEnv *en
 }
 
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_setDirectBufferNative(JNIEnv *env, jclass,
-                                                                                        jlong handle, jstring keyJO,
-                                                                                        jobject valueJO,
-                                                                                        jobject paramJO)
+                                                                                         jlong handle, jstring keyJO,
+                                                                                         jobject valueJO,
+                                                                                         jobject paramJO)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.setDirectBufferNative";
-    Status rc = SetDirectBufferNativeImpl(env, handle, keyJO, valueJO, paramJO);
-    RequestParam reqParam;
-    reqParam.objectKey = ToString(env, keyJO).substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(ToCppSetParam(env, paramJO).writeMode));
-    reqParam.ttlSecond = std::to_string(ToCppSetParam(env, paramJO).ttlSecond);
-    accessPoint.Record(rc.GetCode(), std::to_string(GetByteBufferLimit(env, valueJO)), reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = SetDirectBufferNativeImpl(env, handle, keyJO, valueJO, paramJO, &fields);
+    access.ObjectKeyRef(fields.key)
+        .WriteMode(static_cast<int>(fields.setParam.writeMode))
+        .TtlSecond(fields.setParam.ttlSecond)
+        .Result(rc)
+        .DataSize(fields.dataSize)
+        .Record();
     JNI_CHECK_RESULT(env, rc, void(0));
 }
 
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_setHeapBufferNative(JNIEnv *env, jclass, jlong handle,
-                                                                                      jstring keyJO,
-                                                                                      jbyteArray byteArray, jlong size,
-                                                                                      jobject paramJO)
+                                                                                       jstring keyJO,
+                                                                                       jbyteArray byteArray, jlong size,
+                                                                                       jobject paramJO)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.setDirectBufferNative";
-    Status rc = SetHeapBufferNativeImpl(env, handle, keyJO, byteArray, size, paramJO);
-    RequestParam reqParam;
-    reqParam.objectKey = ToString(env, keyJO).substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(ToCppSetParam(env, paramJO).writeMode));
-    reqParam.ttlSecond = std::to_string(ToCppSetParam(env, paramJO).ttlSecond);
-    accessPoint.Record(rc.GetCode(), std::to_string(size), reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = SetHeapBufferNativeImpl(env, handle, keyJO, byteArray, size, paramJO, &fields);
+    access.ObjectKeyRef(fields.key)
+        .WriteMode(static_cast<int>(fields.setParam.writeMode))
+        .TtlSecond(fields.setParam.ttlSecond)
+        .Result(rc)
+        .DataSize(fields.dataSize)
+        .Record();
     JNI_CHECK_RESULT(env, rc, (void)0);
 }
 
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeyNative(JNIEnv *env, jclass, jlong handle,
-                                                                                  jstring keyJO, jint timeoutMs)
+                                                                                jstring keyJO, jint timeoutMs)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-    VLOG(LOG_LEVEL) << "JNICALL StateClient.getKeyNative";
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     int totalSize = 0;
     jobject heapBuffer = nullptr;
-    Status rc = GetKeyNativeImpl(env, handle, keyJO, timeoutMs, totalSize, heapBuffer);
-    RequestParam reqParam;
-    reqParam.objectKey = ToString(env, keyJO).substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.timeout = std::to_string(timeoutMs);
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(totalSize), reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = GetKeyNativeImpl(env, handle, keyJO, timeoutMs, totalSize, heapBuffer, &fields);
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeyRef(fields.key).TimeoutMs(timeoutMs).Result(accessRc).DataSize(totalSize).Record();
     JNI_CHECK_RESULT(env, rc, 0);
     return heapBuffer;
 }
 
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_getKeysNative(JNIEnv *env, jclass, jlong handle,
-                                                                                   jobject keysJO, jint timeoutMs)
+                                                                                 jobject keysJO, jint timeoutMs)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.getKeysNative";
     int totalSize = 0;
     jobject ListJO = nullptr;
-    Status rc = GetKeysNativeImpl(env, handle, keysJO, timeoutMs, totalSize, ListJO);
-    std::vector<std::string> keys;
-    GetJavaStringListVal(env, keysJO, keys);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    reqParam.timeout = std::to_string(timeoutMs);
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(totalSize), reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = GetKeysNativeImpl(env, handle, keysJO, timeoutMs, totalSize, ListJO, &fields);
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeysRef(fields.keys).TimeoutMs(timeoutMs).Result(accessRc).DataSize(totalSize).Record();
     JNI_CHECK_RESULT(env, rc, 0);
     return ListJO;
 }
 
 JNIEXPORT void JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeyNative(JNIEnv *env, jclass, jlong handle,
-                                                                               jstring keyJO)
+                                                                                jstring keyJO)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.delKeyNative";
     std::vector<std::string> failedKeys;
-    Status rc = DelKeyNativeImpl(env, handle, keyJO, failedKeys);
-    RequestParam reqParam;
-    reqParam.objectKey = ToString(env, keyJO).substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = DelKeyNativeImpl(env, handle, keyJO, failedKeys, &fields);
+    access.ObjectKeyRef(fields.key).Result(rc).Record();
     JNI_CHECK_RESULT(env, rc, (void)0);
 }
 
 JNIEXPORT jobject JNICALL Java_org_yuanrong_datasystem_kv_KVClient_delKeysNative(JNIEnv *env, jclass, jlong handle,
-                                                                                   jobject keysJO)
+                                                                                 jobject keysJO)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     VLOG(LOG_LEVEL) << "JNICALL StateClient.delKeysNative";
     std::vector<std::string> failedKeys;
-    Status rc = DelKeysNativeImpl(env, handle, keysJO, failedKeys);
-    std::vector<std::string> keys;
-    GetJavaStringListVal(env, keysJO, keys);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    JavaKvAccessFields fields;
+    Status rc = DelKeysNativeImpl(env, handle, keysJO, failedKeys, &fields);
+    access.ObjectKeysRef(fields.keys).Result(rc).Record();
     JNI_CHECK_RESULT(env, rc, 0);
     return ToJavaStringList(env, failedKeys);
 }

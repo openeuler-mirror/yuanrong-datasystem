@@ -77,7 +77,7 @@ public:
         opts.numEtcd = 1;
         opts.masterIdx = 0;
         opts.enableDistributedMaster = "false";
-        opts.workerGflagParams = "-shared_memory_size_mb=128 -v=2 -log_monitor=true -log_rate_limit=0";
+        opts.workerGflagParams = "-shared_memory_size_mb=128 -v=2 -log_monitor=true";
     }
 };
 

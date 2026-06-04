@@ -38,7 +38,6 @@
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
 | 19 | `DATASYSTEM_LOG_COMPRESS` | `true` | 日志文件是否压缩,默认压缩。 |
 | 23 | `DATASYSTEM_MIN_LOG_LEVEL` | `0` | 数据系统SDK的最小日志级别。数值越大，输出的日志越少；默认值为0，通常表示INFO级别及以上日志都可输出。 |
-| 25 | `DATASYSTEM_LOG_RATE_LIMIT` | `0` | 每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。 |
 | 26 | `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | `true` | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | 28 | `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` | `true` | 是否让客户端日志文件名不带进程号。默认`true`时输出为`ds_client.log`、`ds_client_access.log`；设置为`false`时恢复为带`<pid>`后缀的命名，适合多client进程同时运行且不希望覆盖日志的场景。 |
 

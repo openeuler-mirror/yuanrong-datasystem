@@ -23,6 +23,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/container_util.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -58,12 +59,11 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, D
 {
     workerOperationTimeCost.Clear();
     Timer timer;
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_DELETE_ALL_COPY);
     uint64_t deletedSize = 0;
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_DELETE_ALL_COPY);
+    access.ObjectKeysRef(req.object_keys()).DataSizeProvider([&deletedSize]() -> uint64_t { return deletedSize; });
     Status rc = DeleteAllCopyImpl(req, resp, deletedSize);
-    RequestParam reqParam;
-    reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
-    posixPoint.Record(rc.GetCode(), std::to_string(deletedSize), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     workerOperationTimeCost.Append("Total DeleteAllCopy", timer.ElapsedMilliSecond());
     LOG(INFO) << "DeleteAllCopy finish with request size: " << req.object_keys_size()
               << ", failed size: " << resp.fail_object_keys_size() << ", the operation cost "

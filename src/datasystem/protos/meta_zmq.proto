@@ -30,19 +30,20 @@ message TickPb {
 }
 
 // Request log sampling state carried by RPC metadata.
-// This single state avoids expanding MetaPb with multiple boolean flags.
+// Converged to request-level complete-print decision via LogSampler.
 enum LogSampleState {
-    // Not an SDK request trace. Background and internal logs are not sampled by log_rate_limit.
+    // Not an SDK request trace. Background and internal logs are not sampled by request_sample_rate.
     LOG_SAMPLE_NONE = 0;
 
-    // SDK request trace admitted by log_rate_limit. Logs should be kept across RPC hops.
+    // SDK request trace admitted by request_sample_rate. Complete request logs are kept across RPC hops.
     LOG_SAMPLE_ADMIT = 1;
 
-    // SDK request trace rejected by log_rate_limit. Logs are dropped across RPC hops.
+    // SDK request trace rejected by request_sample_rate. Request INFO/VLOG are dropped;
+    // diagnostic/access continue supplemental sampling, reject is NOT a direct drop condition for them.
     LOG_SAMPLE_REJECT = 2;
 
     // SDK request trace without a propagated sampling decision yet.
-    // The receiving side may decide locally based on its own log_rate_limit.
+    // The receiving side may create a local decision based on its own request_sample_rate.
     LOG_SAMPLE_UNDECIDED = 3;
 }
 

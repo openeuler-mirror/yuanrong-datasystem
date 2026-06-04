@@ -24,6 +24,7 @@
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -109,7 +110,10 @@ using ObjectKey = std::string;
 class WorkerRequestManager;
 class GetRequest : public std::enable_shared_from_this<GetRequest> {
 public:
-    GetRequest(AccessRecorderKey key) noexcept : recorder_(key) {};
+    GetRequest(AccessRecorderKey key)
+    {
+        recorder_ = AccessRecorder::Object(key);
+    };
     /**
      * @brief Init GetRequst
      * @param[in] tenantId The tenantId.
@@ -230,7 +234,7 @@ private:
     std::vector<GetObjInfo *> orderedObjectInfos_;
     std::unordered_map<ObjectKey, GetObjInfo> objects_;
     std::atomic<size_t> readyCount_{ 0 };
-    AccessRecorder recorder_;
+    std::optional<ObjectAccessRecorder> recorder_;
     Status lastRc_;
     std::atomic<bool> isReturn_{ false };
 

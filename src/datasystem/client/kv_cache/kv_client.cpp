@@ -98,7 +98,7 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_CREATE_BUFFER);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_CREATE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_CREATE);
     object_cache::FullParam creatParam;
     creatParam.writeMode = param.writeMode;
     creatParam.ttlSecond = param.ttlSecond;
@@ -108,13 +108,9 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     Status rc = impl_->Create(key, size, creatParam, buffer);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.ttlSecond = std::to_string(param.ttlSecond);
-    reqParam.existence = std::to_string(static_cast<int>(param.existence));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
-    accessPoint.Record(rc.GetCode(), std::to_string(size), reqParam, rc.GetMsg());
+    access.ObjectKeyRef(key).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
+        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .DataSize(size).Result(rc).Record();
     return rc;
 }
 
@@ -123,7 +119,7 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MCREATE_BUFFERS);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
     object_cache::FullParam creatParam;
     creatParam.writeMode = param.writeMode;
     creatParam.ttlSecond = param.ttlSecond;
@@ -133,14 +129,9 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    RequestParam reqParam;
-    std::string key = (keys.empty() ? "" : keys[0]);
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.ttlSecond = std::to_string(param.ttlSecond);
-    reqParam.existence = std::to_string(static_cast<int>(param.existence));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
-    accessPoint.Record(rc.GetCode(), std::to_string(sizes.size()), reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
+        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .DataSize(sizes.size()).Result(rc).Record();
     return rc;
 }
 
@@ -149,12 +140,10 @@ Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "Buffer must not be null.");
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_BUFFER);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(buffer);
-    RequestParam reqParam;
-    reqParam.objectKey = buffer->bufferInfo_->objectKey;
-    reqParam.transportType = impl_->GetTransportType();
-    accessPoint.Record(rc.GetCode(), std::to_string(buffer->GetSize()), reqParam, rc.GetMsg());
+    access.ObjectKeyRef(buffer->bufferInfo_->objectKey).TrackedTransportType()
+        .DataSize(buffer->GetSize()).Result(rc).Record();
     return rc;
 }
 
@@ -163,14 +152,17 @@ Status KVClient::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "Buffer list should not be empty.");
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_BUFFERS);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSET);
     Status rc = impl_->MSet(buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    RequestParam reqParam;
-    reqParam.objectKey = buffers[0]->bufferInfo_->objectKey;
-    reqParam.transportType = impl_->GetTransportType();
-    accessPoint.Record(rc.GetCode(), std::to_string(buffers.size()), reqParam, rc.GetMsg());
+    access.ObjectKeyProvider([&buffers]() -> std::string {
+        if (!buffers.empty() && buffers[0] != nullptr && buffers[0]->bufferInfo_ != nullptr) {
+            return buffers[0]->bufferInfo_->objectKey;
+        }
+        return std::string();
+    }).TrackedTransportType()
+        .DataSize(buffers.size()).Result(rc).Record();
     return rc;
 }
 
@@ -179,17 +171,14 @@ Status KVClient::Get(const std::string &key, Optional<Buffer> &buffer, int32_t s
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.timeout = std::to_string(subTimeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeyRef(key).TimeoutMs(subTimeoutMs).TrackedTransportType()
+        .DataSize(dataSize).Result(accessRc).Record();
     RETURN_IF_NOT_OK(rc);
     buffer = std::move(buffers[0]);
     return rc;
@@ -201,16 +190,13 @@ Status KVClient::Get(const std::vector<std::string> &keys,
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> tmpBuffers;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get(keys, subTimeoutMs, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    reqParam.timeout = std::to_string(subTimeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(buffers.size()), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
+        .DataSize(buffers.size()).Result(accessRc).Record();
     return rc;
 }
 
@@ -218,16 +204,11 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(key, val, setParam);
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(setParam.writeMode));
-    reqParam.ttlSecond = std::to_string(setParam.ttlSecond);
-    reqParam.existence = std::to_string(static_cast<int>(setParam.existence));
-    reqParam.cacheType = std::to_string(static_cast<int>(setParam.cacheType));
-    reqParam.transportType = impl_->GetTransportType();
-    accessPoint.Record(rc.GetCode(), std::to_string(val.size()), reqParam, rc.GetMsg());
+    access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
+        .Existence(static_cast<int>(setParam.existence)).CacheType(static_cast<int>(setParam.cacheType))
+        .TrackedTransportType().DataSize(val.size()).Result(rc).Record();
     return rc;
 }
 
@@ -235,16 +216,12 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     std::string key;
     auto rc = impl_->Set(val, setParam, key);
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(setParam.writeMode));
-    reqParam.ttlSecond = std::to_string(setParam.ttlSecond);
-    reqParam.cacheType = std::to_string(static_cast<int>(setParam.cacheType));
-    reqParam.transportType = impl_->GetTransportType();
-    accessPoint.Record(rc.GetCode(), std::to_string(val.size()), reqParam);
+    access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
+        .CacheType(static_cast<int>(setParam.cacheType)).TrackedTransportType()
+        .DataSize(val.size()).Result(rc).Record();
     return key;
 }
 
@@ -265,18 +242,13 @@ Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    RequestParam reqParam;
-    std::string key = (keys.empty() ? "" : keys[0]);
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.ttlSecond = std::to_string(param.ttlSecond);
-    reqParam.existence = std::to_string(static_cast<int>(param.existence));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
-    accessPoint.Record(rc.GetCode(), std::to_string(vals.size()), reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
+        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .DataSize(vals.size()).Result(rc).Record();
     return rc;
 }
 
@@ -308,16 +280,13 @@ Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs
     std::vector<Optional<Buffer>> buffers;
     std::vector<std::string> vals;
     size_t dataSize = 0;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->GetWithLatch({ key }, vals, timeoutMs, buffers, dataSize);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.timeout = std::to_string(timeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeyRef(key).TimeoutMs(timeoutMs).TrackedTransportType()
+        .DataSize(dataSize).Result(accessRc).Record();
     if (rc.IsOk()) {
         val = std::move(vals[0]);
     }
@@ -330,16 +299,13 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<std::stri
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_OBJECTS);
     std::vector<Optional<Buffer>> buffers;
     size_t dataSize = 0;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->GetWithLatch(keys, vals, subTimeoutMs, buffers, dataSize);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    reqParam.timeout = std::to_string(subTimeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
+        .DataSize(dataSize).Result(accessRc).Record();
     return rc;
 }
 
@@ -348,17 +314,14 @@ Status KVClient::Get(const std::string &key, Optional<ReadOnlyBuffer> &readOnlyB
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_BUFFER);
     std::vector<Optional<Buffer>> buffers;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get({ key }, subTimeoutMs, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
     size_t dataSize = rc.IsOk() ? buffers[0]->GetSize() : 0;
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.timeout = std::to_string(subTimeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeyRef(key).TimeoutMs(subTimeoutMs).TrackedTransportType()
+        .DataSize(dataSize).Result(accessRc).Record();
     RETURN_IF_NOT_OK(rc);
     auto bufferSharedPtr = std::make_shared<Buffer>(std::move(buffers[0].value()));
     readOnlyBuffer = Optional<ReadOnlyBuffer>(ReadOnlyBuffer(bufferSharedPtr));
@@ -370,19 +333,13 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
     Status rc = impl_->MSet(keys, vals, param, outFailedKeys);
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    RequestParam reqParam;
-    std::string key = (keys.empty() ? "" : keys[0]);
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.writeMode = std::to_string(static_cast<int>(param.writeMode));
-    reqParam.ttlSecond = std::to_string(param.ttlSecond);
-    reqParam.existence = std::to_string(static_cast<int>(param.existence));
-    reqParam.cacheType = std::to_string(static_cast<int>(param.cacheType));
-    reqParam.transportType = impl_->GetTransportType();
-    accessPoint.Record(rc.GetCode(), std::to_string(vals.size()), reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
+        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
+        .TrackedTransportType().DataSize(vals.size()).Result(rc).Record();
     return rc;
 }
 
@@ -392,7 +349,7 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_GET_MUL_BUFFERS);
     std::vector<Optional<Buffer>> buffers;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
     Status rc = impl_->Get(keys, subTimeoutMs, buffers);
     METRIC_INC(metrics::KvMetricId::CLIENT_GET_REQUEST_TOTAL);
     METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_GET_ERROR_TOTAL);
@@ -409,12 +366,9 @@ Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<
             }
         }
     }
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    reqParam.timeout = std::to_string(subTimeoutMs);
-    reqParam.transportType = impl_->GetTransportType();
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.ObjectKeysRef(keys).TimeoutMs(subTimeoutMs).TrackedTransportType()
+        .DataSize(dataSize).Result(accessRc).Record();
     return rc;
 }
 
@@ -440,6 +394,30 @@ static std::string ReadParamToString(const std::vector<ReadParam> &params)
     return ret;
 }
 
+namespace {
+Status ValidateReadParams(const std::vector<ReadParam> &readParams, ObjectAccessRecorder &access)
+{
+    std::unordered_set<std::string> keys;
+    for (const auto &param : readParams) {
+        if (keys.find(param.key) != keys.end()) {
+            auto status = Status(K_INVALID, FormatString("The input parameter contains duplicate key %s. Keys: %s",
+                                                         param.key, VectorToString(keys)));
+            access.Result(K_INVALID, status.GetMsg()).Record();
+            return status;
+        }
+        if (UINT64_MAX - param.size < param.offset) {
+            auto status =
+                Status(K_INVALID, FormatString("The %s's offset: %llu + size: %llu overflow",
+                                               param.key, param.offset, param.size));
+            access.Result(K_INVALID, status.GetMsg()).Record();
+            return status;
+        }
+        keys.insert(param.key);
+    }
+    return Status::OK();
+}
+}  // namespace
+
 Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
@@ -447,29 +425,12 @@ Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Opti
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(readParams.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     std::vector<Optional<Buffer>> buffers;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-    std::unordered_set<std::string> keys;
-    RequestParam reqParam;
-    reqParam.objectKey = ReadParamToString(readParams);
-    reqParam.timeout = std::to_string(0);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+    access.ObjectKeyProvider([&readParams] { return ReadParamToString(readParams); }).TimeoutMs(0);
+    Status rc = ValidateReadParams(readParams, access);
+    RETURN_IF_NOT_OK(rc);
     int64_t dataSize = 0;
-    for (const auto &param : readParams) {
-        if (keys.find(param.key) != keys.end()) {
-            auto status = Status(K_INVALID, FormatString("The input parameter contains duplicate key %s. Keys: %s",
-                                                         param.key, VectorToString(keys)));
-            accessPoint.Record(K_INVALID, std::to_string(dataSize), reqParam, status.GetMsg());
-            return status;
-        }
-        if (UINT64_MAX - param.size < param.offset) {
-            auto status =
-                Status(K_INVALID, FormatString("The %s's offset: %llu + size: %llu overflow",
-                                               param.key, param.offset, param.size));
-            accessPoint.Record(K_INVALID, std::to_string(dataSize), reqParam, status.GetMsg());
-            return status;
-        }
-        keys.insert(param.key);
-    }
-    Status rc = impl_->Read(readParams, buffers);
+    rc = impl_->Read(readParams, buffers);
     if (rc.IsOk()) {
         readOnlyBuffers.clear();
         for (auto &buffer : buffers) {
@@ -482,8 +443,8 @@ Status KVClient::Read(const std::vector<ReadParam> &readParams, std::vector<Opti
             }
         }
     }
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.Result(accessRc).DataSize(dataSize).Record();
     return rc;
 }
 
@@ -492,11 +453,9 @@ Status KVClient::Del(const std::string &key)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_OBJECT);
     std::vector<std::string> failedKeys;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     Status rc = impl_->Delete({ key }, failedKeys);
-    RequestParam reqParam;
-    reqParam.objectKey = key.substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    access.ObjectKeyRef(key).Result(rc).Record();
     return rc;
 }
 
@@ -504,11 +463,9 @@ Status KVClient::Del(const std::vector<std::string> &keys, std::vector<std::stri
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_DEL_MUL_OBJECTS);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
     Status rc = impl_->Delete(keys, failedKeys);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).Result(rc).Record();
     return rc;
 }
 
@@ -541,11 +498,9 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXIST);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
     Status rc = impl_->Exist(keys, exists, true, false);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).Result(rc).Record();
     return rc;
 }
 
@@ -553,11 +508,9 @@ Status KVClient::Expire(const std::vector<std::string> &keys, uint32_t ttlSecond
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::KV_CLIENT_EXPIRE_OBJECT);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXPIRE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXPIRE);
     auto rc = impl_->Expire(keys, ttlSeconds, failedKeys);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString(keys);
-    accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    access.ObjectKeysRef(keys).Result(rc).Record();
     return rc;
 }
 }  // namespace datasystem

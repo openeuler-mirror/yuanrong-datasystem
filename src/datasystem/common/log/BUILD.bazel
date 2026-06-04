@@ -3,6 +3,45 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# LogSampler header-only target (no circular deps - used by spdlog:ds_spdlog)
+ds_cc_library(
+    name = "log_sampler_header",
+    hdrs = [
+        "log_sampler.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log/spdlog:ds_spdlog_header",
+    ],
+)
+
+# LogSampler implementation
+ds_cc_library(
+    name = "log_sampler",
+    srcs = ["log_sampler.cpp", "log_sampler_proto.cpp"],
+    hdrs = ["log_sampler.h"],
+    deps = [
+        ":log_sampler_header",
+        ":access_recorder_header",
+        "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:share_memory_cc_proto",
+    ],
+    alwayslink = 1,
+)
+
+# AccessRecorder header-only target (for log_sampler dep without circular common_log)
+ds_cc_library(
+    name = "access_recorder_header",
+    hdrs = [
+        "access_recorder.h",
+        "access_point.def",
+    ],
+deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
 # Lightweight header-only target for log macros (used by 30+ packages)
 ds_cc_library(
     name = "common_log_header",
@@ -12,8 +51,10 @@ ds_cc_library(
         "time_cost.h",
     ],
     deps = [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log/spdlog:log_rate_limiter",
+        ":log_base",
+        ":log_sampler_header",
+        "//src/datasystem/common/flags:ds_flags_header",
+        "//src/datasystem/common/log/spdlog:ds_spdlog_header",
         "//src/datasystem/common/util:format",
     ],
 )
@@ -31,12 +72,13 @@ ds_cc_library(
 # Full logging implementation (excludes failure_handler which has separate absl deps)
 ds_cc_library(
     name = "common_log",
-    srcs = glob(["*.cpp"], exclude = ["failure_handler.cpp"]),
+    srcs = glob(["*.cpp"], exclude = ["failure_handler.cpp", "log_sampler.cpp", "log_sampler_proto.cpp"]),
     hdrs = glob(["*.h", "*.def"], exclude = ["failure_handler.h"]),
     linkopts = ["-pthread"],
     deps = [
         ":common_log_header",
         ":log_base",
+        ":log_sampler",
         "//src/datasystem/common:common_constants",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log/spdlog:ds_spdlog",

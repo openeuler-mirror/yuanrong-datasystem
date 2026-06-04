@@ -999,11 +999,10 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     Status returnStatus;
-    AccessRecorder accessPoint(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
-    Raii raii([&returnStatus, &accessPoint, &req]() {
-        auto &key = req.object_key().empty() ? "" : req.object_key(0);
-        accessPoint.Record(returnStatus.GetCode(), std::to_string(key.size()),
-                           RequestParam{ .objectKey = ObjectKeysToAbbrStr(req.object_key()) }, returnStatus.GetMsg());
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
+    access.ObjectKeysRef(req.object_key());
+    Raii raii([&returnStatus, &access]() {
+        access.Result(returnStatus).Record();
     });
     ReadLock noRecon;
     returnStatus = ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime());

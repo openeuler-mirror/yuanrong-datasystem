@@ -34,6 +34,7 @@
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/wait_post.h"
 
 namespace datasystem {
 struct EtcdWatchResponseHeader {

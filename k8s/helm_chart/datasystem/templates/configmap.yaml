@@ -8,7 +8,15 @@ data:
     -v={{ .Values.global.logLevel }}
     -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
     -log_compress={{ .Values.global.log.logCompress }}
-    -log_rate_limit={{ .Values.global.log.logRateLimit }}
+    {{- if not (kindIs "invalid" .Values.global.log.requestSampleRate) }}
+    -request_sample_rate={{ .Values.global.log.requestSampleRate }}
+    {{- end }}
+    {{- if not (kindIs "invalid" .Values.global.log.accessSampleRate) }}
+    -access_sample_rate={{ .Values.global.log.accessSampleRate }}
+    {{- end }}
+    {{- if not (kindIs "invalid" .Values.global.log.diagnosticSampleRate) }}
+    -diagnostic_sample_rate={{ .Values.global.log.diagnosticSampleRate }}
+    {{- end }}
     -max_log_file_num={{ .Values.global.log.maxLogFileNum }}
     -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
     -node_dead_timeout_s={{ .Values.global.reliability.nodeDeadTimeoutS }}

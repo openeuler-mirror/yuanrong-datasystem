@@ -26,7 +26,7 @@
 #include <cstring>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/spdlog/log_message.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/spdlog/log_param.h"
@@ -92,21 +92,27 @@ inline bool ShouldCreateLogMessage(LogSeverity logSeverity)
     if (!IsLogSeverityEnabled(logSeverity)) {
         return false;
     }
-
-    auto level = ToSpdlogLevel(logSeverity);
-    auto &trace = Trace::Instance();
-    bool admitted = false;
-    if (trace.GetRequestSampleDecision(admitted)) {
-        return admitted;
-    }
-
-    auto &limiter = LogRateLimiter::Instance();
-    if (!limiter.IsEnabled()) {
+    if (logSeverity == LogSeverity::FATAL) {
         return true;
     }
+    if (!LogSampler::Instance().IsSamplerEnabledFast()) {
+        return true;
+    }
+    return LogSampler::Instance().ShouldCreateRuntimeLog(logSeverity, false);
+}
 
-    uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
-    return limiter.ShouldLog(level, traceHash);
+inline bool ShouldCreatePlogMessage(LogSeverity logSeverity)
+{
+    if (!IsLogSeverityEnabled(logSeverity)) {
+        return false;
+    }
+    if (logSeverity == LogSeverity::FATAL) {
+        return true;
+    }
+    if (!LogSampler::Instance().IsSamplerEnabledFast()) {
+        return true;
+    }
+    return LogSampler::Instance().ShouldCreateRuntimeLog(logSeverity, true);
 }
 
 // `X_##__LINE__` does not expand __LINE__; use DS_LOG_PP_CAT(X_, __LINE__) for per-line unique names.
@@ -120,18 +126,17 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 }
 
 // Basic Logging Macros Impl
-#define LOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__).Stream()
-#define PLOG_IMPL(severity) datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true).Stream() \
-    << "[PLOG] "
+#define LOG_IMPL(severity) \
+    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, false, true).Stream()
+#define PLOG_IMPL(severity) \
+    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true, true).Stream() << "[PLOG] "
 
 // Conditional Logging Macros
 #define LOG_IF(severity, condition)                                                         \
-    if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))         \
+    if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))        \
     LOG_IMPL(severity)
-// PLOG is for performance slow-path diagnostics. It bypasses request log sampling/rate limiting only;
-// severity filtering still follows FLAGS_minloglevel.
 #define PLOG_IF(severity, condition)                                                \
-    if ((condition) && datasystem::IsLogSeverityEnabled(DS_LOGS_LEVEL_##severity))  \
+    if ((condition) && datasystem::ShouldCreatePlogMessage(DS_LOGS_LEVEL_##severity)) \
     PLOG_IMPL(severity)
 
 // Basic Logging Macros

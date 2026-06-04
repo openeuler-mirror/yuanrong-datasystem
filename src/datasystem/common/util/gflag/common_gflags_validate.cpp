@@ -136,6 +136,15 @@ bool ValidateUrmaFailoverMinSampleCount(const char *flagName, uint32_t value)
     }
     return true;
 }
+
+bool ValidateSampleRateRange(const char *flagName, double value)
+{
+    if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+        LOG(ERROR) << FormatString("The %s flag is %f, which must be a finite value in [0.0, 1.0].", flagName, value);
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
@@ -163,3 +172,6 @@ DS_DEFINE_validator(shared_disk_directory, &Validator::ValidatePathString);
 DS_DEFINE_validator(distributed_disk_path, &Validator::ValidatePathString);
 DS_DEFINE_validator(encrypt_kit, &Validator::ValidateEncryptKit);
 DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
+DS_DEFINE_validator(request_sample_rate, &ValidateSampleRateRange);
+DS_DEFINE_validator(access_sample_rate, &ValidateSampleRateRange);
+DS_DEFINE_validator(diagnostic_sample_rate, &ValidateSampleRateRange);

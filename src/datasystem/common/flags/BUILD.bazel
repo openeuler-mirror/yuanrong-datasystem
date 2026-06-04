@@ -3,6 +3,15 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Header-only target (no circular deps - used by common_log_header)
+ds_cc_library(
+    name = "ds_flags_header",
+    hdrs = glob(["*.h"]),
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
 ds_cc_library(
     name = "ds_flags",
     srcs = glob(["*.cpp"]),
@@ -12,6 +21,7 @@ ds_cc_library(
     ],
     linkstatic = True,
     deps = [
+        ":ds_flags_header",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
         "@securec",

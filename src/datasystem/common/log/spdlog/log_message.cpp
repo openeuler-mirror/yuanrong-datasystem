@@ -23,7 +23,12 @@
 namespace datasystem {
 LogMessage::LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog)
 {
-    impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line, forceLog);
+    impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line, forceLog, false);
+}
+
+LogMessage::LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog, bool samplerChecked)
+{
+    impl_ = std::make_shared<LogMessageImpl>(logSeverity, file, line, forceLog, samplerChecked);
 }
 
 std::ostream &LogMessage::Stream()

@@ -27,6 +27,7 @@
 #include <functional>
 
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/metrics/metrics_exporter.h"
 #include "datasystem/common/metrics/res_metric_name.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"

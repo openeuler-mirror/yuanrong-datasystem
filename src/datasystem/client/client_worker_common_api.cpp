@@ -37,8 +37,8 @@
 #include "datasystem/common/inject/inject_point.h"
 #endif
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -110,6 +110,21 @@ std::string FormatUrmaSwitchWindowStats(const std::string &clientId, const std::
                         tracker.GetNextAllowedSwitchTimeMs());
 }
 
+namespace {
+void MaybeApplyLogSampleConfig(const LogSampleConfigPb &config, const std::string &source)
+{
+    auto result = LogSampler::Instance().UpdateConfigFromProto(config);
+    if (result == LogSampler::ConfigUpdateResult::INVALID) {
+        LOG(ERROR) << FormatString(
+            "Illegal LogSampleConfigPb from %s: request_ppm=%u access_ppm=%u diagnostic_ppm=%u",
+            source, config.request_sample_ppm(), config.access_sample_ppm(), config.diagnostic_sample_ppm());
+    } else if (result == LogSampler::ConfigUpdateResult::CHANGED) {
+        LOG(INFO) << FormatString("Applied log sample config from %s: enabled=%s",
+                                  source, config.enabled() ? "true" : "false");
+    }
+}
+}  // namespace
+
 void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
     std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
@@ -178,6 +193,9 @@ Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clien
         clientRemoved = rsp.client_removed();
         isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
         SetHealthy(!rsp.unhealthy());
+        if (rsp.has_log_sample_config()) {
+            MaybeApplyLogSampleConfig(rsp.log_sample_config(), "local worker heartbeat");
+        }
     }
     return status;
 }
@@ -255,8 +273,9 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
     SetHeartbeatProperties(timeoutMs, rsp);
-    LogRateLimiter::Instance().SetRate(rsp.log_rate_limit());
-    LOG(INFO) << "Sync client log_rate_limit from worker register response: " << rsp.log_rate_limit();
+    if (rsp.has_log_sample_config()) {
+        MaybeApplyLogSampleConfig(rsp.log_sample_config(), "local worker register");
+    }
     return Status::OK();
 }
 
@@ -547,6 +566,9 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
         SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());
         expiredWorkerFds = { rsp.expired_worker_fds().begin(), rsp.expired_worker_fds().end() };
         SetHealthy(!rsp.unhealthy());
+        if (rsp.has_log_sample_config()) {
+            MaybeApplyLogSampleConfig(rsp.log_sample_config(), "remote worker heartbeat");
+        }
     }
     return status;
 }
@@ -889,8 +911,9 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     LOG(INFO) << "[URMA_INIT] post_register addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << workerVersion << " shm=" << IsShmEnable() << " ft=" << rsp.fast_transport_mode();
     pendingFtHandshake_ = FtHandshakeContext{ timeoutMs, workerVersion, rsp };
-    LogRateLimiter::Instance().SetRate(rsp.log_rate_limit());
-    LOG(INFO) << "Sync client log_rate_limit from worker register response: " << rsp.log_rate_limit();
+    if (rsp.has_log_sample_config()) {
+        MaybeApplyLogSampleConfig(rsp.log_sample_config(), "remote worker register");
+    }
 }
 
 Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()

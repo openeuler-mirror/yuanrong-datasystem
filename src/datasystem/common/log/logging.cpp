@@ -30,13 +30,14 @@
 
 #include "re2/re2.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/log/spdlog/provider.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
@@ -88,13 +89,16 @@ DS_DEFINE_uint32(stderrthreshold, 2,
                  "addition to logfiles.  This flag obsoletes --alsologtostderr.");
 DS_DEFINE_int32(minloglevel, 0, "Messages logged at a lower level than this don't actually get logged anywhere.");
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
-DS_DEFINE_int32(log_rate_limit, 0,
-    "Maximum sampled request traces per second (0 = unlimited). "
-    "Sampling applies only to request logs with trace IDs. "
-    "Sampled traces print complete log chains. Rejected traces are dropped at all log levels.");
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
                "log files.");
+
+DS_DEFINE_double(request_sample_rate, 1.0,
+                 "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");
+DS_DEFINE_double(access_sample_rate, 1.0,
+                 "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled.");
+DS_DEFINE_double(diagnostic_sample_rate, 1.0,
+                  "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(log_only_write_info_file);
@@ -154,6 +158,31 @@ AccessRecorderManager *Logging::AccessRecorderManagerInstance()
     return instance->accessRecorderManagerInstance_.get();
 }
 
+bool Logging::InitLogSampler()
+{
+    LogSampler::Instance().Init();
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = FLAGS_request_sample_rate;
+    cfg.accessSampleRate = FLAGS_access_sample_rate;
+    cfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
+    std::vector<FlagInfo> allFlags;
+    GetAllFlags(allFlags);
+    for (const auto &fi : allFlags) {
+        if (fi.name == "request_sample_rate") cfg.requestSampleRateExplicit = fi.wasSpecified;
+        if (fi.name == "access_sample_rate") cfg.accessSampleRateExplicit = fi.wasSpecified;
+        if (fi.name == "diagnostic_sample_rate") cfg.diagnosticSampleRateExplicit = fi.wasSpecified;
+    }
+    if (!LogSampler::Instance().UpdateConfigFromFlags(cfg)) {
+        LOG(FATAL) << "Illegal log sampler config at startup: "
+                   << "request_sample_rate=" << FLAGS_request_sample_rate
+                   << " access_sample_rate=" << FLAGS_access_sample_rate
+                   << " diagnostic_sample_rate=" << FLAGS_diagnostic_sample_rate;
+        return false;
+    }
+    return true;
+}
+
 bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
 {
     if (!CreateLogDir()) {
@@ -200,8 +229,9 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
         return false;
     }
 
-    // Sync log rate limit to the rate limiter
-    LogRateLimiter::Instance().SetRate(FLAGS_log_rate_limit);
+    if (!InitLogSampler()) {
+        return false;
+    }
 
     if (loggerParam.logAsync) {
         LOG(INFO) << "Async logging buffer duration: " << globalLogParam.logBufSecs << " s";
@@ -233,6 +263,10 @@ void Logging::ShutdownLoggingWrapper()
 
     // Stop log manager.
     logManager_->Stop();
+
+    // Shutdown LogSampler.
+    LogSampler::Instance().Shutdown();
+
     if (isClient_ && !FLAGS_logtostderr) {
         auto *redirectStdErr = freopen("/dev/null", "w", stderr);
         if (redirectStdErr == nullptr) {
@@ -317,10 +351,6 @@ void Logging::InitClientAdvancedConfig()
 
     FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
 
-    if (FLAGS_log_rate_limit == 0) {
-        FLAGS_log_rate_limit = GetInt32FromEnv(LOG_RATE_LIMIT_ENV.c_str(), 0);
-    }
-
     if (FLAGS_zmq_client_io_thread == 1) {
         FLAGS_zmq_client_io_thread = GetInt32FromEnv("DATASYSTEM_ZMQ_CLIENT_IO_THREAD", 1);
     }
@@ -401,8 +431,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
                       << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
                       << ", log_v: " << FLAGS_v
-                      << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file
-                      << ", log_rate_limit: " << FLAGS_log_rate_limit << std::endl;
+                      << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file << std::endl;
         }
     } else {
         FLAGS_log_monitor = false;

@@ -240,18 +240,15 @@ public:
             }
             context.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(rpcTimeoutMs));
             contextMap_.emplace(&context, false);
-            AccessRecorder requestOutPoint(GetEtcdReqRecorderKey(methodName));
+            auto access = AccessRecorder::RequestOut(GetEtcdReqRecorderKey(methodName));
             grpc::Status status = (stub_.get()->*stubFunc)(&context, req, &rsp);
             INJECT_POINT("grpc_session.SendRpc.EtcdRequestFailed", [&status]() {
                 status = grpc::Status(grpc::StatusCode::UNKNOWN, "Mock etcd operation error.");
                 return Status::OK();
             });
-            RequestParam reqParam;
-            if constexpr (HasMemberFunc_key<Request>::value) {
-                reqParam.outReq = req.key();
-            }
             auto returnCode = static_cast<int>(status.error_code());
-            requestOutPoint.Record(returnCode, std::to_string(dataSize), reqParam, status.error_message(), asyncElapse);
+            access.OutReqKeyIfPresent(req).DataSize(static_cast<uint64_t>(dataSize)).AsyncElapsedUs(asyncElapse)
+                .Result(returnCode, status.error_message()).Record();
             requestStatusVec_.BlockingEmplaceBackCode(returnCode);
             contextMap_.erase(&context);
             if (!status.ok()) {
@@ -299,11 +296,7 @@ public:
         }
         cqMap_.emplace(&cq, &context);
 
-        std::unique_ptr<AccessRecorder> requestOutPoint = nullptr;
-        auto recoredKey = GetEtcdReqRecorderKey(methodName);
-        if (recoredKey != AccessRecorderKey::DS_ETCD_UNKNOWN) {
-            requestOutPoint = std::make_unique<AccessRecorder>(recoredKey);
-        }
+        auto access = AccessRecorder::RequestOut(GetEtcdReqRecorderKey(methodName));
 
         auto rspReader = (stub_.get()->*stubFunc)(&context, req, &cq);
         rspReader->Finish(&rsp, &status, (void *)this);
@@ -311,13 +304,9 @@ public:
         void *tag = nullptr;
         bool ok = false;
         cq.Next(&tag, &ok);
-        if (requestOutPoint != nullptr) {
-            RequestParam reqParam;
-            reqParam.outReq = req.ShortDebugString();
-            auto returnCode = static_cast<int>(status.error_code());
-            auto outResp = status.ok() ? rsp.ShortDebugString() : status.error_message();
-            requestOutPoint->Record(returnCode, "0", reqParam, outResp, 0);
-        }
+        auto returnCode = static_cast<int>(status.error_code());
+        access.OutReqProvider([&] { return req.ShortDebugString(); }).DataSize(0).AsyncElapsedUs(0)
+            .Result(returnCode, status.ok() ? rsp.ShortDebugString() : status.error_message()).Record();
         CHECK_FAIL_RETURN_STATUS(tag == (void *)this, StatusCode::K_RUNTIME_ERROR, "not equal tag");
         cqMap_.erase(&cq);
         RETURN_OK_IF_TRUE(status.ok());

@@ -178,7 +178,6 @@ private:
                                                               "log_monitor",
                                                               "log_async_queue_size",
                                                               "log_compress",
-                                                              "log_rate_limit",
                                                               "max_log_file_num",
                                                               "arena_per_tenant",
                                                               "node_dead_timeout_s",
@@ -196,6 +195,9 @@ private:
                                                               "enable_lossless_data_exit_mode",
                                                               "urma_failover_success_rate_ratio",
                                                               "urma_failover_min_sample_count",
+                                                              "request_sample_rate",
+                                                              "access_sample_rate",
+                                                              "diagnostic_sample_rate",
 #ifdef WITH_TESTS
                                                               "inject_actions"
 #endif
@@ -216,6 +218,14 @@ private:
 
     std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> isToHandle_;
     std::function<bool(const std::string &, const std::string &)> validateSpecial_;
+
+    void UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
+                          const std::string &flagName, const std::string &newVal);
+
+    bool ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap);
+
+    bool CommitSamplerFlagsTransaction(
+        const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg);
 };
 };      // namespace datasystem
 #endif  // DATASYSTEM_COMMON_UTIL_FLAGS_H

@@ -28,7 +28,7 @@
 
 #include "ut/common.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/logger_provider.h"
 #include "datasystem/common/log/trace.h"
@@ -51,7 +51,7 @@ public:
     void SetUp() override
     {
         Trace::Instance().Invalidate();
-        LogRateLimiter::Instance().Reset();
+        LogSampler::Instance().ResetForTest();
 
         GlobalLogParam globalLogParam;
         auto lp = std::make_shared<LoggerProvider>(globalLogParam);
@@ -66,7 +66,7 @@ public:
 
         Provider::Instance().SetLoggerProvider(nullptr);
         Trace::Instance().Invalidate();
-        LogRateLimiter::Instance().Reset();
+        LogSampler::Instance().ResetForTest();
     }
 
     void CreateDsLogger()
@@ -219,15 +219,17 @@ TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
     LOG_IF(INFO, false) << "condition false " << BuildSideEffectPayload(evaluations);
     EXPECT_EQ(evaluations, 0);
 
-    LogRateLimiter::Instance().SetRate(0);
+    // sampler disabled: all logs pass
     LOG(INFO) << "non request info " << BuildSideEffectPayload(evaluations);
     EXPECT_EQ(evaluations, 1);
 
-    LogRateLimiter::Instance().SetRate(1);
+    // sampler enabled with full request rate: request sampled-in
+    LogSampler::Instance().SetSaltForTest(12345);
+    LogSampleUserConfig config;
+    config.requestSampleRateExplicit = true;
+    config.requestSampleRate = 1.0;
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    bool admitted = false;
-    ASSERT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
-    ASSERT_TRUE(admitted);
 
     LOG(INFO) << "admitted request info " << BuildSideEffectPayload(evaluations);
     LOG(WARNING) << "admitted request warning " << BuildSideEffectPayload(evaluations);
@@ -236,44 +238,43 @@ TEST_F(LogMessageTest, AllowedLogsEvaluateStreamExpression)
 
 TEST_F(LogMessageTest, RejectedRequestLogsSkipStreamExpression)
 {
-    LogRateLimiter::Instance().SetRate(1);
+    // Configure sampler with request_rate=0: all requests rejected
+    // diagnostic_rate=0: no diagnostic补采样 (otherwise ERROR/WARNING could still pass)
+    LogSampler::Instance().SetSaltForTest(12345);
+    LogSampleUserConfig config;
+    config.requestSampleRateExplicit = true;
+    config.requestSampleRate = 0.0;
+    config.diagnosticSampleRateExplicit = true;
+    config.diagnosticSampleRate = 0.0;
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
+
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
 
     int evaluations = 0;
-    bool rejectedFound = false;
-    constexpr int kAttempts = 1000;
-    for (int i = 0; i < kAttempts; ++i) {
-        Trace::Instance().Invalidate();
-        TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-        bool admitted = true;
-        ASSERT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
-        if (admitted) {
-            continue;
-        }
-
-        rejectedFound = true;
-        LOG(INFO) << "rejected request info " << BuildSideEffectPayload(evaluations);
-        LOG(WARNING) << "rejected request warning " << BuildSideEffectPayload(evaluations);
-        EXPECT_EQ(evaluations, 0);
-
-        LOG(ERROR) << "rejected request error " << BuildSideEffectPayload(evaluations);
-        EXPECT_EQ(evaluations, 0);
-        break;
-    }
-    EXPECT_TRUE(rejectedFound);
+    LOG(INFO) << "rejected request info " << BuildSideEffectPayload(evaluations);
+    LOG(WARNING) << "rejected request warning " << BuildSideEffectPayload(evaluations);
+    LOG(ERROR) << "rejected request error " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 0);
 }
 
-TEST_F(LogMessageTest, PropagatedRejectSkipsStreamExpressionWhenLocalRateIsZero)
+TEST_F(LogMessageTest, PropagatedRejectSkipsStreamExpressionWhenDiagnosticRateIsZero)
 {
-    LogRateLimiter::Instance().SetRate(0);
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("propagated-rejected-request");
+    // Configure sampler with diagnostic_rate=0 so that diagnostic补采样 also rejects
+    LogSampler::Instance().SetSaltForTest(12345);
+    LogSampleUserConfig config;
+    config.requestSampleRateExplicit = true;
+    config.requestSampleRate = 0.0;
+    config.diagnosticSampleRateExplicit = true;
+    config.diagnosticSampleRate = 0.0;
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(config));
+
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("propagated-rejected-request", true);
     Trace::Instance().SetRequestLogTrace(true);
     Trace::Instance().SetRequestSampleDecision(true, false);
 
     int evaluations = 0;
     LOG(INFO) << "propagated rejected info " << BuildSideEffectPayload(evaluations);
     LOG(WARNING) << "propagated rejected warning " << BuildSideEffectPayload(evaluations);
-    EXPECT_EQ(evaluations, 0);
-
     LOG(ERROR) << "propagated rejected error " << BuildSideEffectPayload(evaluations);
     EXPECT_EQ(evaluations, 0);
 }

@@ -13,6 +13,7 @@ set(DS_UT_DEPEND_LIBS
         generic_service_protos
         slot_recovery_protos
         common_etcd
+        common_log_proto
         common_log
         common_metrics
         common_buffer

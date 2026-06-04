@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <cmath>
+#include "datasystem/common/util/format.h"
 #include "datasystem/utils/embedded_config.h"
 
 namespace datasystem {
@@ -119,9 +121,30 @@ EmbeddedConfig &EmbeddedConfig::VLogLevel(int level)
     return *this;
 }
 
-EmbeddedConfig &EmbeddedConfig::LogRateLimit(int limit)
+EmbeddedConfig &EmbeddedConfig::RequestSampleRate(double rate)
 {
-    extraArgs["log_rate_limit"] = std::to_string(limit);
+    if (!std::isfinite(rate) || rate < 0.0 || rate > 1.0) {
+        return *this;
+    }
+    extraArgs["request_sample_rate"] = std::to_string(rate);
+    return *this;
+}
+
+EmbeddedConfig &EmbeddedConfig::AccessSampleRate(double rate)
+{
+    if (!std::isfinite(rate) || rate < 0.0 || rate > 1.0) {
+        return *this;
+    }
+    extraArgs["access_sample_rate"] = std::to_string(rate);
+    return *this;
+}
+
+EmbeddedConfig &EmbeddedConfig::DiagnosticSampleRate(double rate)
+{
+    if (!std::isfinite(rate) || rate < 0.0 || rate > 1.0) {
+        return *this;
+    }
+    extraArgs["diagnostic_sample_rate"] = std::to_string(rate);
     return *this;
 }
 

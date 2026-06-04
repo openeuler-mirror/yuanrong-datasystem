@@ -26,6 +26,7 @@
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
@@ -69,14 +70,16 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
 {
     workerOperationTimeCost.Clear();
     Timer timer;
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_MULTIPUBLISH);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTIPUBLISH);
+    access.ObjectKeyProvider([&req]() -> std::string {
+        return req.object_info().empty() ? std::string() : req.object_info(0).object_key();
+    }).DataSizeProvider([&req]() -> uint64_t {
+        return req.object_info().empty() ? 0 : req.object_info(0).data_size();
+    });
     CHECK_FAIL_RETURN_STATUS(!req.object_info().empty(), K_INVALID, "The list of object info is empty.");
     Status status = MultiPublishImpl(req, resp, payloads, clientId);
-    RequestParam reqParam;
-    reqParam.objectKey = FormatString(
-        "%s,count:%s", req.object_info(0).object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT), req.object_info_size());
+    access.Result(status).Record();
     auto totalMs = timer.ElapsedMilliSecond();
-    posixPoint.Record(status.GetCode(), std::to_string(req.object_info(0).data_size()), reqParam, status.GetMsg());
     workerOperationTimeCost.Append("Total MultiPublish", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
     VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s",

@@ -96,7 +96,15 @@ spec:
         - -log_async={{ $.Values.global.log.logAsync }}
         - -logbufsecs={{ $.Values.global.log.logBufSecs }}
         - -log_compress={{ $.Values.global.log.logCompress }}
-        - -log_rate_limit=$(LOG_RATE_LIMIT)
+        {{- if not (kindIs "invalid" $.Values.global.log.requestSampleRate) }}
+        - -request_sample_rate=$(REQUEST_SAMPLE_RATE)
+        {{- end }}
+        {{- if not (kindIs "invalid" $.Values.global.log.accessSampleRate) }}
+        - -access_sample_rate=$(ACCESS_SAMPLE_RATE)
+        {{- end }}
+        {{- if not (kindIs "invalid" $.Values.global.log.diagnosticSampleRate) }}
+        - -diagnostic_sample_rate=$(DIAGNOSTIC_SAMPLE_RATE)
+        {{- end }}
         - -logfile_mode=416
         - -shared_memory_size_mb=$(SHARE_MEMORY_SIZE)
         - -sc_local_cache_memory_size_mb={{ $.Values.global.resources.datasystemWorker.scLocalCacheMemorySizeMb }}
@@ -352,8 +360,18 @@ spec:
             value: "/home/yuanrong/datasystem/rocksdb"
           - name: SHARE_MEMORY_SIZE
             value: "{{ $spec.workerResources.sharedMemory }}"
-          - name: LOG_RATE_LIMIT
-            value: "{{ $.Values.global.log.logRateLimit }}"
+          {{- if not (kindIs "invalid" $.Values.global.log.requestSampleRate) }}
+          - name: REQUEST_SAMPLE_RATE
+            value: "{{ $.Values.global.log.requestSampleRate }}"
+          {{- end }}
+          {{- if not (kindIs "invalid" $.Values.global.log.accessSampleRate) }}
+          - name: ACCESS_SAMPLE_RATE
+            value: "{{ $.Values.global.log.accessSampleRate }}"
+          {{- end }}
+          {{- if not (kindIs "invalid" $.Values.global.log.diagnosticSampleRate) }}
+          - name: DIAGNOSTIC_SAMPLE_RATE
+            value: "{{ $.Values.global.log.diagnosticSampleRate }}"
+          {{- end }}
           - name: CURVE_KEY_DIR
             value: {{ $.Values.global.rpc.curveKeyDir }}
           - name: ENABLE_CURVE_ZMQ

@@ -23,6 +23,7 @@
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -427,21 +428,24 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
 {
     workerOperationTimeCost.Clear();
     Timer timer;
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_PUBLISH);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_PUBLISH);
+    access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); })
+        .DataSize(req.data_size());
+    if (req.nested_keys_size() > 0) {
+        access.NestedKeyProvider([&req] {
+            return objectKeysToString(req.nested_keys());
+        });
+    }
+    access.Keep(req.keep())
+        .WriteMode(req.write_mode())
+        .ConsistencyType(req.consistency_type())
+        .IsSeal(req.is_seal())
+        .IsRetry(req.is_retry())
+        .TtlSecond(req.ttl_second())
+        .Existence(req.existence())
+        .CacheType(req.cache_type());
     Status rc = PublishImpl(req, resp, payloads);
-    std::vector<std::string> nestedObjectKeys = { req.nested_keys().begin(), req.nested_keys().end() };
-    RequestParam reqParam;
-    reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
-    reqParam.nestedKey = objectKeysToString(nestedObjectKeys);
-    reqParam.keep = std::to_string(req.keep());
-    reqParam.writeMode = std::to_string(req.write_mode());
-    reqParam.consistencyType = std::to_string(req.consistency_type());
-    reqParam.isSeal = std::to_string(req.is_seal());
-    reqParam.isRetry = std::to_string(req.is_retry());
-    reqParam.ttlSecond = std::to_string(req.ttl_second());
-    reqParam.existence = std::to_string(req.existence());
-    reqParam.cacheType = std::to_string(req.cache_type());
-    posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     const auto totalPublishUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double totalPublishMs = static_cast<double>(totalPublishUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Publish", totalPublishMs);

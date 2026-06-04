@@ -34,7 +34,7 @@
 #include <zmq.h>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -374,13 +374,24 @@ inline LogSampleState GetOrCreateLogSampleState()
     if (!Trace::Instance().IsRequestLogTrace()) {
         return LOG_SAMPLE_NONE;
     }
-    bool admitted = false;
-    if (!LogRateLimiter::Instance().GetOrCreateRequestDecision(Trace::Instance().GetCachedHash(), admitted)) {
-        // Keep request marker but do not force ADMIT when no local decision exists.
-        Trace::Instance().SetRequestSampleDecision(false, false);
-        return LOG_SAMPLE_UNDECIDED;
+
+    if (LogSampler::Instance().IsSamplerEnabledFast()) {
+        bool sampledIn = LogSampler::Instance().IsCurrentRequestSampledIn();
+        bool admitted = false;
+        bool hasDecision = Trace::Instance().GetRequestSampleDecision(admitted);
+        if (hasDecision) {
+            return admitted ? LOG_SAMPLE_ADMIT : LOG_SAMPLE_REJECT;
+        }
+
+        if (sampledIn) {
+            return LOG_SAMPLE_UNDECIDED;
+        } else {
+            Trace::Instance().SetRequestSampleDecision(true, false);
+            return LOG_SAMPLE_REJECT;
+        }
     }
-    return admitted ? LOG_SAMPLE_ADMIT : LOG_SAMPLE_REJECT;
+
+    return LOG_SAMPLE_UNDECIDED;
 }
 
 inline void ApplyLogSampleState(LogSampleState state)
@@ -389,9 +400,9 @@ inline void ApplyLogSampleState(LogSampleState state)
         case LOG_SAMPLE_UNDECIDED: {
             Trace::Instance().SetRequestLogTrace(true);
             Trace::Instance().SetRequestSampleDecision(false, false);
-            bool admitted = false;
-            // Create a local request decision when rate limiting is enabled; the decision is stored in Trace.
-            (void)LogRateLimiter::Instance().GetOrCreateRequestDecision(Trace::Instance().GetCachedHash(), admitted);
+            if (LogSampler::Instance().IsSamplerEnabledFast()) {
+                (void)LogSampler::Instance().IsCurrentRequestSampledIn();
+            }
             break;
         }
         case LOG_SAMPLE_ADMIT:

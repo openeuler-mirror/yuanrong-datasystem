@@ -55,6 +55,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         nlohmann_json::nlohmann_json
         posix_protos_client
         share_memory_protos_client
+        common_log_proto
         worker_object_protos_client
         worker_stream_protos_client
         common_device

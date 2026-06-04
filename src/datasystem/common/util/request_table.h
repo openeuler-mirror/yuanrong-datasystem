@@ -309,7 +309,7 @@ public:
 
     UnaryRequest(std::vector<std::string> objectKeys,
                  std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
-                 std::shared_ptr<AccessRecorder> accessRecorderPoint)
+                 std::shared_ptr<ObjectAccessRecorder> accessRecorderPoint)
         : UnaryRequest(std::move(objectKeys), serverApi, clientId, -1, {}, accessRecorderPoint)
     {
     }
@@ -319,7 +319,7 @@ public:
                  std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
                  int32_t deviceId, const Req &requestInfo)
         : UnaryRequest(std::move(objectKeys), serverApi, clientId, deviceId, requestInfo,
-                       (std::shared_ptr<AccessRecorder>)nullptr)
+                       (std::shared_ptr<ObjectAccessRecorder>)nullptr)
     {
     }
 
@@ -333,13 +333,14 @@ public:
 
     UnaryRequest(std::vector<std::string> objectKeys,
                  std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, const Req &requestInfo)
-        : UnaryRequest(std::move(objectKeys), serverApi, "", -1, requestInfo, (std::shared_ptr<AccessRecorder>)nullptr)
+        : UnaryRequest(std::move(objectKeys), serverApi, "", -1, requestInfo,
+                       (std::shared_ptr<ObjectAccessRecorder>)nullptr)
     {
     }
 
     UnaryRequest(std::vector<std::string> objectKeys,
                  std::shared_ptr<::datasystem::ServerUnaryWriterReader<Resp, Req>> serverApi, ClientKey clientId,
-                 int32_t deviceId, const Req &requestInfo, std::shared_ptr<AccessRecorder> accessRecorderPoint)
+                 int32_t deviceId, const Req &requestInfo, std::shared_ptr<ObjectAccessRecorder> accessRecorderPoint)
         : requestInfo_(requestInfo),
           clientId_(std::move(clientId)),
           deviceId_(deviceId),
@@ -443,7 +444,7 @@ public:
     // The isReturn_ indicates whether the request has been returned.
     std::atomic<bool> isReturn_;
 
-    std::shared_ptr<AccessRecorder> accessRecorderPoint_;
+    std::shared_ptr<ObjectAccessRecorder> accessRecorderPoint_;
 
     // save the last error.
     Status lastRc_;

@@ -196,6 +196,5 @@ std::vector<std::string> GetObjKeysVector(const char **cObjKeys, const size_t *c
  * @return status of the call
  */
 struct StatusC ExecuteGetArray(void *clientPtr, const char **cObjKeys, const size_t *cObjKeysLen, uint64_t cObjKeysNum,
-                               uint32_t ctimeoutms, char **cVals, size_t *valsLen, size_t *totalSize,
-                               datasystem::RequestParam *reqParam);
+                               uint32_t ctimeoutms, char **cVals, size_t *valsLen, size_t *totalSize);
 #endif
