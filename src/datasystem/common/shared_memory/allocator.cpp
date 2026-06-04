@@ -41,6 +41,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/gflag/eviction_watermark.h"
 
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
@@ -64,7 +65,6 @@ Status ValidateSharedMemoryPopulateFlags(bool populate)
 }  // namespace
 
 const int HUNDRED_PERCENT = 100;
-const double HIGH_WATER_MARK_RATIO = 0.9;
 
 void DeallocateForZmqFree(void *data, void *hint)
 {
@@ -258,7 +258,7 @@ ResourcePool *Allocator::GetPhyResourcePoolByType(CacheType cacheType) const
 uint64_t Allocator::GetMemoryAvailToHighWater() const
 {
     uint64_t memoryLimit = GetTotalMemoryLimit();
-    uint64_t highWater = std::max(static_cast<uint64_t>(memoryLimit * HIGH_WATER_MARK_RATIO),
+    uint64_t highWater = std::max(static_cast<uint64_t>(memoryLimit * GetEvictionHighWaterFactor()),
                                   memoryLimit > FLAGS_eviction_reserve_mem_threshold_mb * MB_TO_BYTES
                                       ? memoryLimit - (FLAGS_eviction_reserve_mem_threshold_mb * MB_TO_BYTES)
                                       : 0);

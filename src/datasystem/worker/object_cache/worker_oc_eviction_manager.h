@@ -49,9 +49,6 @@ class AsyncSendManager;
 }
 }  // namespace datasystem
 
-static constexpr double HIGH_WATER_FACTOR = 0.9;
-static constexpr double LOW_WATER_FACTOR = 0.8;
-
 namespace datasystem {
 namespace ut {
 class SpillEvictionTest;

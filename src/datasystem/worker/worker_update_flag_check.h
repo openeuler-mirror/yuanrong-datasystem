@@ -30,6 +30,8 @@ bool WorkerFlagValidateSpecial(const std::string &flagName, const std::string &n
 
 void AdjustNodeTimeoutFlags();
 
+bool ValidateWatermarkFlags();
+
 /**
  * @brief Check whether the value of node_dead_timeout_s is valid.
  * @param[in] value Change node_dead_timeout_s to this value.

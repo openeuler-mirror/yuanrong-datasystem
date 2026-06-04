@@ -33,6 +33,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:eviction_watermark",
     ],
 )
 

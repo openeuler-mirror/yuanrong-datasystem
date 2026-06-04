@@ -34,6 +34,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/common/util/gflag/eviction_watermark.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint64(spill_size_limit);
@@ -287,7 +288,8 @@ void AsyncSendManager::TryEvict(const std::string &objectKey, uint64_t needSize)
     auto memOccupied =
         static_cast<double>(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage() + needSize);
     auto memThreshold =
-        static_cast<double>(datasystem::memory::Allocator::Instance()->GetMaxMemorySize()) * HIGH_WATER_FACTOR;
+        static_cast<double>(datasystem::memory::Allocator::Instance()->GetMaxMemorySize())
+        * GetEvictionHighWaterFactor();
     LOG(INFO) << FormatString("Allocate memory for %s, size = %ld, memOccupied = %ld, memThreshold = %ld", objectKey,
                               needSize, memOccupied, memThreshold);
     if (memOccupied >= memThreshold) {

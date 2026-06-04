@@ -11,4 +11,4 @@ set(GFLAG_LIBS
 add_library(common_util_gflag STATIC ${GFLAG_SRCS})
 target_link_libraries(common_util_gflag PRIVATE ${GFLAG_LIBS})
 target_link_libraries(common_util_gflag PRIVATE ds_flags)
-add_library(common_flags SHARED common_gflag_define.cpp $<TARGET_OBJECTS:ds_flags>)
+add_library(common_flags SHARED common_gflag_define.cpp eviction_watermark.cpp $<TARGET_OBJECTS:ds_flags>)

@@ -85,3 +85,11 @@ global:
     urmaConnectionSize: 0
     # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.
     evictionReserveMemThresholdMB: 10240
+    # Memory usage high watermark (percent). Valid range: 2-100, must be greater than evictionLowWatermarkPercent.
+    evictionHighWatermarkPercent: 90
+    # Memory usage low watermark (percent). Valid range: 1-99, must be less than evictionHighWatermarkPercent.
+    evictionLowWatermarkPercent: 80
+    # Spill directory usage high watermark (percent of spill_size_limit). Valid range: 2-100.
+    spillHighWatermarkPercent: 80
+    # Spill directory usage low watermark (percent of spill_size_limit). Valid range: 1-99.
+    spillLowWatermarkPercent: 60
