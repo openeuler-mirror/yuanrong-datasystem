@@ -130,9 +130,9 @@ class TestDoForAllPods(unittest.TestCase):
 class TestFindDefaultWhl(unittest.TestCase):
     @patch('deploy_worker.glob.glob')
     def test_found(self, mock_glob):
-        mock_glob.return_value = ['/some/path/openyuanrong_datasystem-0.8.1-cp311.whl']
+        mock_glob.return_value = ['/some/path/openyuanrong_datasystem-0.8.2-cp311.whl']
         result = find_default_whl()
-        self.assertIn('0.8.1', result)
+        self.assertIn('0.8.2', result)
 
     @patch('deploy_worker.glob.glob')
     def test_not_found(self, mock_glob):
