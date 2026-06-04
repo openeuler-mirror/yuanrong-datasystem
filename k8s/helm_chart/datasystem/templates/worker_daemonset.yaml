@@ -112,7 +112,6 @@ spec:
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
-        - -eviction_thread_num={{ $.Values.global.spill.evictionThreadNum }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
         - -iam_kit={{ $.Values.global.tenantAuth.iamKit }}
         - -yuanrong_iam_url={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamUrl }}
