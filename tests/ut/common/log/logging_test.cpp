@@ -490,6 +490,9 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
     std::stringstream ssTimeCostFile;
     ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".[0-9]*";
     std::string pattern = ssTimeCostFile.str();
+    std::stringstream ssTimeCostPidFile;
+    ssTimeCostPidFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*.[0-9]*";
+    std::string patternPid = ssTimeCostPidFile.str();
     int timeout = 10;
     bool success = false;
     Timer timer;
@@ -497,6 +500,7 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
     while (timer.ElapsedSecond() < timeout) {
         std::vector<std::string> files;
         DS_ASSERT_OK(Glob(pattern, files));
+        DS_ASSERT_OK(Glob(patternPid, files));
         LOG(INFO) << VectorToString(files);
         if (files.size() == FLAGS_max_log_file_num) {
             success = true;
@@ -538,7 +542,8 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".log";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/"
+                   << Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid()) << ".log";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -638,7 +643,8 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     Trace::Instance().SetRequestSampleDecision(false, false);
 
     std::vector<std::string> clientFiles;
-    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + CLIENT_ACCESS_LOG_NAME + ".log", clientFiles));
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid()) + ".log",
+                      clientFiles));
     ASSERT_EQ(clientFiles.size(), 1ul);
     std::string clientContent = ReadFileContent(clientFiles[0]);
     auto findLine = [](const std::string &content, const std::string &key) {

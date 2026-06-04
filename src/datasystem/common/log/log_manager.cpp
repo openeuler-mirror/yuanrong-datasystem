@@ -84,19 +84,15 @@ void LogManager::RunTimerTask(const std::function<Status(void)> &func, int64_t w
     const int intervalMs = 10;
     const int secToMs = 1000;
     LOG(INFO) << "RunTimerTask thread start with duration:" << waitSeconds << "s";
-    bool isCompressed = false;
     Timer timer;
     while (state_ == RUNNING) {
-        if (!isCompressed) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-            if (static_cast<int64_t>(timer.ElapsedMilliSecond()) < waitSeconds * secToMs) {
-                continue;
-            }
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+        if (static_cast<int64_t>(timer.ElapsedMilliSecond()) < waitSeconds * secToMs) {
+            continue;
         }
 
         Status status = func();
-        isCompressed = status.GetCode() == K_TRY_AGAIN;
-        if (status.IsError() && status.GetCode() != K_TRY_AGAIN) {
+        if (status.IsError()) {
             LOG(WARNING) << "Do Log File Manager failed:" << status.ToString();
         }
 
@@ -112,8 +108,6 @@ Status LogManager::DoLogBackgroundTask()
     RETURN_IF_NOT_OK(DoLogFileCompress(isCompressed));
     RETURN_IF_NOT_OK(DoLogFileRolling());
     RETURN_IF_NOT_OK(DoLogMonitorWrite());
-    CHECK_FAIL_RETURN_STATUS(isCompressed == false, K_TRY_AGAIN,
-                             "Execute success, execute the next round of loop immediately.");
     return Status::OK();
 }
 
@@ -165,21 +159,41 @@ Status LogManager::FetchLogWithPattern(std::vector<std::string> &files, bool isR
     return Status::OK();
 }
 
+Status LogManager::CollectLogFilesForSeverity(int severity, std::vector<std::string> &files)
+{
+    auto severityName = GetLogSeverityName(LogSeverity(severity));
+    std::stringstream ss;
+    ss << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "\\." << severityName
+       << "\\." << "*[0-9]\\.log";
+    if (FLAGS_log_compress) {
+        ss << "\\.gz";
+    }
+    RETURN_IF_NOT_OK(Glob(ss.str(), files));
+
+    // Also match log files without PID suffix for backward compatibility
+    // (e.g., files created before PID was enabled).
+    auto underscorePos = FLAGS_log_filename.rfind('_');
+    if (underscorePos != std::string::npos) {
+        std::string possiblePid = FLAGS_log_filename.substr(underscorePos + 1);
+        if (!possiblePid.empty() && possiblePid.find_first_not_of("0123456789") == std::string::npos) {
+            std::stringstream ssBase;
+            ssBase << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.substr(0, underscorePos) << "\\."
+                   << severityName << "\\." << "*[0-9]\\.log";
+            if (FLAGS_log_compress) {
+                ssBase << "\\.gz";
+            }
+            RETURN_IF_NOT_OK(Glob(ssBase.str(), files));
+        }
+    }
+
+    return Status::OK();
+}
+
 Status LogManager::DoLogFileRolling()
 {
     for (int i = 0; i < NUM_SEVERITIES; ++i) {
-        // 1st: get log files based on regular expressions.
         std::vector<std::string> files;
-        // log gzip filename format: <program name>.<severity level>.<timestamp>.log.gz
-        std::stringstream ss;
-        ss << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "\\." << GetLogSeverityName(LogSeverity(i))
-           << "\\." << "*[0-9]\\.log";
-        if (FLAGS_log_compress) {
-            ss << "\\.gz";
-        }
-
-        std::string pattern = ss.str();
-        RETURN_IF_NOT_OK(Glob(pattern, files));
+        RETURN_IF_NOT_OK(CollectLogFilesForSeverity(i, files));
 
         if (i == NUM_SEVERITIES - 1) {
             RETURN_IF_NOT_OK(FetchLogWithPattern(files, true));
