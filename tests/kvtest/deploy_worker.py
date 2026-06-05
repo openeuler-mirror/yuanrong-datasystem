@@ -104,12 +104,11 @@ def upload_procmon(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
 
 
 def start_procmon(pod, namespace, worker_pid, remote_dir='/tmp',
-                  interval=2, timeout=DEFAULT_TIMEOUT):
+                  interval=1, timeout=DEFAULT_TIMEOUT):
     """Start procmon monitoring for a worker process."""
-    log_path = f'{remote_dir}/resource_monitor.log'
     cmd = (f'cd {remote_dir} && '
            f'(nohup python3 procmon.py --pid {worker_pid} -i {interval} '
-           f'> {log_path} 2>&1 & echo $!) <&-')
+           f'--output resource_monitor.log </dev/null & echo $!)')
     try:
         result = kubectl_exec(pod['name'], namespace, cmd, timeout=timeout)
         return result.stdout.strip() if result.returncode == 0 else None
@@ -133,7 +132,8 @@ def find_worker_pid(pod, namespace, port, timeout=DEFAULT_TIMEOUT):
 
 
 def start_worker(pod, namespace, config_template, worker_port, remote_config,
-                 enable_procmon=True, procmon_remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
+                 enable_procmon=True, procmon_remote_dir='/tmp',
+                 numactl_opts=None, timeout=DEFAULT_TIMEOUT):
     """Start worker in a single pod."""
     pod_name = pod['name']
     pod_ip = pod['ip']
@@ -147,7 +147,10 @@ def start_worker(pod, namespace, config_template, worker_port, remote_config,
 
     try:
         kubectl_cp_to(pod_name, namespace, tmp_path, remote_config, timeout=timeout)
-        result = kubectl_exec(pod_name, namespace, f'dscli start -f {remote_config}', timeout=timeout)
+        cmd = f'dscli start -f {remote_config}'
+        if numactl_opts:
+            cmd += f' {numactl_opts}'
+        result = kubectl_exec(pod_name, namespace, cmd, timeout=timeout)
         print(f'  {pod_name} ({pod_ip}) -> started')
 
         if enable_procmon:
@@ -302,9 +305,15 @@ def cmd_start(args, pods):
     def do_op(pod):
         cfg = json.loads(json.dumps(config_template))
         cfg['worker_address']['value'] = f'{pod["ip"]}:{args.port}'
+        numactl_opts = None
+        if args.numa_nodes:
+            numactl_opts = f'-N {args.numa_nodes}'
+        if args.cpu_bind:
+            numactl_opts = f'-C {args.cpu_bind}'
         return start_worker(pod, args.namespace, cfg, args.port, args.remote_config,
                            enable_procmon=args.enable_procmon,
                            procmon_remote_dir=args.procmon_dir,
+                           numactl_opts=numactl_opts,
                            timeout=args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Starting workers')
@@ -324,6 +333,51 @@ def cmd_kill(args, pods):
         return kill_worker(pod, args.namespace, args.process, args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Killing workers')
+
+
+def clean_pod(pod, namespace, log_dir, remote_config_dir, timeout=DEFAULT_TIMEOUT):
+    """Kill worker and clean logs in a single pod."""
+    pod_name = pod['name']
+    pod_ip = pod['ip']
+    try:
+        kill_worker(pod, namespace, timeout=timeout)
+
+        # Remove log_dir and resource_monitor.log from remote_config_dir
+        if log_dir:
+            kubectl_exec(pod_name, namespace, f'rm -rf {log_dir}', check=False, timeout=timeout)
+        kubectl_exec(pod_name, namespace, f'rm -f {remote_config_dir}/resource_monitor.log', check=False, timeout=timeout)
+
+        print(f'  {pod_name} ({pod_ip}) -> OK')
+        return True
+    except subprocess.TimeoutExpired:
+        print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+        return False
+    except Exception as e:
+        print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+        return False
+
+
+def cmd_clean(args, pods):
+    """Kill workers and clean log directories."""
+    log_dir = None
+    if pods:
+        try:
+            result = kubectl_exec(pods[0]['name'], args.namespace, f'cat {args.remote_config}', check=True, timeout=args.timeout)
+            config = json.loads(result.stdout)
+            log_dir_entry = config.get('log_dir', {})
+            if isinstance(log_dir_entry, dict):
+                log_dir = log_dir_entry.get('value', None)
+            else:
+                log_dir = log_dir_entry or None
+        except Exception as e:
+            print(f'WARNING: Failed to read remote config from pod: {e}', file=sys.stderr)
+
+    remote_config_dir = os.path.dirname(args.remote_config)
+
+    def do_op(pod):
+        return clean_pod(pod, args.namespace, log_dir, remote_config_dir, timeout=args.timeout)
+
+    return do_for_all_pods(pods, do_op, 'Cleaning worker logs')
 
 
 def cmd_check(args, pods):
@@ -395,7 +449,8 @@ def cmd_exec(args, pods):
     return do_for_all_pods(pods, do_op, f'Executing command: {cmd}')
 
 
-def collect_logs_from_pod(pod, namespace, log_dir, local_dir, timeout=DEFAULT_TIMEOUT):
+def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
+                          remote_config_dir=None, timeout=DEFAULT_TIMEOUT):
     """Collect log files from a single pod."""
     pod_name = pod['name']
     pod_ip = pod['ip']
@@ -410,7 +465,7 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir, timeout=DEFAULT_TI
             return True
 
         # List log files
-        ls_result = kubectl_exec(pod_name, namespace, f'ls {log_dir}/*.log {log_dir}/*.txt 2>/dev/null', check=False, timeout=timeout)
+        ls_result = kubectl_exec(pod_name, namespace, f'ls {log_dir}/*.log {log_dir}/*.log.gz {log_dir}/*.txt 2>/dev/null', check=False, timeout=timeout)
         log_files = [f.strip() for f in (ls_result.stdout or '').splitlines() if f.strip()]
 
         if not log_files:
@@ -429,6 +484,29 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir, timeout=DEFAULT_TI
                     f.write(result.stdout)
             except Exception as e:
                 print(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
+
+        # Collect procmon resource_monitor.log from remote_config_dir (start's fallback)
+        # and from log_dir (when config had log_dir from the start).
+        # This covers both scenarios: log_dir injected via --set (procmon in
+        # remote_config_dir) and log_dir in original config (procmon in log_dir).
+        procmon_dirs = set()
+        if remote_config_dir:
+            procmon_dirs.add(remote_config_dir)
+        if log_dir:
+            procmon_dirs.add(log_dir)
+        # Skip dirs already covered by the *.log glob above
+        glob_dirs = {os.path.dirname(f) for f in log_files}
+        for pdir in procmon_dirs:
+            if pdir in glob_dirs:
+                continue
+            procmon_log = f'{pdir}/resource_monitor.log'
+            try:
+                result = kubectl_exec(pod_name, namespace, f'cat {procmon_log}', check=True, timeout=timeout)
+                local_path = os.path.join(local_pod_dir, 'resource_monitor.log')
+                with open(local_path, 'w', encoding='utf-8') as f:
+                    f.write(result.stdout)
+            except Exception:
+                pass
 
         return True
     except subprocess.TimeoutExpired:
@@ -461,11 +539,16 @@ def cmd_collect(args, pods):
         print('ERROR: log_dir not found in remote config', file=sys.stderr)
         return 1
 
+    # Procmon resource_monitor.log may be in remote_config_dir (start's fallback
+    # when config had no log_dir) or in log_dir.  Try both to cover all scenarios.
+    remote_config_dir = os.path.dirname(args.remote_config)
+
     print(f'Using log directory from remote config: {log_dir}')
     local_dir = args.output or 'collected_worker_logs'
 
     def do_op(pod):
-        return collect_logs_from_pod(pod, args.namespace, log_dir, local_dir, args.timeout)
+        return collect_logs_from_pod(pod, args.namespace, log_dir, local_dir,
+                                     remote_config_dir=remote_config_dir, timeout=args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Collecting worker logs')
 
@@ -508,6 +591,10 @@ def main():
                               help='Disable procmon.py monitoring')
     parser_start.add_argument('--procmon-dir', default=None,
                               help='Remote directory for procmon files (default: same as --remote-config dir)')
+    parser_start.add_argument('-N', '--numa-nodes', default=None,
+                              help='NUMA node(s) to bind worker to, passed to dscli start -N (e.g. "0" or "0,1")')
+    parser_start.add_argument('-C', '--cpu-bind', default=None,
+                              help='CPU core(s) to bind worker to, passed to dscli start -C (e.g. "0-7" or "0,2,4,6")')
 
     # Stop subcommand (graceful stop using dscli)
     parser_stop = subparsers.add_parser('stop', parents=[parent_parser],
@@ -548,6 +635,12 @@ def main():
     parser_collect.add_argument('-o', '--output', default='collected_worker_logs',
                                 help='Local output directory (default: collected_worker_logs)')
 
+    # Clean subcommand
+    parser_clean = subparsers.add_parser('clean', parents=[parent_parser],
+                                         help='Kill workers and clean log directories')
+    parser_clean.add_argument('--remote-config', default='/tmp/worker.config',
+                              help='Config path inside pod (default: /tmp/worker.config)')
+
     args = parser.parse_args()
 
     if not args.action:
@@ -580,6 +673,8 @@ def main():
         return cmd_exec(args, pods)
     elif args.action == 'collect':
         return cmd_collect(args, pods)
+    elif args.action == 'clean':
+        return cmd_clean(args, pods)
 
     return 0
 
