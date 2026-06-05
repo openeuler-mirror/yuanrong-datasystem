@@ -1306,20 +1306,36 @@ Status ObjectClientImpl::MGetH2D(const std::vector<std::string> &objectKeys,
         access.Result(rc).Record();
         return rc;
     }
-    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
-
+    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+    if (cfgRc.IsError()) {
+        failedKeys.clear();
+        access.Result(cfgRc).Record();
+        return cfgRc;
+    }
     auto status = MGetH2DImpl(objectKeys, devBlobList, timeoutMs, failedKeys);
     access.Result(status).Record();
     return status;
 }
 
 namespace {
-std::shared_future<AsyncResult> FastFailAsyncResult(const Status &rc)
+std::shared_future<AsyncResult> FastFailAsyncResult(const Status &rc, std::vector<std::string> failedKeys)
 {
     std::promise<AsyncResult> promise;
     std::shared_future<AsyncResult> future = promise.get_future().share();
-    promise.set_value({ rc, {} });
+    promise.set_value({ rc, std::move(failedKeys) });
     return future;
+}
+
+std::shared_future<AsyncResult> MakeFailedAsyncH2DFuture(ObjectAccessRecorder &access, const Status &rc,
+                                                         const std::vector<DeviceBlobList> &devBlobList,
+                                                         const std::vector<std::string> &objectKeys,
+                                                         std::vector<std::string> failedKeys)
+{
+    access.ObjectKeysSummaryRef(objectKeys)
+        .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); })
+        .Result(rc)
+        .Record();
+    return FastFailAsyncResult(rc, std::move(failedKeys));
 }
 }  // namespace
 
@@ -1333,18 +1349,18 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector
 
     auto rc = CheckMGetH2DInput(objectKeys, devBlobList);
     if (rc.IsError()) {
-        access->ObjectKeysSummaryRef(objectKeys)
-            .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); })
-            .Result(rc)
-            .Record();
-        return FastFailAsyncResult(rc);
+        return MakeFailedAsyncH2DFuture(*access, rc, devBlobList, objectKeys, {});
+    }
+
+    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+    if (cfgRc.IsError()) {
+        return MakeFailedAsyncH2DFuture(*access, cfgRc, devBlobList, objectKeys, {});
     }
 
     auto asyncState = std::make_shared<AsyncMGetH2DState>(objectKeys, devBlobList);
     access->ObjectKeysSummaryRef(asyncState->objectKeys)
         .DataSizeProvider([asyncState] { return CalculateDeviceBlobSize(asyncState->devBlobList); });
     std::shared_future<AsyncResult> future = asyncState->promise.get_future().share();
-    UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
     auto traceContext = Trace::Instance().GetContext();
     auto asyncStateForRpc = asyncState;
@@ -1479,7 +1495,7 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
         auto &seg = remoteHostInfo->remote_host_segment();
         auto &hostDataInfo = remoteHostInfo->data_info();
         auto &blobs = devBlobList[i]->blobs;
-        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ImportHostSegment(seg));
+        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ImportHostSegment(p2pComm->remoteEndpoint, seg));
 
         auto &entry = entries[i];
         CHECK_FAIL_RETURN_STATUS(
@@ -1641,7 +1657,11 @@ Status ObjectClientImpl::MSetD2H(const std::vector<std::string> &objectKeys,
         access.Result(rc).Record();
         return rc;
     }
-    UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+    if (cfgRc.IsError()) {
+        access.Result(cfgRc).Record();
+        return cfgRc;
+    }
     auto status = MSetD2HImpl(objectKeys, devBlobList, setParam);
     access.Result(status).Record();
     return status;
@@ -1656,20 +1676,17 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
         AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMSETD2H));
     auto rc = CheckMSetD2HInput(objectKeys, devBlobList, setParam);
     if (rc.IsError()) {
-        std::promise<AsyncResult> promise;
-        std::shared_future<AsyncResult> future = promise.get_future().share();
-        promise.set_value({ rc, objectKeys });
-        access->ObjectKeysSummaryRef(objectKeys)
-            .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); })
-            .Result(rc)
-            .Record();
-        return future;
+        return MakeFailedAsyncH2DFuture(*access, rc, devBlobList, objectKeys, objectKeys);
+    }
+
+    auto cfgRc = UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
+    if (cfgRc.IsError()) {
+        return MakeFailedAsyncH2DFuture(*access, cfgRc, devBlobList, objectKeys, objectKeys);
     }
 
     auto asyncState = std::make_shared<AsyncMSetD2HState>(objectKeys, devBlobList, setParam);
     access->ObjectKeysSummaryRef(asyncState->objectKeys)
         .DataSizeProvider([asyncState] { return CalculateDeviceBlobSize(asyncState->devBlobList); });
-    UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
     auto traceContext = Trace::Instance().GetContext();
     return asyncSetRPCPool_->Submit(
@@ -4256,9 +4273,9 @@ Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
 {
     if (devId_ >= 0 && devId_ != devId) {
         LOG(WARNING) << "The client device id is changing from " << devId_ << " to " << devId;
-        devId_ = devId;
     }
-    SetClientRemoteH2DConfig(enableRemoteH2D_, devId);
+    RETURN_IF_NOT_OK(SetClientRemoteH2DConfig(enableRemoteH2D_, devId, ipAddress_.Host()));
+    devId_ = devId;
     return Status::OK();
 }
 

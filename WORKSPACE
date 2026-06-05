@@ -2,8 +2,11 @@ workspace(name = "yuanrong-datasystem")
 
 load("//:version.bzl", "DATASYSTEM_VERSION")
 load("//bazel:ds_deps.bzl", "ds_deps", "setup_grpc")
+load("//bazel:ascend_configure.bzl", "ascend_configure")
 
 ds_deps()
+
+ascend_configure(name = "local_ascend")
 
 load("@com_google_googleapis//:repository_rules.bzl", "switched_rules_by_language")
 

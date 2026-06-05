@@ -1,4 +1,11 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
+load(
+    "@local_ascend//:ascend_config.bzl",
+    "ASCEND_HIXL_DEFINES",
+    "ASCEND_HIXL_DEPS",
+    "ASCEND_HIXL_HDRS",
+    "ASCEND_HIXL_SRCS",
+)
 
 package(default_visibility = ["//src/datasystem:__subpackages__"])
 
@@ -8,7 +15,8 @@ ds_cc_library(
     #     "remote_h2d_manager.cpp",
     # ],
     hdrs = [
-        "remote_h2d_manager.h"
+        "remote_h2d_manager.h",
+        "rh2d_transport_strategy.h",
     ],
     deps = [
     #     "//src/datasystem/common/log:common_log",
@@ -36,11 +44,15 @@ ds_cc_library(
     name = "remote_h2d_manager",
     srcs = [
         "remote_h2d_manager.cpp",
-    ],
+        "roce_transport.cpp",
+    ] + ASCEND_HIXL_SRCS,
     hdrs = [
-        "remote_h2d_manager.h"
-    ],
+        "remote_h2d_manager.h",
+        "rh2d_transport_strategy.h",
+        "roce_transport.h",
+    ] + ASCEND_HIXL_HDRS,
     copts = ["-isystem external/re2"],
+    defines = ASCEND_HIXL_DEFINES,
     deps = [
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",
         "//src/datasystem/common/device/ascend:acl_device_manager",
@@ -58,7 +70,8 @@ ds_cc_library(
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/common/ak_sk:common_ak_sk",
         "//include/datasystem/object:object_headers",
         "@re2",
-    ],
+    ] + ASCEND_HIXL_DEPS,
 )

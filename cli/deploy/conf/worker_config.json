@@ -706,5 +706,13 @@
     "remote_h2d_device_ids": {
         "value": "",
         "description": "The NPU device ids to be used for Remote H2D purposes given as a list of comma seperated values, default is none. Assigning values enables RemoteH2D."
+    },
+    "remote_h2d_link_type": {
+        "value": "ROCE",
+        "description": "Link type for Remote H2D: ROCE or HCCS. Default is ROCE."
+    },
+    "remote_h2d_hccs_buffer_pool": {
+        "value": "4:8",
+        "description": "HIXL buffer-pool spec for HCCS RH2D, format \"<count>:<size>\" (both positive). Only used when remote_h2d_link_type=HCCS."
     }
 }

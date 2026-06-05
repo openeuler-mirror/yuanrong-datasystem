@@ -20,30 +20,30 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <optional>
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/common/flags/flags.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/rdma/npu/rh2d_transport_strategy.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/lock_map.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/common/util/thread_pool.h"
 
 DS_DECLARE_string(remote_h2d_device_ids);
 
 namespace datasystem {
-
 struct HostSegment {
     std::byte *data;
     std::uint64_t dataSize;
@@ -54,10 +54,8 @@ struct HostSegment {
 
     HostSegment(std::byte *data, std::uint64_t dataSize, P2pSegmentInfo segmentInfo, P2pSegmentPermissions permissions);
 
-    static Status Create(std::shared_ptr<HostSegment> &result, std::byte *data, std::size_t data_size,
+    static Status Create(std::shared_ptr<HostSegment> &result, std::byte *data, std::size_t dataSize,
                          P2pSegmentInfo segmentInfo, P2pSegmentPermissions permissions);
-
-    ~HostSegment();
 };
 
 using HostSegmentMap = LockMap<uint64_t, std::unordered_map<uint64_t, std::shared_ptr<HostSegment>>>;
@@ -66,12 +64,20 @@ using RemoteSegmentMap = LockMap<std::string, std::shared_ptr<HostSegment>>;
 struct RemoteH2DContext {
     ~RemoteH2DContext();
 
-    P2PComm p2pComm = nullptr;
-    HcclRootInfo rootInfo;
     enum InitState : uint32_t { UNINITIALIZED = 0, INITIALIZING, INITIALIZED };
     std::atomic<InitState> initialized = InitState::UNINITIALIZED;
     WaitPost waitPost;
+    // Connection identity: for RoCE this is base64 rootInfo, for HCCS it's "IP:Port"
+    std::string remoteEndpoint;
+    P2pLink linkType;
+
+    // Local identity for exchange: base64(rootInfo) for RoCE, "IP:Port" for HCCS.
+    // Used by remote peer to establish connection back.
+    std::string localIdentity;
+
+    // RoCE only: stream for async operations
     std::shared_ptr<aclrtStream> stream{ nullptr };
+
     std::mutex mutex;
     int32_t devId;
 };
@@ -87,13 +93,6 @@ public:
     static RemoteH2DManager &Instance();
 
     ~RemoteH2DManager();
-
-    /**
-     * @brief Client sets global remote h2d configurations according to connect options.
-     * @param[in] enableRemoteH2D Whether to enable remote host to device data transfer.
-     * @param[in] devId The NPU device id.
-     */
-    static void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId);
 
     /**
      * @brief Whether remote H2D is enabled according to FLAGS_enable_remote_h2d.
@@ -116,7 +115,7 @@ public:
     Status GetClientCommUuid(std::string &commId);
 
     /**
-     * @brief Get the client's device id stored in FLAGS_remote_h2d_device_ids
+     * @brief Get the client's configured device id.
      * @param[out] devId The clients device id
      * @return Status of the call
      */
@@ -163,7 +162,7 @@ public:
      * remote host side.
      * @param[in] p2pRootInfo The root info for the connection.
      * @param[in] kind The p2p connection direction.
-     * @param[out] p2pComm The p2p comm and stream for actual data operation if applicable.
+     * @param[out] p2pComm The p2p communicator context.
      * @param[in] devId Optional. Specify the device id to execute on.
      * @param[in] threadPool Optional. Thread pool to handle async connection.
      * @return Status of the call.
@@ -194,16 +193,17 @@ public:
 
     /**
      * @brief Helper function to import the segment.
-     * @param[in] seg The memory address.
+     * @param[in] remoteEndpoint Remote identity string (base64 for RoCE, IP:port for HCCS)
+     * @param[in] seg The memory address segment info.
      * @return Status of the call.
      */
-    Status ImportHostSegment(const RemoteHostSegmentPb &seg);
+    Status ImportHostSegment(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg);
 
     /**
      * @brief Batch scatter entries from host memory.
      * @param[in] entries The array of entries to scatter.
      * @param[in] size The number of entries.
-     * @param[in] p2pComm The p2p communicator and stream.
+     * @param[in] p2pComm The p2p communicator context.
      */
     Status ScatterBatch(P2pScatterEntry *entries, uint32_t size, std::shared_ptr<RemoteH2DContext> p2pComm);
 
@@ -214,6 +214,27 @@ public:
      */
     Status GetDevIdForComm(const std::string &commId, int32_t &devId);
 
+    /**
+     * @brief Configure the local H2D endpoint IP for HCCS.
+     *        Called before RemoteH2DManager singleton is created. Only the IP is stored;
+     *        per-device ports are allocated lazily inside HCCSTransport::Init().
+     * @param[in] localIp The local IP address to use as the endpoint base.
+     * @return Status of the call.
+     */
+    static Status SetRH2DLocalEndpointIp(const std::string &localIp);
+
+    /**
+     * @brief Client sets global remote h2d configurations according to connect options.
+     *        When localIp is provided, SetRH2DLocalEndpointIp is called internally
+     *        so callers do not have to make the second call separately. Worker processes call
+     *        SetRH2DLocalEndpointIp directly and do not call this function.
+     * @param[in] enableRemoteH2D Whether to enable remote host to device data transfer.
+     * @param[in] devId The NPU device id.
+     * @param[in] localIp Optional. Local IP address for HCCS endpoint.
+     * @return Status of the call.
+     */
+    static Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std::string &localIp = "");
+
     void AfterFork();
 
 private:
@@ -223,6 +244,13 @@ private:
     void SubmitConnectionInitTask(const std::string &key, P2pKind kind, int32_t devId,
                                   const std::shared_ptr<ThreadPool> &threadPool);
     void ManageHeartbeats();
+    void DispatchPings();
+    std::vector<std::string> CheckDisconnectedClients();
+    void CleanupDisconnectedClients(const std::vector<std::string> &disconnected);
+    static std::unique_ptr<RH2DTransportStrategy> CreateTransport();
+
+    static std::string hccsLocalEndpointIp_;
+    static bool isClient_;
 
     // Root info string to p2p communicator mapping.
     mutable std::shared_timed_mutex communicatorMutex_;
@@ -231,23 +259,29 @@ private:
     mutable std::shared_timed_mutex segmentMutex_;
     // Memory address to host segment mapping.
     std::unique_ptr<HostSegmentMap> hostSegmentMap_;
-    // Segment info to imported remote segment mapping.
+    // Segment info to imported remote segment mapping (RoCE only).
     std::unique_ptr<RemoteSegmentMap> remoteSegmentMap_;
     // List of all device ids the worker is allowed to use
     std::vector<int32_t> workerDeviceIds_;
     // Whether or not RemoteH2D is enabled
     static bool enableRemoteH2D_;
+    static int32_t clientDeviceId_;
     // CommId to device id mapping
     tbb::concurrent_hash_map<std::string, int32_t> commDevIdMap_;
-    // Index for next devId to use in worker device ids
-    std::atomic<unsigned int> nextDevIdIndex_{0};
+    // Index for next devId to use in worker device ids (round-robin for GetDevIdForComm)
+    std::atomic<unsigned int> nextDevIdIndex_{ 0 };
     // Heartbeat variables
     std::thread heartbeatThread_;
+    // Mutex to protect heartbeat callback maps
+    std::mutex heartbeatMutex_;
     std::unordered_map<std::string, std::shared_ptr<std::function<int()>>> clientDisconnectChecks_;
     std::unordered_map<std::string, std::shared_ptr<std::function<int()>>> clientPingFunctions_;
-    std::atomic<bool> interrupted_{false};
-    int64_t heartbeatIntervalS_{30};
-    int64_t heartbeatTimeoutS_{60};
+    std::atomic<bool> interrupted_{ false };
+    int64_t heartbeatIntervalS_{ 30 };
+    int64_t heartbeatTimeoutS_{ 60 };
+
+    // Transport strategy
+    std::unique_ptr<RH2DTransportStrategy> transport_;
 };
 }  // namespace datasystem
 

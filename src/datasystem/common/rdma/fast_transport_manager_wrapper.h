@@ -47,8 +47,20 @@ Status GetClientCommUuid(std::string &commId);
  * @brief Client sets global remote h2d configurations according to connect options.
  * @param[in] enableRemoteH2D Whether to enable remote host to device data transfer.
  * @param[in] devId The NPU device id.
+ * @param[in] localIp Optional. Local IP address for HCCS endpoint. Forwarded to
+ *            RemoteH2DManager::SetClientRemoteH2DConfig.
+ * @return Status of the call.
  */
-void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId);
+Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std::string &localIp = "");
+
+/**
+ * @brief Configure the local H2D endpoint IP for HCCS on the worker side.
+ *        This is a thin wrapper that is only active when BUILD_HETERO is defined;
+ *        otherwise the call is a no-op so workers do not need their own #ifdef.
+ * @param[in] localIp The local endpoint IP.
+ * @return Status of the call.
+ */
+Status SetRH2DLocalEndpointIp(const std::string &localIp);
 
 /**
  * @brief Set the fast transport mode for the client.
@@ -108,8 +120,7 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
-                        std::vector<uint64_t> &eventKeys,
-                        std::shared_ptr<EventWaiter> waiter = nullptr);
+                        std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter = nullptr);
 
 /**
  * @brief Trigger UrmaManager logic to import segment and read payload.

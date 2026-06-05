@@ -724,7 +724,7 @@ Status AclDeviceManager::DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pS
 Status AclDeviceManager::DSP2PImportHostSegment(P2pSegmentInfo segmentInfo)
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
-    RETURN_RUNTIME_ERROR_IF_NULL(DSP2PRegisterHostMemFunc_);
+    RETURN_RUNTIME_ERROR_IF_NULL(DSP2PImportHostSegmentFunc_);
     RETURN_ACL_RESULT(DSP2PImportHostSegmentFunc_(segmentInfo));
 }
 
