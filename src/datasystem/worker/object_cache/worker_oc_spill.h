@@ -717,19 +717,13 @@ public:
      * @brief Get low water factor.
      * @return Low water factor.
      */
-    double LowWaterFactor() const
-    {
-        return lowWaterFactor_;
-    }
+    double LowWaterFactor() const;
 
     /**
      * @brief Get high water factor.
      * @return High water factor.
      */
-    double HighWaterFactor() const
-    {
-        return highWaterFactor_;
-    }
+    double HighWaterFactor() const;
 
     /**
      * @brief Get the total spill space usage.
@@ -795,9 +789,6 @@ private:
     uint64_t freeSpaceInRealTime_ = 0;
 
     EvictionList spillEvictionList_;
-
-    static constexpr double highWaterFactor_ = 0.8;
-    static constexpr double lowWaterFactor_ = 0.6;
 };
 
 }  // namespace object_cache

@@ -254,3 +254,7 @@ global:
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存驱逐阈值（MB），由 min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb) 决定。当内存低于此阈值时，驱逐操作开始。有效范围为 100-102400。 |
+| global.performance.evictionHighWatermarkPercent | int | `90` | 内存使用率高水位线（百分比）。有效范围 2-100，必须大于 evictionLowWatermarkPercent。 |
+| global.performance.evictionLowWatermarkPercent | int | `80` | 内存使用率低水位线（百分比）。有效范围 1-99，必须小于 evictionHighWatermarkPercent。 |
+| global.performance.spillHighWatermarkPercent | int | `80` | Spill 目录使用率高水位线（占 spill_size_limit 的百分比）。有效范围 2-100。 |
+| global.performance.spillLowWatermarkPercent | int | `60` | Spill 目录使用率低水位线（占 spill_size_limit 的百分比）。有效范围 1-99。 |

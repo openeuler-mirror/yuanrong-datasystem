@@ -305,6 +305,7 @@ Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
     // The configuration file processing is triggered immediately when the worker is started.
     flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
     AdjustNodeTimeoutFlags();
+    CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
     return InitWorker(flags, defaultGflagMap, true);
 }
 
@@ -327,6 +328,7 @@ Status Worker::Init(Flags &flags, int argc, char **argv)
     // The configuration file processing is triggered immediately when the worker is started.
     flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
     AdjustNodeTimeoutFlags();
+    CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
     RETURN_IF_NOT_OK(flags.EraseInfo(argc, argv));
 
     InstallFailureSignalHandler(argv[0]);

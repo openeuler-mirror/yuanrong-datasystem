@@ -277,6 +277,29 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:validator",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "eviction_watermark_test",
+    srcs = ["eviction_watermark_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/util/gflag:eviction_watermark",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "watermark_flag_parse_test",
+    srcs = ["watermark_flag_parse_test.cpp"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_update_flag_check",
         "//tests/ut:ut_common",
     ],
 )
@@ -295,6 +318,8 @@ ds_cc_test(
 test_suite(
     name = "all_util_tests",
     tests = [
+        "eviction_watermark_test",
+        "watermark_flag_parse_test",
         "blocking_queue_test",
         "event_subscribers_test",
         "fd_manager_test",

@@ -42,6 +42,7 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/common/util/gflag:eviction_watermark",
         "@re2",
         "@jemalloc_kvc//:jemalloc",
     ],

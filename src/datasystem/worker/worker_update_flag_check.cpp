@@ -16,6 +16,7 @@
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/gflag/eviction_watermark.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
@@ -85,6 +86,18 @@ void AdjustNodeTimeoutFlags()
     if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
         FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
     }
+}
+
+bool ValidateWatermarkFlags()
+{
+    if (!Validator::ValidateEvictionWatermarkPercentPair()) {
+        return false;
+    }
+    if (!Validator::ValidateSpillWatermarkPercentPair()) {
+        return false;
+    }
+    RefreshWatermarkFactors();
+    return true;
 }
 
 bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)

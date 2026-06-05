@@ -46,6 +46,11 @@ constexpr int32_t MS_PER_SECOND = 1000;
 constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
 
+DS_DECLARE_uint32(eviction_high_watermark_percent);
+DS_DECLARE_uint32(eviction_low_watermark_percent);
+DS_DECLARE_uint32(spill_high_watermark_percent);
+DS_DECLARE_uint32(spill_low_watermark_percent);
+
 using namespace datasystem;
 
 class Validator {
@@ -106,6 +111,88 @@ public:
                 "The %s flag is currently set to %u MB. It is recommended to adjust it to a value between 100 MB and "
                 "100 GB.",
                 flagName, value);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateEvictionHighWatermarkPercent(const char *flagName, uint32_t value)
+    {
+        if (!ValidateUint32(flagName, value)) {
+            return false;
+        }
+        constexpr uint32_t kMinHigh = 2;
+        constexpr uint32_t kMaxHigh = 100;
+        if (value < kMinHigh || value > kMaxHigh) {
+            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
+                                       kMinHigh, kMaxHigh);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateEvictionLowWatermarkPercent(const char *flagName, uint32_t value)
+    {
+        if (!ValidateUint32(flagName, value)) {
+            return false;
+        }
+        constexpr uint32_t kMinLow = 1;
+        constexpr uint32_t kMaxLow = 99;
+        if (value < kMinLow || value > kMaxLow) {
+            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value, kMinLow,
+                                       kMaxLow);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateSpillHighWatermarkPercent(const char *flagName, uint32_t value)
+    {
+        if (!ValidateUint32(flagName, value)) {
+            return false;
+        }
+        constexpr uint32_t kMinHigh = 2;
+        constexpr uint32_t kMaxHigh = 100;
+        if (value < kMinHigh || value > kMaxHigh) {
+            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
+                                       kMinHigh, kMaxHigh);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateSpillLowWatermarkPercent(const char *flagName, uint32_t value)
+    {
+        if (!ValidateUint32(flagName, value)) {
+            return false;
+        }
+        constexpr uint32_t kMinLow = 1;
+        constexpr uint32_t kMaxLow = 99;
+        if (value < kMinLow || value > kMaxLow) {
+            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value, kMinLow,
+                                       kMaxLow);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateEvictionWatermarkPercentPair()
+    {
+        if (FLAGS_eviction_high_watermark_percent <= FLAGS_eviction_low_watermark_percent) {
+            LOG(ERROR) << FormatString(
+                "eviction_high_watermark_percent (%u) must be greater than eviction_low_watermark_percent (%u).",
+                FLAGS_eviction_high_watermark_percent, FLAGS_eviction_low_watermark_percent);
+            return false;
+        }
+        return true;
+    }
+
+    static bool ValidateSpillWatermarkPercentPair()
+    {
+        if (FLAGS_spill_high_watermark_percent <= FLAGS_spill_low_watermark_percent) {
+            LOG(ERROR) << FormatString(
+                "spill_high_watermark_percent (%u) must be greater than spill_low_watermark_percent (%u).",
+                FLAGS_spill_high_watermark_percent, FLAGS_spill_low_watermark_percent);
             return false;
         }
         return true;

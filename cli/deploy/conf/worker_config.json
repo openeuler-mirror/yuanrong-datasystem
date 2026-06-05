@@ -155,6 +155,22 @@
         "value": "10240",
         "description": "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400."
     },
+    "eviction_high_watermark_percent": {
+        "value": "90",
+        "description": "Memory usage high watermark (percent). Eviction starts when occupied memory reaches max(ratio * memory, memory - eviction_reserve_mem_threshold_mb). Must be greater than eviction_low_watermark_percent. Valid range: 2-100."
+    },
+    "eviction_low_watermark_percent": {
+        "value": "80",
+        "description": "Memory usage low watermark (percent). Background eviction runs until usage is at or below this ratio. Must be less than eviction_high_watermark_percent. Valid range: 1-99."
+    },
+    "spill_high_watermark_percent": {
+        "value": "80",
+        "description": "Spill directory usage high watermark (percent of spill_size_limit). Valid range: 2-100. Must be greater than spill_low_watermark_percent."
+    },
+    "spill_low_watermark_percent": {
+        "value": "60",
+        "description": "Spill directory usage low watermark (percent of spill_size_limit). Valid range: 1-99. Must be less than spill_high_watermark_percent."
+    },
     "client_reconnect_wait_s": {
         "value": "5",
         "description": "Client reconnect wait seconds, default is 5."

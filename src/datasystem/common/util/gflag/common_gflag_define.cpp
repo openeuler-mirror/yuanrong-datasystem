@@ -73,6 +73,19 @@ DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
     "The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). "
     "Eviction begins when memory drops below this threshold.The valid range is 100-102400.");
+DS_DEFINE_uint32(eviction_high_watermark_percent, 90,
+                 "Memory usage high watermark (percent of available shared memory). Eviction starts when occupied "
+                 "memory reaches max(ratio * memory, memory - eviction_reserve_mem_threshold_mb). Must be greater "
+                 "than eviction_low_watermark_percent. Valid range: 2-100.");
+DS_DEFINE_uint32(eviction_low_watermark_percent, 80,
+                 "Memory usage low watermark (percent). Background eviction runs until usage is at or below this "
+                 "ratio. Must be less than eviction_high_watermark_percent. Valid range: 1-99.");
+DS_DEFINE_uint32(spill_high_watermark_percent, 80,
+                 "Spill directory usage high watermark (percent of spill_size_limit). Valid range: 2-100. Must be "
+                 "greater than spill_low_watermark_percent.");
+DS_DEFINE_uint32(spill_low_watermark_percent, 60,
+                 "Spill directory usage low watermark (percent of spill_size_limit). Valid range: 1-99. Must be less "
+                 "than spill_high_watermark_percent.");
 DS_DEFINE_uint32(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint64(stream_idle_time_s, 5 * 60, "stream idle time. default 300s (5 minutes)");
 DS_DEFINE_int64(payload_nocopy_threshold, 1048576L * 100L, "minimum payload size to trigger no memory copy");

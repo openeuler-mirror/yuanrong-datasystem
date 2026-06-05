@@ -44,6 +44,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/common/util/gflag/eviction_watermark.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/utils/status.h"
@@ -1097,14 +1098,24 @@ bool WorkerOcSpill::IsSpaceFull(size_t size)
     return IsSpaceExceed(1.0, size);
 }
 
+double WorkerOcSpill::LowWaterFactor() const
+{
+    return GetSpillLowWaterFactor();
+}
+
+double WorkerOcSpill::HighWaterFactor() const
+{
+    return GetSpillHighWaterFactor();
+}
+
 bool WorkerOcSpill::IsSpaceExceedLWM(size_t size)
 {
-    return IsSpaceExceed(lowWaterFactor_, size);
+    return IsSpaceExceed(LowWaterFactor(), size);
 }
 
 bool WorkerOcSpill::IsSpaceExceedHWM(size_t size)
 {
-    return IsSpaceExceed(highWaterFactor_, size);
+    return IsSpaceExceed(HighWaterFactor(), size);
 }
 
 bool WorkerOcSpill::IsSpaceExceed(double ratio, size_t size)
@@ -1115,12 +1126,12 @@ bool WorkerOcSpill::IsSpaceExceed(double ratio, size_t size)
 
 bool WorkerOcSpill::IsActiveSpillSizeExceedLWM(size_t size)
 {
-    return IsActiveSpillSizeExceed(lowWaterFactor_, size);
+    return IsActiveSpillSizeExceed(LowWaterFactor(), size);
 }
 
 bool WorkerOcSpill::IsActiveSpillSizeExceedHWM(size_t size)
 {
-    return IsActiveSpillSizeExceed(lowWaterFactor_, size);
+    return IsActiveSpillSizeExceed(HighWaterFactor(), size);
 }
 
 bool WorkerOcSpill::IsActiveSpillSizeExceed(double ratio, size_t size)

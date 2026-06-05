@@ -41,6 +41,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/common/util/gflag/eviction_watermark.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #undef private
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -504,7 +505,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjWriteThroughHashMap)
 
     // Put HashMap objects
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
         uint64_t dataSize = 10 * 1024 * 1024;
@@ -527,7 +528,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjWriteThroughHashMap)
     // Evict, objects will be delete.
     evictionManager.Evict();
     sleep(5);
-    ASSERT_TRUE(GetAllocatedSize() < GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_TRUE(GetAllocatedSize() < GetMaxMemorySize() * GetEvictionLowWaterFactor());
 
     // Verify
     objsInList.clear();
@@ -539,7 +540,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjWriteThroughHashMap)
     ASSERT_EQ(objsInList.size(), objsInTable.size());
 
     // Put again
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
         uint64_t dataSize = 10 * 1024 * 1024;
@@ -571,7 +572,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotPrimaryCopy)
     auto masterClient0 = CreateClient(0);
     auto masterClient1 = CreateClient(1);
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
         uint64_t dataSize = 10 * 1024 * 1024;
@@ -599,7 +600,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjNotPrimaryCopy)
     // Evict, objects will be delete.
     evictionManager.Evict();
     sleep(5);
-    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionLowWaterFactor());
 
     objsInList.clear();
     objsInTable.clear();
@@ -718,7 +719,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopy)
     // Put
     auto masterClient = CreateClient(0);
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -749,7 +750,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopy)
     int timeoutS = 40;
     bool success = false;
     while (timer.ElapsedSecond() < timeoutS) {
-        if (GetAllocatedSize() < GetMaxMemorySize() * LOW_WATER_FACTOR) {
+        if (GetAllocatedSize() < GetMaxMemorySize() * GetEvictionLowWaterFactor()) {
             success = true;
             break;
         } else {
@@ -778,7 +779,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_LEVEL1_TestEvictObjWithLock)
     std::vector<std::shared_ptr<SafeObjType>> entryList;
     std::shared_ptr<SafeObjType> entry;
     uint64_t dataSize = 10 * 1024 * 1024;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
         std::string objectKey = "key_" + std::to_string(i);
@@ -822,7 +823,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_LEVEL1_TestEvictObjWithLock)
     // Evict, objects will be spilled to disk.
     evictionManager.Evict();
     t.join();
-    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionLowWaterFactor());
 
     const int sleepTimeout = 5000;
     std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeout));
@@ -850,7 +851,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_LEVEL1_TestEvictObjWithLock)
     timer.Reset();
     while (timer.ElapsedMilliSecond() < maxWaitTime) {
         std::this_thread::sleep_for(std::chrono::milliseconds(timeoutOneSec));
-        if (GetAllocatedSize() < GetMaxMemorySize() * LOW_WATER_FACTOR) {
+        if (GetAllocatedSize() < GetMaxMemorySize() * GetEvictionLowWaterFactor()) {
             result = true;
             break;
         }
@@ -869,7 +870,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithoutL2Cache)
     // Put
     std::shared_ptr<SafeObjType> entry;
     auto masterClient = CreateClient(0);
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -894,7 +895,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithoutL2Cache)
     // Evict, objects will be spilled to disk.
     evictionManager.Evict();
     sleep(5);
-    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * HIGH_WATER_FACTOR);
+    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionHighWaterFactor());
 
     objsInList.clear();
     objsInTable.clear();
@@ -917,7 +918,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithL2Cache)
     // Put
     std::shared_ptr<SafeObjType> entry;
     auto masterClient = CreateClient(0);
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -942,7 +943,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillDisableWithL2Cache)
     // Evict, objects will be spilled to disk.
     evictionManager.Evict();
     sleep(5);
-    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionLowWaterFactor());
 
     objsInList.clear();
     objsInTable.clear();
@@ -976,7 +977,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_WriteBackDelayTest)
     // Put
     std::shared_ptr<SafeObjType> entry;
     auto masterClient = CreateClient(0);
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -1000,7 +1001,7 @@ TEST_F(EvictionManagerAndMasterTest, DISABLED_WriteBackDelayTest)
 
     evictionManager->Evict();
     sleep(5);
-    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * HIGH_WATER_FACTOR);  // No objects evicted.
+    ASSERT_GE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionHighWaterFactor());  // No objects evicted.
 
     objsInList.clear();
     objsInTable.clear();
@@ -1024,7 +1025,7 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillSizeLimit)
     // Put
     auto masterClient = CreateClient(0);
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -1049,11 +1050,11 @@ TEST_F(EvictionManagerAndMasterTest, TestSpillSizeLimit)
     // Evict, objects will be spilled to disk.
     evictionManager.Evict();
     auto sleepTime = 20;
-    while (GetAllocatedSize() > GetMaxMemorySize() * LOW_WATER_FACTOR && sleepTime > 0) {
+    while (GetAllocatedSize() > GetMaxMemorySize() * GetEvictionLowWaterFactor() && sleepTime > 0) {
         sleepTime--;
         sleep(1);
     }
-    ASSERT_LT(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_LT(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionLowWaterFactor());
     objsInList.clear();
     objsInTable.clear();
     DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
@@ -1072,7 +1073,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopyAlreadySpilled)
     // Put
     auto masterClient = CreateClient(0);
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -1097,7 +1098,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjPrimaryCopyAlreadySpilled)
     // Evict, objects will be free.
     evictionManager.Evict();
     sleep(5);
-    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * LOW_WATER_FACTOR);
+    ASSERT_LE(GetAllocatedSize(), GetMaxMemorySize() * GetEvictionLowWaterFactor());
 
     objsInList.clear();
     objsInTable.clear();
@@ -1118,7 +1119,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjConcurrently1111)
     // Put
     auto masterClient = CreateClient(0);
     std::shared_ptr<SafeObjType> entry;
-    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * HIGH_WATER_FACTOR; i++) {
+    for (int i = 0; GetAllocatedSize() < GetMaxMemorySize() * GetEvictionHighWaterFactor(); i++) {
         uint64_t dataSize = 10 * 1024 * 1024;
         HostPort metaAddress;
         cluster_->GetMetaServerAddr(metaAddress);
@@ -1159,7 +1160,7 @@ TEST_F(EvictionManagerAndMasterTest, TestEvictObjConcurrently1111)
     int timeoutS = 40;
     bool success = false;
     while (timer.ElapsedSecond() < timeoutS) {
-        if (GetAllocatedSize() < GetMaxMemorySize() * LOW_WATER_FACTOR) {
+        if (GetAllocatedSize() < GetMaxMemorySize() * GetEvictionLowWaterFactor()) {
             success = true;
             break;
         } else {

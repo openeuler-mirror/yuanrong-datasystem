@@ -19,6 +19,8 @@
  */
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 
+#include "datasystem/common/util/gflag/eviction_watermark.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -434,7 +436,7 @@ uint64_t WorkerOcEvictionManager::GetLowWaterMark(CacheType cacheType)
     auto lowWater = static_cast<std::uint64_t>(
         std::min(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + usedMemorySize,
                  maxMemorySize)
-        * LOW_WATER_FACTOR);
+        * GetEvictionLowWaterFactor());
     return lowWater;
 }
 
@@ -1042,7 +1044,7 @@ bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize
     auto realObjMemoryUsed =
         datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::OBJECT, memCacheType);
     auto getMemThresInitVal = [](uint64_t maxAvailableMemorySize, uint64_t evictionThresholdMB) {
-        return std::max(static_cast<uint64_t>(maxAvailableMemorySize * HIGH_WATER_FACTOR),
+        return std::max(static_cast<uint64_t>(maxAvailableMemorySize * GetEvictionHighWaterFactor()),
                         maxAvailableMemorySize > evictionThresholdMB * MB_TO_BYTES
                             ? maxAvailableMemorySize - evictionThresholdMB * MB_TO_BYTES
                             : 0);

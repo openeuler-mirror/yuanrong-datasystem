@@ -19,9 +19,15 @@
  */
 #include "datasystem/common/util/validator.h"
 #include <cstdint>
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/uuid_generator.h"
 
 #include "ut/common.h"
+
+DS_DECLARE_uint32(eviction_high_watermark_percent);
+DS_DECLARE_uint32(eviction_low_watermark_percent);
+DS_DECLARE_uint32(spill_high_watermark_percent);
+DS_DECLARE_uint32(spill_low_watermark_percent);
 
 namespace datasystem {
 namespace ut {
@@ -216,6 +222,60 @@ TEST_F(ValidatorTest, ValidateFailed)
     ASSERT_FALSE(Validator::ValidateMaxRpcSessionNum("", 0));
     ASSERT_FALSE(Validator::ValidateUnixDomainSocketDir("", ""));
     ASSERT_FALSE(Validator::ValidateUnixDomainSocketDir("", "￥"));
+}
+
+TEST_F(ValidatorTest, ValidateEvictionWatermarkPercents)
+{
+    auto savedHigh = FLAGS_eviction_high_watermark_percent;
+    auto savedLow = FLAGS_eviction_low_watermark_percent;
+    FLAGS_eviction_high_watermark_percent = 90;
+    FLAGS_eviction_low_watermark_percent = 80;
+
+    EXPECT_TRUE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 90));
+    EXPECT_TRUE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 80));
+    EXPECT_FALSE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 1));
+    EXPECT_FALSE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 101));
+    EXPECT_FALSE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 0));
+    EXPECT_FALSE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 100));
+
+    FLAGS_eviction_high_watermark_percent = 75;
+    FLAGS_eviction_low_watermark_percent = 70;
+    EXPECT_TRUE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 75));
+    EXPECT_TRUE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 70));
+    EXPECT_TRUE(Validator::ValidateEvictionWatermarkPercentPair());
+
+    FLAGS_eviction_high_watermark_percent = 80;
+    FLAGS_eviction_low_watermark_percent = 85;
+    EXPECT_FALSE(Validator::ValidateEvictionWatermarkPercentPair());
+
+    FLAGS_eviction_high_watermark_percent = savedHigh;
+    FLAGS_eviction_low_watermark_percent = savedLow;
+}
+
+TEST_F(ValidatorTest, ValidateSpillWatermarkPercents)
+{
+    auto savedHigh = FLAGS_spill_high_watermark_percent;
+    auto savedLow = FLAGS_spill_low_watermark_percent;
+    FLAGS_spill_high_watermark_percent = 80;
+    FLAGS_spill_low_watermark_percent = 60;
+
+    EXPECT_TRUE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 80));
+    EXPECT_TRUE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 60));
+    EXPECT_FALSE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 1));
+    EXPECT_FALSE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 0));
+
+    FLAGS_spill_high_watermark_percent = 75;
+    FLAGS_spill_low_watermark_percent = 55;
+    EXPECT_TRUE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 75));
+    EXPECT_TRUE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 55));
+    EXPECT_TRUE(Validator::ValidateSpillWatermarkPercentPair());
+
+    FLAGS_spill_high_watermark_percent = 65;
+    FLAGS_spill_low_watermark_percent = 70;
+    EXPECT_FALSE(Validator::ValidateSpillWatermarkPercentPair());
+
+    FLAGS_spill_high_watermark_percent = savedHigh;
+    FLAGS_spill_low_watermark_percent = savedLow;
 }
 }  // namespace ut
 }  // namespace datasystem

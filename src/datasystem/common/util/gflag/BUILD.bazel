@@ -14,6 +14,16 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "eviction_watermark",
+    srcs = ["eviction_watermark.cpp"],
+    hdrs = ["eviction_watermark.h"],
+    deps = [
+        ":common_util_gflag_def",
+        ":common_util_gflag_header",
+    ],
+)
+
+ds_cc_library(
     name = "common_util_gflag_def",
     srcs = [
         "common_gflag_define.cpp",
