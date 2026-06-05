@@ -762,6 +762,11 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_file_open_limit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
 | eviction_thread_num | int | `1` | 后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中 |
+| eviction_reserve_mem_threshold_mb | int | `10240` | 内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_percent 共同决定驱逐触发线。有效范围 100-102400 |
+| eviction_high_watermark_percent | int | `90` | 内存占用率高水位（百分比，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 2-100，须大于 eviction_low_watermark_percent |
+| eviction_low_watermark_percent | int | `80` | 内存占用率低水位（百分比），后台驱逐运行直至占用率降至该比例及以下。有效范围 1-99，须小于 eviction_high_watermark_percent |
+| spill_high_watermark_percent | int | `80` | Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100，须大于 spill_low_watermark_percent |
+| spill_low_watermark_percent | int | `60` | Spill 目录占用率低水位（相对 spill_size_limit 的百分比）。有效范围 1-99，须小于 spill_high_watermark_percent |
 
 #### 日志与可观测相关配置
 
