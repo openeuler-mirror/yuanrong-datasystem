@@ -2,6 +2,7 @@
 """Monitor CPU and memory usage of a process by name."""
 
 import argparse
+import atexit
 import os
 import signal
 import subprocess
@@ -55,14 +56,30 @@ def main():
     parser = argparse.ArgumentParser(description="Monitor process CPU and memory usage")
     parser.add_argument("-p", "--process", help="Process name to find and monitor")
     parser.add_argument("--pid", type=int, help="Monitor specific PID directly")
-    parser.add_argument("-i", "--interval", type=float, default=2, help="Sample interval in seconds (default: 2)")
+    parser.add_argument("-i", "--interval", type=float, default=1, help="Sample interval in seconds (default: 1)")
     parser.add_argument("-d", "--duration", type=float, default=0, help="Monitor duration in seconds, 0=until exit/Ctrl+C (default: 0)")
+    parser.add_argument("-o", "--output", help="Write output to this file in real-time (default: stdout)")
     args = parser.parse_args()
 
     if not args.process and not args.pid:
         parser.error("Either --process or --pid is required")
 
     clock_ticks = os.sysconf("SC_CLK_TCK")
+
+    if args.output:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if not os.path.isabs(args.output):
+            output_path = os.path.join(script_dir, args.output)
+        else:
+            output_path = args.output
+        outfile = open(output_path, "w", buffering=1)
+        atexit.register(outfile.close)
+        out = outfile
+    else:
+        out = sys.stdout
+
+    def emit(msg=""):
+        print(msg, file=out, flush=True)
 
     if args.pid:
         pid = args.pid
@@ -72,8 +89,8 @@ def main():
             print(f"Process '{args.process}' not found", file=sys.stderr)
             sys.exit(1)
 
-    print(f"Monitoring PID={pid}, interval={args.interval}s"
-          + (f", duration={args.duration}s" if args.duration > 0 else ""))
+    emit(f"Monitoring PID={pid}, interval={args.interval}s"
+         + (f", duration={args.duration}s" if args.duration > 0 else ""))
 
     samples_cpu = []
     samples_mem = []
@@ -93,7 +110,7 @@ def main():
     while running:
         time.sleep(args.interval)
 
-        if args.duration > 0 and (time.monotonic() - start_time) >= args.duration:
+        if 0 < args.duration <= (time.monotonic() - start_time):
             break
 
         now = time.monotonic()
@@ -101,7 +118,7 @@ def main():
         rss_bytes = read_proc_statm(pid)
 
         if cpu_ticks is None or rss_bytes is None:
-            print(f"[{time.strftime('%H:%M:%S')}] Process exited")
+            emit(f"[{time.strftime('%H:%M:%S')}] Process exited")
             break
 
         dt = now - prev_time
@@ -116,20 +133,20 @@ def main():
         samples_mem.append(mem_mb)
 
         ts = time.strftime("%H:%M:%S")
-        print(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB")
+        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB")
 
         prev_cpu = cpu_ticks
         prev_time = now
 
     elapsed = time.monotonic() - start_time
-    print()
-    print("=== Summary ===")
-    print(f"Samples: {len(samples_cpu)}, Duration: {elapsed:.0f}s")
+    emit()
+    emit("=== Summary ===")
+    emit(f"Samples: {len(samples_cpu)}, Duration: {elapsed:.0f}s")
     if samples_cpu:
-        print(f"CPU  avg={sum(samples_cpu)/len(samples_cpu):.1f}%  peak={max(samples_cpu):.1f}%")
+        emit(f"CPU  avg={sum(samples_cpu)/len(samples_cpu):.1f}%  peak={max(samples_cpu):.1f}%")
         avg_mem = sum(samples_mem) / len(samples_mem)
         peak_mem = max(samples_mem)
-        print(f"MEM  avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
+        emit(f"MEM  avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
 
 
 if __name__ == "__main__":

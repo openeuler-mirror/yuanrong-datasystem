@@ -188,7 +188,7 @@ class Deployer:
                 cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'cat', remote_path]
                 try:
                     with open(local_path, 'wb') as f:
-                        subprocess.run(cmd, stdout=f, check=True, timeout=30)
+                        subprocess.run(cmd, stdout=f, check=True, timeout=120)
                 except Exception as e:
                     print(f'    {fname} -> FAILED: {e}')
         elif transport == 'localhost':
@@ -271,7 +271,7 @@ class Deployer:
             return
 
         fls = self.run_on(node,
-            f'ls {sdk_log_dir}/*.log {sdk_log_dir}/*.txt 2>/dev/null',
+            f'ls {sdk_log_dir}/*.log {sdk_log_dir}/*.log.gz {sdk_log_dir}/*.txt 2>/dev/null',
             check=False)
         files = [f.strip() for f in (fls.stdout or '').splitlines() if f.strip()]
 
@@ -279,7 +279,7 @@ class Deployer:
             node, local_dir, files,
             file_label='SDK log files',
             remote_dir=sdk_log_dir,
-            tar_pattern='*.log *.txt'
+            tar_pattern='*.log *.log.gz *.txt'
         )
 
     # --- Config generation ---
@@ -415,7 +415,7 @@ class Deployer:
             time.sleep(1)
             pid = None
             verify = self.run_on(
-                node, f'pgrep -f "kvtest config_{instance_id}\\.json"',
+                node, f'pgrep -x kvtest',
                 check=False)
             if verify.returncode == 0 and verify.stdout.strip():
                 pid = verify.stdout.strip().split('\n')[0]
@@ -434,8 +434,8 @@ class Deployer:
             if self.enable_procmon and pid:
                 procmon_cmd = (
                     f"cd {self.remote_work_dir} && "
-                    f"nohup python3 procmon.py --pid {pid} -i 2"
-                    f" > resource_monitor.log 2>&1 </dev/null & disown")
+                    f"nohup python3 procmon.py --pid {pid} -i 1"
+                    f" --output resource_monitor.log </dev/null & disown")
                 self.run_on(node, procmon_cmd, check=False, allow_timeout=True)
 
             print(f'  {target} -> OK')
@@ -496,6 +496,11 @@ class Deployer:
 
         def stop_one(node):
             target = self._exec_target(node)
+            # Check if kvtest process exists before trying HTTP stop
+            r = self.run_on(node, 'pgrep -x kvtest', check=False, timeout=5)
+            if r.returncode != 0 or not r.stdout.strip():
+                print(f'  {target} -> no kvtest process, skipped')
+                return (target, None)
             if http_stop(node):
                 return (target, True)
             return (target, False)
@@ -506,7 +511,9 @@ class Deployer:
             futures = [pool.submit(stop_one, n) for n in self.nodes]
             for future in as_completed(futures):
                 target, result = future.result()
-                if result is True:
+                if result is None:
+                    pass
+                elif result is True:
                     ok += 1
                     print(f'  {target} -> OK (graceful)')
                 else:
@@ -520,15 +527,15 @@ class Deployer:
         def kill_remaining(node, sig=''):
             return self.run_on(
                 node,
-                f"for p in $(pgrep -f kvtest 2>/dev/null); do "
+                f"for p in $(pgrep -x kvtest 2>/dev/null); do "
                 f"kill {sig} $p 2>/dev/null; done; "
-                f"for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                f"for p in $(pgrep -x procmon.py 2>/dev/null); do "
                 f"kill {sig} $p 2>/dev/null; done",
                 check=False, timeout=10)
 
         def check_alive(node):
             r = self.run_on(node,
-                'pgrep -f kvtest 2>/dev/null',
+                'pgrep -x kvtest 2>/dev/null',
                 check=False)
             return r.returncode == 0
 
@@ -564,26 +571,26 @@ class Deployer:
             target = self._exec_target(node)
             print(f'Cleaning {target}...')
             try:
-                # Step 1: Kill processes (use pgrep+kill to avoid pkill -f matching own shell)
+                # Step 1: Kill processes
                 self.run_on(node,
-                    "for p in $(pgrep -f kvtest 2>/dev/null); do "
+                    "for p in $(pgrep -x kvtest 2>/dev/null); do "
                     "kill $p 2>/dev/null; done; "
-                    "for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                    "for p in $(pgrep -x procmon.py 2>/dev/null); do "
                     "kill $p 2>/dev/null; done",
                     check=False, timeout=15)
                 time.sleep(1)
 
                 # Step 2: Force kill remaining
                 self.run_on(node,
-                    "for p in $(pgrep -f kvtest 2>/dev/null); do "
+                    "for p in $(pgrep -x kvtest 2>/dev/null); do "
                     "kill -9 $p 2>/dev/null; done; "
-                    "for p in $(pgrep -f procmon.py 2>/dev/null); do "
+                    "for p in $(pgrep -x procmon.py 2>/dev/null); do "
                     "kill -9 $p 2>/dev/null; done",
                     check=False, timeout=15)
                 time.sleep(1)
 
-                # Step 3: Remove directory
-                self.run_on(node, f'rm -rf {self.remote_work_dir}',
+                # Step 3: Remove directories
+                self.run_on(node, f'rm -rf {self.remote_work_dir} /root/.datasystem/logs/',
                            check=False, timeout=15)
 
                 # Verify cleanup
@@ -607,7 +614,7 @@ class Deployer:
         ok = sum(1 for r in results if r)
         print(f'\nClean result: {ok}/{len(results)}')
 
-    def do_collect(self):
+    def do_collect(self, sdk_log_dir='/root/.datasystem/logs'):
         collect_dir = 'collected'
         results = []
 
@@ -625,21 +632,16 @@ class Deployer:
 
         time.sleep(1)
 
-        # Phase 2: collect files
+        # Phase 2: collect kvtest output files and SDK logs
+        def collect_all(node, local_dir):
+            self.collect_files(node, local_dir)
+            self.collect_sdk_logs(node, local_dir, sdk_log_dir)
+
         self._collect_from_all_nodes(
             collect_dir,
-            lambda node, local_dir: self.collect_files(node, local_dir),
+            collect_all,
             file_label='files',
             result_label='Collect result'
-        )
-
-    def do_collect_logs(self, sdk_log_dir='/root/.datasystem/logs'):
-        collect_dir = 'collected_sdk_logs'
-        self._collect_from_all_nodes(
-            collect_dir,
-            lambda node, local_dir: self.collect_sdk_logs(node, local_dir, sdk_log_dir),
-            file_label='SDK log files',
-            result_label='Collect SDK logs result'
         )
 
     def _collect_from_all_nodes(self, collect_dir, collect_fn, file_label='files', result_label='Collect result'):
@@ -1043,12 +1045,7 @@ def main():
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
 
     # collect
-    p = sub.add_parser('collect', help='Collect output files to collected/', parents=[shared])
-    p.add_argument('deploy_json')
-    p.add_argument('config_template', nargs='?', default='config/config.json.example')
-
-    # collect-logs
-    p = sub.add_parser('collect-logs', help='Collect SDK logs to collected_sdk_logs/', parents=[shared])
+    p = sub.add_parser('collect', help='Collect output files and SDK logs to collected/', parents=[shared])
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
     p.add_argument('--sdk-log-dir', default='/root/.datasystem/logs',
@@ -1087,9 +1084,7 @@ def main():
     elif args.command == 'stop':
         deployer.do_stop()
     elif args.command == 'collect':
-        deployer.do_collect()
-    elif args.command == 'collect-logs':
-        deployer.do_collect_logs(getattr(args, 'sdk_log_dir', '/root/.datasystem/logs'))
+        deployer.do_collect(args.sdk_log_dir)
     elif args.command == 'clean':
         deployer.do_clean()
 
