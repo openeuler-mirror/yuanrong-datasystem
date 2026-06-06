@@ -1187,6 +1187,8 @@ private:
 
     std::shared_ptr<WorkerOcServiceMigrateImpl> gMigrateProc_{ nullptr };
 
+    std::shared_ptr<MigrateDataRateController> migrateRateController_{ nullptr };
+
     std::shared_ptr<WorkerOcServiceExpireImpl> expireProc_{ nullptr };
     AsyncTasksDoneChecker asyncTasksDoneChecker_{ nullptr };
 };

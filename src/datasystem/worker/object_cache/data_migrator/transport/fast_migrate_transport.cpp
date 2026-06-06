@@ -32,6 +32,7 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
                                                   Response &rsp)
 {
     rsp.remainBytes = rspPb.remain_bytes();
+    rsp.limitRate = rspPb.limit_rate();
     rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
     for (const auto &obj : reqPb.objects()) {
         const auto &key = obj.object_key();

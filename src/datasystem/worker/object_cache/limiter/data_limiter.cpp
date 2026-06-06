@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 
+#include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/inject/inject_point.h"
 
@@ -26,6 +27,7 @@ namespace datasystem {
 namespace object_cache {
 const uint ms2us = 1'000ul;
 const uint s2ms = 1'000ul;
+constexpr uint64_t RATE_SMOOTHING_DIVISOR = 2;
 
 static inline std::time_t Now()
 {
@@ -111,9 +113,65 @@ void MigrateDataRateLimiter::SlidingWindowUpdateRate(const uint64_t &bytesReceiv
     window.push_back({ now, bytesReceived });
     currentBandwidth += bytesReceived;
 
-    while (!window.empty() && (window.front().timestamp - std::chrono::seconds(1)) < now) {
+    while (!window.empty() && window.front().timestamp + std::chrono::seconds(1) < now) {
         currentBandwidth -= window.front().bytes;
         window.pop_front();
+    }
+}
+
+MigrateDataRateController::MigrateDataRateController(uint64_t maxBandwidthBytes) : rateLimiter_(maxBandwidthBytes)
+{
+}
+
+void MigrateDataRateController::SlidingWindowUpdateRate(uint64_t bytesReceived)
+{
+    rateLimiter_.SlidingWindowUpdateRate(bytesReceived);
+}
+
+uint64_t MigrateDataRateController::CalculateSmoothedRate(uint64_t lastRate, uint64_t availableBandwidth)
+{
+    if (availableBandwidth < lastRate) {
+        return availableBandwidth;
+    }
+    return (lastRate + availableBandwidth) / RATE_SMOOTHING_DIVISOR;
+}
+
+uint64_t MigrateDataRateController::CalculateNewRate(const std::string &workerAddr)
+{
+    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    uint64_t lastRate =
+        rateMap_.count(workerAddr) ? rateMap_[workerAddr] : rateLimiter_.GetMaxBandwidth() / RATE_SMOOTHING_DIVISOR;
+    uint64_t newRate = CalculateSmoothedRate(lastRate, rateLimiter_.GetAvailableBandwidth());
+    uint64_t timestampMs = GetSteadyClockTimeStampMs();
+    rateTimeStampMap_[workerAddr] = timestampMs;
+    rateMap_[workerAddr] = newRate;
+    TimerQueue::TimerImpl timer;
+    const uint32_t expireMs = RATE_RECORD_EXPIRE_MS;
+    std::weak_ptr<MigrateDataRateController> weakPtr = weak_from_this();
+    TimerQueue::GetInstance()->AddTimer(
+        expireMs,
+        [workerAddr, expireMs, timestampMs, weakPtr]() {
+            auto sharedPtr = weakPtr.lock();
+            if (sharedPtr == nullptr) {
+                return;
+            }
+            sharedPtr->ClearExpiredRate(workerAddr, expireMs, timestampMs);
+        },
+        timer);
+    return newRate;
+}
+
+void MigrateDataRateController::ClearExpiredRate(const std::string &workerAddr, uint64_t expireMs,
+                                                 uint64_t lastUpdateTimeMs)
+{
+    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    auto it = rateTimeStampMap_.find(workerAddr);
+    if (it == rateTimeStampMap_.end() || it->second != lastUpdateTimeMs) {
+        return;
+    }
+    if (GetSteadyClockTimeStampMs() - it->second >= expireMs) {
+        rateMap_.erase(workerAddr);
+        rateTimeStampMap_.erase(workerAddr);
     }
 }
 }  // namespace object_cache

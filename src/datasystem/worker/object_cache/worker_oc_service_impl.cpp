@@ -128,6 +128,12 @@ DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_
     (void)flagName;
     return value > 0;
 });
+DS_DEFINE_string(data_migrate_urma_transport_mode, "write",
+                 "URMA transport mode for background data migration, valid values are read and write.");
+DS_DEFINE_validator(data_migrate_urma_transport_mode, [](const char *flagName, const std::string &value) {
+    (void)flagName;
+    return value == "read" || value == "write";
+});
 
 DS_DECLARE_uint32(max_client_num);
 DS_DECLARE_string(worker_address);
@@ -274,8 +280,10 @@ void WorkerOCServiceImpl::InitServiceImpl()
     multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, etcdCM_, memCpyThreadPool_,
                                                                           threadPool_, akSkManager_, localAddress_);
 
+    migrateRateController_ =
+        std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
     getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, etcdCM_, etcdStore_, memCpyThreadPool_, threadPool_,
-                                                        akSkManager_, localAddress_);
+                                                        akSkManager_, localAddress_, migrateRateController_);
 
     deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, etcdCM_, akSkManager_, localAddress_, getProc_);
 
@@ -283,7 +291,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
                                                                      localAddress_);
 
     gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, etcdCM_, memCpyThreadPool_, akSkManager_,
-                                                                 GetLocalAddr().ToString());
+                                                                 GetLocalAddr().ToString(), migrateRateController_);
 
     expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, etcdCM_, akSkManager_);
     initOk_.set_value(Status::OK());

@@ -35,6 +35,7 @@
 #include "eviction_manager_common.h"
 
 DS_DECLARE_uint32(arena_per_tenant);
+DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
@@ -78,8 +79,11 @@ public:
             .etcdCM = nullptr,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
+        auto rateController =
+            std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
         impl_ =
-            std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888");
+            std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888",
+                                                         rateController);
         TimerQueue::GetInstance()->Initialize();
     }
 
@@ -342,6 +346,9 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectVersionMismatch)
     MigrateDataDirectRspPb rsp;
     DS_ASSERT_OK(impl_->MigrateDataDirect(req, rsp));
     ASSERT_EQ(rsp.failed_object_keys_size(), 0);
+    const uint64_t maxBandwidth = FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul;
+    const uint64_t expectedRate = MigrateDataRateController::CalculateSmoothedRate(maxBandwidth / 2, maxBandwidth);
+    ASSERT_EQ(rsp.limit_rate(), expectedRate);
 }
 
 TEST_F(MigrateDataDirectTest, TestMigrateDataDirectUrmaReadFail)

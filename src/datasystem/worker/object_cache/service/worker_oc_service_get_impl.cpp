@@ -80,6 +80,7 @@ DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
 DS_DECLARE_bool(enable_data_replication);
+DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DEFINE_bool(enable_l2_cache_fallback, true, "Control whether enable fallback to L2 cache when worker failed.");
 using namespace datasystem::worker;
 using namespace datasystem::master;
@@ -98,14 +99,16 @@ static constexpr double US_PER_MS = 1000.0;
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
-                                               std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress)
+                                               std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
+                                               std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
       etcdCM_(etcdCM),
       etcdStore_(etcdStore),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
-      localAddress_(std::move(localAddress))
+      localAddress_(std::move(localAddress)),
+      rateController_(std::move(rateController))
 {
     remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
     if (HaveOtherAZ()) {
@@ -2927,7 +2930,7 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
     std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
-    Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas)
+    Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes)
 {
     std::vector<std::string> successIds;
     successIds.reserve(lockedEntries.size());
@@ -2953,6 +2956,12 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     }
     ClearNeedDeleteForMigratedObjects(successIds, lockedEntries);
     BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
+    for (const auto &objectKey : successIds) {
+        auto metaIt = queryMetas.find(objectKey);
+        if (metaIt != queryMetas.end()) {
+            migratedBytes += metaIt->second.meta().data_size();
+        }
+    }
 }
 
 void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
@@ -2974,7 +2983,7 @@ void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp, std::set<ReadKey> &objectsNeedGetRemote,
-    const QueryMetaMap &queryMetas)
+    const QueryMetaMap &queryMetas, uint64_t &migratedBytes)
 {
     Status lastRc;
     std::vector<std::future<Status>> futures;
@@ -3027,13 +3036,15 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
         }
     }
     PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
+                                           migratedBytes);
     return lastRc;
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req,
                                                               std::set<ReadKey> objectsNeedGetRemote,
-                                                              QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
+                                                              QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp,
+                                                              uint64_t &migratedBytes)
 {
     Status lastRc;
     do {
@@ -3064,17 +3075,24 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
         }
         auto remoteGetRc =
-            ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas);
+            ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas,
+                                               migratedBytes);
         if (remoteGetRc.IsError()) {
             LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
             lastRc = std::move(remoteGetRc);
         }
-
     } while (!objectsNeedGetRemote.empty() && reqTimeoutDuration.CalcRealRemainingTime() > 0);
     for (const auto &obj : objectsNeedGetRemote) {
         rsp.add_failed_object_keys(obj.objectKey);
     }
     return lastRc;
+}
+
+void WorkerOcServiceGetImpl::UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
+                                                            NotifyRemoteGetRspPb &rsp)
+{
+    rateController_->SlidingWindowUpdateRate(migratedBytes);
+    rsp.set_limit_rate(rateController_->CalculateNewRate(workerAddr));
 }
 
 Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas,
@@ -3091,6 +3109,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     const int maxBatchSize = 32;
     std::set<ReadKey> batchObjects;
     Status lastRc;
+    uint64_t migratedBytes = 0;
     for (const auto &kv : queryMetas) {
         const auto &objectKey = kv.first;
         const auto &meta = kv.second;
@@ -3106,7 +3125,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
         batchObjects.insert(readKey);
 
         if (batchObjects.size() >= maxBatchSize) {
-            Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp);
+            Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp, migratedBytes);
             if (rc.IsError()) {
                 lastRc = rc;
             }
@@ -3116,11 +3135,12 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
 
     // Process remaining objects in the last batch
     if (!batchObjects.empty()) {
-        Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp);
+        Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp, migratedBytes);
         if (rc.IsError()) {
             lastRc = rc;
         }
     }
+    UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
     return lastRc;
 }
 }  // namespace object_cache

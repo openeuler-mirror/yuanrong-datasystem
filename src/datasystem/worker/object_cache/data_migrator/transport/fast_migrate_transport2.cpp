@@ -26,6 +26,28 @@
 
 namespace datasystem {
 namespace object_cache {
+void FastMigrateTransport2::ProcessMigrateResponse(const NotifyRemoteGetReqPb &reqPb,
+                                                   const NotifyRemoteGetRspPb &rspPb, const Request &req,
+                                                   Response &rsp)
+{
+    rsp.remainBytes = rspPb.remain_bytes();
+    rsp.limitRate = rspPb.limit_rate();
+    rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
+    for (const auto &key : reqPb.object_keys()) {
+        if (rsp.failedKeys.find(key) == rsp.failedKeys.end()) {
+            (void)rsp.successKeys.emplace(key);
+        }
+    }
+    if (req.progress != nullptr) {
+        req.progress->Deal(rsp.successKeys.size());
+    }
+    LOG_IF(WARNING, !rspPb.failed_object_keys().empty())
+        << FormatString("[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed, "
+                        "remain_bytes: %lu",
+                        req.datas->size(), req.batchSize, req.api->Address(), rspPb.failed_object_keys_size(),
+                        VectorToString(rspPb.failed_object_keys()), rsp.remainBytes);
+}
+
 Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &rsp)
 {
     NotifyRemoteGetReqPb reqPb;
@@ -61,20 +83,7 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
                                        },
                                        {});
     if (rc.IsOk()) {
-        rsp.remainBytes = rspPb.remain_bytes();
-        rsp.failedKeys.insert(rspPb.failed_object_keys().begin(), rspPb.failed_object_keys().end());
-        for (const auto &key : reqPb.object_keys()) {
-            if (rsp.failedKeys.find(key) == rsp.failedKeys.end()) {
-                (void)rsp.successKeys.emplace(key);
-            }
-        }
-        if (req.progress != nullptr) {
-            req.progress->Deal(rsp.successKeys.size());
-        }
-        LOG_IF(WARNING, !rspPb.failed_object_keys().empty())
-            << FormatString("[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed, remain_bytes: %lu",
-                            req.datas->size(), req.batchSize, req.api->Address(), rspPb.failed_object_keys_size(),
-                            VectorToString(rspPb.failed_object_keys()), rsp.remainBytes);
+        ProcessMigrateResponse(reqPb, rspPb, req, rsp);
     } else {
         rsp.remainBytes = 0;
     }

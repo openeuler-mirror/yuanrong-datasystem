@@ -37,6 +37,17 @@ public:
      * @return Status of the call.
      */
     Status MigrateDataToRemote(const Request &req, Response &rsp) override;
+
+private:
+    /**
+     * @brief Process the response from NotifyRemoteGet RPC.
+     * @param[in] reqPb The protobuf request that was sent.
+     * @param[in] rspPb The protobuf response received.
+     * @param[in] req The original Request for progress callback and logging.
+     * @param[out] rsp The Response to populate with results.
+     */
+    void ProcessMigrateResponse(const NotifyRemoteGetReqPb &reqPb, const NotifyRemoteGetRspPb &rspPb,
+                                const Request &req, Response &rsp);
 };
 
 }  // namespace object_cache
