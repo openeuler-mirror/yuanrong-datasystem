@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>kubernetes部署配置项 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -1081,7 +1081,32 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillToRemoteWorker</p></td>
+<tr class="row-odd"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
+<td><p>内存预留阈值（MB），与比例高水位取 max 后触发驱逐。有效范围 100-102400</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.evictionHighWatermarkPercent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
+<td><p>内存占用率高水位（百分比，相对可用共享内存）。有效范围 2-100，须大于 evictionLowWatermarkPercent</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.spill.evictionLowWatermarkPercent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
+<td><p>内存占用率低水位（百分比），后台驱逐目标。有效范围 1-99，须小于 evictionHighWatermarkPercent</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.spillHighWatermarkPercent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
+<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.spill.spillLowWatermarkPercent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>Spill 目录占用率低水位（百分比）。有效范围 1-99</p></td>
+</tr>
+<tr class="row-even"><td><p>global.spill.spillToRemoteWorker</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。</p></td>
@@ -1670,7 +1695,12 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 <td><p><code class="docutils literal notranslate"><span class="pre">40</span></code></p></td>
 <td><p>配置优雅退出数据迁移的流控（以MB/s为单位）</p></td>
 </tr>
-<tr class="row-even"><td><p>global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds</p></td>
+<tr class="row-even"><td><p>global.gracefulShutdown.dataMigrateUrmaTransportMode</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">write</span></code></p></td>
+<td><p>配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：<code class="docutils literal notranslate"><span class="pre">write</span></code> 表示使用 URMA write 路径，<code class="docutils literal notranslate"><span class="pre">read</span></code> 表示使用 URMA read 路径。仅在 <code class="docutils literal notranslate"><span class="pre">global.performance.enableUrma=true</span></code> 时生效</p></td>
+</tr>
+<tr class="row-odd"><td><p>global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worker Pod</p></td>
@@ -1751,82 +1781,77 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.urmaMode</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">UB</span></code></p></td>
-<td><p>是否开用Urma通过IB或UB运行，默认情况下，UB将与URMA一起运行</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.performance.urmaPollSize</p></td>
+<tr class="row-even"><td><p>global.performance.urmaPollSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.urmaRegisterWholeArena</p></td>
+<tr class="row-odd"><td><p>global.performance.urmaRegisterWholeArena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.urmaConnectionSize</p></td>
+<tr class="row-even"><td><p>global.performance.urmaConnectionSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>[已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.urmaEventMode</p></td>
+<tr class="row-odd"><td><p>global.performance.urmaEventMode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否使用中断模式轮询完成事件</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.enableTransportFallback</p></td>
+<tr class="row-even"><td><p>global.performance.enableTransportFallback</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.sharedDiskDirectory</p></td>
+<tr class="row-odd"><td><p>global.performance.sharedDiskDirectory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.sharedDiskSize</p></td>
+<tr class="row-even"><td><p>global.performance.sharedDiskSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.sharedDiskArenaPerTenant</p></td>
+<tr class="row-odd"><td><p>global.performance.sharedDiskArenaPerTenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.enableRdma</p></td>
+<tr class="row-even"><td><p>global.performance.enableRdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否为OC工作节点之间的数据传输启用RDMA</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.rdmaRegisterWholeArena</p></td>
+<tr class="row-odd"><td><p>global.performance.rdmaRegisterWholeArena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，false时将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ucxTransportLayerSelection</p></td>
+<tr class="row-even"><td><p>global.performance.ucxTransportLayerSelection</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">rc_x</span></code></p></td>
 <td><p>UCX使用的 RDMA传输模式。默认选用 “rc_x” 以获得最佳性能；若当前环境不支持，可改用 “rc”、“ud” 或 “dc”。各模式适用场景详见<a class="reference external" href="https://github.com/openucx/ucx/wiki/UCX-environment-parameters">UCX传输模式说明</a></p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateMergeSize</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2097152</span></code></p></td>
 <td><p>worker响应的目标批量大小，默认值为2MB</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
+<tr class="row-even"><td><p>global.performance.ocWorkerAggregateSingleMax</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
 <td><p>批量处理worker最大单个项目大小，默认为64KB</p></td>
 </tr>
-<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
+<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelMin</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">100</span></code></p></td>
 <td><p>并行工作线程批处理响应的最小数据计数，默认值为100</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
+<tr class="row-even"><td><p>global.performance.ocWorkerWorkerParallelNums</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
 <td><p>worker并行数量，0表示无限制</p></td>

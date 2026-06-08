@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>Client环境变量 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -682,7 +682,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p>11</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_V</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>数据系统SDK的日志级别。</p></td>
+<td><p>数据系统SDK的 <code class="docutils literal notranslate"><span class="pre">VLOG</span></code> 级别。数值越大，输出的调试日志越详细；一般用于排查内部细节，默认值为0。</p></td>
 </tr>
 <tr class="row-even"><td><p>12</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_MAX_LOG_SIZE</span></code></p></td>
@@ -727,7 +727,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-even"><td><p>23</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_MIN_LOG_LEVEL</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>用于设置日志记录的最低级别,默认是0。</p></td>
+<td><p>数据系统SDK的最小日志级别。数值越大，输出的日志越少；默认值为0，通常表示INFO级别及以上日志都可输出。</p></td>
 </tr>
 <tr class="row-odd"><td><p>25</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_RATE_LIMIT</span></code></p></td>
@@ -738,6 +738,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。</p></td>
+</tr>
+<tr class="row-odd"><td><p>28</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否让客户端日志文件名不带进程号。默认<code class="docutils literal notranslate"><span class="pre">true</span></code>时输出为<code class="docutils literal notranslate"><span class="pre">ds_client.log</span></code>、<code class="docutils literal notranslate"><span class="pre">ds_client_access.log</span></code>；设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>时恢复为带<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code>后缀的命名，适合多client进程同时运行且不希望覆盖日志的场景。</p></td>
 </tr>
 </tbody>
 </table>
@@ -793,7 +798,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <section id="id6">
 <h2>使用说明<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
 <p>1.环境变量的优先级低于SDK内部配置。如果SDK中已经配置了某个参数,则不会读取该环境变量;只有当SDK中没有配置该参数时,才会从环境变量中读取对应的值。
-2.日志配置相关环境变量只有配置了某个参数后，才会从环境变量中读取对应的值。</p>
+2.日志配置相关环境变量只有配置了某个参数后，才会从环境变量中读取对应的值。
+3.<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_V</span></code> 控制 VLOG 详细程度，<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_MIN_LOG_LEVEL</span></code> 控制常规日志最低输出级别，两者分别影响不同日志通道。</p>
 <p>设置环境变量的示例:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">DATASYSTEM_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
 <span class="nb">export</span><span class="w"> </span><span class="nv">DATASYSTEM_PORT</span><span class="o">=</span><span class="m">8080</span>
