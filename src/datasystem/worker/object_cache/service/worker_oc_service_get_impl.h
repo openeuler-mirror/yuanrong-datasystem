@@ -21,6 +21,8 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GET_IMPL_H
 
 #include <memory>
+#include <shared_mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "datasystem/common/object_cache/object_base.h"
@@ -32,6 +34,7 @@
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
+#include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -47,7 +50,8 @@ class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
 public:
     WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM, EtcdStore *etcdStore,
                            std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
-                           std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress);
+                           std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
+                           std::shared_ptr<MigrateDataRateController> rateController);
 
     ~WorkerOcServiceGetImpl()
     {
@@ -971,12 +975,13 @@ private:
     Status TryReconnectRemoteWorker(const std::string &endPoint, Status &lastResult);
 
     Status ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req, std::set<ReadKey> objectsNeedGetRemote,
-                                          QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
+                                          QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp,
+                                          uint64_t &migratedBytes);
 
     Status ProcessRemoteGetInNotificationImpl(
         std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
         std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
-        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas);
+        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas, uint64_t &migratedBytes);
 
     void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,
@@ -984,10 +989,13 @@ private:
             &groupedQueryMetas,
         std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
         std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
-        Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas);
+        Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes);
 
     void ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
                                            std::map<ReadKey, LockedEntity> &lockedEntries);
+
+    void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
+                                        NotifyRemoteGetRspPb &rsp);
 
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
@@ -1008,6 +1016,8 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
     HostPort localAddress_;
+
+    std::shared_ptr<MigrateDataRateController> rateController_;
 
     std::vector<std::string> otherAZNames_;
 

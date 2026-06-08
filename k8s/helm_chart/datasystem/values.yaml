@@ -391,6 +391,9 @@ global:
     checkAsyncQueueEmptyTimeS: 15
     # Data migration rate limit for every node when scaling down.
     dataMigrateRateLimitMb: 40
+    # URMA transport mode for background data migration. Optional values: write, read.
+    # This option only takes effect when enableUrma=true.
+    dataMigrateUrmaTransportMode: "write"
     # Overwrite the global default terminationGracePeriodSeconds when liveness probe failed, enable when greater than 0.
     livenessProbeTerminationGracePeriodSeconds: 0
 

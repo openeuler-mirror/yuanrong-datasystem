@@ -73,13 +73,14 @@ std::unordered_set<std::string> CollectRequestObjectKeys(const ObjInfoPbList &ob
 WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                        std::shared_ptr<ThreadPool> memcpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager,
-                                                       const std::string &localAddr)
+                                                       const std::string &localAddr,
+                                                       std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
       etcdCM_(etcdCM),
       memcpyThreadPool_(std::move(memcpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddr_(localAddr),
-      rateLimiter_(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul)
+      rateController_(std::move(rateController))
 {
 }
 
@@ -203,7 +204,7 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDa
     std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
                    [](const auto &info) { return info.object_key(); });
     const bool noSpace = (code == StatusCode::K_OUT_OF_MEMORY || code == StatusCode::K_NO_SPACE);
-    FillMigrateDataDirectResponse(failedIds, noSpace, rsp);
+    FillMigrateDataDirectResponse(req, failedIds, noSpace, 0, rsp);
     LOG(INFO) << "[Migrate Data] " << message;
     return Status(code, message);
 }
@@ -237,7 +238,7 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectEntries(
     QueryMetaMap metas;
     Status rc = QueryMasterMetadata(needQueryIds, metas, failedIds);
     if (rc.IsError()) {
-        FillMigrateDataDirectResponse(failedIds, false, rsp);
+        FillMigrateDataDirectResponse(req, failedIds, false, 0, rsp);
         return rc;
     }
 
@@ -257,7 +258,7 @@ Status WorkerOcServiceMigrateImpl::HandleMigrateDataDirectNoSpace(const MigrateD
         failedIds.insert(object.object_key());
     }
     RollbackObjects(failedIds, needReadDataIds);
-    FillMigrateDataDirectResponse(failedIds, true, rsp);
+    FillMigrateDataDirectResponse(req, failedIds, true, 0, rsp);
     LOG(WARNING) << "[Migrate Data] Slot migration allocate memory failed, retry all objects.";
     return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
 }
@@ -297,7 +298,8 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
     ObjectInfoMap needSendMasterIds;
-    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds);
+    uint64_t migratedBytes = 0;
+    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds, migratedBytes);
     Status noSpaceStatus = HandleMigrateDataDirectNoSpace(req, rsp, needReadDataIds, failedIds, status);
     if (noSpaceStatus.IsError()) {
         return noSpaceStatus;
@@ -306,7 +308,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
     ReplacePrimaryForMigrateDataDirect(req, point, needModifyPrimary, needReadDataIds, successIds, failedIds,
                                        needSendMasterIds, status);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
-    FillMigrateDataDirectResponse(failedIds, oom, rsp);
+    FillMigrateDataDirectResponse(req, failedIds, oom, migratedBytes, rsp);
     if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
         auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
         LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
@@ -562,7 +564,8 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
 Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDirectReqPb &req,
                                                            const ObjectInfoMap &needReadDataIds,
                                                            ObjectInfoMap &needSendMasterIds,
-                                                           std::unordered_set<std::string> &failedIds)
+                                                           std::unordered_set<std::string> &failedIds,
+                                                           uint64_t &migratedBytes)
 {
     // 1. Aggregate pre-allocated memory for objects.
     PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_ALLOCATE_AGGREGATE);
@@ -587,7 +590,7 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
 
     // 3. Wait tasks and finalize object entries.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_WAIT_REMOTE_READ);
-    Status waitRc = WaitRemoteReadTasks(tasks, needSendMasterIds, failedIds);
+    Status waitRc = WaitRemoteReadTasks(tasks, needSendMasterIds, failedIds, migratedBytes);
     return waitRc.IsError() ? waitRc : startRc;
 }
 
@@ -625,7 +628,7 @@ Status WorkerOcServiceMigrateImpl::ProcessRemoteReadForObject(const MigrateDataD
         return rc;
     }
 
-    tasks.push_back(ReadTask{ objectKey, std::move(eventKeys), std::move(shmUnit), needReadIt->second.first,
+    tasks.push_back(ReadTask{ objectKey, dataSize, std::move(eventKeys), std::move(shmUnit), needReadIt->second.first,
                               needReadIt->second.second });
     return Status::OK();
 }
@@ -684,7 +687,8 @@ Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(const MigrateDataDirectR
 }
 
 Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
-                                                       std::unordered_set<std::string> &failedIds)
+                                                       std::unordered_set<std::string> &failedIds,
+                                                       uint64_t &migratedBytes)
 {
     const auto metaSize = GetMetadataSize();
     Status lastRc;
@@ -699,6 +703,7 @@ Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &ta
         }
 
         needSendMasterIds.emplace(task.objectKey, std::make_pair(task.entry, task.isNewCreate));
+        migratedBytes += task.dataSize;
 
         task.shmUnit->id = ShmKey::Intern(GetStringUuid());
         if (metaSize > 0) {
@@ -803,14 +808,14 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         rsp.set_disk_remain_bytes(0);
         rsp.set_limit_rate(0);
     } else {
-        rateLimiter_.SlidingWindowUpdateRate(req.bytes_send());
+        rateController_->SlidingWindowUpdateRate(req.bytes_send());
         rsp.set_remain_bytes(CalcRemainBytes(req.type()));
         rsp.set_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio());
         uint64_t diskRemainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree(memory::CacheType::DISK);
         constexpr double remainThreshold = 0.8;
         rsp.set_disk_remain_bytes(static_cast<uint64_t>(diskRemainBytes * remainThreshold));
         rsp.set_disk_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio(memory::CacheType::DISK));
-        uint64_t limitRate = CalculateNewRate(req.worker_addr());
+        uint64_t limitRate = rateController_->CalculateNewRate(req.worker_addr());
         rsp.set_limit_rate(limitRate);
     }
     if (etcdCM_ != nullptr) {
@@ -824,59 +829,22 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
     }
 }
 
-void WorkerOcServiceMigrateImpl::FillMigrateDataDirectResponse(const std::unordered_set<std::string> &failedIds,
-                                                               bool oom, MigrateDataDirectRspPb &rsp)
+void WorkerOcServiceMigrateImpl::FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,
+                                                               const std::unordered_set<std::string> &failedIds,
+                                                               bool oom, uint64_t migratedBytes,
+                                                               MigrateDataDirectRspPb &rsp)
 {
     for (const auto &id : failedIds) {
         rsp.add_failed_object_keys(id);
     }
     if (oom) {
         rsp.set_remain_bytes(0);
+        rsp.set_limit_rate(0);
     } else {
         rsp.set_remain_bytes(CalcRemainBytes(MigrateType::SPILL));
+        rateController_->SlidingWindowUpdateRate(migratedBytes);
+        rsp.set_limit_rate(rateController_->CalculateNewRate(req.worker_addr()));
     }
-}
-
-uint64_t WorkerOcServiceMigrateImpl::CalculateNewRate(const std::string &workerAddr)
-{
-    std::lock_guard<std::shared_timed_mutex> l(mutex_);
-
-    uint64_t lastRate = rateMap_.count(workerAddr) ? rateMap_[workerAddr] : rateLimiter_.GetMaxBandwidth() / 2;
-    auto availableBandwidth = rateLimiter_.GetAvailableBandwidth();
-    uint64_t newRate;
-    if (availableBandwidth < lastRate) {
-        newRate = availableBandwidth;
-    } else {
-        newRate = (lastRate + availableBandwidth) / 2;  // 2 means new rate is half of available bandwidth and last rate
-    }
-
-    auto toMs = std::chrono::milliseconds(1);
-    uint64_t timeStamp = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch() / toMs);
-    rateTimeStampMap_[workerAddr] = timeStamp;
-    rateMap_[workerAddr] = newRate;
-    TimerQueue::TimerImpl timer;
-    const uint32_t expireMs = 60000;
-    auto weakPtr = weak_from_this();
-    TimerQueue::GetInstance()->AddTimer(
-        expireMs,
-        [workerAddr, toMs, weakPtr]() {
-            auto sharedPtr = weakPtr.lock();
-            if (sharedPtr == nullptr) {
-                return;
-            }
-            std::lock_guard<std::shared_timed_mutex> l(sharedPtr->mutex_);
-            auto it = sharedPtr->rateTimeStampMap_.find(workerAddr);
-            if (it == sharedPtr->rateTimeStampMap_.end()) {
-                return;
-            }
-            uint64_t currTime = std::chrono::steady_clock::now().time_since_epoch() / toMs;
-            if (currTime - it->second >= expireMs) {
-                sharedPtr->rateMap_.erase(workerAddr);
-                sharedPtr->rateTimeStampMap_.erase(workerAddr);
-            }
-        },
-        timer);
-    return newRate;
 }
 
 Status WorkerOcServiceMigrateImpl::PureQueryMetaOnce(const std::shared_ptr<worker::WorkerMasterOCApi> &api,

@@ -161,6 +161,7 @@ message MigrateDataDirectReqPb {
 message MigrateDataDirectRspPb {
   uint64 remain_bytes = 1;
   repeated string failed_object_keys = 2;
+  uint64 limit_rate = 3;
 }
 
 message NotifyRemoteGetReqPb {
@@ -177,6 +178,7 @@ message NotifyRemoteGetReqPb {
 message NotifyRemoteGetRspPb {
   repeated string failed_object_keys = 1;
   uint64 remain_bytes = 2;
+  uint64 limit_rate = 3;
 }
 
 service WorkerWorkerTransportService {

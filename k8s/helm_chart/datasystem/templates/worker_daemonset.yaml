@@ -211,6 +211,7 @@ spec:
         - -spill_low_watermark_percent={{ $.Values.global.spill.spillLowWatermarkPercent }}
         - -spill_to_remote_worker={{ $.Values.global.spill.spillToRemoteWorker }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
+        - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}
         - -ipc_through_shared_memory={{ $.Values.global.ipc.ipcThroughSharedMemory }}
         - -shared_memory_worker_port={{ $.Values.global.ipc.sharedMemoryWorkerPort }}

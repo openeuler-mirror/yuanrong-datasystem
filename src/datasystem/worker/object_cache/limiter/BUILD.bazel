@@ -11,6 +11,7 @@ ds_cc_library(
         "data_limiter.h",
     ],
     deps = [
+        "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/inject:common_inject",
     ]

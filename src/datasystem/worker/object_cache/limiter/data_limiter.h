@@ -24,8 +24,11 @@
 #include <cstdint>
 #include <ctime>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
+#include <unordered_map>
 
 namespace datasystem {
 namespace object_cache {
@@ -127,6 +130,43 @@ private:
     std::deque<TimestampedData> window;
     const uint64_t maxBandwidth;
     uint64_t currentBandwidth;
+};
+
+class MigrateDataRateController : public std::enable_shared_from_this<MigrateDataRateController> {
+public:
+    explicit MigrateDataRateController(uint64_t maxBandwidthBytes);
+
+    ~MigrateDataRateController() = default;
+
+    /**
+     * @brief Update current bandwidth by sliding window.
+     * @param[in] bytesReceived Bytes received of this request.
+     */
+    void SlidingWindowUpdateRate(uint64_t bytesReceived);
+
+    /**
+     * @brief Calculate the next rate for a worker according to available bandwidth and historical rate.
+     * @param[in] workerAddr Worker address.
+     * @return New rate in bytes per second.
+     */
+    uint64_t CalculateNewRate(const std::string &workerAddr);
+
+    /**
+     * @brief Smooth rate changes. Rate drops immediately under pressure and rises gradually when bandwidth recovers.
+     * @param[in] lastRate Last rate sent to the worker.
+     * @param[in] availableBandwidth Current available migration bandwidth.
+     * @return Smoothed rate in bytes per second.
+     */
+    static uint64_t CalculateSmoothedRate(uint64_t lastRate, uint64_t availableBandwidth);
+
+private:
+    void ClearExpiredRate(const std::string &workerAddr, uint64_t expireMs, uint64_t lastUpdateTimeMs);
+
+    static constexpr uint32_t RATE_RECORD_EXPIRE_MS = 60'000;
+    mutable std::shared_timed_mutex mutex_;
+    std::unordered_map<std::string, uint64_t> rateMap_;
+    std::unordered_map<std::string, uint64_t> rateTimeStampMap_;
+    MigrateDataRateLimiter rateLimiter_;
 };
 
 }  // namespace object_cache

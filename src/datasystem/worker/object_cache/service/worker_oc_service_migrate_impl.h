@@ -70,7 +70,8 @@ public:
      */
     WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                std::shared_ptr<ThreadPool> memcpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
-                               const std::string &localAddr);
+                               const std::string &localAddr,
+                               std::shared_ptr<MigrateDataRateController> rateController);
 
     /**
      * @brief Migrate data.
@@ -201,13 +202,16 @@ private:
      * @param[in] needReadDataIds Need read data object keys.
      * @param[out] needSendMasterIds Need send master object keys.
      * @param[out] failedIds Failed object key list.
+     * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
      * @return K_OK on success, the error otherwise.
      */
     Status FillDataToObjectEntries(const MigrateDataDirectReqPb &req, const ObjectInfoMap &needReadDataIds,
-                                   ObjectInfoMap &needSendMasterIds, std::unordered_set<std::string> &failedIds);
+                                   ObjectInfoMap &needSendMasterIds, std::unordered_set<std::string> &failedIds,
+                                   uint64_t &migratedBytes);
 
     struct ReadTask {
         std::string objectKey;
+        uint64_t dataSize;
         std::vector<uint64_t> eventKeys;
         std::shared_ptr<ShmUnit> shmUnit;
         std::shared_ptr<SafeObjType> entry;
@@ -260,10 +264,11 @@ private:
      * @param[in,out] tasks Remote read tasks.
      * @param[out] needSendMasterIds Need send master object keys.
      * @param[out] failedIds Failed object key list.
+     * @param[out] migratedBytes Bytes whose URMA read events have completed successfully.
      * @return K_OK on success, the error otherwise.
      */
     Status WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
-                               std::unordered_set<std::string> &failedIds);
+                               std::unordered_set<std::string> &failedIds, uint64_t &migratedBytes);
 
     /**
      * @brief Helper function for aggregate allocation.
@@ -311,10 +316,12 @@ private:
      * @brief Fill migrate data direct response.
      * @param[in] failedIds Failed object key list.
      * @param[in] oom Indicate is OOM or not.
+     * @param[in] migratedBytes Bytes whose URMA read events have completed successfully.
      * @param[out] rsp Migrate data direct response.
      */
-    void FillMigrateDataDirectResponse(const std::unordered_set<std::string> &failedIds, bool oom,
-                                       MigrateDataDirectRspPb &rsp);
+    void FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,
+                                       const std::unordered_set<std::string> &failedIds, bool oom,
+                                       uint64_t migratedBytes, MigrateDataDirectRspPb &rsp);
 
     /**
      * @brief For test mock purpose.
@@ -506,13 +513,6 @@ private:
     Status CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
     /**
-     * @brief Galculate the limit rate can be provied for the worker.
-     * @param[in] workeAddr Worker address of the request.
-     * @return The limit rate for the worker.
-     */
-    uint64_t CalculateNewRate(const std::string &workerAddr);
-
-    /**
      * @brief Get migrate data objects.
      * @param[in] req Migrate data request.
      * @return Object list.
@@ -611,15 +611,9 @@ private:
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 
-    std::shared_timed_mutex mutex_;  // protect rateMap_ and rateTimeStampMap_
-
-    std::unordered_map<std::string, uint64_t> rateMap_;  // key is worker ip, value is last rate
-
-    std::unordered_map<std::string, uint64_t> rateTimeStampMap_;  // key is worker ip, value is timestamp
-
     std::string localAddr_;
 
-    MigrateDataRateLimiter rateLimiter_;
+    std::shared_ptr<MigrateDataRateController> rateController_;
     
     std::shared_timed_mutex unitMutex_;
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;

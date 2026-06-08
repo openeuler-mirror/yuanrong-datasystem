@@ -95,7 +95,10 @@ public:
             .etcdCM = nullptr,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
-        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888");
+        rateController_ =
+            std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
+        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888",
+                                                             rateController_);
         TimerQueue::GetInstance()->Initialize();
     }
 
@@ -169,6 +172,7 @@ protected:
     std::shared_ptr<WorkerOcServiceMigrateImpl> impl_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     WorkerRequestManager requestManager_;
+    std::shared_ptr<MigrateDataRateController> rateController_;
 };
 
 TEST_F(MigrateDataServiceTest, TestDiskIOError)
@@ -535,6 +539,11 @@ TEST_F(MigrateL2DataServiceTest, TestMigrateL2Data)
     
 }
 
+TEST_F(MigrateDataServiceTest, UsesInjectedRateController)
+{
+    ASSERT_EQ(impl_->rateController_, rateController_);
+}
+
 class NotifyRemoteGetMigrationTest : public CommonTest {
 public:
     void SetUp() override
@@ -555,14 +564,17 @@ public:
             .persistenceApi = nullptr,
             .etcdCM = nullptr,
         };
+        rateController_ =
+            std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
         impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, nullptr,
-                                                          HostPort("127.0.0.1:18888"));
+                                                         HostPort("127.0.0.1:18888"), rateController_);
     }
 
 protected:
     std::shared_ptr<ObjectTable> objectTable_;
     WorkerRequestManager requestManager_;
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
+    std::shared_ptr<MigrateDataRateController> rateController_;
 };
 
 TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDeleteFlagWhenReplicationDisabled)
@@ -605,15 +617,67 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     Status lastRc = Status::OK();
     NotifyRemoteGetRspPb rsp;
     QueryMetaMap queryMetas;
+    uint64_t migratedBytes = 0;
 
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas);
+                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
+                                                  migratedBytes);
 
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
     EXPECT_TRUE(untouchedEntry->Get()->stateInfo.IsNeedToDelete());
 
     entry->WUnlock();
     untouchedEntry->WUnlock();
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, UsesInjectedRateController)
+{
+    ASSERT_EQ(impl_->rateController_, rateController_);
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRateLimitUsesMigratedBytes)
+{
+    const uint64_t maxBandwidth = FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul;
+    const uint64_t migratedBytes = maxBandwidth / 4;
+    uint64_t firstAvailableBandwidth = maxBandwidth - migratedBytes;
+    uint64_t firstRate = MigrateDataRateController::CalculateSmoothedRate(maxBandwidth / 2, firstAvailableBandwidth);
+    ASSERT_EQ(firstRate, (maxBandwidth / 2 + firstAvailableBandwidth) / 2);
+
+    ASSERT_EQ(MigrateDataRateController::CalculateSmoothedRate(firstRate, 0), 0);
+}
+
+TEST_F(MigrateDataServiceTest, MigrateDataDirectResponseSetsLimitRate)
+{
+    MigrateDataDirectReqPb req;
+    req.set_worker_addr("127.0.0.1:18889");
+    auto *object1 = req.add_objects();
+    object1->set_object_key("object1");
+    object1->set_data_size(1024);
+    auto *object2 = req.add_objects();
+    object2->set_object_key("object2");
+    object2->set_data_size(1024);
+    std::unordered_set<std::string> failedIds{ "object2" };
+    uint64_t migratedBytes = object1->data_size();
+    MigrateDataDirectRspPb rsp;
+
+    impl_->FillMigrateDataDirectResponse(req, failedIds, false, migratedBytes, rsp);
+
+    ASSERT_GT(rsp.limit_rate(), 0);
+    ASSERT_EQ(rsp.failed_object_keys_size(), 1);
+    ASSERT_EQ(rsp.failed_object_keys(0), "object2");
+}
+
+TEST_F(MigrateDataServiceTest, MigrateDataDirectResponseSetsZeroLimitRateWhenOom)
+{
+    MigrateDataDirectReqPb req;
+    req.set_worker_addr("127.0.0.1:18889");
+    std::unordered_set<std::string> failedIds;
+    MigrateDataDirectRspPb rsp;
+
+    impl_->FillMigrateDataDirectResponse(req, failedIds, true, 0, rsp);
+
+    ASSERT_EQ(rsp.limit_rate(), 0);
+    ASSERT_EQ(rsp.remain_bytes(), 0);
 }
 }  // namespace ut
 }  // namespace datasystem

@@ -359,6 +359,10 @@
         "value": "40",
         "description": "Data migrate rate limit for every node when scale down happen."
     },
+    "data_migrate_urma_transport_mode": {
+        "value": "write",
+        "description": "URMA transport mode for background data migration. Optional values: write, read. write uses the URMA write path, and read uses the URMA read path."
+    },
     "check_async_queue_empty_time_s": {
         "value": "1",
         "description": "The worker ensures a certain period of time that the asynchronous queues for sending messages to ETCD and L2 cache remain empty before it can exit properly."

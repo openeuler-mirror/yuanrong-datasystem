@@ -34,6 +34,7 @@
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/log.h"
@@ -52,6 +53,7 @@ using namespace datasystem::object_cache;
 using namespace ::testing;
 
 DS_DECLARE_string(spill_directory);
+DS_DECLARE_string(data_migrate_urma_transport_mode);
 DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 namespace datasystem {
@@ -211,6 +213,18 @@ TEST_F(DataLimiterTest, TestMaxLimitSize)
     timer.Reset();
     limiter.WaitAllow(requireSize);
     ASSERT_GE(timer.ElapsedMilliSecond(), double(4900));
+}
+
+TEST_F(DataLimiterTest, TestMigrateRateLimiterSlidingWindow)
+{
+    constexpr uint64_t maxBandwidth = 1000;
+    MigrateDataRateLimiter limiter(maxBandwidth);
+
+    limiter.SlidingWindowUpdateRate(400);
+    ASSERT_EQ(limiter.GetAvailableBandwidth(), 600);
+
+    limiter.SlidingWindowUpdateRate(700);
+    ASSERT_EQ(limiter.GetAvailableBandwidth(), 0);
 }
 
 class MigrateDataHandlerTest : public CommonTest, public EvictionManagerCommon {
@@ -760,6 +774,131 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportProbeFallback)
     DS_ASSERT_OK(result.status);
     ASSERT_TRUE(result.successIds.empty());
     ASSERT_EQ(result.skipIds.size(), 1);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerTest, TestFastTransportUsesLimiterAcrossBatches)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 1;
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("FastTransportLimiterAcrossBatches", objectSize, objectCount, objectKeys);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    Timer timer;
+
+    auto result = handler.MigrateDataToRemote();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_NE(result.status.GetMsg().find("NotifyRemoteGet"), std::string::npos) << result.status.ToString();
+    ASSERT_TRUE(result.successIds.empty());
+    ASSERT_EQ(result.failedIds.size(), objectCount);
+    ASSERT_GE(timer.ElapsedMilliSecond(), double(950));
+}
+
+TEST_F(MigrateDataHandlerTest, TestFastTransportSkipsSendWhenLimiterBusy)
+{
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 0;
+    constexpr uint64_t objectSize = 100;
+    constexpr uint64_t objectCount = 1;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("FastTransportLimiterBusy", objectSize, objectCount, objectKeys);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::NotifyRemoteGet, (_, _)).Times(0);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _)).Times(0);
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
+    ASSERT_TRUE(result.successIds.empty());
+    ASSERT_EQ(result.failedIds.size(), objectCount);
+}
+
+TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 100;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("UrmaReadTransportMode", objectSize, objectCount, objectKeys);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::NotifyRemoteGet, (_, _)).Times(0);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 2);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(1024ul * 1024ul);
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.successIds.size(), objectCount);
+    ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 100;
+    constexpr uint64_t objectCount = 1;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("FastTransportZeroRateRecovers", objectSize, objectCount, objectKeys);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillOnce(Invoke([](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .Times(1)
+        .WillOnce(Invoke([](MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_TRUE(payloads.empty());
+            rsp.set_limit_rate(1024ul * 1024ul);
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.successIds.size(), objectCount);
     ASSERT_TRUE(result.failedIds.empty());
 }
 

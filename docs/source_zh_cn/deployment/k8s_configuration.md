@@ -432,6 +432,7 @@ global:
 | global.gracefulShutdown.enableLosslessDataExitMode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
 | global.gracefulShutdown.checkAsyncQueueEmptyTimeS | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | global.gracefulShutdown.dataMigrateRateLimitMb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
+| global.gracefulShutdown.dataMigrateUrmaTransportMode | string | `write` | 配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：`write` 表示使用 URMA write 路径，`read` 表示使用 URMA read 路径。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.gracefulShutdown.livenessProbeTerminationGracePeriodSeconds | int | `0` | 优雅退出的最大处理时间（以秒为单位），0表示无限时间；当该值大于0时，如果优雅退出时间超过该值，Kubernetes会强制清除datasystem-worker Pod |
 
 ### 性能相关配置

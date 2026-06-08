@@ -30,6 +30,7 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
+DS_DECLARE_string(data_migrate_urma_transport_mode);
 
 namespace datasystem {
 namespace object_cache {
@@ -54,7 +55,11 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       slotId_(slotId)
 {
     if (ShouldUseFastTransport()) {
-        transport_ = std::make_shared<FastMigrateTransport2>();
+        if (FLAGS_data_migrate_urma_transport_mode == "read") {
+            transport_ = std::make_shared<FastMigrateTransport>();
+        } else {
+            transport_ = std::make_shared<FastMigrateTransport2>();
+        }
     } else {
         transport_ = std::make_shared<TcpMigrateTransport>();
     }
@@ -333,17 +338,15 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
         return;
     }
 
-    if (!IsFastTransportEnabled()) {
-        if (limiter_.IsRemoteBusyNode()) {
-            LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
-            std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                           [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-            lastRc_ = Status(StatusCode::K_NOT_READY, "[Migrate Data] Remote node is busy");
-            Clear();
-            return;
-        }
-        limiter_.WaitAllow(currBatchSize_);
+    if (limiter_.IsRemoteBusyNode()) {
+        LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
+        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
+        lastRc_ = Status(StatusCode::K_NOT_READY, "[Migrate Data] Remote node is busy");
+        Clear();
+        return;
     }
+    limiter_.WaitAllow(currBatchSize_);
 
     MigrateTransport::Request req{ .type = type_,
                                    .api = remoteApi_,
@@ -396,7 +399,6 @@ Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<Worker
 
 Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
 {
-    RETURN_OK_IF_TRUE(IsFastTransportEnabled());
     const uint64_t minSleepMs = 100;
     const uint64_t maxSleepMs = 500;
     int busyNodeRetryCount = 5;
