@@ -762,6 +762,11 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_file_open_limit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
 | eviction_thread_num | int | `1` | 后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中 |
+| eviction_reserve_mem_threshold_mb | int | `10240` | 内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_percent 共同决定驱逐触发线。有效范围 100-102400 |
+| eviction_high_watermark_percent | int | `90` | 内存占用率高水位（百分比，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 2-100，须大于 eviction_low_watermark_percent |
+| eviction_low_watermark_percent | int | `80` | 内存占用率低水位（百分比），后台驱逐运行直至占用率降至该比例及以下。有效范围 1-99，须小于 eviction_high_watermark_percent |
+| spill_high_watermark_percent | int | `80` | Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100，须大于 spill_low_watermark_percent |
+| spill_low_watermark_percent | int | `60` | Spill 目录占用率低水位（相对 spill_size_limit 的百分比）。有效范围 1-99，须小于 spill_high_watermark_percent |
 
 #### 日志与可观测相关配置
 
@@ -849,6 +854,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | enable_lossless_data_exit_mode | bool | `false` | 是否启用无损数据退出模式，当该值为 `true` 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失 |
 | check_async_queue_empty_time_s | int | `1` | datasystem-worker检测异步队列为空的时间，单位为秒 |
 | data_migrate_rate_limit_mb | int | `40` | 配置优雅退出数据迁移的流控（以MB/s为单位） |
+| data_migrate_urma_transport_mode | string | `write` | 配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：`write` 表示使用 URMA write 路径，`read` 表示使用 URMA read 路径。仅在 `enable_urma=true` 时生效 |
 
 #### 性能相关配置
 
@@ -869,6 +875,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
+| urma_max_write_size_mb | int | `2` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
 | urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |

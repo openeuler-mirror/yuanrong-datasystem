@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>openYuanrong datasystem 日志 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -630,12 +630,12 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 <tr class="row-even"><td><p>7</p></td>
 <td><p>Client</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_{pid}.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等；<code class="docutils literal notranslate"><span class="pre">{pid}</span></code> 为进程号）</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等；关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_{pid}.INFO.log</span></code>）</p></td>
 <td><p>SDK 运行日志；基名可由启动参数与环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_NAME</span></code> 覆盖</p></td>
 </tr>
 <tr class="row-odd"><td><p>8</p></td>
 <td><p>Client</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access_{pid}.log</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access.log</span></code>（关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access_{pid}.log</span></code>）</p></td>
 <td><p>SDK 接口访问日志；基名可由 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 覆盖</p></td>
 </tr>
 </tbody>

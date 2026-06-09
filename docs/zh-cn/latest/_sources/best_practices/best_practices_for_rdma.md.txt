@@ -469,3 +469,50 @@ dscli start \
    ```
 
    若日志中出现 RC 相关传输信息，说明 RDMA 已正确启用。
+
+5. **如何解决 UCX endpoint timeout 超时问题？**
+
+   InfiniBand 或 RoCE 物理底层链路已通过 perftest 验证正常，但运行实际业务时系统抛出 endpoint timeout 错误。
+
+   **根本原因**：UCX 连接建立需先通过以太网（TCP/IP）接口交换 RDMA 所需的队列对（QP）信息，再切换至 RDMA 通道传输数据。在多网卡服务器中，若未显式指定 TCP 控制流接口，UCX 会随机选择激活的以太网接口，若选中隔离网络（如 Docker 桥接网、管理网），控制流无法送达，导致握手失败。
+
+   **解决方案**：
+
+   首先在节点间交叉 ping 高速数据网段 IP（如 192.168.4.x），确保双向互通。然后通过 `sysfs` 反查 IP 网卡与 RDMA 设备号的物理配套关系：
+
+   ```bash
+   ls -d /sys/class/infiniband/*/device/net/*
+   ```
+
+   输出示例：
+
+   ```text
+   /sys/class/infiniband/mlx5_0/device/net/enp67s0f0np0
+   /sys/class/infiniband/mlx5_1/device/net/enp67s0f1np1
+   ```
+
+   路径中 `infiniband/` 后紧跟的设备名（如 `mlx5_1`）与末尾的网络接口名（如 `enp67s0f1np1`）在物理上属于同一硬件端口。
+
+   > 注意：不同节点的网卡接口名称可能不一致（例如节点 A 为 `enp195s0f1np1`，节点 B 为 `enp67s0f1np1`）。
+
+   最后在启动脚本中根据实际反查结果配置环境变量：
+
+   - 节点 A 配置：
+
+   ```bash
+   # 指定本地物理 RDMA 设备
+   export UCX_NET_DEVICES=mlx5_0:1
+   # 指定该 RDMA 设备对应的 TCP 控制流网络接口
+   export UCX_TCP_CM_ROUTE=enp195s0f1np1
+   ```
+
+   - 节点 B 配置：
+
+   ```bash
+   # 指定本地物理 RDMA 设备（此节点硬件名称不同）
+   export UCX_NET_DEVICES=rocep67s0f0:1
+   # 指定该 RDMA 设备对应的 TCP 控制流网络接口
+   export UCX_TCP_CM_ROUTE=enp67s0f1np1
+   ```
+
+   `UCX_NET_DEVICES` 负责高性能数据通道，`UCX_TCP_CM_ROUTE` 负责控制流通道，两个变量指定的网络接口必须在物理上或逻辑上处于同一互通网络平面，UCX 连接方可正常建立。

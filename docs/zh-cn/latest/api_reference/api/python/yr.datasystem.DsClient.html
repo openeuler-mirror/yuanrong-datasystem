@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>yr.datasystem.DsClient - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
@@ -581,6 +581,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <p><code class="docutils literal notranslate"><span class="pre">DsClient</span></code> 是聚合客户端，会同时创建 <a class="reference internal" href="yr.datasystem.kv_client.KVClient.html"><span class="doc">KVClient</span></a>、
 <a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.html"><span class="doc">HeteroClient</span></a> 和
 <a class="reference internal" href="yr.datasystem.object_client.ObjectClient.html"><span class="doc">ObjectClient</span></a> 3 个客户端实例，并统一提供初始化、关闭和访问入口。</p>
+<p><strong>使用约束</strong>：启用 fast transport（URMA）时，单个进程内只能初始化一个 client 实例。若需要同时使用多种语义能力，请在同一进程内复用同一个 <code class="docutils literal notranslate"><span class="pre">DsClient</span></code> 实例，并通过 <code class="docutils literal notranslate"><span class="pre">kv()</span></code>、<code class="docutils literal notranslate"><span class="pre">object()</span></code>、<code class="docutils literal notranslate"><span class="pre">hetero()</span></code> 获取对应客户端能力。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>host</strong> (str) - 数据系统 Worker 的主机 IP 地址。</p></li>

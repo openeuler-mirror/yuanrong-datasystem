@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>RH2D最佳实践 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -751,8 +751,8 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 <h2>快速验证<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
 <p>通过跨节点拉取数据的样例可快速验证RH2D的能力。</p>
 <p>在节点1执行以下Python脚本：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span><span class="n">HeteroClient</span><span class="p">,</span> <span class="n">Blob</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">acl</span>
+<span class="kn">from</span> <span class="nn">yr.datasystem</span> <span class="kn">import</span> <span class="p">(</span><span class="n">HeteroClient</span><span class="p">,</span> <span class="n">Blob</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">)</span>
 
 <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 <span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
@@ -769,8 +769,8 @@ dscli<span class="w"> </span>start<span class="w"> </span><span class="se">\</sp
 </pre></div>
 </div>
 <p>在节点2执行以下Python脚本：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span><span class="n">HeteroClient</span><span class="p">,</span> <span class="n">Blob</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">)</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">acl</span>
+<span class="kn">from</span> <span class="nn">yr.datasystem</span> <span class="kn">import</span> <span class="p">(</span><span class="n">HeteroClient</span><span class="p">,</span> <span class="n">Blob</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">)</span>
 
 <span class="n">acl</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 <span class="n">device_id</span> <span class="o">=</span> <span class="mi">2</span>

@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>部署指南 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -651,7 +651,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <section id="cann">
 <h3>安装CANN（非必须）<a class="headerlink" href="#cann" title="Link to this heading">¶</a></h3>
 <p>CANN的安装依赖Python环境，请确保您在开始安装CANN之前环境中的Python已经就绪。</p>
-<p>在<a class="reference external" href="https://www.hiascend.com/developer/download/community/result?module=cann&amp;cann=8.2.RC1">Ascend官网</a>下载CANN run包，安装 run 包：</p>
+<p>在<a class="reference external" href="https://www.hiascend.com/developer/download/community/result?module=cann&amp;amp;cann=8.2.RC1">Ascend官网</a>下载CANN run包，安装 run 包：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run
 ./Ascend-cann-toolkit_&lt;version&gt;_linux-&lt;arch&gt;.run<span class="w"> </span>--install<span class="w"> </span>--quiet
 </pre></div>
@@ -898,7 +898,7 @@ chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span>~
 <section id="id14">
 <h3>快速验证<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <p>Python 脚本快速验证：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">yr.datasystem.ds_client</span> <span class="kn">import</span> <span class="n">DsClient</span>
 
 <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
 <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
@@ -1099,7 +1099,7 @@ cp<span class="w"> </span>-r<span class="w"> </span>yuanrong-datasystem/docker/c
 <section id="id21">
 <h3>快速验证<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
 <p>openYuanrong datasystem会默认以DaemonSet的方式在每个节点都部署一个 <code class="docutils literal notranslate"><span class="pre">ds-worker</span></code> Pod，默认监听 <code class="docutils literal notranslate"><span class="pre">&lt;主机IP&gt;:31501</span></code>，可通过如下 Python 脚本快速验证：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem.ds_client</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">yr.datasystem.ds_client</span> <span class="kn">import</span> <span class="n">DsClient</span>
 
 <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
 <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>

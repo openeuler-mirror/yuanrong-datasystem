@@ -8,7 +8,7 @@
 
     <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>dscli命令行工具 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
     <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
@@ -1744,6 +1744,31 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td><p>后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中</p></td>
 </tr>
+<tr class="row-odd"><td><p>eviction_reserve_mem_threshold_mb</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
+<td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_percent 共同决定驱逐触发线。有效范围 100-102400</p></td>
+</tr>
+<tr class="row-even"><td><p>eviction_high_watermark_percent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
+<td><p>内存占用率高水位（百分比，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 2-100，须大于 eviction_low_watermark_percent</p></td>
+</tr>
+<tr class="row-odd"><td><p>eviction_low_watermark_percent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
+<td><p>内存占用率低水位（百分比），后台驱逐运行直至占用率降至该比例及以下。有效范围 1-99，须小于 eviction_high_watermark_percent</p></td>
+</tr>
+<tr class="row-even"><td><p>spill_high_watermark_percent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
+<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100，须大于 spill_low_watermark_percent</p></td>
+</tr>
+<tr class="row-odd"><td><p>spill_low_watermark_percent</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>Spill 目录占用率低水位（相对 spill_size_limit 的百分比）。有效范围 1-99，须小于 spill_high_watermark_percent</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -2121,6 +2146,11 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">40</span></code></p></td>
 <td><p>配置优雅退出数据迁移的流控（以MB/s为单位）</p></td>
 </tr>
+<tr class="row-odd"><td><p>data_migrate_urma_transport_mode</p></td>
+<td><p>string</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">write</span></code></p></td>
+<td><p>配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：<code class="docutils literal notranslate"><span class="pre">write</span></code> 表示使用 URMA write 路径，<code class="docutils literal notranslate"><span class="pre">read</span></code> 表示使用 URMA read 路径。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 时生效</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -2212,42 +2242,47 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>一次可轮询的完整记录数量，该设备最多可轮询16条记录</p></td>
 </tr>
-<tr class="row-odd"><td><p>urma_register_whole_arena</p></td>
+<tr class="row-odd"><td><p>urma_max_write_size_mb</p></td>
+<td><p>int</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span></code></p></td>
+<td><p>URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048]</p></td>
+</tr>
+<tr class="row-even"><td><p>urma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-even"><td><p>enable_rdma</p></td>
+<tr class="row-odd"><td><p>enable_rdma</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>是否开启RDMA以实现对象worker之间的数据传输</p></td>
 </tr>
-<tr class="row-odd"><td><p>rdma_register_whole_arena</p></td>
+<tr class="row-even"><td><p>rdma_register_whole_arena</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否在RDMA初始化时将整个arena注册为一个段，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>，将每个对象分别注册为一个段</p></td>
 </tr>
-<tr class="row-even"><td><p>oc_shm_transfer_threshold_kb</p></td>
+<tr class="row-odd"><td><p>oc_shm_transfer_threshold_kb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">500</span></code></p></td>
 <td><p>在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_arena_per_tenant</p></td>
+<tr class="row-even"><td><p>shared_disk_arena_per_tenant</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32]</p></td>
 </tr>
-<tr class="row-even"><td><p>shared_disk_directory</p></td>
+<tr class="row-odd"><td><p>shared_disk_directory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
 <td><p>磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-odd"><td><p>shared_disk_size_mb</p></td>
+<tr class="row-even"><td><p>shared_disk_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存</p></td>
 </tr>
-<tr class="row-even"><td><p>memory_alignment</p></td>
+<tr class="row-odd"><td><p>memory_alignment</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
