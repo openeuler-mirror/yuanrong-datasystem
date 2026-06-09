@@ -8,6 +8,9 @@ from typing import Any
 TYPE_LABELS = {
     "zh": {
         "bug": "Bug",
+        "build": "构建",
+        "compatibility": "兼容性",
+        "correctness": "正确性",
         "security": "安全",
         "performance": "性能",
         "design": "设计",
@@ -16,6 +19,9 @@ TYPE_LABELS = {
     },
     "en": {
         "bug": "Bug",
+        "build": "Build",
+        "compatibility": "Compatibility",
+        "correctness": "Correctness",
         "security": "Security",
         "performance": "Performance",
         "design": "Design",
@@ -51,29 +57,42 @@ def format_comment(finding: dict[str, Any], language: str, fingerprint: str) -> 
     severity = finding.get("severity", "warning")
     kind = finding.get("type", "bug")
     title = str(finding.get("title", "")).strip()
+    evidence = str(finding.get("evidence", "")).strip()
     problem = str(finding.get("problem", "")).strip()
+    impact = str(finding.get("impact", "")).strip()
     suggestion = str(finding.get("suggestion", "")).strip()
     example_code = str(finding.get("example_code", "")).rstrip()
+    verification = str(finding.get("verification", "")).strip()
 
-    header = f"**[{SEVERITY_LABELS[language][severity]}][{TYPE_LABELS[language][kind]}] {title}**"
+    severity_label = SEVERITY_LABELS[language].get(str(severity), str(severity))
+    type_label = TYPE_LABELS[language].get(str(kind), str(kind))
+    header = f"**[{severity_label}][{type_label}] {title}**"
     if language == "zh":
-        parts = [
-            header,
-            f"问题：{problem}",
-            f"建议：{suggestion}",
-        ]
+        parts = [header]
+        if evidence:
+            parts.append(f"证据：{evidence}")
+        parts.append(f"问题：{problem}")
+        if impact:
+            parts.append(f"影响：{impact}")
+        parts.append(f"建议：{suggestion}")
         if example_code:
             parts.append("示例：")
             parts.append(f"```{_code_lang_for_path(str(finding.get('path', '')))}\n{example_code}\n```")
+        if verification:
+            parts.append(f"验证：{verification}")
     else:
-        parts = [
-            header,
-            f"Issue: {problem}",
-            f"Suggestion: {suggestion}",
-        ]
+        parts = [header]
+        if evidence:
+            parts.append(f"Evidence: {evidence}")
+        parts.append(f"Issue: {problem}")
+        if impact:
+            parts.append(f"Impact: {impact}")
+        parts.append(f"Suggestion: {suggestion}")
         if example_code:
             parts.append("Example:")
             parts.append(f"```{_code_lang_for_path(str(finding.get('path', '')))}\n{example_code}\n```")
+        if verification:
+            parts.append(f"Verification: {verification}")
 
     parts.append(f"<!-- yuanrong-pr-review:{fingerprint} -->")
     return "\n\n".join(parts).strip() + "\n"

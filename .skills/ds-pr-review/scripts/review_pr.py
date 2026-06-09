@@ -23,6 +23,7 @@ from common import (
 from context_builder import build_context_snippets, focus_tags_for_path
 from dedupe import compress_suggestions, extract_fingerprint, fingerprint_for_finding
 from diff_position import absolute_line_for_position, find_position, parse_patch, render_annotated_patch
+from finding_validator import validate_findings
 from gitcode_api import GitCodeClient
 from language_detect import detect_review_language
 
@@ -66,7 +67,8 @@ def _prepare(args: argparse.Namespace) -> int:
     pull = client.get_pull(pr_number)
     files = client.list_pull_files(pr_number)
     comments = client.list_pull_comments(pr_number)
-    language = detect_review_language(str(pull.get("body") or pull.get("description") or ""))
+    pr_description = str(pull.get("body") or pull.get("description") or "")
+    language = detect_review_language(f"{pull.get('title') or ''}\n{pr_description}")
 
     review_files = []
     review_settings = settings["review"]
@@ -128,7 +130,7 @@ def _prepare(args: argparse.Namespace) -> int:
             "number": pr_number,
             "url": pull.get("html_url") or f"{settings['gitcode']['pr_url_prefix']}{pr_number}",
             "title": pull.get("title"),
-            "description": pull.get("body") or pull.get("description") or "",
+            "description": pr_description,
             "state": pull.get("state"),
             "author": (pull.get("user") or {}).get("login"),
             "base_ref": (pull.get("base") or {}).get("ref"),
@@ -148,7 +150,28 @@ def _prepare(args: argparse.Namespace) -> int:
         "existing_comments": normalized_comments,
     }
     write_json(bundle_path, bundle)
-    write_json(findings_template_path, {"overall_risk": "low", "findings": []})
+    write_json(
+        findings_template_path,
+        {
+            "overall_risk": "low",
+            "_contract": {
+                "required_fields": [
+                    "path",
+                    "diff_line_index or line",
+                    "type",
+                    "severity",
+                    "title",
+                    "evidence",
+                    "problem",
+                    "impact",
+                    "suggestion",
+                ],
+                "optional_fields": ["example_code", "verification", "match_text"],
+                "note": "Use example_code for multi-line code; publish validates language and Markdown quality.",
+            },
+            "findings": [],
+        },
+    )
 
     output = {
         "bundle_path": str(bundle_path),
@@ -188,6 +211,12 @@ def _publish(args: argparse.Namespace) -> int:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         return 0
 
+    language = str(bundle["pr"].get("language") or "zh")
+    validation_errors = validate_findings(findings, language)
+    if validation_errors:
+        formatted = "\n".join(f"- {error}" for error in validation_errors)
+        raise ReviewError(f"Finding validation failed:\n{formatted}")
+
     findings = compress_suggestions(findings, int(bundle["review_policy"]["suggestion_limit_per_file"]))
 
     pr_number = int(bundle["pr"]["number"])
@@ -205,7 +234,6 @@ def _publish(args: argparse.Namespace) -> int:
         if fingerprint:
             existing_fingerprints.add(str(fingerprint))
 
-    language = bundle["pr"]["language"]
     posted_line_comments = 0
     posted_general_comments = 0
     skipped_duplicates = 0
