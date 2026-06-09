@@ -118,7 +118,6 @@ TEST_F(ValidatorTest, TestValidatorThreadNum)
     EXPECT_EQ(Validator::ValidateThreadNum("threadPoolSize", -1), false);
     EXPECT_EQ(Validator::ValidateThreadNum("threadPoolSize", 2048), true);
     EXPECT_EQ(Validator::ValidateThreadNum("threadPoolSize", 4097), false);
-    EXPECT_EQ(Validator::ValidateThreadNum("eviction_thread_num", static_cast<uint32_t>(4097)), false);
     EXPECT_EQ(Validator::ValidateThreadNum("spill_thread_num", static_cast<uint32_t>(4097)), false);
 }
 

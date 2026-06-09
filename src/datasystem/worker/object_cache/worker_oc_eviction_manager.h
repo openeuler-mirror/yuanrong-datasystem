@@ -21,11 +21,13 @@
 #define DATASYSTEM_WORKER_OC_EVICTION_MANAGER_H
 
 #include <cstdint>
+#include <deque>
 #include <future>
 #include <list>
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -58,6 +60,7 @@ class SpillEvictionTest;
 namespace datasystem {
 
 namespace master {
+class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
 }
 class EtcdClusterManager;
@@ -82,6 +85,7 @@ public:
         LOG(INFO) << "WorkerOcEvictionManager exit";
         // Wait for the thread execution to complete first to avoid releasing other variables.
         memEvictTaskThreadPool_.reset();
+        primaryEndLifeThreadPool_.reset();
         spillEvictTaskThreadPool_.reset();
         spillTaskThreadPool_.reset();
         masterTaskThreadPool_.reset();
@@ -228,6 +232,20 @@ private:
         std::unique_ptr<EvictionTrace> trace;
     };
 
+    struct PrimaryEndLifeTask {
+        std::string objectKey;
+        uint64_t version;
+        CacheType cacheType;
+        uint64_t needSize{ 0 };
+        // True when master metadata was already deleted and only local cleanup should be retried.
+        bool metaDeleted{ false };
+    };
+
+    struct PrimaryEndLifeCandidate {
+        PrimaryEndLifeTask task;
+        std::shared_ptr<SafeObjType> entry;
+    };
+
     using EvictFailedList = std::vector<std::pair<std::string, uint8_t>>;
 
     /**
@@ -243,15 +261,16 @@ private:
     Status RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions);
 
     /**
-     * @brief Try to evict a single object.
+     * @brief Execute the selected eviction action for a locked object.
      * @param[in] objectKV The object entry that need to evict and its corresponding objectKey.
      * @param[in] nextAction The next action.
      * @return Status of the call.
      */
-    Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr);
+    Status EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects = nullptr,
+                       CacheType cacheType = CacheType::MEMORY, uint64_t needSize = 0);
 
     /**
-     * @brief Try to evict a single object.
+     * @brief Run eviction for one locked object and update async spill bookkeeping.
      * @param[in] entry The object entry that need to spill.
      * @param[in] trace The evict trace object.
      * @param[out] pendingSpillSize The size of data to be spill.
@@ -261,14 +280,15 @@ private:
      */
     Status TryEvictObject(std::shared_ptr<SafeObjType> &entry, std::unique_ptr<EvictionTrace> trace,
                           size_t &pendingSpillSize, std::unordered_map<std::string, SpillTask> &spillTasks,
-                          bool &locked, EvictDeletedObjects *deletedObjects = nullptr);
+                          bool &locked, CacheType cacheType = CacheType::MEMORY,
+                          EvictDeletedObjects *deletedObjects = nullptr, uint64_t needSize = 0);
 
     /**
      * @brief Eviction task, asynchronous.
      * @param[in] needSize The need size.
-     * @param[in] caheType The type of cache.
+     * @param[in] cacheType The type of cache.
      */
-    void EvictionTask(uint64_t needSize, CacheType caheType = CacheType::MEMORY);
+    void EvictionTask(uint64_t needSize, CacheType cacheType = CacheType::MEMORY);
 
     /**
      * @brief Migrate memory data to other workers.
@@ -297,6 +317,155 @@ private:
 
     void SubmitAsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
     void AsyncMasterTask(const EvictDeletedObjects &objectKeyVersions);
+
+    /**
+     * @brief Submit a primary-copy END_LIFE object to the async primary end-life lane.
+     * @param[in] objectKV The object selected by the memory eviction loop.
+     * @param[in] cacheType The cache type being evicted.
+     * @param[in] needSize The foreground memory demand that triggered this eviction round.
+     * @param[out] accepted Whether this object is newly accepted into the pending set.
+     * @return Status of the submit operation.
+     */
+    Status SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType, uint64_t needSize, bool &accepted);
+
+    /**
+     * @brief Reserve a primary end-life task in the pending set before enqueueing it.
+     * @param[in,out] task The primary end-life task to reserve.
+     * @param[out] accepted Whether the task was inserted into the pending set.
+     * @return Status of the reservation.
+     */
+    Status ReservePrimaryEndLifeTask(PrimaryEndLifeTask &task, bool &accepted);
+
+    /**
+     * @brief Enqueue a reserved primary end-life task and start the drain worker when needed.
+     * @param[in] task The primary end-life task to enqueue.
+     * @return Status of the enqueue operation.
+     */
+    Status EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTask &task);
+
+    /**
+     * @brief Remove a primary end-life task from the pending set.
+     * @param[in] task The primary end-life task whose pending mark should be cleared.
+     */
+    void ClearPrimaryEndLifePending(const PrimaryEndLifeTask &task);
+
+    /**
+     * @brief Finish a primary end-life task and optionally readd it to the eviction list.
+     * @param[in] task The primary end-life task that has finished one lane attempt.
+     * @param[in] readd Whether the object should return to the eviction list for a later attempt.
+     */
+    void FinishPrimaryEndLifeTask(const PrimaryEndLifeTask &task, bool readd);
+
+    /**
+     * @brief Readd primary end-life tasks that could not be safely deleted in the lane attempt.
+     * @param[in] tasks The skipped or failed tasks to readd.
+     */
+    void ReaddPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks);
+
+    /**
+     * @brief Drain queued primary end-life tasks until the queue is empty.
+     */
+    void DrainPrimaryEndLifeTasks();
+
+    /**
+     * @brief Pop all currently queued primary end-life tasks as a drain batch.
+     * @return A batch of queued primary end-life tasks.
+     */
+    std::vector<PrimaryEndLifeTask> PopPrimaryEndLifeTasks();
+
+    /**
+     * @brief Group primary end-life tasks by current master and process each master batch.
+     * @param[in] tasks The tasks popped from the primary end-life queue.
+     */
+    void ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks);
+
+    /**
+     * @brief Process one master batch by deleting remote metadata before local object erase.
+     * @param[in] masterAddr The owner master address for this batch.
+     * @param[in] tasks The primary end-life tasks routed to the same master.
+     */
+    void ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr, std::vector<PrimaryEndLifeTask> tasks);
+
+    /**
+     * @brief Revalidate tasks, acquire object write locks, and select candidates within the release budget.
+     * @param[in] tasks The tasks routed to one master.
+     * @param[out] candidates Locked candidates that may proceed to DeleteAllCopyMeta.
+     * @param[out] skippedTasks Tasks that should be retried by the eviction list later.
+     * @return Status of candidate preparation.
+     */
+    Status PreparePrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeTask> &tasks,
+                                           std::vector<PrimaryEndLifeCandidate> &candidates,
+                                           std::vector<PrimaryEndLifeTask> &skippedTasks);
+
+    /**
+     * @brief Get the object entry and acquire its write lock for a primary end-life attempt.
+     * @param[in] task The primary end-life task being prepared.
+     * @param[out] entry The locked object entry on success.
+     * @return Status of lookup and lock acquisition.
+     */
+    Status TryLockPrimaryEndLifeTask(const PrimaryEndLifeTask &task, std::shared_ptr<SafeObjType> &entry);
+
+    /**
+     * @brief Check whether a locked object is still eligible for primary end-life deletion.
+     * @param[in] task The primary end-life task carrying the expected version and cache type.
+     * @param[in] entry The locked object entry to validate.
+     * @return True if the object can still be deleted by the primary end-life lane.
+     */
+    bool IsPrimaryEndLifeTaskStillEvictable(const PrimaryEndLifeTask &task, const SafeObjType &entry);
+
+    /**
+     * @brief Compute how many bytes this lane may additionally release before reaching the low watermark.
+     * @param[in] cacheType The cache type being evicted.
+     * @param[in] needSize The foreground memory demand that triggered this eviction round.
+     * @return The remaining release budget in bytes.
+     */
+    uint64_t GetPrimaryEndLifeReleaseBudget(CacheType cacheType, uint64_t needSize);
+
+    /**
+     * @brief Delete all-copy metadata for locked primary end-life candidates on one master.
+     * @param[in] masterAddr The owner master address for this batch.
+     * @param[in] candidates The locked candidates to delete from metadata.
+     * @param[out] failedKeys Keys that must not be locally erased and should be readded.
+     * @return Status of the metadata delete operation.
+     */
+    Status DeleteAllCopyMetaForPrimaryEndLife(const HostPort &masterAddr,
+                                              const std::vector<PrimaryEndLifeCandidate> &candidates,
+                                              std::unordered_set<std::string> &failedKeys);
+
+    /**
+     * @brief Collect failed keys from a DeleteAllCopyMeta response, including redirect and moving metadata cases.
+     * @param[in] rsp The DeleteAllCopyMeta response.
+     * @param[out] failedKeys Keys that should not proceed to local erase.
+     * @return Status derived from the response.
+     */
+    static Status CollectDeleteAllCopyMetaResult(const master::DeleteAllCopyMetaRspPb &rsp,
+                                                 std::unordered_set<std::string> &failedKeys);
+
+    /**
+     * @brief Cancel the write-back async send task only after local erase succeeded.
+     * @param[in] objectKey The object key whose async send task should be canceled.
+     */
+    void RemovePrimaryEndLifeAsyncSend(const std::string &objectKey);
+
+    /**
+     * @brief Erase the locked primary end-life candidate from local disk state and object table.
+     * @param[in] candidate The candidate to erase locally.
+     * @return Status of local erase.
+     */
+    Status DeletePrimaryEndLifeLocal(const PrimaryEndLifeCandidate &candidate);
+
+    /**
+     * @brief Get the memory release size for a locked primary end-life candidate.
+     * @param[in] entry The object entry to inspect.
+     * @return Data plus metadata size in bytes, saturated on overflow.
+     */
+    static uint64_t GetPrimaryEndLifeReleaseSize(const SafeObjType &entry);
+
+    /**
+     * @brief Unlock all object entries held by primary end-life candidates.
+     * @param[in] candidates The candidates whose entries are write locked.
+     */
+    static void UnlockPrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeCandidate> &candidates);
 
     /**
      * @brief Submit spill task to thread pool.
@@ -426,6 +595,7 @@ private:
     std::shared_ptr<ObjectTable> objectTable_;
     EvictionList memEvictionList_;
     std::unique_ptr<ThreadPool> memEvictTaskThreadPool_{ nullptr };
+    std::unique_ptr<ThreadPool> primaryEndLifeThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> spillEvictTaskThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> masterTaskThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> spillTaskThreadPool_{ nullptr };
@@ -439,6 +609,12 @@ private:
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
+    std::mutex primaryEndLifeMutex_;
+    std::unordered_map<std::string, uint64_t> pendingPrimaryEndLifeObjects_;
+    // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.
+    std::unordered_map<std::string, uint64_t> metaDeletedPrimaryEndLifeObjects_;
+    std::deque<PrimaryEndLifeTask> primaryEndLifeQueue_;
+    bool primaryEndLifeDrainRunning_{ false };
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

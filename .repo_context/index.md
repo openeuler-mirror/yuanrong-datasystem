@@ -34,6 +34,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | optimize CMake compile speed or change CMake target/package dependencies | `playbooks/features/quality/cmake-build-optimization.md` | `modules/quality/cmake-build/design.md`, nearest `CMakeLists.txt`, `cmake/package.cmake` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
+| understand worker object cache eviction, END_LIFE, spill eviction, or master metadata cleanup from eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*`, `src/datasystem/master/object_cache/oc_metadata_manager.*` |
 | understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `modules/runtime/etcd-metadata/README.md`, `modules/runtime/hash-ring/README.md`, `modules/runtime/cluster-manager/README.md` |
 | review scale-up, scale-down, restart, or ETCD crash DFX coverage | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache/kv_client_scale_test.cpp`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp` |
 | understand ETCD proto/client access, watch, keepalive, CAS, or Metastore behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
@@ -81,6 +82,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
+| object cache eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/eviction_list.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*` |
 | cluster coordination overview | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `third_party/protos/etcd` |
 | cluster DFX scenario matrix | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache` |
 | ETCD metadata backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |

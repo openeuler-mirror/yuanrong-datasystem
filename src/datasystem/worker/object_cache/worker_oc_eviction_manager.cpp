@@ -24,7 +24,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <sstream>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -39,11 +42,12 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/common/util/validator.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
@@ -53,8 +57,6 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
-DS_DEFINE_uint32(eviction_thread_num, 1, "Thread number of eviction for object cache.");
-DS_DEFINE_validator(eviction_thread_num, &Validator::ValidateThreadNum);
 DS_DECLARE_uint32(spill_thread_num);
 DS_DECLARE_bool(spill_to_remote_worker);
 
@@ -65,6 +67,8 @@ constexpr uint32_t MASTER_TASK_THREAD_NUM = 8;
 #endif
 
 constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
+constexpr uint32_t MEM_EVICT_THREAD_NUM = 1;
+constexpr uint32_t PRIMARY_END_LIFE_THREAD_NUM = 1;
 
 namespace datasystem {
 namespace object_cache {
@@ -72,6 +76,12 @@ static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int BATCH_SPILL_THRESHOLD = 512;
 static constexpr int BATCH_DELETE_META_THRESHOLD = 300;
 static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
+static constexpr size_t PRIMARY_END_LIFE_PENDING_LIMIT = 64;
+static constexpr size_t PRIMARY_END_LIFE_BATCH_LIMIT = PRIMARY_END_LIFE_PENDING_LIMIT;
+static constexpr int PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS = 10;
+static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 5 * SECS_TO_MS;
+static constexpr uint32_t PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3;
+static constexpr int PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1;
 thread_local std::string evictSpillTaskId;
 
 constexpr uint64_t EVICTION_TRACE_SUMMARY_INTERVAL_MS = 60 * SECS_TO_MS;
@@ -192,7 +202,9 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
                                      std::shared_ptr<AkSkManager> akSkManager)
 {
     RETURN_IF_EXCEPTION_OCCURS(memEvictTaskThreadPool_ =
-                                   std::make_unique<ThreadPool>(FLAGS_eviction_thread_num, 0, "MemEvictionThread"));
+                                   std::make_unique<ThreadPool>(MEM_EVICT_THREAD_NUM, 0, "MemEvictionThread"));
+    RETURN_IF_EXCEPTION_OCCURS(primaryEndLifeThreadPool_ = std::make_unique<ThreadPool>(
+                                   PRIMARY_END_LIFE_THREAD_NUM, 0, "PrimaryEndLifeThread"));
     RETURN_IF_EXCEPTION_OCCURS(spillEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(SPILL_EVICT_THREAD_NUM, 0, "SpillEvictionThread"));
     RETURN_IF_EXCEPTION_OCCURS(masterTaskThreadPool_ =
@@ -381,10 +393,19 @@ void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::uniqu
     trace->action = nextAction;
 }
 
-Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects)
+Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextAction, EvictDeletedObjects *deletedObjects,
+                                            CacheType cacheType, uint64_t needSize)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
+    if (nextAction == Action::END_LIFE) {
+        bool accepted = false;
+        Status rc = SubmitPrimaryEndLifeTask(objectKV, cacheType, needSize, accepted);
+        (void)memEvictionList_.Erase(objectKey);
+        RETURN_IF_NOT_OK(rc);
+        VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life, accepted: %d", objectKey, accepted);
+        return Status::OK();
+    }
     (void)memEvictionList_.Erase(objectKey);
     if (nextAction == Action::DELETE) {
         PerfPoint point(PerfKey::WORKER_EVICT_DELETE);
@@ -408,14 +429,6 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
         VLOG(1) << FormatString("[ObjectKey %s] Object will be migrated", objectKey);
     } else if (nextAction == Action::SPILL) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be spill", objectKey);
-    } else if (nextAction == Action::END_LIFE) {
-        if (entry->IsWriteBackL2CacheEvictMode()) {
-            if (auto sp = asyncSendManager_.lock()) {
-                sp->Remove(objectKey);
-            }
-        }
-        VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life", objectKey);
-        RETURN_IF_NOT_OK(DeleteNoneL2CacheEvictableObject(objectKV));
     } else {
         RETURN_STATUS(K_NOT_READY, "No space in EvictObject");
     }
@@ -479,11 +492,11 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         auto trace = std::make_unique<EvictionTrace>(candidateId);
         std::shared_ptr<SafeObjType> entry;
         Status rc = GetAndLockEntry(candidateId, entry, evictFailedIds);
-        ObjectKV objectKV(candidateId, *entry);
         if (rc.IsError()) {
             trace->rc = Status(rc.GetCode(), FormatString("GetAndLockEntry failed %s.", rc.GetMsg()));
             continue;
         }
+        ObjectKV objectKV(candidateId, *entry);
         bool locked = true;
         Raii unLockRaii([entry, &locked]() {
             if (locked) {
@@ -500,7 +513,8 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         }
         GetObjectNextAction(*entry, trace, pendingSpillSize);
         bool wasDeletedObjectsEmpty = deletedObjects.empty();
-        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, &deletedObjects);
+        rc = TryEvictObject(entry, std::move(trace), pendingSpillSize, spillTasks, locked, cacheType, &deletedObjects,
+                            needSize);
         if (wasDeletedObjectsEmpty && !deletedObjects.empty()) {
             deletedObjectsFlushTimer.Reset();
         }
@@ -555,12 +569,13 @@ Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
                                                std::unique_ptr<EvictionTrace> trace, size_t &pendingSpillSize,
                                                std::unordered_map<std::string, SpillTask> &spillTasks, bool &locked,
-                                               EvictDeletedObjects *deletedObjects)
+                                               CacheType cacheType, EvictDeletedObjects *deletedObjects,
+                                               uint64_t needSize)
 {
     const auto &objectKey = trace->taskId;
     ObjectKV objectKV(objectKey, *entry);
     PerfPoint point(PerfKey::WORKER_EVICT_ONE_OBJECT);
-    Status rc = EvictObject(objectKV, trace->action, deletedObjects);
+    Status rc = EvictObject(objectKV, trace->action, deletedObjects, cacheType, needSize);
     if (rc.IsError()) {
         trace->rc = rc;
         if (rc.GetCode() != K_NOT_READY) {
@@ -653,6 +668,438 @@ void WorkerOcEvictionManager::AsyncMasterTask(const EvictDeletedObjects &objectK
         auto logLevel = elapsedMs > 1 ? 0 : 1;
         VLOG(logLevel) << FormatString("[Object count %zu] RemoveMetaFromMasterForEviction took %f ms",
                                        objectKeyVersions.size(), elapsedMs);
+    }
+}
+
+Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectKV, CacheType cacheType,
+                                                         uint64_t needSize, bool &accepted)
+{
+    const auto &objectKey = objectKV.GetObjKey();
+    PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), cacheType, needSize };
+    RETURN_IF_NOT_OK(ReservePrimaryEndLifeTask(task, accepted));
+    if (!accepted) {
+        VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] Primary end-life task already pending.", objectKey);
+        return Status::OK();
+    }
+    Status rc = EnqueuePrimaryEndLifeTask(task);
+    if (rc.IsError()) {
+        LOG(WARNING) << "[ObjectKey " << objectKey << "] Enqueue primary end-life task failed, " <<
+            rc.ToString() << ".";
+        ClearPrimaryEndLifePending(task);
+    }
+    return rc;
+}
+
+Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &task, bool &accepted)
+{
+    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+    task.metaDeleted = false;
+    auto metaIter = metaDeletedPrimaryEndLifeObjects_.find(task.objectKey);
+    if (metaIter != metaDeletedPrimaryEndLifeObjects_.end()) {
+        if (metaIter->second == task.version) {
+            task.metaDeleted = true;
+        } else {
+            metaDeletedPrimaryEndLifeObjects_.erase(metaIter);
+        }
+    }
+    accepted = false;
+    auto [iter, inserted] = pendingPrimaryEndLifeObjects_.emplace(task.objectKey, task.version);
+    if (!inserted) {
+        return Status::OK();
+    }
+    if (pendingPrimaryEndLifeObjects_.size() > PRIMARY_END_LIFE_PENDING_LIMIT) {
+        pendingPrimaryEndLifeObjects_.erase(iter);
+        RETURN_STATUS(K_TRY_AGAIN, "Primary end-life pending queue is full.");
+    }
+    accepted = true;
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTask &task)
+{
+    std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
+    try {
+        primaryEndLifeQueue_.emplace_back(task);
+    } catch (const std::exception &e) {
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Enqueue primary end-life task failed: %s", e.what()));
+    }
+    if (!primaryEndLifeDrainRunning_) {
+        try {
+            primaryEndLifeThreadPool_->Execute(&WorkerOcEvictionManager::DrainPrimaryEndLifeTasks, this);
+            primaryEndLifeDrainRunning_ = true;
+        } catch (const std::exception &e) {
+            primaryEndLifeQueue_.pop_back();
+            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Submit primary end-life task failed: %s", e.what()));
+        }
+    }
+    return Status::OK();
+}
+
+void WorkerOcEvictionManager::ClearPrimaryEndLifePending(const PrimaryEndLifeTask &task)
+{
+    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+    auto iter = pendingPrimaryEndLifeObjects_.find(task.objectKey);
+    if (iter != pendingPrimaryEndLifeObjects_.end() && iter->second == task.version) {
+        pendingPrimaryEndLifeObjects_.erase(iter);
+    }
+}
+
+void WorkerOcEvictionManager::FinishPrimaryEndLifeTask(const PrimaryEndLifeTask &task, bool readd)
+{
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        auto pendingIter = pendingPrimaryEndLifeObjects_.find(task.objectKey);
+        if (pendingIter != pendingPrimaryEndLifeObjects_.end() && pendingIter->second == task.version) {
+            pendingPrimaryEndLifeObjects_.erase(pendingIter);
+        }
+        auto metaIter = metaDeletedPrimaryEndLifeObjects_.find(task.objectKey);
+        if (readd && task.metaDeleted) {
+            metaDeletedPrimaryEndLifeObjects_[task.objectKey] = task.version;
+        } else if (metaIter != metaDeletedPrimaryEndLifeObjects_.end() && metaIter->second == task.version) {
+            metaDeletedPrimaryEndLifeObjects_.erase(metaIter);
+        }
+    }
+    if (readd) {
+        memEvictionList_.Add(task.objectKey, READD_COUNTER);
+    }
+}
+
+void WorkerOcEvictionManager::ReaddPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks)
+{
+    for (const auto &task : tasks) {
+        FinishPrimaryEndLifeTask(task, true);
+    }
+}
+
+void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
+{
+    std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS));
+    while (true) {
+        auto tasks = PopPrimaryEndLifeTasks();
+        if (tasks.empty()) {
+            return;
+        }
+        ProcessPrimaryEndLifeTasks(std::move(tasks));
+    }
+}
+
+std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager::PopPrimaryEndLifeTasks()
+{
+    std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+    if (primaryEndLifeQueue_.empty()) {
+        primaryEndLifeDrainRunning_ = false;
+        return {};
+    }
+    auto batchSize = std::min(primaryEndLifeQueue_.size(), PRIMARY_END_LIFE_BATCH_LIMIT);
+    std::vector<PrimaryEndLifeTask> tasks;
+    tasks.reserve(batchSize);
+    for (size_t i = 0; i < batchSize; ++i) {
+        tasks.emplace_back(std::move(primaryEndLifeQueue_.front()));
+        primaryEndLifeQueue_.pop_front();
+    }
+    return tasks;
+}
+
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
+{
+    if (etcdCM_ == nullptr) {
+        LOG(ERROR) << "ETCD cluster manager is not provided for primary end-life eviction.";
+        ReaddPrimaryEndLifeTasks(tasks);
+        return;
+    }
+    std::vector<std::string> objectKeys;
+    std::unordered_map<std::string, PrimaryEndLifeTask> taskByKey;
+    objectKeys.reserve(tasks.size());
+    taskByKey.reserve(tasks.size());
+    for (const auto &task : tasks) {
+        objectKeys.emplace_back(task.objectKey);
+        taskByKey.emplace(task.objectKey, task);
+    }
+    std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupedKeys;
+    std::optional<std::unordered_map<std::string, Status>> errInfos(std::in_place);
+    etcdCM_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, groupedKeys, errInfos);
+
+    std::unordered_set<std::string> routeFailedKeys;
+    for (const auto &item : *errInfos) {
+        LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.",
+                                     item.first, item.second.ToString());
+        routeFailedKeys.emplace(item.first);
+    }
+    std::vector<PrimaryEndLifeTask> failedTasks;
+    failedTasks.reserve(routeFailedKeys.size());
+    for (const auto &key : routeFailedKeys) {
+        auto iter = taskByKey.find(key);
+        if (iter != taskByKey.end()) {
+            failedTasks.emplace_back(iter->second);
+        }
+    }
+    ReaddPrimaryEndLifeTasks(failedTasks);
+
+    for (const auto &item : groupedKeys) {
+        HostPort masterAddr = item.first.GetAddressAndSaveDbName();
+        std::vector<PrimaryEndLifeTask> masterTasks;
+        masterTasks.reserve(item.second.size());
+        for (const auto &objectKey : item.second) {
+            if (routeFailedKeys.count(objectKey) == 0 && taskByKey.count(objectKey) > 0) {
+                masterTasks.emplace_back(taskByKey.at(objectKey));
+            }
+        }
+        if (masterTasks.empty()) {
+            continue;
+        }
+        if (masterAddr.Empty()) {
+            ReaddPrimaryEndLifeTasks(masterTasks);
+            continue;
+        }
+        ProcessPrimaryEndLifeMasterBatch(masterAddr, std::move(masterTasks));
+    }
+}
+
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr,
+                                                               std::vector<PrimaryEndLifeTask> tasks)
+{
+    std::sort(tasks.begin(), tasks.end(), [](const auto &lhs, const auto &rhs) {
+        return lhs.objectKey < rhs.objectKey;
+    });
+    std::vector<PrimaryEndLifeCandidate> candidates;
+    std::vector<PrimaryEndLifeTask> skippedTasks;
+    LOG_IF_ERROR(PreparePrimaryEndLifeCandidates(tasks, candidates, skippedTasks),
+                 "Prepare primary end-life candidates failed.");
+    ReaddPrimaryEndLifeTasks(skippedTasks);
+    if (candidates.empty()) {
+        return;
+    }
+    Raii unlockRaii([&candidates] { UnlockPrimaryEndLifeCandidates(candidates); });
+    std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
+    needDeleteMetaCandidates.reserve(candidates.size());
+    for (const auto &candidate : candidates) {
+        if (!candidate.task.metaDeleted) {
+            needDeleteMetaCandidates.emplace_back(candidate);
+        }
+    }
+    std::unordered_set<std::string> failedKeys;
+    Status rc;
+    if (!needDeleteMetaCandidates.empty()) {
+        rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
+    }
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta failed, count %zu, status: %s.",
+                                     needDeleteMetaCandidates.size(), rc.ToString());
+    }
+    for (const auto &candidate : candidates) {
+        PrimaryEndLifeTask finishTask = candidate.task;
+        bool failed = !candidate.task.metaDeleted && (rc.IsError() || failedKeys.count(candidate.task.objectKey) > 0);
+        if (!failed) {
+            bool removeAsyncSend = candidate.entry != nullptr && (*candidate.entry)->IsWriteBackL2CacheEvictMode();
+            Status deleteRc = DeletePrimaryEndLifeLocal(candidate);
+            failed = deleteRc.IsError();
+            finishTask.metaDeleted = failed;
+            if (!failed && removeAsyncSend) {
+                RemovePrimaryEndLifeAsyncSend(candidate.task.objectKey);
+            }
+        }
+        FinishPrimaryEndLifeTask(finishTask, failed);
+    }
+}
+
+Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(
+    const std::vector<PrimaryEndLifeTask> &tasks, std::vector<PrimaryEndLifeCandidate> &candidates,
+    std::vector<PrimaryEndLifeTask> &skippedTasks)
+{
+    std::unordered_map<int, uint64_t> selectedSizeByCache;
+    const size_t candidateBegin = candidates.size();
+    bool handoffCandidates = false;
+    Raii unlockOnError([&candidates, &handoffCandidates, candidateBegin] {
+        if (handoffCandidates) {
+            return;
+        }
+        for (size_t i = candidateBegin; i < candidates.size(); ++i) {
+            if (candidates[i].entry != nullptr) {
+                candidates[i].entry->WUnlock();
+            }
+        }
+        candidates.resize(candidateBegin);
+    });
+    for (const auto &task : tasks) {
+        if (!IsAboveLowWaterMark(task.needSize, 0, task.cacheType)) {
+            skippedTasks.emplace_back(task);
+            continue;
+        }
+        std::shared_ptr<SafeObjType> entry;
+        Status rc = TryLockPrimaryEndLifeTask(task, entry);
+        if (rc.IsError()) {
+            skippedTasks.emplace_back(task);
+            continue;
+        }
+        bool entryLocked = true;
+        Raii unlockEntry([&entry, &entryLocked] {
+            if (entryLocked) {
+                entry->WUnlock();
+            }
+        });
+        if (!IsPrimaryEndLifeTaskStillEvictable(task, *entry)) {
+            skippedTasks.emplace_back(task);
+            continue;
+        }
+        auto cacheKey = static_cast<int>(task.cacheType);
+        auto releaseSize = GetPrimaryEndLifeReleaseSize(*entry);
+        auto budget = GetPrimaryEndLifeReleaseBudget(task.cacheType, task.needSize);
+        auto selectedSize = selectedSizeByCache[cacheKey];
+        // The first candidate is allowed so a single large object can still relieve pressure.
+        if (selectedSize != 0 && releaseSize > budget - std::min(budget, selectedSize)) {
+            skippedTasks.emplace_back(task);
+            continue;
+        }
+        auto maxSize = std::numeric_limits<uint64_t>::max();
+        selectedSizeByCache[cacheKey] = releaseSize > maxSize - selectedSize ? maxSize : selectedSize + releaseSize;
+        candidates.emplace_back(PrimaryEndLifeCandidate{ task, entry });
+        entryLocked = false;
+    }
+    handoffCandidates = true;
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::TryLockPrimaryEndLifeTask(const PrimaryEndLifeTask &task,
+                                                          std::shared_ptr<SafeObjType> &entry)
+{
+    RETURN_IF_NOT_OK(objectTable_->Get(task.objectKey, entry));
+    Status rc;
+    for (uint32_t i = 0; i < PRIMARY_END_LIFE_LOCK_RETRY_TIMES; ++i) {
+        rc = entry->TryWLock();
+        if (rc.IsOk() || rc.GetCode() != K_TRY_AGAIN) {
+            return rc;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS));
+    }
+    return rc;
+}
+
+bool WorkerOcEvictionManager::IsPrimaryEndLifeTaskStillEvictable(const PrimaryEndLifeTask &task,
+                                                                 const SafeObjType &entry)
+{
+    if (entry->GetCreateTime() != task.version) {
+        VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey << "] Skip primary end-life, version changed, "
+                              << "expected: " << task.version << ", current: " << entry->GetCreateTime();
+        return false;
+    }
+    if (!entry->stateInfo.IsPrimaryCopy()) {
+        VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey << "] Skip primary end-life, not primary copy.";
+        return false;
+    }
+    bool isBinary = entry->IsBinary();
+    if (!isBinary && !entry->HasL2Cache()) {
+        VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey
+                              << "] Skip primary end-life, non-binary object has no L2 cache.";
+        return false;
+    }
+    if (isBinary && entry->GetShmUnit() == nullptr) {
+        VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey
+                              << "] Skip primary end-life, binary object has no shm.";
+        return false;
+    }
+    bool hasL2Cache = IsObjectExistInL2Cache(entry);
+    if (entry->modeInfo.GetCacheType() == CacheType::DISK) {
+        bool evictable = !hasL2Cache && entry->IsNoneL2CacheEvictMode();
+        if (!evictable) {
+            VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey
+                                  << "] Skip primary end-life, disk object is not none-L2 evictable.";
+        }
+        return evictable;
+    }
+    if (entry->IsWriteBackL2CacheEvictMode()) {
+        return true;
+    }
+    bool evictable = !hasL2Cache && entry->IsNoneL2CacheEvictMode();
+    if (!evictable) {
+        VLOG(DEBUG_LOG_LEVEL) << "[ObjectKey " << task.objectKey
+                              << "] Skip primary end-life, memory object is not evictable.";
+    }
+    return evictable;
+}
+
+uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseBudget(CacheType cacheType, uint64_t needSize)
+{
+    auto realUsage = datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(
+        ServiceType::OBJECT, static_cast<memory::CacheType>(cacheType));
+    auto max = std::numeric_limits<uint64_t>::max();
+    realUsage = realUsage > max - needSize ? max : realUsage + needSize;
+    auto lowWater = GetLowWaterMark(cacheType);
+    return realUsage > lowWater ? realUsage - lowWater : 0;
+}
+
+Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
+    const HostPort &masterAddr, const std::vector<PrimaryEndLifeCandidate> &candidates,
+    std::unordered_set<std::string> &failedKeys)
+{
+    auto workerMasterApi =
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+    RETURN_IF_NOT_OK(workerMasterApi->Init());
+    master::DeleteAllCopyMetaReqPb req;
+    req.set_address(localAddress_.ToString());
+    req.set_redirect(true);
+    for (const auto &candidate : candidates) {
+        auto *objKeyVersionPb = req.add_ids_with_version();
+        objKeyVersionPb->set_id(candidate.task.objectKey);
+        objKeyVersionPb->set_version(candidate.task.version);
+    }
+    master::DeleteAllCopyMetaRspPb rsp;
+    reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
+    Raii resetTimeout([] { reqTimeoutDuration.Reset(); });
+    RETURN_IF_NOT_OK(workerMasterApi->DeleteAllCopyMeta(req, rsp));
+    return CollectDeleteAllCopyMetaResult(rsp, failedKeys);
+}
+
+Status WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(const master::DeleteAllCopyMetaRspPb &rsp,
+                                                               std::unordered_set<std::string> &failedKeys)
+{
+    Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    failedKeys.insert(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
+    failedKeys.insert(rsp.outdated_objs().begin(), rsp.outdated_objs().end());
+    failedKeys.insert(rsp.objs_without_meta().begin(), rsp.objs_without_meta().end());
+    for (const auto &redirectInfo : rsp.info()) {
+        failedKeys.insert(redirectInfo.change_meta_ids().begin(), redirectInfo.change_meta_ids().end());
+    }
+    if (rsp.meta_is_moving()) {
+        RETURN_STATUS(K_TRY_AGAIN, "DeleteAllCopyMeta meta is moving.");
+    }
+    RETURN_IF_NOT_OK(lastRc);
+    return Status::OK();
+}
+
+void WorkerOcEvictionManager::RemovePrimaryEndLifeAsyncSend(const std::string &objectKey)
+{
+    if (auto sp = asyncSendManager_.lock()) {
+        sp->Remove(objectKey);
+    }
+}
+
+Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocal(const PrimaryEndLifeCandidate &candidate)
+{
+    const auto &objectKey = candidate.task.objectKey;
+    auto &entry = *candidate.entry;
+    if (entry->IsSpilled()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey),
+                                         FormatString("[ObjectKey %s] Delete from disk failed", objectKey));
+    }
+    entry->stateInfo.SetSpillState(false);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->Erase(objectKey, entry),
+                                     FormatString("Failed to erase object %s from object table", objectKey));
+    return Status::OK();
+}
+
+uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseSize(const SafeObjType &entry)
+{
+    auto dataSize = entry->GetDataSize();
+    auto metaSize = entry->GetMetadataSize();
+    auto max = std::numeric_limits<uint64_t>::max();
+    return dataSize > max - metaSize ? max : dataSize + metaSize;
+}
+
+void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(
+    const std::vector<PrimaryEndLifeCandidate> &candidates)
+{
+    for (const auto &candidate : candidates) {
+        candidate.entry->WUnlock();
     }
 }
 
@@ -898,9 +1345,11 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     master::DeleteAllCopyMetaRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->DeleteAllCopyMeta(req, rsp),
                                      FormatString("DeleteAllCopyMeta failed, objectKey %s.", objectKey));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        Status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg()),
-        "Delete from master failed.");
+    std::unordered_set<std::string> failedKeys;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CollectDeleteAllCopyMetaResult(rsp, failedKeys), "Delete from master failed.");
+    if (!failedKeys.empty()) {
+        RETURN_STATUS_LOG_ERROR(K_TRY_AGAIN, FormatString("DeleteAllCopyMeta needs retry, objectKey %s.", objectKey));
+    }
 
     if (objectKV.GetObjEntry()->IsSpilled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey),

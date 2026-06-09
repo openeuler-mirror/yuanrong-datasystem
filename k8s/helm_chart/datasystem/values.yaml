@@ -105,8 +105,6 @@ global:
     spillFileOpenLimit: 512
     # Disable readahead can mitigate the read amplification problem for offset read, default is true
     spillEnableReadahead: true
-    # Thread number of eviction for object cache, suggested value range: (0, 4096].
-    evictionThreadNum: 1
     # The reserved memory (MB) is determined by min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb). Eviction begins when memory drops below this threshold.The valid range is 100-102400.
     evictionReserveMemThresholdMB: 10240
     # Memory usage high watermark (percent). Valid range: 2-100, must be greater than evictionLowWatermarkPercent.
