@@ -21,6 +21,7 @@
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
 
 #include <poll.h>
+#include <mutex>
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -885,6 +886,7 @@ void ZmqStubConn::Shutdown()
 
 Status ZmqStubConn::Init()
 {
+    INJECT_POINT("ZmqStubConn.Init.Fail");
     return ZmqBaseStubConn::Init();
 }
 
@@ -950,6 +952,7 @@ ZmqStubConnMgrImpl::ZmqStubConnMgrImpl()
 
 Status ZmqStubConnMgrImpl::StartAllThreads()
 {
+    INJECT_POINT("ZmqStubConnMgrImpl.StartAllThreads.Fail");
     bool expected = false;
     if (initialize_.compare_exchange_strong(expected, true)) {
         RETURN_IF_NOT_OK(ctx_->Init());
@@ -999,11 +1002,11 @@ void ZmqStubConnMgrImpl::Shutdown()
         ele->Stop();
     }
     for (const auto &p : connMap_) {
-        auto conn = p.second.lock();
-        if (conn == nullptr) {
-            continue;
+        std::lock_guard<std::mutex> entryLock(p.second->mtx);
+        auto conn = p.second->conn.lock();
+        if (conn) {
+            conn->Shutdown();
         }
-        conn->Shutdown();
     }
     if (ctx_) {
         ctx_->Close(ZmqStubConnMgr::LoggingOn());
@@ -1036,19 +1039,24 @@ ZmqStubConnMgr::~ZmqStubConnMgr()
     }
 }
 
-std::shared_ptr<ZmqBaseStubConn> ZmqStubConnMgrImpl::GetExistingConn(const ZmqConnKey &key)
+size_t ZmqStubConnMgrImpl::GetConnMapSize()
 {
-    std::shared_ptr<ZmqBaseStubConn> conn;
+    ReadLock lock(&connMux_);
+    return connMap_.size();
+}
+
+std::shared_ptr<ZmqStubConnMgrImpl::ZmqConnEntry> ZmqStubConnMgrImpl::GetOrCreateConnEntry(const ZmqConnKey &key)
+{
+    std::shared_ptr<ZmqConnEntry> entry;
+    WriteLock lock(&connMux_);
     auto it = connMap_.find(key);
     if (it != connMap_.end()) {
-        auto sc = it->second.lock();
-        if (sc) {
-            conn = sc;
-        } else {
-            connMap_.erase(it);
-        }
+        entry = it->second;
+    } else {
+        entry = std::make_shared<ZmqConnEntry>();
+        connMap_.emplace(key, entry);
     }
-    return conn;
+    return entry;
 }
 
 Status ZmqStubConnMgrImpl::GetConn(ZmqStub *stub, std::shared_ptr<StubInfo> &handle,
@@ -1059,34 +1067,66 @@ Status ZmqStubConnMgrImpl::GetConn(ZmqStub *stub, std::shared_ptr<StubInfo> &han
     const auto &info = handle;
     // Next we construct the key which controls if existing connection can be shared
     ZmqConnKey key = CreatePrimaryKey(info.get());
-    WriteLock lock(&connMux_);
-    conn = GetExistingConn(key);
-    bool insert = (conn == nullptr);
-    // Before we continue, ensure all threads are running if we haven't started them yet.
     RETURN_IF_NOT_OK(StartAllThreads());
-    // If we create a new one, pick a ZmqMsgMgr and possibly a poller to link to the ZmqFrontend
+
+    std::shared_ptr<ZmqConnEntry> entry = GetOrCreateConnEntry(key);
+    INJECT_POINT("ZmqStubConnMgrImpl.GetConn.AfterGetOrCreateEntry");
+    std::unique_lock<std::mutex> entryLock(entry->mtx);
+    // When multiple threads concurrently connect to the same node, they share the
+    // same ZmqConnEntry. The first thread that acquires the lock attempts the
+    // actual connection. If it fails, the error status is stored in connectRc.
+    // Subsequent threads that acquire the lock will see this stored error and
+    // return failure immediately without retrying the connection, because the
+    // entry has already been removed from connMap_ by the first thread's
+    // failure cleanup (the RAII block below).
+    RETURN_IF_NOT_OK(entry->connectRc);
+    conn = entry->conn.lock();
+    bool insert = conn == nullptr;
     if (insert) {
+        Status rc;
+        Raii raii([&]() {
+            if (rc.IsOk()) {
+                return;
+            }
+            entry->connectRc = rc;
+            if (entryLock.owns_lock()) {
+                entryLock.unlock();
+            }
+
+            WriteLock lock(&connMux_);
+            // Although there is a gap between releasing entry->mtx and acquiring
+            // connMux_, no other thread can erase this key and create a replacement
+            // entry with a different connect during that gap. Threads waiting on
+            // entry->mtx will see connectRc error and return immediately without
+            // modifying connMap_. New threads calling GetOrCreateConnEntry will
+            // find the existing entry still present (we haven't erased it yet) and
+            // return the same entry. The only erase path for ZmqStubConnMgrImpl's
+            // connMap_ during normal execution is this RAII cleanup itself.
+            connMap_.erase(key);
+        });
         // They can be created independently, but we will simply
         // share with existing ones. Not only this avoids the cost of creating
         // and destroying objects but also control the number of threads spawned.
         auto backend = GetNextBackendMgr();
         auto frontend = std::make_shared<ZmqFrontend>(GetZmqContext(), info->channel_, backend);
-        RETURN_IF_NOT_OK(frontend->Init());
+        rc = frontend->Init();
+        RETURN_IF_NOT_OK(rc);
         frontend->UpdateLiveness(timeoutMs);
         // Next we will create a ZmqStubConn to hold the pieces together which also
         // serves the purpose to keep the shared pointer reference count.
         conn = std::make_shared<ZmqStubConn>(key, backend, frontend);
-        RETURN_IF_NOT_OK(conn->Init());
-        std::weak_ptr<ZmqBaseStubConn> wp(conn);
-        connMap_.insert(std::make_pair(key, wp));
-        VLOG(RPC_LOG_LEVEL) << FormatString("Create conn end point for %s. Conn manager map size %d",
-                                            key.channelEndPoint_, connMap_.size());
+        rc = conn->Init();
+        RETURN_IF_NOT_OK(rc);
+        entry->conn = conn;
     } else {
         VLOG(RPC_LOG_LEVEL) << FormatString("Found existing conn end point for %s. Use count %d (including myself)",
                                             key.channelEndPoint_, conn.use_count());
     }
+    entryLock.unlock();
     // Attach a weak pointer to the stub info. The ZmqStubImpl class has saved the original shared pointer already.
     info->conn_ = conn;
+    VLOG_IF(RPC_LOG_LEVEL, insert) << FormatString("Create conn end point for %s. Conn manager map size %zu",
+                                                   key.channelEndPoint_, GetConnMapSize());
     // If uds or tcp is required, register the stub to the sock helper class
     if (info->uds_ || info->tcpDirect_) {
         RETURN_IF_NOT_OK(sockConnHelper_->RegisterStub(info, key, conn, sockConn, insert));
@@ -1099,7 +1139,9 @@ void ZmqStubConnMgrImpl::IncConnRef(const ZmqConnKey &key)
     WriteLock lock(&connMux_);
     auto it = connMap_.find(key);
     if (it != connMap_.end()) {
-        auto sc = it->second.lock();
+        auto entry = it->second;
+        std::lock_guard<std::mutex> entryLock(entry->mtx);
+        auto sc = entry->conn.lock();
         if (sc) {
             ref_.insert({ key, std::move(sc) });
             VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Cache connection for %s for service %s", key.channelEndPoint_,
@@ -1113,7 +1155,7 @@ void ZmqStubConnMgrImpl::DecConnRef(const ZmqConnKey &key)
     WriteLock lock(&connMux_);
     auto it = ref_.find(key);
     if (it != ref_.end()) {
-        ref_.erase((it));
+        ref_.erase(it);
     }
 }
 
@@ -1276,7 +1318,9 @@ Status ZmqStubConnMgrImpl::GetZmqFrontendFromPtr(int64_t stubId, ZmqFrontend *ra
     {
         ReadLock rlock(&connMux_);
         for (const auto &p : connMap_) {
-            auto conn = p.second.lock();
+            auto &entry = p.second;
+            std::lock_guard<std::mutex> entryLock(entry->mtx);
+            auto conn = entry->conn.lock();
             if (conn == nullptr) {
                 continue;
             }

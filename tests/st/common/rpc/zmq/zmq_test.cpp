@@ -126,11 +126,16 @@ public:
 
     virtual void CreateStub()
     {
+        stub = CreateStubImpl();
+    }
+
+    std::unique_ptr<arbitrary::workspace::DemoService::Stub> CreateStubImpl() const
+    {
         HostPort serverAddress("127.0.0.1", GetServerPort());
         auto channel = std::make_shared<datasystem::RpcChannel>(serverAddress, datasystem::RpcCredential());
         channel->SetServiceUdsEnabled(arbitrary::workspace::DemoService_Stub::FullServiceName(),
                                       GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
-        stub = std::make_unique<arbitrary::workspace::DemoService::Stub>(channel);
+        return std::make_unique<arbitrary::workspace::DemoService::Stub>(channel);
     }
 
     int GetServerPort() const
@@ -1528,6 +1533,147 @@ TEST_F(ZmqConnTest, TestConnectionFrontendInitFail)
     rc = stub->UnarySocketSimpleGreeting(req, rsp);
     LOG(INFO) << rc.ToString();
     EXPECT_TRUE(rc.IsError());
+}
+
+TEST_F(ZmqConnTest, FrontendInitFailRaiiCleanupAllowsRetry)
+{
+    // First attempt: inject frontend init failure
+    DS_ASSERT_OK(datasystem::inject::Set("ZmqFrontend.WorkerEntry.FailInit", "1*return(K_RUNTIME_ERROR)"));
+    CreateStub();
+
+    arbitrary::workspace::SayHelloPb req;
+    req.set_msg("Hello");
+    arbitrary::workspace::ReplyHelloPb rsp;
+    Status rc1 = stub->UnarySocketSimpleGreeting(req, rsp);
+    EXPECT_TRUE(rc1.IsError()) << "First connection attempt should fail: " << rc1.ToString();
+
+    // The inject point has been consumed (1* = fire once), so new connections should succeed.
+    // Destroy the failed stub so the ZmqStubImpl releases its handle,
+    // and the UnregisterStub thread cleans up the stale StubInfo.
+    stub.reset();
+    const int delayMs = 10;
+    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+
+    CreateStub();
+    rc1 = stub->UnarySocketSimpleGreeting(req, rsp);
+    EXPECT_TRUE(rc1.IsOk()) << "Retry after RAII cleanup should succeed: " << rc1.ToString();
+    EXPECT_EQ(rsp.reply(), "Hello");
+}
+
+TEST_F(ZmqConnTest, ConnInitFailTriggersRaiiCleanup)
+{
+    DS_ASSERT_OK(datasystem::inject::Set("ZmqStubConn.Init.Fail", "1*return(K_RUNTIME_ERROR)"));
+    CreateStub();
+
+    arbitrary::workspace::SayHelloPb req;
+    req.set_msg("Hello");
+    arbitrary::workspace::ReplyHelloPb rsp;
+    Status rc = stub->UnarySocketSimpleGreeting(req, rsp);
+    EXPECT_TRUE(rc.IsError()) << "ZmqStubConn::Init() failure should propagate: " << rc.ToString();
+
+    // The inject point was consumed (1*). Destroy stub and retry.
+    stub.reset();
+    const int delayMs = 10;
+    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+
+    CreateStub();
+    rc = stub->UnarySocketSimpleGreeting(req, rsp);
+    EXPECT_TRUE(rc.IsOk()) << "Retry after RAII cleanup should succeed: " << rc.ToString();
+    EXPECT_EQ(rsp.reply(), "Hello");
+}
+
+TEST_F(ZmqConnTest, ConcurrentGetConnFailPropagatesConnectRcToSecondThread)
+{
+    // Use the "pause" action to hold threads at the inject point right after
+    // GetOrCreateConnEntry, ensuring both threads obtain the same ZmqConnEntry
+    // before either thread proceeds to lock entry->mtx.
+    DS_ASSERT_OK(datasystem::inject::Set("ZmqStubConnMgrImpl.GetConn.AfterGetOrCreateEntry", "2*pause"));
+    // Also make the frontend init fail so the first thread's connection attempt fails.
+    DS_ASSERT_OK(datasystem::inject::Set("ZmqFrontend.WorkerEntry.FailInit", "1*return(K_RUNTIME_ERROR)"));
+
+    const int parallelCount = 2;
+    std::vector<Status> results(parallelCount, Status::OK());
+    std::vector<std::thread> threads;
+    threads.reserve(parallelCount);
+    for (int i = 0; i < parallelCount; ++i) {
+        threads.emplace_back([this, &results, i]() {
+            arbitrary::workspace::SayHelloPb req;
+            req.set_msg("Hello");
+            arbitrary::workspace::ReplyHelloPb rsp;
+            auto stub = CreateStubImpl();
+            results[i] = stub->UnarySocketSimpleGreeting(req, rsp);
+        });
+    }
+
+    // Both threads are now paused at the inject point inside GetConn.
+    // Wait briefly to ensure they have both entered the paused state.
+    Timer timer;
+    const int maxWaitSec = 10;
+    while (timer.ElapsedSecond() < maxWaitSec) {
+        if (inject::GetExecuteCount("ZmqStubConnMgrImpl.GetConn.AfterGetOrCreateEntry") == parallelCount) {
+            break;
+        }
+        const int intervalMs = 10;
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+    }
+
+    // Clear the pause so both threads resume simultaneously.
+    DS_ASSERT_OK(datasystem::inject::Clear("ZmqStubConnMgrImpl.GetConn.AfterGetOrCreateEntry"));
+
+    for (auto &t : threads) {
+        t.join();
+    }
+
+    // Thread 1 should fail because the frontend init was injected to fail.
+    EXPECT_TRUE(results[0].IsError()) << "First thread should see connection error: " << results[0].ToString();
+    // Thread 2 should also fail because it shares the same ZmqConnEntry and
+    // sees the connectRc error set by thread 1's RAII cleanup.
+    EXPECT_TRUE(results[1].IsError()) << "Second thread should see connectRc error: " << results[1].ToString();
+
+    DS_ASSERT_OK(datasystem::inject::Clear("ZmqFrontend.WorkerEntry.FailInit"));
+
+    arbitrary::workspace::SayHelloPb req;
+    req.set_msg("Hello");
+    arbitrary::workspace::ReplyHelloPb rsp;
+    auto stub = CreateStubImpl();
+    auto rc = stub->UnarySocketSimpleGreeting(req, rsp);
+
+    EXPECT_TRUE(rc.IsOk()) << "Retry after RAII cleanup should succeed: " << rc.ToString();
+    EXPECT_EQ(rsp.reply(), "Hello");
+}
+
+TEST_F(ZmqConnTest, ConcurrentGetConnSharesExistingEntry)
+{
+    CreateStub();
+
+    HostPort serverAddress("127.0.0.1", GetServerPort());
+    const int numThreads = 4;
+    std::vector<std::shared_ptr<datasystem::RpcChannel>> channels;
+    std::vector<std::unique_ptr<arbitrary::workspace::DemoService::Stub>> stubs;
+    for (int i = 0; i < numThreads; ++i) {
+        auto ch = std::make_shared<datasystem::RpcChannel>(serverAddress, datasystem::RpcCredential());
+        channels.push_back(ch);
+        stubs.push_back(std::make_unique<arbitrary::workspace::DemoService::Stub>(ch));
+    }
+
+    std::atomic<int> successCount{ 0 };
+    std::vector<std::thread> threads;
+    threads.reserve(numThreads);
+    for (int i = 0; i < numThreads; ++i) {
+        threads.emplace_back([&stubs, &successCount, i]() {
+            arbitrary::workspace::SayHelloPb req;
+            req.set_msg("Hello");
+            arbitrary::workspace::ReplyHelloPb rsp;
+            Status rc = stubs[i]->UnarySocketSimpleGreeting(req, rsp);
+            if (rc.IsOk() && rsp.reply() == "Hello") {
+                successCount++;
+            }
+        });
+    }
+    for (auto &t : threads) {
+        t.join();
+    }
+    EXPECT_EQ(successCount.load(), numThreads);
 }
 }  // namespace st
 }  // namespace datasystem

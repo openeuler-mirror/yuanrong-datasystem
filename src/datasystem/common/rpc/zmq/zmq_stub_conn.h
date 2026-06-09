@@ -574,6 +574,11 @@ public:
 
 private:
     friend class ZmqSockConnHelper;
+    struct ZmqConnEntry {
+        std::mutex mtx;
+        std::weak_ptr<ZmqBaseStubConn> conn;
+        Status connectRc;
+    };
     std::atomic<bool> interrupt_;
     std::atomic<bool> initialize_;
     mutable WriterPrefRWLock stubMux_;
@@ -586,7 +591,7 @@ private:
     std::vector<std::shared_ptr<ZmqMsgMgr>> backends_;
     std::vector<std::unique_ptr<ZmqEpoll>> pollers_;
     std::unique_ptr<ZmqSockConnHelper> sockConnHelper_;
-    std::unordered_map<ZmqConnKey, std::weak_ptr<ZmqBaseStubConn>> connMap_;
+    std::unordered_map<ZmqConnKey, std::shared_ptr<ZmqConnEntry>> connMap_;
     std::unordered_map<int64_t, std::shared_ptr<StubInfo>> stubInfos_;
     std::unique_ptr<Thread> unregStubThrd_{ nullptr };
     WaitPost cvLock_;
@@ -617,7 +622,8 @@ private:
 
     Status StartAllThreads();
 
-    std::shared_ptr<ZmqBaseStubConn> GetExistingConn(const ZmqConnKey &key);
+    size_t GetConnMapSize();
+    std::shared_ptr<ZmqConnEntry> GetOrCreateConnEntry(const ZmqConnKey &key);
     Status GetZmqFrontendFromPtr(int64_t stubId, ZmqFrontend *rawPtr, std::shared_ptr<ZmqFrontend> &frontend);
 };
 
