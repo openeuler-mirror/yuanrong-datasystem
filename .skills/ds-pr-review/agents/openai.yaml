@@ -1,4 +1,4 @@
 interface:
   display_name: "Datasystem PR Review"
-  short_description: "Review datasystem diffs with infra safety gates"
+  short_description: "Review datasystem PRs with strict infra gates"
   default_prompt: "Use $ds-pr-review to review this yuanrong-datasystem diff or PR."
