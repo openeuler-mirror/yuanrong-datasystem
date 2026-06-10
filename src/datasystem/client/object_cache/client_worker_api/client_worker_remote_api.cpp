@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -64,6 +65,8 @@ Status AppendPublishPayload(std::atomic<uint64_t> &pendingBytes, const std::shar
             LOG(WARNING) << "Client-to-worker TCP fallback payload rejected: " << rc.ToString();
             return rc;
         }
+        payloads.emplace_back(bufferInfo->pointer + bufferInfo->metadataSize, bufferInfo->dataSize);
+        return Status::OK();
     }
     payloads.emplace_back(bufferInfo->pointer, bufferInfo->dataSize);
     return Status::OK();
@@ -410,6 +413,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     uint8_t *ubBufferPtr = nullptr;
     uint64_t ubBufferSize = 0;
     RETURN_IF_NOT_OK(PrepareGetUrmaBuffer(getParam, req, ubBufferHandle, ubBufferPtr, ubBufferSize));
+    if (getParam.actualTransportKind != nullptr) {
+        *getParam.actualTransportKind = req.has_urma_info() ? AccessTransportKind::UB : AccessTransportKind::TCP;
+    }
 #endif
     Status getStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);

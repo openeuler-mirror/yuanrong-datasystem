@@ -51,6 +51,16 @@ ds_cc_test(
     ],
 )
 
+# Access transport tracker 测试（不依赖 USE_URMA）
+ds_cc_test(
+    name = "access_transport_tracker_test",
+    srcs = ["access_transport_tracker_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 追踪测试
 ds_cc_test(
     name = "trace_test",

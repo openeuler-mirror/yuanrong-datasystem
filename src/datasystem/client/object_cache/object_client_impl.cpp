@@ -50,7 +50,6 @@
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
-#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
@@ -101,11 +100,27 @@ const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALL
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
 constexpr uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = 1000;
 constexpr double US_PER_MS = 1000.0;
-thread_local bool g_isThroughUb = false;
 
 namespace datasystem {
 namespace {
 constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
+
+#ifdef USE_URMA
+AccessTransportKind MergeTransportKind(AccessTransportKind lhs, AccessTransportKind rhs)
+{
+    return static_cast<AccessTransportKind>(std::max(static_cast<uint8_t>(lhs), static_cast<uint8_t>(rhs)));
+}
+#endif
+
+void MergeTransportKind(std::atomic<AccessTransportKind> &aggregatedTransport, AccessTransportKind kind)
+{
+    auto current = aggregatedTransport.load(std::memory_order_relaxed);
+    // Transport priority only moves upward (SHM -> UB -> TCP), so failed CAS retries either
+    // observe a newer higher-priority value and exit, or eventually publish this thread's value.
+    while (static_cast<uint8_t>(kind) > static_cast<uint8_t>(current)
+           && !aggregatedTransport.compare_exchange_weak(current, kind, std::memory_order_relaxed)) {
+    }
+}
 
 void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
 {
@@ -1999,7 +2014,6 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                          uint64_t length)
 {
-    g_isThroughUb = true;
     std::shared_ptr<IClientWorkerApi> api;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
@@ -2294,7 +2308,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_GET_OBJECT);
-    g_isThroughUb = false;
+    AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
@@ -2424,23 +2438,27 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     const std::vector<std::string> &objectsNeedToGet = getParam.objectKeys;
     const std::vector<ReadParam> &readParams = getParam.readParams;
     CHECK_FAIL_RETURN_STATUS(buffers.size() == objectsNeedToGet.size(), K_INVALID, "buffers size does not match");
+    bool shouldRecordTransport = false;
+    AccessTransportKind actualTransportKind = AccessTransportKind::SHM;
+    getParam.actualTransportKind = nullptr;
 
 #ifdef USE_URMA
     // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
     if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()
         && !(getParam.isRH2DSupported && IsRemoteH2DEnabled())) {
+        shouldRecordTransport = true;
         std::vector<ObjMetaInfo> objMetas;
         std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
         Timer metaTimer;
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
         getParam.ubMetaResolved = true;
-        g_isThroughUb = true;
         if (metaRc.IsError()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
         } else if (objMetas.size() != objectsNeedToGet.size()) {
             LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size() << " but got "
                          << objMetas.size() << ", fallback to TCP/IP payload before get.";
+            actualTransportKind = AccessTransportKind::TCP;
         } else {
             uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
             uint64_t totalSize = 0;
@@ -2450,9 +2468,13 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
             if (totalSize <= ubMaxGetSize) {
                 // common case: everything fits in one buffer. Pass total batch size and perform a single Get.
                 getParam.ubTotalSize = totalSize;
+                getParam.actualTransportKind = &actualTransportKind;
             } else {
                 // batch special case: total size exceeds buffer limit. Split into sub-batches.
-                return GetBuffersFromWorkerBatched(workerApi, getParam, buffers, objMetas, ubMaxGetSize);
+                Status batchRc = GetBuffersFromWorkerBatched(workerApi, getParam, buffers, objMetas, ubMaxGetSize,
+                                                             &actualTransportKind);
+                AccessTransportTracker::Record(actualTransportKind);
+                return batchRc;
             }
         }
     }
@@ -2462,7 +2484,11 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     std::vector<RpcMessage> payloads;
     uint32_t version = 0;
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Get(getParam, version, rsp, payloads), "Get error");
+    Status getRc = workerApi->Get(getParam, version, rsp, payloads);
+    if (shouldRecordTransport) {
+        AccessTransportTracker::Record(actualTransportKind);
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(getRc, "Get error");
     stagePoint.RecordAndReset(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_PROCESS_RESPONSE);
 
     std::vector<std::string> failedObjectKey;
@@ -2527,7 +2553,8 @@ static std::vector<UBGetBatch> BuildUBGetBatches(const std::vector<ObjMetaInfo> 
 Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi,
                                                      const GetParam &getParam,
                                                      std::vector<std::shared_ptr<Buffer>> &buffers,
-                                                     const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize)
+                                                     const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
+                                                     AccessTransportKind *requestTransportKind)
 {
     PerfPoint totalPoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER);
     const auto &objectKeys = getParam.objectKeys;
@@ -2555,6 +2582,7 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
         }
 
         std::vector<std::shared_ptr<Buffer>> subBuffers(batch.indices.size());
+        AccessTransportKind batchTransportKind = AccessTransportKind::SHM;
 
         GetParam subGetParam{ .objectKeys = subKeys,
                               .subTimeoutMs = getParam.subTimeoutMs,
@@ -2563,7 +2591,8 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
                               .isRH2DSupported = getParam.isRH2DSupported,
                               .ubTotalSize = batch.totalSize,
                               .ubMetaResolved = true,
-                              .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs };
+                              .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs,
+                              .actualTransportKind = &batchTransportKind };
 
         GetRspPb rsp;
         std::vector<RpcMessage> payloads;
@@ -2571,6 +2600,9 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
 
         PerfPoint stagePoint(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_RPC);
         Status rc = workerApi->Get(subGetParam, version, rsp, payloads);
+        if (requestTransportKind != nullptr) {
+            *requestTransportKind = MergeTransportKind(*requestTransportKind, batchTransportKind);
+        }
         if (rc.IsError()) {
             LOG(WARNING) << "Batch Get failed for " << subKeys.size() << " objects: " << rc.ToString();
             lastError = rc;
@@ -3075,7 +3107,7 @@ void ObjectClientImpl::AddTbbLockForGlobalRefIds(const std::vector<std::string> 
 
 Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 {
-    g_isThroughUb = false;
+    AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "The buffer should not be empty.");
     RETURN_IF_NOT_OK(buffer->CheckDeprecated());
@@ -3087,7 +3119,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
 {
-    g_isThroughUb = false;
+    AccessTransportTracker::Reset();
     CHECK_FAIL_RETURN_STATUS(!buffers.empty(), K_INVALID, "The buffer list must not be empty.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
                                          FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
@@ -3124,7 +3156,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
 
 Status ObjectClientImpl::Set(const std::string &key, const StringView &val, const SetParam &setParam)
 {
-    g_isThroughUb = false;
+    AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKey(key));
     FullParam param;
@@ -3352,9 +3384,11 @@ Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
                                             const std::vector<StringView> &vals, const FullParam &creatParam,
                                             std::vector<std::shared_ptr<Buffer>> &bufferList,
-                                            std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList)
+                                            std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                                            AccessTransportKind *requestTransportKind)
 {
     const int sz = static_cast<int>(bufferList.size());
+    std::atomic<AccessTransportKind> aggregatedTransport(AccessTransportKind::SHM);
     auto memoryCopy = [&](int start, int end) {
         for (int i = start; i < end; i++) {
             auto &buffer = bufferList[i];
@@ -3367,34 +3401,44 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
             RETURN_IF_NOT_OK(buffer->CheckDeprecated());
             CHECK_FAIL_RETURN_STATUS(!buffer->bufferInfo_->isSeal, K_OC_ALREADY_SEALED,
                                      "Client object is already sealed");
-            RETURN_IF_NOT_OK(buffer->MemoryCopy(vals[i].data(), vals[i].size()));
+            AccessTransportKind actualTransportKind = AccessTransportKind::SHM;
+            uint8_t transportKindValue = static_cast<uint8_t>(AccessTransportKind::SHM);
+            RETURN_IF_NOT_OK(buffer->MemoryCopyWithTransport(
+                vals[i].data(), vals[i].size(), requestTransportKind != nullptr ? &transportKindValue : nullptr));
+            if (requestTransportKind != nullptr) {
+                actualTransportKind = static_cast<AccessTransportKind>(transportKindValue);
+                MergeTransportKind(aggregatedTransport, actualTransportKind);
+            }
             bufferInfoList[i] = buffer->bufferInfo_;
         }
         return Status::OK();
     };
+    Status rc;
     if (!isParallel || parallismNum_ == 0) {
-        return memoryCopy(0, sz);
+        rc = memoryCopy(0, sz);
+    } else {
+        int workerNum = parallismNum_;
+        size_t chunkSize = 4;
+        if (sz <= parallismNum_) {
+            workerNum = sz;
+            chunkSize = 1;
+        }
+        rc = Parallel::ParallelFor<size_t>(0, bufferInfoList.size(), memoryCopy, chunkSize, workerNum);
     }
-    int workerNum = parallismNum_;
-    size_t chunkSize = 4;
-    if (sz <= parallismNum_) {
-        workerNum = sz;
-        chunkSize = 1;
+    if (rc.IsOk() && requestTransportKind != nullptr) {
+        *requestTransportKind = aggregatedTransport.load(std::memory_order_relaxed);
     }
-    return Parallel::ParallelFor<size_t>(0, bufferInfoList.size(), memoryCopy, chunkSize, workerNum);
+    return rc;
 }
 
-Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
-                              const MSetParam &param, std::vector<std::string> &outFailedKeys)
+Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string> &keys,
+                                                  const std::vector<StringView> &vals,
+                                                  const std::vector<std::string> &deduplicateKeys,
+                                                  const std::vector<StringView> &deduplicateVals,
+                                                  const MSetParam &param,
+                                                  const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                                  std::vector<std::string> &outFailedKeys, PerfPoint &point)
 {
-    PerfPoint point(PerfKey::CLIENT_MSET_INPUT_CHECK);
-    g_isThroughUb = false;
-    std::vector<std::string> deduplicateKeys;
-    std::vector<StringView> deduplicateVals;
-    RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
     FullParam creatParam;
     creatParam.writeMode = param.writeMode;
@@ -3420,8 +3464,10 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     bool isParallel =
         dataSizeSum > minSizeThreshold && (dataSizeSum >= sizeThreshold || filteredKeys.size() >= countThreshold);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
-    RETURN_IF_NOT_OK(
-        MemoryCopyParallel(isParallel, filteredKeys, filteredValues, creatParam, bufferList, bufferInfoList));
+    AccessTransportKind requestTransportKind = AccessTransportKind::SHM;
+    RETURN_IF_NOT_OK(MemoryCopyParallel(isParallel, filteredKeys, filteredValues, creatParam, bufferList,
+                                        bufferInfoList, &requestTransportKind));
+    AccessTransportTracker::Record(requestTransportKind);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
     MultiPublishRspPb rsp;
     PublishParam publishParam{
@@ -3440,9 +3486,24 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
 }
 
 Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+                              const MSetParam &param, std::vector<std::string> &outFailedKeys)
+{
+    PerfPoint point(PerfKey::CLIENT_MSET_INPUT_CHECK);
+    AccessTransportTracker::Reset();
+    std::vector<std::string> deduplicateKeys;
+    std::vector<StringView> deduplicateVals;
+    RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    return MSetCreateCopyAndPublish(keys, vals, deduplicateKeys, deduplicateVals, param, workerApi, outFailedKeys,
+                                    point);
+}
+
+Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                               const MSetParam &setParam)
 {
-    g_isThroughUb = false;
+    AccessTransportTracker::Reset();
     // Validate the effectiveness of parameters.
     RETURN_IF_NOT_OK(IsClientReady());
     std::map<std::string, StringView> kv;
@@ -4122,10 +4183,7 @@ Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
 
 std::string ObjectClientImpl::GetTransportType() const
 {
-    if (g_isThroughUb) {
-        return "UB";
-    }
-    return "SHM";
+    return AccessTransportTracker::ToString();
 }
 
 }  // namespace object_cache
