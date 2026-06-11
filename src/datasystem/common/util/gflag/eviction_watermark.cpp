@@ -18,32 +18,25 @@
 
 #include "datasystem/common/flags/flags.h"
 
-DS_DECLARE_uint32(eviction_high_watermark_percent);
-DS_DECLARE_uint32(eviction_low_watermark_percent);
-DS_DECLARE_uint32(spill_high_watermark_percent);
-DS_DECLARE_uint32(spill_low_watermark_percent);
+DS_DECLARE_double(eviction_high_watermark_ratio);
+DS_DECLARE_double(eviction_low_watermark_ratio);
+DS_DECLARE_double(spill_high_watermark_ratio);
+DS_DECLARE_double(spill_low_watermark_ratio);
 
 namespace datasystem {
 namespace {
-constexpr int PERCENT_DENOMINATOR = 100;
-
 double g_evictionHighWaterFactor = 0.9;
 double g_evictionLowWaterFactor = 0.8;
 double g_spillHighWaterFactor = 0.8;
 double g_spillLowWaterFactor = 0.6;
-
-double PercentToFactor(uint32_t percent)
-{
-    return static_cast<double>(percent) / PERCENT_DENOMINATOR;
-}
 }  // namespace
 
 void RefreshWatermarkFactors()
 {
-    g_evictionHighWaterFactor = PercentToFactor(FLAGS_eviction_high_watermark_percent);
-    g_evictionLowWaterFactor = PercentToFactor(FLAGS_eviction_low_watermark_percent);
-    g_spillHighWaterFactor = PercentToFactor(FLAGS_spill_high_watermark_percent);
-    g_spillLowWaterFactor = PercentToFactor(FLAGS_spill_low_watermark_percent);
+    g_evictionHighWaterFactor = FLAGS_eviction_high_watermark_ratio;
+    g_evictionLowWaterFactor = FLAGS_eviction_low_watermark_ratio;
+    g_spillHighWaterFactor = FLAGS_spill_high_watermark_ratio;
+    g_spillLowWaterFactor = FLAGS_spill_low_watermark_ratio;
 }
 
 double GetEvictionHighWaterFactor()

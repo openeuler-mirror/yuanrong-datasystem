@@ -25,33 +25,33 @@
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "ut/common.h"
 
-DS_DECLARE_uint32(eviction_high_watermark_percent);
-DS_DECLARE_uint32(eviction_low_watermark_percent);
-DS_DECLARE_uint32(spill_high_watermark_percent);
-DS_DECLARE_uint32(spill_low_watermark_percent);
+DS_DECLARE_double(eviction_high_watermark_ratio);
+DS_DECLARE_double(eviction_low_watermark_ratio);
+DS_DECLARE_double(spill_high_watermark_ratio);
+DS_DECLARE_double(spill_low_watermark_ratio);
 
 namespace datasystem {
 namespace ut {
 namespace {
 struct WatermarkFlagSnapshot {
-    uint32_t evictionHigh;
-    uint32_t evictionLow;
-    uint32_t spillHigh;
-    uint32_t spillLow;
+    double evictionHigh;
+    double evictionLow;
+    double spillHigh;
+    double spillLow;
 };
 
 void RestoreWatermarkFlags(const WatermarkFlagSnapshot &snapshot)
 {
-    FLAGS_eviction_high_watermark_percent = snapshot.evictionHigh;
-    FLAGS_eviction_low_watermark_percent = snapshot.evictionLow;
-    FLAGS_spill_high_watermark_percent = snapshot.spillHigh;
-    FLAGS_spill_low_watermark_percent = snapshot.spillLow;
+    FLAGS_eviction_high_watermark_ratio = snapshot.evictionHigh;
+    FLAGS_eviction_low_watermark_ratio = snapshot.evictionLow;
+    FLAGS_spill_high_watermark_ratio = snapshot.spillHigh;
+    FLAGS_spill_low_watermark_ratio = snapshot.spillLow;
 }
 
 WatermarkFlagSnapshot SaveWatermarkFlags()
 {
-    return WatermarkFlagSnapshot{ FLAGS_eviction_high_watermark_percent, FLAGS_eviction_low_watermark_percent,
-                                  FLAGS_spill_high_watermark_percent, FLAGS_spill_low_watermark_percent };
+    return WatermarkFlagSnapshot{ FLAGS_eviction_high_watermark_ratio, FLAGS_eviction_low_watermark_ratio,
+                                  FLAGS_spill_high_watermark_ratio, FLAGS_spill_low_watermark_ratio };
 }
 
 void ParseTwoFlagsInOrder(const char *highFlag, const char *highValue, const char *lowFlag, const char *lowValue,
@@ -72,16 +72,16 @@ void ParseTwoFlagsInOrder(const char *highFlag, const char *highValue, const cha
 }
 
 void ExpectParsedPairValid(const char *highFlag, const char *highValue, const char *lowFlag, const char *lowValue,
-                           bool highFirst, uint32_t expectedHigh, uint32_t expectedLow)
+                           bool highFirst, double expectedHigh, double expectedLow)
 {
     ParseTwoFlagsInOrder(highFlag, highValue, lowFlag, lowValue, highFirst);
     EXPECT_TRUE(ValidateWatermarkFlags());
-    if (std::string(highFlag) == "eviction_high_watermark_percent") {
-        EXPECT_EQ(FLAGS_eviction_high_watermark_percent, expectedHigh);
-        EXPECT_EQ(FLAGS_eviction_low_watermark_percent, expectedLow);
+    if (std::string(highFlag) == "eviction_high_watermark_ratio") {
+        EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, expectedHigh);
+        EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, expectedLow);
     } else {
-        EXPECT_EQ(FLAGS_spill_high_watermark_percent, expectedHigh);
-        EXPECT_EQ(FLAGS_spill_low_watermark_percent, expectedLow);
+        EXPECT_DOUBLE_EQ(FLAGS_spill_high_watermark_ratio, expectedHigh);
+        EXPECT_DOUBLE_EQ(FLAGS_spill_low_watermark_ratio, expectedLow);
     }
 }
 }  // namespace
@@ -103,81 +103,81 @@ protected:
 
 TEST_F(WatermarkFlagParseTest, EvictionBelowDefaultHighBeforeLow)
 {
-    ExpectParsedPairValid("eviction_high_watermark_percent", "75", "eviction_low_watermark_percent", "70", true, 75,
-                          70);
+    ExpectParsedPairValid("eviction_high_watermark_ratio", "0.75", "eviction_low_watermark_ratio", "0.70", true, 0.75,
+                          0.70);
 }
 
 TEST_F(WatermarkFlagParseTest, EvictionBelowDefaultLowBeforeHigh)
 {
-    ExpectParsedPairValid("eviction_high_watermark_percent", "75", "eviction_low_watermark_percent", "70", false, 75,
-                          70);
+    ExpectParsedPairValid("eviction_high_watermark_ratio", "0.75", "eviction_low_watermark_ratio", "0.70", false, 0.75,
+                          0.70);
 }
 
 TEST_F(WatermarkFlagParseTest, EvictionAboveDefaultHighBeforeLow)
 {
-    ExpectParsedPairValid("eviction_high_watermark_percent", "95", "eviction_low_watermark_percent", "85", true, 95,
-                          85);
+    ExpectParsedPairValid("eviction_high_watermark_ratio", "0.95", "eviction_low_watermark_ratio", "0.85", true, 0.95,
+                          0.85);
 }
 
 TEST_F(WatermarkFlagParseTest, EvictionAboveDefaultLowBeforeHigh)
 {
-    ExpectParsedPairValid("eviction_high_watermark_percent", "95", "eviction_low_watermark_percent", "85", false, 95,
-                          85);
+    ExpectParsedPairValid("eviction_high_watermark_ratio", "0.95", "eviction_low_watermark_ratio", "0.85", false, 0.95,
+                          0.85);
 }
 
 TEST_F(WatermarkFlagParseTest, SpillBelowDefaultHighBeforeLow)
 {
-    ExpectParsedPairValid("spill_high_watermark_percent", "70", "spill_low_watermark_percent", "55", true, 70, 55);
+    ExpectParsedPairValid("spill_high_watermark_ratio", "0.70", "spill_low_watermark_ratio", "0.55", true, 0.70, 0.55);
 }
 
 TEST_F(WatermarkFlagParseTest, SpillBelowDefaultLowBeforeHigh)
 {
-    ExpectParsedPairValid("spill_high_watermark_percent", "70", "spill_low_watermark_percent", "55", false, 70, 55);
+    ExpectParsedPairValid("spill_high_watermark_ratio", "0.70", "spill_low_watermark_ratio", "0.55", false, 0.70, 0.55);
 }
 
 TEST_F(WatermarkFlagParseTest, SpillAboveDefaultHighBeforeLow)
 {
-    ExpectParsedPairValid("spill_high_watermark_percent", "90", "spill_low_watermark_percent", "75", true, 90, 75);
+    ExpectParsedPairValid("spill_high_watermark_ratio", "0.90", "spill_low_watermark_ratio", "0.75", true, 0.90, 0.75);
 }
 
 TEST_F(WatermarkFlagParseTest, SpillAboveDefaultLowBeforeHigh)
 {
-    ExpectParsedPairValid("spill_high_watermark_percent", "90", "spill_low_watermark_percent", "75", false, 90, 75);
+    ExpectParsedPairValid("spill_high_watermark_ratio", "0.90", "spill_low_watermark_ratio", "0.75", false, 0.90, 0.75);
 }
 
 TEST_F(WatermarkFlagParseTest, AllWatermarksBelowDefaultMixedArgOrder)
 {
     char arg0[] = "./program";
-    char spillLow[] = "--spill_low_watermark_percent=55";
-    char evictionHigh[] = "--eviction_high_watermark_percent=75";
-    char spillHigh[] = "--spill_high_watermark_percent=70";
-    char evictionLow[] = "--eviction_low_watermark_percent=70";
+    char spillLow[] = "--spill_low_watermark_ratio=0.55";
+    char evictionHigh[] = "--eviction_high_watermark_ratio=0.75";
+    char spillHigh[] = "--spill_high_watermark_ratio=0.70";
+    char evictionLow[] = "--eviction_low_watermark_ratio=0.70";
     char *argv[] = { arg0, spillLow, evictionHigh, spillHigh, evictionLow };
     ParseCommandLineFlags(5, argv);
-    EXPECT_EQ(FLAGS_eviction_high_watermark_percent, 75u);
-    EXPECT_EQ(FLAGS_eviction_low_watermark_percent, 70u);
-    EXPECT_EQ(FLAGS_spill_high_watermark_percent, 70u);
-    EXPECT_EQ(FLAGS_spill_low_watermark_percent, 55u);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, 0.75);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, 0.70);
+    EXPECT_DOUBLE_EQ(FLAGS_spill_high_watermark_ratio, 0.70);
+    EXPECT_DOUBLE_EQ(FLAGS_spill_low_watermark_ratio, 0.55);
     EXPECT_TRUE(ValidateWatermarkFlags());
 }
 
 TEST_F(WatermarkFlagParseTest, InvalidEvictionPairFailsAfterParse)
 {
-    ParseTwoFlagsInOrder("eviction_high_watermark_percent", "80", "eviction_low_watermark_percent", "85", true);
-    EXPECT_EQ(FLAGS_eviction_high_watermark_percent, 80u);
-    EXPECT_EQ(FLAGS_eviction_low_watermark_percent, 85u);
+    ParseTwoFlagsInOrder("eviction_high_watermark_ratio", "0.80", "eviction_low_watermark_ratio", "0.85", true);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, 0.80);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, 0.85);
     EXPECT_FALSE(ValidateWatermarkFlags());
 }
 
 TEST_F(WatermarkFlagParseTest, EmbeddedConfigEvictionBelowDefaultPairValid)
 {
     EmbeddedConfig config;
-    config.SetArgs({ { "eviction_high_watermark_percent", "75" }, { "eviction_low_watermark_percent", "70" } });
+    config.SetArgs({ { "eviction_high_watermark_ratio", "0.75" }, { "eviction_low_watermark_ratio", "0.70" } });
     std::string errMsg;
     EXPECT_TRUE(ParseCommandLineFlags(config, errMsg));
     EXPECT_TRUE(errMsg.empty());
-    EXPECT_EQ(FLAGS_eviction_high_watermark_percent, 75u);
-    EXPECT_EQ(FLAGS_eviction_low_watermark_percent, 70u);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_high_watermark_ratio, 0.75);
+    EXPECT_DOUBLE_EQ(FLAGS_eviction_low_watermark_ratio, 0.70);
     EXPECT_TRUE(ValidateWatermarkFlags());
 }
 }  // namespace ut

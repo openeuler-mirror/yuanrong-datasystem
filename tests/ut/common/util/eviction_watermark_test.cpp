@@ -22,33 +22,33 @@
 #include "datasystem/common/flags/flags.h"
 #include "ut/common.h"
 
-DS_DECLARE_uint32(eviction_high_watermark_percent);
-DS_DECLARE_uint32(eviction_low_watermark_percent);
-DS_DECLARE_uint32(spill_high_watermark_percent);
-DS_DECLARE_uint32(spill_low_watermark_percent);
+DS_DECLARE_double(eviction_high_watermark_ratio);
+DS_DECLARE_double(eviction_low_watermark_ratio);
+DS_DECLARE_double(spill_high_watermark_ratio);
+DS_DECLARE_double(spill_low_watermark_ratio);
 
 namespace datasystem {
 namespace ut {
 namespace {
 struct WatermarkFlagSnapshot {
-    uint32_t evictionHigh;
-    uint32_t evictionLow;
-    uint32_t spillHigh;
-    uint32_t spillLow;
+    double evictionHigh;
+    double evictionLow;
+    double spillHigh;
+    double spillLow;
 };
 
 void RestoreWatermarkFlags(const WatermarkFlagSnapshot &snapshot)
 {
-    FLAGS_eviction_high_watermark_percent = snapshot.evictionHigh;
-    FLAGS_eviction_low_watermark_percent = snapshot.evictionLow;
-    FLAGS_spill_high_watermark_percent = snapshot.spillHigh;
-    FLAGS_spill_low_watermark_percent = snapshot.spillLow;
+    FLAGS_eviction_high_watermark_ratio = snapshot.evictionHigh;
+    FLAGS_eviction_low_watermark_ratio = snapshot.evictionLow;
+    FLAGS_spill_high_watermark_ratio = snapshot.spillHigh;
+    FLAGS_spill_low_watermark_ratio = snapshot.spillLow;
 }
 
 WatermarkFlagSnapshot SaveWatermarkFlags()
 {
-    return WatermarkFlagSnapshot{ FLAGS_eviction_high_watermark_percent, FLAGS_eviction_low_watermark_percent,
-                                  FLAGS_spill_high_watermark_percent, FLAGS_spill_low_watermark_percent };
+    return WatermarkFlagSnapshot{ FLAGS_eviction_high_watermark_ratio, FLAGS_eviction_low_watermark_ratio,
+                                  FLAGS_spill_high_watermark_ratio, FLAGS_spill_low_watermark_ratio };
 }
 }  // namespace
 
@@ -57,8 +57,8 @@ class EvictionWatermarkTest : public CommonTest {};
 TEST_F(EvictionWatermarkTest, DefaultEvictionFactorsMatchLegacyConstants)
 {
     auto saved = SaveWatermarkFlags();
-    FLAGS_eviction_high_watermark_percent = 90;
-    FLAGS_eviction_low_watermark_percent = 80;
+    FLAGS_eviction_high_watermark_ratio = 0.9;
+    FLAGS_eviction_low_watermark_ratio = 0.8;
     RefreshWatermarkFactors();
     EXPECT_DOUBLE_EQ(GetEvictionHighWaterFactor(), 0.9);
     EXPECT_DOUBLE_EQ(GetEvictionLowWaterFactor(), 0.8);
@@ -66,11 +66,11 @@ TEST_F(EvictionWatermarkTest, DefaultEvictionFactorsMatchLegacyConstants)
     RefreshWatermarkFactors();
 }
 
-TEST_F(EvictionWatermarkTest, EvictionFactorsFollowFlagPercent)
+TEST_F(EvictionWatermarkTest, EvictionFactorsFollowFlagRatio)
 {
     auto saved = SaveWatermarkFlags();
-    FLAGS_eviction_high_watermark_percent = 85;
-    FLAGS_eviction_low_watermark_percent = 70;
+    FLAGS_eviction_high_watermark_ratio = 0.85;
+    FLAGS_eviction_low_watermark_ratio = 0.70;
     RefreshWatermarkFactors();
     EXPECT_DOUBLE_EQ(GetEvictionHighWaterFactor(), 0.85);
     EXPECT_DOUBLE_EQ(GetEvictionLowWaterFactor(), 0.70);
@@ -81,8 +81,8 @@ TEST_F(EvictionWatermarkTest, EvictionFactorsFollowFlagPercent)
 TEST_F(EvictionWatermarkTest, DefaultSpillFactorsMatchLegacyConstants)
 {
     auto saved = SaveWatermarkFlags();
-    FLAGS_spill_high_watermark_percent = 80;
-    FLAGS_spill_low_watermark_percent = 60;
+    FLAGS_spill_high_watermark_ratio = 0.8;
+    FLAGS_spill_low_watermark_ratio = 0.6;
     RefreshWatermarkFactors();
     EXPECT_DOUBLE_EQ(GetSpillHighWaterFactor(), 0.8);
     EXPECT_DOUBLE_EQ(GetSpillLowWaterFactor(), 0.6);
@@ -90,11 +90,11 @@ TEST_F(EvictionWatermarkTest, DefaultSpillFactorsMatchLegacyConstants)
     RefreshWatermarkFactors();
 }
 
-TEST_F(EvictionWatermarkTest, SpillFactorsFollowFlagPercent)
+TEST_F(EvictionWatermarkTest, SpillFactorsFollowFlagRatio)
 {
     auto saved = SaveWatermarkFlags();
-    FLAGS_spill_high_watermark_percent = 75;
-    FLAGS_spill_low_watermark_percent = 55;
+    FLAGS_spill_high_watermark_ratio = 0.75;
+    FLAGS_spill_low_watermark_ratio = 0.55;
     RefreshWatermarkFactors();
     EXPECT_DOUBLE_EQ(GetSpillHighWaterFactor(), 0.75);
     EXPECT_DOUBLE_EQ(GetSpillLowWaterFactor(), 0.55);
@@ -105,8 +105,8 @@ TEST_F(EvictionWatermarkTest, SpillFactorsFollowFlagPercent)
 TEST_F(EvictionWatermarkTest, ActiveSpillHwmThresholdUsesHighFactorNotLowFactor)
 {
     auto saved = SaveWatermarkFlags();
-    FLAGS_spill_high_watermark_percent = 90;
-    FLAGS_spill_low_watermark_percent = 55;
+    FLAGS_spill_high_watermark_ratio = 0.9;
+    FLAGS_spill_low_watermark_ratio = 0.55;
     RefreshWatermarkFactors();
     EXPECT_GT(GetSpillHighWaterFactor(), GetSpillLowWaterFactor());
     const uint64_t spillLimit = 1000;
