@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="dsbench性能测试工具" href="dsbench.html"><link rel="prev" title="dscli命令行工具" href="dscli.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>kubernetes部署配置项 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -1076,37 +1076,32 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 <code class="docutils literal notranslate"><span class="pre">Read</span></code> 接口偏移读取导致的读放大问题</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.evictionThreadNum</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>后台驱逐线程池大小，用于将缓存数据从共享内存驱逐到溢出队列中等到溢出到磁盘</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
+<tr class="row-even"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
 <td><p>内存预留阈值（MB），与比例高水位取 max 后触发驱逐。有效范围 100-102400</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.evictionHighWatermarkPercent</p></td>
+<tr class="row-odd"><td><p>global.spill.evictionHighWatermarkPercent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
 <td><p>内存占用率高水位（百分比，相对可用共享内存）。有效范围 2-100，须大于 evictionLowWatermarkPercent</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.evictionLowWatermarkPercent</p></td>
+<tr class="row-even"><td><p>global.spill.evictionLowWatermarkPercent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
 <td><p>内存占用率低水位（百分比），后台驱逐目标。有效范围 1-99，须小于 evictionHighWatermarkPercent</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.spillHighWatermarkPercent</p></td>
+<tr class="row-odd"><td><p>global.spill.spillHighWatermarkPercent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
 <td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillLowWatermarkPercent</p></td>
+<tr class="row-even"><td><p>global.spill.spillLowWatermarkPercent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
 <td><p>Spill 目录占用率低水位（百分比）。有效范围 1-99</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.spillToRemoteWorker</p></td>
+<tr class="row-odd"><td><p>global.spill.spillToRemoteWorker</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 <td><p>表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。</p></td>
@@ -1125,7 +1120,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
 <span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 </pre></div>
 </div>
 </li>
@@ -1139,7 +1133,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
 <span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 
 <span class="nt">mount</span><span class="p">:</span>
 <span class="w">  </span><span class="c1"># 宿主机挂载目录，该场景下即为宿主机的SSD路径</span>
@@ -1159,7 +1152,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="w">    </span><span class="nt">spillFileMaxSizeMb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200</span>
 <span class="w">    </span><span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="w">    </span><span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="nt">evictionThreadNum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 <span class="w">    </span><span class="nt">spillToRemoteWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </pre></div>
 </div>
@@ -2203,15 +2195,15 @@ Distributed Disk</label><div class="sd-tab-content docutils">
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>

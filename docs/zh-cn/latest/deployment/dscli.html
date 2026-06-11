@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="kubernetes部署配置项" href="k8s_configuration.html"><link rel="prev" title="部署指南" href="deploy.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>dscli命令行工具 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=acfd86a5" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -1739,32 +1739,27 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 <code class="docutils literal notranslate"><span class="pre">Read</span></code> 接口偏移读取导致的读放大问题</p></td>
 </tr>
-<tr class="row-even"><td><p>eviction_thread_num</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
-<td><p>后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中</p></td>
-</tr>
-<tr class="row-odd"><td><p>eviction_reserve_mem_threshold_mb</p></td>
+<tr class="row-even"><td><p>eviction_reserve_mem_threshold_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
 <td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_percent 共同决定驱逐触发线。有效范围 100-102400</p></td>
 </tr>
-<tr class="row-even"><td><p>eviction_high_watermark_percent</p></td>
+<tr class="row-odd"><td><p>eviction_high_watermark_percent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
 <td><p>内存占用率高水位（百分比，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 2-100，须大于 eviction_low_watermark_percent</p></td>
 </tr>
-<tr class="row-odd"><td><p>eviction_low_watermark_percent</p></td>
+<tr class="row-even"><td><p>eviction_low_watermark_percent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
 <td><p>内存占用率低水位（百分比），后台驱逐运行直至占用率降至该比例及以下。有效范围 1-99，须小于 eviction_high_watermark_percent</p></td>
 </tr>
-<tr class="row-even"><td><p>spill_high_watermark_percent</p></td>
+<tr class="row-odd"><td><p>spill_high_watermark_percent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
 <td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100，须大于 spill_low_watermark_percent</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_low_watermark_percent</p></td>
+<tr class="row-even"><td><p>spill_low_watermark_percent</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
 <td><p>Spill 目录占用率低水位（相对 spill_size_limit 的百分比）。有效范围 1-99，须小于 spill_high_watermark_percent</p></td>
@@ -2468,15 +2463,15 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
