@@ -150,7 +150,7 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
 inline PhaseResult RunPhaseMultiThread(
     KVClientAdapter *adapter, ChildCmd phase, int round,
     int numThreads, int keysPerRound, const std::string &setApi,
-    const std::string &data) {
+    const std::string &data, int instanceId) {
     std::vector<PhaseResult> threadResults(numThreads);
     std::vector<std::thread> threads;
 
@@ -163,13 +163,13 @@ inline PhaseResult RunPhaseMultiThread(
 
             switch (phase) {
                 case CMD_RUN_SET:
-                    threadResults[t] = RunSetPhase(adapter, round, startKey, numKeys, setApi, data);
+                    threadResults[t] = RunSetPhase(adapter, instanceId, round, startKey, numKeys, setApi, data);
                     break;
                 case CMD_RUN_GET:
-                    threadResults[t] = RunGetPhase(adapter, round, startKey, numKeys);
+                    threadResults[t] = RunGetPhase(adapter, instanceId, round, startKey, numKeys);
                     break;
                 case CMD_RUN_DEL:
-                    threadResults[t] = RunDelPhase(adapter, round, startKey, numKeys);
+                    threadResults[t] = RunDelPhase(adapter, instanceId, round, startKey, numKeys);
                     break;
                 default:
                     break;
@@ -263,7 +263,7 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
         PhaseResult result = RunPhaseMultiThread(
             &adapter, phase, cmd.round, cfg.numThreads, keysPerRound,
-            cfg.setApi, data);
+            cfg.setApi, data, cfg.instanceId);
 
         ResultMsg msg = PhaseResultToMsg(result);
         if (!WriteExact(writeFd, &msg, sizeof(msg))) break;

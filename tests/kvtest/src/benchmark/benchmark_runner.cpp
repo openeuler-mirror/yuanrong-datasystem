@@ -10,8 +10,8 @@ int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize) {
     return std::max(keys, 1);
 }
 
-std::string MakeBenchKey(int round, int index) {
-    return "bench_" + std::to_string(round) + "_" + std::to_string(index);
+std::string MakeBenchKey(int instanceId, int round, int index) {
+    return "bench_" + std::to_string(instanceId) + "_" + std::to_string(round) + "_" + std::to_string(index);
 }
 
 std::pair<int, int> ThreadKeyRange(int totalKeys, int numThreads, int threadId) {
