@@ -146,6 +146,14 @@ private:
     bool ParseAssignFromString(const std::string &value, std::string &errMsg);
 
     /**
+     * @brief Parse and assign value from double value.
+     * @param[in] value Value string.
+     * @param[out] Error message would be fill if error happen.
+     * @return True if assign success.
+     */
+    bool ParseAssignFromDouble(const std::string &value, std::string &errMsg);
+
+    /**
      * @brief Return illegal value message.
      * @param[in] value Value string.
      * @return Illegal value message.
@@ -159,7 +167,7 @@ private:
      */
     std::string ValidateFailureMessage() const;
 
-    // Flag type: boolean/uint32/int32/uint64/int64/string.
+    // Flag type: boolean/uint32/int32/uint64/int64/string/double.
     FlagType type_;
 
     // Flag name like 'help'
@@ -179,6 +187,9 @@ private:
 
     // Indicate flag value is modified or not.
     bool modified_;
+
+    // Indicate flag value was explicitly specified.
+    bool wasSpecified_ = false;
 
     // Flag validator function.
     void *validator_;

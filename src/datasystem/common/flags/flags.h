@@ -84,6 +84,12 @@
 #define DS_DECLARE_string(name) \
     DS_DECLARE_TYPE(name, std::string, S)
 
+#define DS_DEFINE_double(name, defvalue, meaning) \
+    DS_DEFINE_TYPE(name, defvalue, meaning, double, D, FLAG_DOUBLE)
+
+#define DS_DECLARE_double(name) \
+    DS_DECLARE_TYPE(name, double, D)
+
 // Convenience macro for the registration of a flag validator
 #define DS_DEFINE_validator(name, func) \
     static const bool is_##name = ::datasystem::RegisterValidator(&FLAGS_##name, func)
@@ -94,7 +100,7 @@
 
 namespace datasystem {
 struct FlagInfo {
-    // Flag type: boolean/uint32/int32/uint64/int64/string.
+    // Flag type: boolean/uint32/int32/uint64/int64/string/double.
     std::string type;
 
     // Flag name.
@@ -111,6 +117,9 @@ struct FlagInfo {
 
     // Indicate flag value is default or not.
     bool isDefault;
+
+    // Indicate flag value was explicitly specified (not via default).
+    bool wasSpecified;
 };
 
 /**
@@ -283,13 +292,24 @@ inline bool RegisterValidator(std::string *flag, bool (*func)(const char *, cons
     return RegisterValidator(flag, reinterpret_cast<void *>(func));
 }
 
+/**
+ * @brief Register double type flag validator function before main() execute.
+ * @param[in] flag Flag current value memory address.
+ * @param[in] func Validator function.
+ */
+inline bool RegisterValidator(double *flag, bool (*func)(const char *, double))
+{
+    return RegisterValidator(flag, reinterpret_cast<void *>(func));
+}
+
 enum FlagType {
     FLAG_BOOL = 0,
     FLAG_UINT32,
     FLAG_INT32,
     FLAG_UINT64,
     FLAG_INT64,
-    FLAG_STRING
+    FLAG_STRING,
+    FLAG_DOUBLE
 };
 
 class FlagRegisterHelper {

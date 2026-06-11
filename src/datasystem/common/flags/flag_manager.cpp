@@ -15,17 +15,20 @@
  */
 
 #include "datasystem/common/flags/flag_manager.h"
+#include <cerrno>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <stdarg.h>
+#include <iostream>
 #include <mutex>
-#include <sstream>
+#include <stdarg.h>
 #include <string>
 #include <type_traits>
 #include <utility>
-#include <iostream>
+
+#include <securec.h>
 
 #include "datasystem/common/flags/string_to_long.h"
 #include "datasystem/common/util/format.h"
@@ -41,6 +44,7 @@ DS_DECLARE_bool(version);
     (reinterpret_cast<bool (*)(const char *, type)>(validator)(name, TREAT_VALUE_AS(const type, value)))
 
 namespace datasystem {
+const int K_DOUBLE_STR_PRECISION = 15;
 char one[2] = { '1', '\0' };
 
 void ReportError(const char *format, ...)
@@ -74,10 +78,16 @@ bool Flag::Assign(const std::string &value, std::string &errMsg)
         case FLAG_STRING:
             success = ParseAssignFromString(value, errMsg);
             break;
+        case FLAG_DOUBLE:
+            success = ParseAssignFromDouble(value, errMsg);
+            break;
         default:
             success = false;
     }
 
+    if (success) {
+        wasSpecified_ = true;
+    }
     return success;
 }
 
@@ -101,6 +111,8 @@ bool Flag::IsValidate(const void *value) const
             return TREAT_VALIDATOR_AS(int64_t, validator_, name_.c_str(), value);
         case FLAG_STRING:
             return TREAT_VALIDATOR_AS(std::string, validator_, name_.c_str(), value);
+        case FLAG_DOUBLE:
+            return TREAT_VALIDATOR_AS(double, validator_, name_.c_str(), value);
         default:
             return false;
     }
@@ -121,6 +133,8 @@ std::string Flag::TypeName() const
             return "int64";
         case FLAG_STRING:
             return "string";
+        case FLAG_DOUBLE:
+            return "double";
         default:
             return "Unknown";
     }
@@ -141,6 +155,11 @@ std::string Flag::ValueString() const
             return std::to_string(TREAT_VALUE_AS(int64_t, currentVal_));
         case FLAG_STRING:
             return TREAT_VALUE_AS(std::string, currentVal_);
+        case FLAG_DOUBLE: {
+            char buf[32];
+            sprintf_s(buf, sizeof(buf), "%.15g", TREAT_VALUE_AS(double, currentVal_));
+            return std::string(buf);
+        }
         default:
             return "Unknown";
     }
@@ -166,6 +185,9 @@ void Flag::UpdateModified()
             break;
         case FLAG_STRING:
             modified_ = (TREAT_VALUE_AS(std::string, currentVal_) != TREAT_VALUE_AS(std::string, defaultVal_));
+            break;
+        case FLAG_DOUBLE:
+            modified_ = (fabs(TREAT_VALUE_AS(double, currentVal_) - TREAT_VALUE_AS(double, defaultVal_)) > 1e-12);
             break;
         default:
             break;
@@ -389,6 +411,25 @@ bool Flag::ParseAssignFromString(const std::string &value, std::string &errMsg)
     return success;
 }
 
+bool Flag::ParseAssignFromDouble(const std::string &value, std::string &errMsg)
+{
+    char *end;
+    errno = 0;
+    double parsed = strtod(value.c_str(), &end);
+    if (errno != 0 || end == value.c_str() || *end != '\0' || !std::isfinite(parsed)) {
+        errMsg = IllegalValueMessage(value);
+        return false;
+    }
+    bool success = IsValidate(static_cast<const void *>(&parsed));
+    if (success) {
+        TREAT_VALUE_AS(double, currentVal_) = parsed;
+        UpdateModified();
+    } else {
+        errMsg = ValidateFailureMessage();
+    }
+    return success;
+}
+
 std::string Flag::IllegalValueMessage(const std::string &value) const
 {
     return "Error: illegal value '" + value + "' specified for " + TypeName() + " flag '" + name_ + "' \n";
@@ -518,7 +559,8 @@ void FlagManager::GetAllFlags(std::vector<FlagInfo> &output) const
                        .meaning = flag.meaning_,
                        .filename = flag.filename_,
                        .value = flag.ValueString(),
-                       .isDefault = !flag.IsModified() };
+                       .isDefault = !flag.IsModified(),
+                       .wasSpecified = flag.wasSpecified_ };
         output.emplace_back(std::move(info));
     }
 }
