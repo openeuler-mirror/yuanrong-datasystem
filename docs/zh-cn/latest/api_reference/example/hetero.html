@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="KVClient编程示例" href="kv.html"><link rel="prev" title="编程示例" href="index.html">
         <link rel="prefetch" href="../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>HeteroClient编程示例 - openYuanrong datasystem documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=acfd86a5" />
+      <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=33406c05" />
@@ -599,11 +599,11 @@ DevSubscribe单Key的订阅超时时间为20s，多key为60s。</p>
 <input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-0">
 Python</label><div class="sd-tab-content docutils">
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">acl</span>
-<span class="kn">import</span> <span class="nn">random</span>
-<span class="kn">from</span> <span class="nn">yr.datasystem</span> <span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
 
-<span class="k">def</span> <span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
     <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
     <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
@@ -612,7 +612,7 @@ Python</label><div class="sd-tab-content docutils">
 
 <span class="c1"># hetero_dev_publish and hetero_dev_subscribe must be executed in different processes</span>
 <span class="c1"># because they need to be bound to different NPUs.</span>
-<span class="k">def</span> <span class="nf">hetero_dev_publish</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_publish</span><span class="p">():</span>
     <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 
@@ -638,7 +638,7 @@ Python</label><div class="sd-tab-content docutils">
     <span class="k">for</span> <span class="n">future</span> <span class="ow">in</span> <span class="n">pub_futures</span><span class="p">:</span>
         <span class="n">future</span><span class="o">.</span><span class="n">get</span><span class="p">()</span>
 
-<span class="k">def</span> <span class="nf">hetero_dev_subscribe</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_subscribe</span><span class="p">():</span>
     <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 
@@ -769,11 +769,11 @@ C++</label><div class="sd-tab-content docutils">
 <input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-2">
 Python</label><div class="sd-tab-content docutils">
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">acl</span>
-<span class="kn">import</span> <span class="nn">random</span>
-<span class="kn">from</span> <span class="nn">yr.datasystem</span> <span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
 
-<span class="k">def</span> <span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
     <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
     <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
@@ -782,7 +782,7 @@ Python</label><div class="sd-tab-content docutils">
 
 <span class="c1"># hetero_dev_mset and hetero_dev_mget must be executed in different processes</span>
 <span class="c1"># because they need to be bound to different NPUs.</span>
-<span class="k">def</span> <span class="nf">hetero_dev_mset</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_mset</span><span class="p">():</span>
     <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 
@@ -806,7 +806,7 @@ Python</label><div class="sd-tab-content docutils">
         <span class="n">in_data_blob_list</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">blob_list</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">hetero</span><span class="p">()</span><span class="o">.</span><span class="n">dev_mset</span><span class="p">(</span><span class="n">key_list</span><span class="p">,</span> <span class="n">in_data_blob_list</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="nf">hetero_dev_mget</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_dev_mget</span><span class="p">():</span>
     <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 
@@ -933,18 +933,18 @@ MGetH2D / MSetD2H 需配套使用。当 MSetD2H 对 HBM 的小数据块合并后
 <input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
 <label class="sd-tab-label" for="sd-tab-item-4">
 Python</label><div class="sd-tab-content docutils">
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">acl</span>
-<span class="kn">import</span> <span class="nn">random</span>
-<span class="kn">from</span> <span class="nn">yr.datasystem</span> <span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">acl</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">yr.datasystem</span><span class="w"> </span><span class="kn">import</span> <span class="n">DsClient</span><span class="p">,</span> <span class="n">DeviceBlobList</span><span class="p">,</span> <span class="n">Blob</span>
 
-<span class="k">def</span> <span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">random_str</span><span class="p">(</span><span class="n">slen</span><span class="o">=</span><span class="mi">10</span><span class="p">):</span>
     <span class="n">seed</span> <span class="o">=</span> <span class="s2">&quot;1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#%^*()_+=-&quot;</span>
     <span class="n">sa</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">slen</span><span class="p">):</span>
         <span class="n">sa</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">seed</span><span class="p">))</span>
     <span class="k">return</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">sa</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="nf">hetero_mset_d2h_mget_h2d</span><span class="p">():</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">hetero_mset_d2h_mget_h2d</span><span class="p">():</span>
     <span class="n">client</span> <span class="o">=</span> <span class="n">DsClient</span><span class="p">(</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="p">,</span> <span class="mi">31501</span><span class="p">)</span>
     <span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 
@@ -1125,15 +1125,15 @@ C++</label><div class="sd-tab-content docutils">
     </aside>
   </div>
 </div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>
