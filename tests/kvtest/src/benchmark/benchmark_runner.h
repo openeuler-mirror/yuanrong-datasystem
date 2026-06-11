@@ -14,7 +14,7 @@
 
 // Key calculation utilities
 int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize);
-std::string MakeBenchKey(int round, int index);
+std::string MakeBenchKey(int instanceId, int round, int index);
 std::pair<int, int> ThreadKeyRange(int totalKeys, int numThreads, int threadId);
 
 // Per-phase result with per-request latency tracking
@@ -52,14 +52,14 @@ inline Percentiles ComputePercentiles(std::vector<double> latencies) {
 
 // Phase execution functions (template on client type for testability)
 template<typename Client>
-PhaseResult RunSetPhase(Client *client, int round, int startKey, int numKeys,
+PhaseResult RunSetPhase(Client *client, int instanceId, int round, int startKey, int numKeys,
                         const std::string &setApi, const std::string &data);
 
 template<typename Client>
-PhaseResult RunGetPhase(Client *client, int round, int startKey, int numKeys);
+PhaseResult RunGetPhase(Client *client, int instanceId, int round, int startKey, int numKeys);
 
 template<typename Client>
-PhaseResult RunDelPhase(Client *client, int round, int startKey, int numKeys);
+PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey, int numKeys);
 
 // Thread barrier for phase synchronization
 class Barrier {
@@ -107,11 +107,11 @@ struct BenchmarkParams {
 // --- Template implementations (header-only for template linkage) ---
 
 template<typename Client>
-PhaseResult RunSetPhase(Client *client, int round, int startKey, int numKeys,
+PhaseResult RunSetPhase(Client *client, int instanceId, int round, int startKey, int numKeys,
                         const std::string &setApi, const std::string &data) {
     PhaseResult result;
     for (int i = 0; i < numKeys; i++) {
-        std::string key = MakeBenchKey(round, startKey + i);
+        std::string key = MakeBenchKey(instanceId, round, startKey + i);
         auto start = std::chrono::steady_clock::now();
         bool ok = false;
         if (setApi == "string_view") {
@@ -132,10 +132,10 @@ PhaseResult RunSetPhase(Client *client, int round, int startKey, int numKeys,
 }
 
 template<typename Client>
-PhaseResult RunGetPhase(Client *client, int round, int startKey, int numKeys) {
+PhaseResult RunGetPhase(Client *client, int instanceId, int round, int startKey, int numKeys) {
     PhaseResult result;
     for (int i = 0; i < numKeys; i++) {
-        std::string key = MakeBenchKey(round, startKey + i);
+        std::string key = MakeBenchKey(instanceId, round, startKey + i);
         std::string out;
         auto start = std::chrono::steady_clock::now();
         bool ok = client->Get(key, out);
@@ -150,7 +150,7 @@ PhaseResult RunGetPhase(Client *client, int round, int startKey, int numKeys) {
 }
 
 template<typename Client>
-PhaseResult RunDelPhase(Client *client, int round, int startKey, int numKeys) {
+PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey, int numKeys) {
     PhaseResult result;
     constexpr int kBatchSize = 1000;
     constexpr int kMaxRetries = 3;
@@ -161,7 +161,7 @@ PhaseResult RunDelPhase(Client *client, int round, int startKey, int numKeys) {
         std::vector<std::string> keys;
         keys.reserve(batchEnd - offset);
         for (int i = offset; i < batchEnd; i++) {
-            keys.push_back(MakeBenchKey(round, startKey + i));
+            keys.push_back(MakeBenchKey(instanceId, round, startKey + i));
         }
         bool ok = false;
         auto start = std::chrono::steady_clock::now();

@@ -31,9 +31,9 @@ TEST(CalcKeysPerRound_ZeroMemory) {
 // --- Key name generation tests ---
 
 TEST(MakeBenchKey_Basic) {
-    ASSERT_EQ(MakeBenchKey(0, 42), std::string("bench_0_42"));
-    ASSERT_EQ(MakeBenchKey(3, 0), std::string("bench_3_0"));
-    ASSERT_EQ(MakeBenchKey(10, 999), std::string("bench_10_999"));
+    ASSERT_EQ(MakeBenchKey(0, 0, 42), std::string("bench_0_0_42"));
+    ASSERT_EQ(MakeBenchKey(0, 3, 0), std::string("bench_0_3_0"));
+    ASSERT_EQ(MakeBenchKey(1, 10, 999), std::string("bench_1_10_999"));
 }
 
 // --- Thread key range tests ---
@@ -83,7 +83,7 @@ TEST(ThreadKeyRange_MoreThreadsThanKeys) {
 
 TEST(BenchmarkWorker_SetPhase_StringView) {
     StubKVClient client;
-    auto result = RunSetPhase(&client, 0, 0, 4, "string_view", "data");
+    auto result = RunSetPhase(&client, 0, 0, 0, 4, "string_view", "data");
     ASSERT_EQ(result.successCount, 4);
     ASSERT_EQ(client.setCount.load(), 4);
     ASSERT_EQ(result.latenciesMs.size(), 4u);
@@ -94,7 +94,7 @@ TEST(BenchmarkWorker_SetPhase_StringView) {
 
 TEST(BenchmarkWorker_GetPhase) {
     StubKVClient client;
-    auto result = RunGetPhase(&client, 0, 0, 4);
+    auto result = RunGetPhase(&client, 0, 0, 0, 4);
     ASSERT_EQ(result.successCount, 4);
     ASSERT_EQ(client.getCount.load(), 4);
     ASSERT_EQ(result.latenciesMs.size(), 4u);
@@ -102,14 +102,14 @@ TEST(BenchmarkWorker_GetPhase) {
 
 TEST(BenchmarkWorker_DelPhase) {
     StubKVClient client;
-    RunDelPhase(&client, 0, 0, 4);
+    RunDelPhase(&client, 0, 0, 0, 4);
     ASSERT_EQ(client.delCount.load(), 4);
 }
 
 TEST(BenchmarkWorker_DelPhase_Batched) {
     // 2500 keys, timeout=20 -> 20 parallel batches of ~125 keys each
     StubKVClient client;
-    RunDelPhase(&client, 0, 0, 2500);
+    RunDelPhase(&client, 0, 0, 0, 2500);
     ASSERT_EQ(client.delCount.load(), 2500);
 }
 
@@ -117,21 +117,21 @@ TEST(BenchmarkWorker_DelPhase_LargeBatch) {
     // 50000 keys, timeout=10 -> min(10,1000,50000)=10 batches, 5000 each -> exceeds 1000
     // -> recalculated: 50 batches of 1000 each
     StubKVClient client;
-    RunDelPhase(&client, 0, 0, 50000);
+    RunDelPhase(&client, 0, 0, 0, 50000);
     ASSERT_EQ(client.delCount.load(), 50000);
 }
 
 TEST(BenchmarkWorker_SetPhase_Failure) {
     StubKVClient client;
     client.failSets = true;
-    auto result = RunSetPhase(&client, 0, 0, 4, "string_view", "data");
+    auto result = RunSetPhase(&client, 0, 0, 0, 4, "string_view", "data");
     ASSERT_EQ(result.successCount, 0);
     ASSERT_EQ(result.latenciesMs.size(), 0u);
 }
 
 TEST(BenchmarkWorker_SetPhase_CreateBuffer) {
     StubKVClient client;
-    auto result = RunSetPhase(&client, 0, 0, 4, "create_buffer", "data");
+    auto result = RunSetPhase(&client, 0, 0, 0, 4, "create_buffer", "data");
     ASSERT_EQ(result.successCount, 4);
     ASSERT_EQ(client.createCount.load(), 4);
     ASSERT_EQ(client.setCount.load(), 4);
