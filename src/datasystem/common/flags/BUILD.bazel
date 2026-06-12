@@ -14,5 +14,6 @@ ds_cc_library(
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
+        "@securec",
     ],
 )

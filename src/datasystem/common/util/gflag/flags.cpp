@@ -86,7 +86,7 @@ std::string Flags::GetExplicitDeclaredFlags()
     GetAllFlags(defaultFlags);
     std::ostringstream args;
     for (const auto &flag : defaultFlags) {
-        if (!flag.isDefault) {
+        if (flag.wasSpecified || !flag.isDefault) {
             args << "--" << flag.name << '=' << flag.value << '\n';
         }
     }

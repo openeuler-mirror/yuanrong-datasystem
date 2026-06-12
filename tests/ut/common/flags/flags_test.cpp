@@ -22,6 +22,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ DS_DEFINE_int32(int32_flag, 32, "uint32 variable test");
 DS_DEFINE_uint64(uint64_flag, 64, "uint32 variable test");
 DS_DEFINE_int64(int64_flag, 64, "uint32 variable test");
 DS_DEFINE_string(str_flag, "default", "uint32 variable test");
+DS_DEFINE_double(double_flag, 1.0, "double variable test");
 
 int modifyCount = 0;
 int defaultCount = 0;
@@ -171,6 +173,7 @@ public:
         FLAGS_uint64_flag = 64;
         FLAGS_int64_flag = 64;
         FLAGS_str_flag = "default";
+        FLAGS_double_flag = 1.0;
     }
 };
 
@@ -308,7 +311,7 @@ TEST_F(FlagsTest, TestGetAllFlags)
     GetAllFlags(output);
     // Don't check exact size as other modules may register flags
     // Just ensure our test flags are present
-    ASSERT_GE(output.size(), 6ul);
+    ASSERT_GE(output.size(), 7ul);
 
     // Check that our test flags are in the list
     bool found_bool_flag = false;
@@ -332,7 +335,7 @@ TEST_F(FlagsTest, TestGetAllFlags)
 
     output.clear();
     GetAllFlags(output);
-    ASSERT_GE(output.size(), 6ul);
+    ASSERT_GE(output.size(), 7ul);
 
     int modCount = 0;
 
@@ -476,6 +479,142 @@ TEST_F(FlagsTest, TestGetStringEnv)
     ASSERT_EQ(GetStringFromEnv("empty", "xxx"), "");
     ASSERT_EQ(GetStringFromEnv("no_exist", "xxx"), "xxx");
     ASSERT_EQ(GetStringFromEnv(nullptr, "xxx"), "xxx");
+}
+
+TEST_F(FlagsTest, TestDoubleFlagRejectsEmptyValue)
+{
+    std::string errMsg;
+    ASSERT_FALSE(SetCommandLineOption("double_flag", "", errMsg));
+    ASSERT_EQ(FLAGS_double_flag, 1.0);
+    ASSERT_TRUE(SetCommandLineOption("double_flag", "0.5", errMsg));
+    ASSERT_EQ(FLAGS_double_flag, 0.5);
+    ASSERT_TRUE(SetCommandLineOption("double_flag", "0.0", errMsg));
+    ASSERT_EQ(FLAGS_double_flag, 0.0);
+}
+
+// wasSpecified: flag set via SetCommandLineOption has wasSpecified=true
+TEST_F(FlagsTest, WasSpecifiedAfterSetCommandLineOption)
+{
+    const char *argv[] = { "./program" };
+    ParseCommandLineFlags(1, (char **)argv);
+
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("bool_flag", "true", errMsg));
+
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    for (const auto &fi : output) {
+        if (fi.name == "bool_flag") {
+            EXPECT_TRUE(fi.wasSpecified);
+        }
+    }
+}
+
+// wasSpecified: flag set via argv has wasSpecified=true
+TEST_F(FlagsTest, WasSpecifiedAfterArgv)
+{
+    const char *argv[] = { "./program", "-bool_flag=true" };
+    ParseCommandLineFlags(2, (char **)argv);
+
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    for (const auto &fi : output) {
+        if (fi.name == "bool_flag") {
+            EXPECT_TRUE(fi.wasSpecified);
+        }
+    }
+}
+
+// wasSpecified: isDefault tracks value != default, wasSpecified tracks explicit set
+TEST_F(FlagsTest, WasSpecifiedDiffersFromIsDefault)
+{
+    const char *argv[] = { "./program", "-uint32_flag=32" }; // set to default value
+    ParseCommandLineFlags(2, (char **)argv);
+
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    for (const auto &fi : output) {
+        if (fi.name == "uint32_flag") {
+            // Value equals default, but was explicitly specified
+            EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
+            EXPECT_TRUE(fi.wasSpecified);  // explicitly set -> wasSpecified=true
+        }
+    }
+}
+
+TEST_F(FlagsTest, TestDoubleFlagRejectsNan)
+{
+    std::string errMsg;
+    ASSERT_FALSE(SetCommandLineOption("double_flag", "nan", errMsg));
+    ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
+    ASSERT_EQ(FLAGS_double_flag, 1.0);
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    for (const auto &fi : output) {
+        if (fi.name == "double_flag") {
+            EXPECT_TRUE(fi.isDefault);
+            EXPECT_FALSE(fi.wasSpecified);
+        }
+    }
+}
+
+TEST_F(FlagsTest, TestDoubleFlagRejectsInf)
+{
+    std::string errMsg;
+    ASSERT_FALSE(SetCommandLineOption("double_flag", "inf", errMsg));
+    ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
+    ASSERT_EQ(FLAGS_double_flag, 1.0);
+}
+
+TEST_F(FlagsTest, TestDoubleFlagRejectsNegativeInf)
+{
+    std::string errMsg;
+    ASSERT_FALSE(SetCommandLineOption("double_flag", "-inf", errMsg));
+    ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
+    ASSERT_EQ(FLAGS_double_flag, 1.0);
+}
+
+TEST_F(FlagsTest, TestDoubleFlagAcceptsScientificNotation)
+{
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("double_flag", "1.5e-2", errMsg));
+    ASSERT_NEAR(FLAGS_double_flag, 0.015, 1e-12);
+    FLAGS_double_flag = 1.0;
+}
+
+TEST_F(FlagsTest, GetExplicitDeclaredFlagsIncludesExplicitDefault)
+{
+    const char *argv[] = { "./program", "-uint32_flag=32" };
+    ParseCommandLineFlags(2, (char **)argv);
+
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    std::ostringstream args;
+    for (const auto &flag : output) {
+        if (flag.wasSpecified || !flag.isDefault) {
+            args << "--" << flag.name << '=' << flag.value << '\n';
+        }
+    }
+    EXPECT_TRUE(args.str().find("--uint32_flag=32") != args.str().npos);
+}
+
+TEST_F(FlagsTest, GetExplicitDeclaredFlagsIncludesRuntimeModified)
+{
+    const char *argv[] = { "./program" };
+    ParseCommandLineFlags(1, (char **)argv);
+
+    std::string errMsg;
+    ASSERT_TRUE(SetCommandLineOption("uint32_flag", "64", errMsg));
+
+    std::vector<FlagInfo> output;
+    GetAllFlags(output);
+    std::ostringstream args;
+    for (const auto &flag : output) {
+        if (flag.wasSpecified || !flag.isDefault) {
+            args << "--" << flag.name << '=' << flag.value << '\n';
+        }
+    }
+    EXPECT_TRUE(args.str().find("--uint32_flag=") != args.str().npos);
 }
 }  // namespace ut
 }  // namespace datasystem
