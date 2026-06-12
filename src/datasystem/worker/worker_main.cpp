@@ -18,10 +18,12 @@
  * Description: Worker program master file.
  */
 
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <libgen.h>
-#include <sys/prctl.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
@@ -48,15 +50,55 @@ using namespace datasystem::worker;
 static constexpr int CHECK_EVERY_MS = 1'000;
 static constexpr int MAX_TOLERATED_ATTEMPTS = 10;
 static constexpr int REPORTING_THRESHOLD_MS = CHECK_EVERY_MS * MAX_TOLERATED_ATTEMPTS;
+static constexpr size_t ERR_MSG_BUF_SIZE = 256;
+
+struct SetSchedRuntimeResult {
+    bool success;
+    int err;
+};
+
+SetSchedRuntimeResult SetWorkerSchedRuntime();
+uint64_t GetWorkerSchedRuntimeNs();
+
+std::string StrError(int err)
+{
+    char buf[ERR_MSG_BUF_SIZE] = { 0 };
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    return std::string(strerror_r(err, buf, sizeof(buf)));
+#else
+    auto ret = strerror_r(err, buf, sizeof(buf));
+    if (ret != 0) {
+        return FormatString("Unknown error %d", err);
+    }
+    return std::string(buf);
+#endif
+}
+
+void LogSetWorkerSchedRuntimeResult(const SetSchedRuntimeResult &result)
+{
+    if (!result.success) {
+        LOG(WARNING) << FormatString("Failed to set worker sched runtime to %llu ns, errno: %d, error: %s",
+                                     static_cast<unsigned long long>(GetWorkerSchedRuntimeNs()), result.err,
+                                     StrError(result.err));
+        return;
+    }
+    LOG(INFO) << "Set worker sched runtime to " << GetWorkerSchedRuntimeNs() << " ns.";
+}
 
 int main(int argc, char **argv)
 {
+    auto setSchedRuntimeResult = SetWorkerSchedRuntime();
+
     Flags flags;
     auto rc = Worker::GetInstance()->Init(flags, argc, argv);
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
+        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
         LOG_IF_ERROR(Worker::GetInstance()->ShutDown(), "worker shutdown failed");
         return -1;
+    }
+    if (!IsTermSignalReceived()) {
+        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
     }
     PerfManager *perfManager = PerfManager::Instance();
 
