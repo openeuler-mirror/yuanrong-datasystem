@@ -33,3 +33,14 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "urma_success_rate_tracker_test",
+    srcs = ["urma_success_rate_tracker_test.cpp"],
+    deps = [
+        "//src/datasystem/client:urma_success_rate_tracker",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)

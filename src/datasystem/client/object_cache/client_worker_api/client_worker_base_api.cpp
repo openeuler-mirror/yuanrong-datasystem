@@ -297,9 +297,13 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
         uint64_t realSize = 0;
         RETURN_IF_NOT_OK(PrepareUbHandle(totalSize, bufHandle, realSize));
         if (totalSize == realSize) {
-            return SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle);
+            Status rc = SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle);
+            RecordUrmaDataPlaneResult(rc.IsOk());
+            return rc;
         }
-        RETURN_IF_NOT_OK(PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize));
+        Status pipelineRc = PipelineDataTransferHelper(bufferInfo, data, totalSize, bufHandle, realSize);
+        RecordUrmaDataPlaneResult(pipelineRc.IsOk());
+        RETURN_IF_NOT_OK(pipelineRc);
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
         return Status::OK();
     }

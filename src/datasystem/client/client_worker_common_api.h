@@ -49,6 +49,7 @@
 #include "datasystem/utils/status.h"
 
 #include "datasystem/client/embedded_client_worker_api.h"
+#include "datasystem/client/urma_success_rate_tracker.h"
 
 namespace datasystem {
 static constexpr int MIN_HEARTBEAT_TIMEOUT_MS = 15 * 1000;
@@ -258,6 +259,33 @@ public:
      */
     virtual Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) = 0;
 
+    /**
+     * @brief Record a URMA data-plane request result into the success-rate tracker.
+     * @param[in] success Whether the URMA request succeeded.
+     */
+    virtual void RecordUrmaDataPlaneResult(bool success)
+    {
+        (void)success;
+    }
+
+    /**
+     * @brief Mark the current URMA data-plane switch attempt as finished.
+     * @param[in] success Whether the worker switch succeeded.
+     */
+    virtual void FinishUrmaDataPlaneSwitchAttempt(bool success)
+    {
+        (void)success;
+    }
+
+    /**
+     * @brief Set the callback invoked when URMA data-plane failover is triggered.
+     * @param[in] callback A function that attempts the worker switch and returns true on success.
+     */
+    virtual void SetUrmaDataPlaneFailureCallback(std::function<bool()> callback)
+    {
+        (void)callback;
+    }
+
 protected:
     virtual Status SetToken(std::string &token) = 0;
     virtual void SetTenantId(std::string &tenantId) = 0;
@@ -372,6 +400,9 @@ public:
     std::vector<HostPort> GetStandbyWorkers() override;
     Status UpdateToken(SensitiveValue &token) override;
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey) override;
+    void RecordUrmaDataPlaneResult(bool success) override;
+    void FinishUrmaDataPlaneSwitchAttempt(bool success) override;
+    void SetUrmaDataPlaneFailureCallback(std::function<bool()> callback) override;
 
     bool IsWorkerSupportMultiShmRefCount() const
     {
@@ -489,6 +520,8 @@ protected:
     std::unique_ptr<ThreadPool> urmaHandshakeRetryPool_{ nullptr };
     std::atomic_bool stopUrmaHandshakeRetry_{ false };
     std::string deviceId_;
+    UrmaSuccessRateTracker urmaSuccessRateTracker_;
+    std::function<bool()> urmaDataPlaneFailureCallback_;
 
     struct FtHandshakeContext {
         int32_t timeoutMs{ 0 };

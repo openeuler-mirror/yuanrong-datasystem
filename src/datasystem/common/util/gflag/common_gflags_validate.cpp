@@ -16,6 +16,8 @@
 
 #include "datasystem/common/util/gflag/common_gflags.h"
 
+#include <cmath>
+
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/validator.h"
 
@@ -114,6 +116,26 @@ bool ValidateUrmaMaxWriteSize(const char *flagName, uint64_t value)
     }
     return true;
 }
+
+bool ValidateUrmaFailoverSuccessRateRatio(const char *flagName, double value)
+{
+    constexpr double kMinSuccessRateRatio = 0.0;
+    constexpr double kMaxSuccessRateRatio = 1.0;
+    if (!std::isfinite(value) || value < kMinSuccessRateRatio || value > kMaxSuccessRateRatio) {
+        LOG(ERROR) << FormatString("The %s flag is %g, which must be between 0.0 and 1.0.", flagName, value);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateUrmaFailoverMinSampleCount(const char *flagName, uint32_t value)
+{
+    if (value == 0) {
+        LOG(ERROR) << FormatString("The %s flag must be greater than 0, got %u.", flagName, value);
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
@@ -128,6 +150,8 @@ DS_DEFINE_validator(spill_high_watermark_ratio, &Validator::ValidateWatermarkHig
 DS_DEFINE_validator(spill_low_watermark_ratio, &Validator::ValidateWatermarkLowRatio);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
+DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
+DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);

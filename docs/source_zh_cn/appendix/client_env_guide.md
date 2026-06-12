@@ -55,11 +55,21 @@
 |------|------|--------|-----------|
 | 24 | `DATASYSTEM_LOG_MONITOR_ENABLE` | `true` | 是否开启接口日志统计,默认开启。 |
 
+## 客户端运行参数
+
+以下 gflag 参数可通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件设置，支持热更新。
+
+| 序号 | 名称 | 默认值 | 取值范围 | 含义/用途 |
+|------|------|--------|----------|-----------|
+| 29 | `urma_failover_success_rate_ratio` | `0.5` | `[0.0, 1.0]` | Client 侧 URMA 数据面成功率阈值。一个完整统计窗口的成功率严格低于该 ratio 时，client 尝试切换 worker；设置为 `0.0` 表示关闭 URMA 故障切换功能，同时清空当前窗口状态。 |
+| 30 | `urma_failover_min_sample_count` | `5` | `> 0` | 每个 `client_dead_timeout_s` 统计窗口内进行故障切换判断前所需的最小 URMA 数据面样本数。样本不足时即使成功率很低也不会触发切换，避免少量请求误触发。 |
+
 ## 使用说明
 
 1.环境变量的优先级低于SDK内部配置。如果SDK中已经配置了某个参数,则不会读取该环境变量;只有当SDK中没有配置该参数时,才会从环境变量中读取对应的值。
 2.日志配置相关环境变量只有配置了某个参数后，才会从环境变量中读取对应的值。
 3.`DATASYSTEM_LOG_V` 控制 VLOG 详细程度，`DATASYSTEM_MIN_LOG_LEVEL` 控制常规日志最低输出级别，两者分别影响不同日志通道。
+4.客户端运行参数通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件设置。
 
 设置环境变量的示例:
 

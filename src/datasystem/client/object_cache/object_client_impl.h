@@ -1304,6 +1304,30 @@ private:
 
     Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker);
 
+    /**
+     * @brief Configure the URMA data-plane failover callback on a worker API instance.
+     * @param[in] node The worker node slot (LOCAL_WORKER or STANDBY_WORKER).
+     * @param[in] workerApi The worker API to configure.
+     */
+    void ConfigureUrmaDataPlaneFailureCallback(WorkerNode node, const std::shared_ptr<IClientWorkerApi> &workerApi);
+
+    /**
+     * @brief Submit an asynchronous worker switch triggered by URMA data-plane failure.
+     * @param[in] node The worker node slot to switch away from.
+     * @param[in] weakWorkerApi Weak reference to the current worker API.
+     * @return True if the switch task was submitted to the async pool; false otherwise.
+     */
+    bool SubmitUrmaDataPlaneSwitch(WorkerNode node, std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi);
+
+    /**
+     * @brief Check whether a URMA failure callback still belongs to the current worker.
+     * @param[in] node The worker node slot captured by the callback.
+     * @param[in] workerApi The worker API that reported the failure.
+     * @return True if the callback source is still current and should trigger a switch.
+     */
+    bool IsCurrentUrmaDataPlaneTrigger(WorkerNode node,
+                                       const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi);
+
     Status InitListenWorker();
 
     Status InitListenWorkerAt(WorkerNode node, bool isLocalWorker);

@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/common/flags/flags.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
@@ -55,6 +56,9 @@
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
+
+DS_DECLARE_double(urma_failover_success_rate_ratio);
+DS_DECLARE_uint32(urma_failover_min_sample_count);
 
 namespace datasystem {
 namespace {
@@ -92,6 +96,20 @@ const char *ShmEnableTypeName(ShmEnableType type)
 }  // namespace
 
 namespace client {
+std::string FormatUrmaSwitchWindowStats(const std::string &clientId, const std::string &workerAddress,
+                                        const UrmaSuccessRateTracker &tracker,
+                                        const UrmaSuccessRateTracker::WindowStats &windowStats,
+                                        uint64_t windowLengthMs)
+{
+    return FormatString("[Switch] URMA data-plane settled window, client id: %s, worker address: %s, "
+                        "success: %llu, failure: %llu, total: %llu, success rate ratio: %g, min sample count: %u, "
+                        "window length ms: %llu, backoff level: %u, next allowed switch time ms: %llu",
+                        clientId, workerAddress, windowStats.successCount, windowStats.failureCount,
+                        windowStats.totalCount, FLAGS_urma_failover_success_rate_ratio,
+                        FLAGS_urma_failover_min_sample_count, windowLengthMs, tracker.GetBackoffLevel(),
+                        tracker.GetNextAllowedSwitchTimeMs());
+}
+
 void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
     std::vector<uint64_t> heartBeatTimeoutMsOptions = { static_cast<uint64_t>(timeoutMs), MAX_HEARTBEAT_TIMEOUT_MS };
@@ -626,6 +644,38 @@ Status ClientWorkerRemoteCommonApi::UpdateAkSk(const std::string &accessKey, Sen
     CHECK_FAIL_RETURN_STATUS(!accessKey.empty(), K_INVALID, "accessKey is empty");
     CHECK_FAIL_RETURN_STATUS(!secretKey.Empty(), K_INVALID, "secretKey is empty");
     return signature_->SetClientAkSk(accessKey, secretKey);
+}
+
+void ClientWorkerRemoteCommonApi::RecordUrmaDataPlaneResult(bool success)
+{
+    UrmaSuccessRateTracker::WindowStats windowStats;
+    if (!urmaSuccessRateTracker_.RecordUrmaResult(success, clientDeadTimeoutMs_, GetSteadyClockTimeStampMs(),
+                                                  &windowStats)) {
+        if (windowStats.totalCount > 0) {
+            VLOG(1) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_,
+                                                   windowStats, clientDeadTimeoutMs_)
+                    << ", switch trigger: false";
+        }
+        return;
+    }
+    LOG(INFO) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_,
+                                             windowStats, clientDeadTimeoutMs_)
+              << ", switch trigger: true";
+    if (urmaDataPlaneFailureCallback_ == nullptr || !urmaDataPlaneFailureCallback_()) {
+        LOG(ERROR) << "[Switch] Submit URMA data-plane failure worker switch failed, client id: " << clientId_
+                   << ", worker address: " << hostPort_.ToString();
+        urmaSuccessRateTracker_.FinishSwitchAttempt(false, GetSteadyClockTimeStampMs());
+    }
+}
+
+void ClientWorkerRemoteCommonApi::FinishUrmaDataPlaneSwitchAttempt(bool success)
+{
+    urmaSuccessRateTracker_.FinishSwitchAttempt(success, GetSteadyClockTimeStampMs());
+}
+
+void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<bool()> callback)
+{
+    urmaDataPlaneFailureCallback_ = std::move(callback);
 }
 
 Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)

@@ -124,6 +124,23 @@ void FillCreateUrmaInfo(bool isUrmaEnabled, const CreateRspPb &rsp,
     (void)urmaDataInfo;
 #endif
 }
+
+#ifdef USE_URMA
+/**
+ * @brief Check whether a Get response contains URMA payloads that fell back to TCP.
+ * @param[in] rsp The server Get response.
+ * @return True if any payload entry has part_index entries (indicating TCP fallback).
+ */
+bool HasUrmaTcpFallbackPayload(const GetRspPb &rsp)
+{
+    for (int i = 0; i < rsp.payload_info_size(); ++i) {
+        if (rsp.payload_info(i).part_index_size() > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 }  // namespace
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
@@ -456,6 +473,15 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     RETURN_IF_NOT_OK(getStatus);
 #ifdef USE_URMA
+    const bool hasUrmaGetAttempt = ubBufferHandle != nullptr && req.has_urma_info();
+    if (hasUrmaGetAttempt) {
+        const bool hasUrmaResponseError = static_cast<StatusCode>(rsp.last_rc().error_code()) == K_URMA_ERROR;
+        if (hasUrmaResponseError) {
+            RecordUrmaDataPlaneResult(false);
+        } else if (rsp.payload_info_size() > 0) {
+            RecordUrmaDataPlaneResult(!HasUrmaTcpFallbackPayload(rsp));
+        }
+    }
     RETURN_IF_NOT_OK(FillUrmaBuffer(ubBufferHandle, rsp, payloads, ubBufferPtr, ubBufferSize));
 #endif
     version = workerVersion_.load(std::memory_order_relaxed);

@@ -74,6 +74,21 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "urma_success_rate_tracker",
+    srcs = [
+        "urma_success_rate_tracker.cpp",
+    ],
+    hdrs = [
+        "urma_success_rate_tracker.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
     name = "client_worker_common_api",
     srcs = [
         "client_worker_common_api.cpp",
@@ -87,6 +102,7 @@ ds_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/datasystem/client:embedded_client_worker_api",
+        "//src/datasystem/client:urma_success_rate_tracker",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",

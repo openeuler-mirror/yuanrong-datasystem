@@ -41,6 +41,8 @@ DS_DECLARE_bool(urma_event_mode);
 // DEPRECATED: This flag is no longer used and will be removed in a future version.
 DS_DECLARE_string(urma_mode);
 DS_DECLARE_bool(enable_transport_fallback);
+DS_DECLARE_double(urma_failover_success_rate_ratio);
+DS_DECLARE_uint32(urma_failover_min_sample_count);
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
 DS_DECLARE_bool(enable_remote_h2d);

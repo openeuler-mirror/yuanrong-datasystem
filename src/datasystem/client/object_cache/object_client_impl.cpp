@@ -402,7 +402,64 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
     }
     workerApi_[node]->isUseStandbyWorker_ = node != LOCAL_WORKER;
     RETURN_IF_NOT_OK(workerApi_[node]->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_));
+    ConfigureUrmaDataPlaneFailureCallback(node, workerApi_[node]);
     return Status::OK();
+}
+
+void ObjectClientImpl::ConfigureUrmaDataPlaneFailureCallback(WorkerNode node,
+                                                             const std::shared_ptr<IClientWorkerApi> &workerApi)
+{
+    if (workerApi == nullptr || !enableCrossNodeConnection_) {
+        return;
+    }
+    std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi(workerApi);
+    workerApi->SetUrmaDataPlaneFailureCallback([this, node, weakWorkerApi]() {
+        return SubmitUrmaDataPlaneSwitch(node, weakWorkerApi);
+    });
+}
+
+bool ObjectClientImpl::SubmitUrmaDataPlaneSwitch(WorkerNode node,
+                                                 std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi)
+{
+    if (asyncSwitchWorkerPool_ == nullptr) {
+        return false;
+    }
+    auto traceId = Trace::Instance().GetTraceID();
+    asyncSwitchWorkerPool_->Execute([this, node, weakWorkerApi, traceId]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        auto workerApi = weakWorkerApi.lock();
+        if (workerApi == nullptr) {
+            return;
+        }
+        if (!IsCurrentUrmaDataPlaneTrigger(node, workerApi)) {
+            LOG(INFO) << "[Switch] Ignore stale URMA data-plane failure callback, client id: " << workerApi->clientId_
+                      << ", worker address: " << workerApi->hostPort_.ToString()
+                      << ", source node: " << static_cast<int>(node);
+            workerApi->FinishUrmaDataPlaneSwitchAttempt(false);
+            return;
+        }
+        LOG(INFO) << "[Switch] URMA data-plane failure triggers worker switch, client id: " << workerApi->clientId_
+                  << ", worker address: " << workerApi->hostPort_.ToString();
+        bool switched = SwitchWorkerNode(node, client::SwitchTriggerReason::URMA_DATA_PLANE_FAILURE);
+        if (switched) {
+            LOG(INFO) << "[Switch] URMA data-plane failure worker switch finished successfully, client id: "
+                      << workerApi->clientId_ << ", source worker address: " << workerApi->hostPort_.ToString()
+                      << ", source node: " << static_cast<int>(node);
+        } else {
+            LOG(ERROR) << "[Switch] URMA data-plane failure worker switch failed, client id: " << workerApi->clientId_
+                       << ", source worker address: " << workerApi->hostPort_.ToString()
+                       << ", source node: " << static_cast<int>(node);
+        }
+        workerApi->FinishUrmaDataPlaneSwitchAttempt(switched);
+    });
+    return true;
+}
+
+bool ObjectClientImpl::IsCurrentUrmaDataPlaneTrigger(
+    WorkerNode node, const std::shared_ptr<client::IClientWorkerCommonApi> &workerApi)
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    return currentNode_ == node && workerApi_[node] != nullptr && workerApi_[node].get() == workerApi.get();
 }
 
 Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker)
@@ -730,7 +787,8 @@ bool ObjectClientImpl::SwitchToStandbyWorkerImpl(const std::shared_ptr<IClientWo
 {
     PerfPoint perfPoint(PerfKey::CLIENT_SWITCH_STANDBY_WORKER);
     Raii switchEndNotifier([]() { INJECT_POINT_NO_RETURN("client.switch_worker_end", []() { return true; }); });
-    const bool keepCurrentWorker = reason == client::SwitchTriggerReason::VOLUNTARY_SCALE_DOWN;
+    const bool keepCurrentWorker = reason == client::SwitchTriggerReason::VOLUNTARY_SCALE_DOWN
+                                   || reason == client::SwitchTriggerReason::URMA_DATA_PLANE_FAILURE;
     std::vector<HostPort> sameHost;
     std::vector<HostPort> others;
     GetStandbyWorkersForSwitch(currentApi, sameHost, others);
@@ -871,6 +929,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
                                                     tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
                                                     embeddedClientWorkerApi_, worker_);
     candidateWorkerApi->isUseStandbyWorker_ = true;
+    ConfigureUrmaDataPlaneFailureCallback(next, candidateWorkerApi);
     Status rc = candidateWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("[Switch] Worker(%s) init failed, error msg: %s", standbyWorker.ToString(),
@@ -1072,6 +1131,7 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
                    << " failed: " << rc.ToString();
         return rc;
     }
+    ConfigureUrmaDataPlaneFailureCallback(LOCAL_WORKER, localWorkerApi);
 
     localMmapManager = std::make_unique<client::MmapManager>(localWorkerApi, false);
     rc = localWorkerApi->PrepairForDecreaseShmRef(std::bind(&client::MmapManager::LookupUnitsAndMmapFd,
