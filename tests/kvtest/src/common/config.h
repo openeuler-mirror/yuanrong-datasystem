@@ -20,13 +20,19 @@ enum class TestMode {
     GET_CROSS_NODE,
     GET_REMOTE_DIRECT,
     GET_REMOTE_CROSS,
+    MIXED_LOCAL,
+    MIXED_CROSS_NODE,
 };
+
+enum class MixedKeyStrategy { SAME_KEYS = 0, READ_PREV = 1, INDEPENDENT = 2 };
 
 enum class RunMode { PIPELINE, CACHE, BENCHMARK };
 
 TestMode ParseTestMode(const std::string &s);
 bool NeedsRemoteWorker(TestMode mode);
 bool IsGetMode(TestMode mode);
+bool IsMixedMode(TestMode mode);
+std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s);
 std::optional<RunMode> ParseRunMode(const std::string &s);
 
 struct Config {
@@ -80,6 +86,9 @@ struct Config {
         std::string host;
         int port = 31501;
     } remoteWorker;
+    // Mixed workload fields
+    double setRatio = 0.5;
+    MixedKeyStrategy mixedKeyStrategy = MixedKeyStrategy::SAME_KEYS;
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024

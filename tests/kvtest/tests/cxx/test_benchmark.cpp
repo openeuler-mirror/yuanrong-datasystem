@@ -224,3 +224,63 @@ TEST(RunBenchmarkRounds_MultipleRounds) {
     ASSERT_EQ(stats.totalGet.load(), 0);   // not get mode
     ASSERT_EQ(stats.totalDel.load(), 12);
 }
+
+// --- Mixed phase tests ---
+
+TEST(RunMixedPhase_BasicSplit) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 0, 10, 4, 2,
+                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 10);
+    ASSERT_EQ(result.getResult.successCount, 10);
+    ASSERT_EQ(client.setCount.load(), 10);
+    ASSERT_EQ(client.getCount.load(), 10);
+}
+
+TEST(RunMixedPhase_AllSetThreads) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 0, 8, 4, 0,
+                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 8);
+    ASSERT_EQ(result.getResult.successCount, 0);
+    ASSERT_EQ(client.setCount.load(), 8);
+    ASSERT_EQ(client.getCount.load(), 0);
+}
+
+TEST(RunMixedPhase_ReadPrevRoundZero) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 0, 10, 2, 2,
+                                MixedKeyStrategy::READ_PREV, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 10);
+    ASSERT_EQ(result.getResult.successCount, 0);
+    ASSERT_EQ(client.setCount.load(), 10);
+    ASSERT_EQ(client.getCount.load(), 0);
+}
+
+TEST(RunMixedPhase_ReadPrevRoundOne) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 1, 10, 2, 2,
+                                MixedKeyStrategy::READ_PREV, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 10);
+    ASSERT_EQ(result.getResult.successCount, 10);
+    ASSERT_EQ(client.setCount.load(), 10);
+    ASSERT_EQ(client.getCount.load(), 10);
+}
+
+TEST(RunMixedPhase_IndependentStrategy) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 5, 10, 2, 2,
+                                MixedKeyStrategy::INDEPENDENT, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 10);
+    ASSERT_EQ(result.getResult.successCount, 10);
+    ASSERT_EQ(client.setCount.load(), 10);
+    ASSERT_EQ(client.getCount.load(), 10);
+}
+
+TEST(RunMixedPhase_EmptyKeys) {
+    StubKVClient client;
+    auto result = RunMixedPhase(&client, 0, 0, 0, 2, 2,
+                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
+    ASSERT_EQ(result.setResult.successCount, 0);
+    ASSERT_EQ(result.getResult.successCount, 0);
+}

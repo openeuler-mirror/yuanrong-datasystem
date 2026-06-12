@@ -22,7 +22,7 @@
 
 // --- Pipe protocol types ---
 
-enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2, CMD_RUN_DEL = 3 };
+enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2, CMD_RUN_DEL = 3, CMD_RUN_MIXED = 4 };
 enum ChildRole : int32_t { ROLE_SET = 0, ROLE_GET = 1, ROLE_DEL = 2 };
 
 struct CmdMsg {
@@ -45,6 +45,13 @@ struct ResultMsg {
 struct InitMsg {
     int32_t ok = 0;   // 1 = success, 0 = failure
     char errorMsg[256] = {};
+};
+
+// Extra parameters for CMD_RUN_MIXED (sent after CmdMsg)
+struct MixedParams {
+    int32_t numSetThreads = 0;
+    int32_t numGetThreads = 0;
+    int32_t keyStrategy = 0;  // MixedKeyStrategy as int32_t
 };
 
 // --- Pipe I/O helpers ---
@@ -87,7 +94,8 @@ inline bool RoleUsesServiceDiscovery(ChildRole role, TestMode testMode) {
     switch (role) {
         case ROLE_SET:
             return testMode == TestMode::SET_LOCAL || testMode == TestMode::GET_LOCAL ||
-                   testMode == TestMode::GET_REMOTE_CROSS;
+                   testMode == TestMode::GET_REMOTE_CROSS ||
+                   testMode == TestMode::MIXED_LOCAL || testMode == TestMode::MIXED_CROSS_NODE;
         case ROLE_GET:
             return testMode == TestMode::GET_LOCAL || testMode == TestMode::GET_CROSS_NODE;
         case ROLE_DEL:
@@ -260,16 +268,80 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         if (!ReadExact(readFd, &cmd, sizeof(cmd))) break;
         if (cmd.cmd == CMD_EXIT) break;
 
-        ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
-        PhaseResult result = RunPhaseMultiThread(
-            &adapter, phase, cmd.round, cfg.numThreads, keysPerRound,
-            cfg.setApi, data, cfg.instanceId);
+        if (cmd.cmd == CMD_RUN_MIXED) {
+            // Read extra parameters for mixed mode
+            MixedParams mp{};
+            if (!ReadExact(readFd, &mp, sizeof(mp))) break;
 
-        ResultMsg msg = PhaseResultToMsg(result);
-        if (!WriteExact(writeFd, &msg, sizeof(msg))) break;
+            MixedKeyStrategy strategy = static_cast<MixedKeyStrategy>(mp.keyStrategy);
+            int getRound = GetRoundForGet(strategy, cmd.round);
+            bool skipGet = (getRound < 0) || (mp.numGetThreads <= 0);
 
-        SLOG_INFO("Child " << roleName << " round=" << cmd.round
-                  << " phase=" << cmd.cmd << " ok=" << result.successCount);
+            // Spawn set threads
+            std::vector<PhaseResult> setResults(mp.numSetThreads);
+            std::vector<std::thread> threads;
+            for (int t = 0; t < mp.numSetThreads; t++) {
+                threads.emplace_back([&, t]() {
+                    auto range = ThreadKeyRange(keysPerRound, mp.numSetThreads, t);
+                    if (range.second == 0) return;
+                    setResults[t] = RunSetPhase(&adapter, cfg.instanceId, cmd.round, range.first,
+                                                range.second, cfg.setApi, data);
+                });
+            }
+
+            // Spawn get threads
+            std::vector<PhaseResult> getResults(skipGet ? 0 : mp.numGetThreads);
+            if (!skipGet) {
+                for (int t = 0; t < mp.numGetThreads; t++) {
+                    threads.emplace_back([&, t]() {
+                        auto range = ThreadKeyRange(keysPerRound, mp.numGetThreads, t);
+                        if (range.second == 0) return;
+                        getResults[t] = RunGetPhase(&adapter, cfg.instanceId, getRound,
+                                                     range.first, range.second);
+                    });
+                }
+            }
+
+            for (auto &t : threads) t.join();
+
+            // Merge and send set result
+            PhaseResult mergedSet;
+            for (auto &r : setResults) {
+                mergedSet.successCount += r.successCount;
+                mergedSet.latenciesMs.insert(mergedSet.latenciesMs.end(),
+                                             r.latenciesMs.begin(), r.latenciesMs.end());
+            }
+            ResultMsg setMsg = PhaseResultToMsg(mergedSet);
+            if (!WriteExact(writeFd, &setMsg, sizeof(setMsg))) break;
+
+            // Merge and send get result
+            PhaseResult mergedGet;
+            if (!skipGet) {
+                for (auto &r : getResults) {
+                    mergedGet.successCount += r.successCount;
+                    mergedGet.latenciesMs.insert(mergedGet.latenciesMs.end(),
+                                                 r.latenciesMs.begin(), r.latenciesMs.end());
+                }
+            }
+            ResultMsg getMsg = PhaseResultToMsg(mergedGet);
+            if (!WriteExact(writeFd, &getMsg, sizeof(getMsg))) break;
+
+            SLOG_INFO("Child " << roleName << " round=" << cmd.round
+                      << " MIXED set=" << mergedSet.successCount
+                      << " get=" << mergedGet.successCount);
+        } else {
+            // Existing set/get/del phases
+            ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
+            PhaseResult result = RunPhaseMultiThread(
+                &adapter, phase, cmd.round, cfg.numThreads, keysPerRound,
+                cfg.setApi, data, cfg.instanceId);
+
+            ResultMsg msg = PhaseResultToMsg(result);
+            if (!WriteExact(writeFd, &msg, sizeof(msg))) break;
+
+            SLOG_INFO("Child " << roleName << " round=" << cmd.round
+                      << " phase=" << cmd.cmd << " ok=" << result.successCount);
+        }
     }
 
     SLOG_INFO("Child " << roleName << " waiting 3s for in-flight operations to complete...");
@@ -338,6 +410,15 @@ inline bool SendCommand(const ChildProcess &cp, ChildCmd cmd, int32_t round) {
 
 inline bool RecvResult(const ChildProcess &cp, ResultMsg &result) {
     return ReadExact(cp.fromChildFd, &result, sizeof(result));
+}
+
+inline bool SendMixedCommand(const ChildProcess &cp, int32_t round,
+                              int32_t numSetThreads, int32_t numGetThreads,
+                              MixedKeyStrategy keyStrategy) {
+    CmdMsg cmd{CMD_RUN_MIXED, round};
+    if (!WriteExact(cp.toChildFd, &cmd, sizeof(cmd))) return false;
+    MixedParams params{numSetThreads, numGetThreads, static_cast<int32_t>(keyStrategy)};
+    return WriteExact(cp.toChildFd, &params, sizeof(params));
 }
 
 inline void ShutdownChild(ChildProcess &cp) {
