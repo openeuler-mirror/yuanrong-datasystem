@@ -24,6 +24,7 @@
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
@@ -90,7 +91,7 @@ Status Buffer::Init()
 
 Status Buffer::MallocBufferHelper()
 {
-    auto mallocSize = bufferInfo_->dataSize + 1;
+    auto mallocSize = bufferInfo_->metadataSize + bufferInfo_->dataSize + 1;
     auto memPtr = static_cast<uint8_t *>(malloc(mallocSize));
     if (memPtr == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Memory allocation failed");
@@ -192,6 +193,14 @@ Buffer::~Buffer()
 
 Status Buffer::MemoryCopy(const void *data, uint64_t length)
 {
+    return MemoryCopyWithTransport(data, length, nullptr);
+}
+
+Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_t *actualTransportKind)
+{
+    if (actualTransportKind != nullptr) {
+        *actualTransportKind = static_cast<uint8_t>(AccessTransportKind::SHM);
+    }
     if (bufferInfo_ == nullptr) {
         RETURN_STATUS(StatusCode::K_INVALID,
                       "Buffer is not initialized. Key may already exist with NX option.");
@@ -210,7 +219,18 @@ Status Buffer::MemoryCopy(const void *data, uint64_t length)
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
     if (bufferInfo_->ubUrmaDataInfo) {
-        RETURN_OK_IF_TRUE(clientImpl->SendBufferViaUb(bufferInfo_, data, length).IsOk());
+        Status ubStatus = clientImpl->SendBufferViaUb(bufferInfo_, data, length);
+        if (ubStatus.IsOk()) {
+            if (actualTransportKind != nullptr) {
+                *actualTransportKind = static_cast<uint8_t>(AccessTransportKind::UB);
+            }
+            AccessTransportTracker::Record(AccessTransportKind::UB);
+            return Status::OK();
+        }
+        if (actualTransportKind != nullptr) {
+            *actualTransportKind = static_cast<uint8_t>(AccessTransportKind::TCP);
+        }
+        AccessTransportTracker::Record(AccessTransportKind::TCP);
         // fallback to TCP if UB send fails, allocate buffer for that purpose.
         RETURN_IF_NOT_OK(MallocBufferHelper());
     }
@@ -243,9 +263,13 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
         const void *dataPtr = ImmutableData();
         if (dataPtr != nullptr && dataSize > 0) {
             Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize);
-            LOG_IF(ERROR, ubStatus.IsError())
-                << "Try to publish via UB but failed! object key: " << bufferInfo_->objectKey
-                << ", ub send status: " << ubStatus.ToString();
+            if (ubStatus.IsOk()) {
+                AccessTransportTracker::Record(AccessTransportKind::UB);
+            } else {
+                LOG(ERROR) << "Try to publish via UB but failed! object key: " << bufferInfo_->objectKey
+                           << ", ub send status: " << ubStatus.ToString();
+                AccessTransportTracker::Record(AccessTransportKind::TCP);
+            }
         }
     }
 

@@ -23,6 +23,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -43,6 +44,31 @@ enum class AccessRecorderKey : size_t {
 #undef ACCESS_RECORDER_KEY_DEF
 
 enum class AccessKeyType { CLIENT, ACCESS, REQUEST_OUT };
+
+/**
+ * @brief Transport kind recorded in client access logs.
+ */
+enum class AccessTransportKind : uint8_t {
+    SHM = 0,
+    UB,
+    TCP,
+};
+
+/**
+ * @brief Thread-local tracker for the actual client-to-worker transport of the current request.
+ */
+class AccessTransportTracker {
+public:
+    AccessTransportTracker() = delete;
+    ~AccessTransportTracker() = delete;
+
+    static void Reset();
+    static void Record(AccessTransportKind kind);
+    static std::string ToString();
+
+private:
+    static thread_local AccessTransportKind current_;
+};
 
 struct RequestParam {
     std::string ToString() const;

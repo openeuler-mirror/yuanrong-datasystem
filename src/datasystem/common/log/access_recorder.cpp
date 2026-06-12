@@ -385,4 +385,29 @@ std::string StreamResponseParam::ToString() const
     ss << "}";
     return ss.str();
 }
+
+thread_local AccessTransportKind AccessTransportTracker::current_ = AccessTransportKind::SHM;
+
+void AccessTransportTracker::Reset()
+{
+    current_ = AccessTransportKind::SHM;
+}
+
+void AccessTransportTracker::Record(AccessTransportKind kind)
+{
+    current_ = kind;
+}
+
+std::string AccessTransportTracker::ToString()
+{
+    switch (current_) {
+        case AccessTransportKind::UB:
+            return "UB";
+        case AccessTransportKind::TCP:
+            return "TCP";
+        case AccessTransportKind::SHM:
+        default:
+            return "SHM";
+    }
+}
 }  // namespace datasystem

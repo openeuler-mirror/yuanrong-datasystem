@@ -161,6 +161,11 @@ private:
     /// \return K_OK if the malloc succeeds, error code otherwise.
     Status MallocBufferHelper();
 
+    /// \brief Internal MemoryCopy that reports actual transport kind for access logging.
+    ///
+    /// \param[out] actualTransportKind Optional output for AccessTransportKind value (uint8_t).
+    Status MemoryCopyWithTransport(const void *data, uint64_t length, uint8_t *actualTransportKind);
+
     /// \brief Check if buffer is deprecated. If worker is down and buffer is shm buffer, this check would
     ///         return error, means the buffer is useless, user should destruct it as fast as possible.
     ///

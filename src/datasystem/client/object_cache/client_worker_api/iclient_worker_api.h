@@ -59,6 +59,7 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_types.h"
 
 namespace datasystem {
+enum class AccessTransportKind : uint8_t;
 namespace object_cache {
 
 struct MultiCreateParam {
@@ -94,6 +95,7 @@ struct GetParam {
     uint64_t ubTotalSize = 0;  // Pre-fetched total UB data size; 0 means not pre-fetched.
     bool ubMetaResolved = false;  // True means UB meta lookup was already attempted for this request.
     int64_t ubGetObjMetaElapsedMs = 0;  // Time spent by UB Get pre-fetching object metadata before Get.
+    AccessTransportKind *actualTransportKind = nullptr;  // Actual request transport after UB/TCP resolution.
 };
 
 struct H2DParam {

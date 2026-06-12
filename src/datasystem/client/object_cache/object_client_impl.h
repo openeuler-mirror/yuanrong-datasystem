@@ -48,6 +48,7 @@
 #ifdef BUILD_HETERO
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_helper.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -845,7 +846,8 @@ private:
      */
     Status GetBuffersFromWorkerBatched(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
                                        std::vector<std::shared_ptr<Buffer>> &buffers,
-                                       const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize);
+                                       const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
+                                       AccessTransportKind *requestTransportKind);
 #endif
 
     /**
@@ -1232,6 +1234,15 @@ private:
                                                 std::vector<std::string> &outFailedKeys,
                                                 std::vector<std::string> &deduplicateKeys,
                                                 std::vector<StringView> &deduplicateVals);
+
+    /**
+     * @brief Create buffers, copy values, and publish for MSet with outFailedKeys.
+     */
+    Status MSetCreateCopyAndPublish(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+                                    const std::vector<std::string> &deduplicateKeys,
+                                    const std::vector<StringView> &deduplicateVals, const MSetParam &param,
+                                    const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                    std::vector<std::string> &outFailedKeys, PerfPoint &point);
     /**
      * @brief Check the validation of the input parameter of the multiple set.
      * @param[in] keys The keys to be set.
@@ -1366,7 +1377,8 @@ private:
     Status MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
                               const std::vector<StringView> &vals, const FullParam &creatParam,
                               std::vector<std::shared_ptr<Buffer>> &bufferList,
-                              std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList);
+                              std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                              AccessTransportKind *requestTransportKind = nullptr);
 
     /**
      * @brief Start periodic reconcile thread for client-worker shm refs.

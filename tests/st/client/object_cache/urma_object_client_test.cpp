@@ -19,12 +19,17 @@
  */
 #include <gtest/gtest.h>
 #include <future>
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
-#include <chrono>
 
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
+#include "datasystem/common/log/log_manager.h"
+#include "datasystem/common/log/logging.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -34,6 +39,9 @@
 #include "oc_client_common.h"
 #include "securec.h"
 #include "zmq_curve_test_common.h"
+
+DS_DECLARE_bool(log_monitor);
+DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace st {
@@ -46,6 +54,72 @@ constexpr int ABNORMAL_EXIT_CODE = -2;
 const char *WARMUP_PREPARE_INJECT = "WorkerOCServiceImpl.PrepareUrmaWarmupObject.done";
 const char *WARMUP_REMOTE_GET_INJECT = "WorkerOcServiceGetImpl.WarmupGetObjectFromRemoteWorker.begin";
 const char *QUERY_META_INJECT = "worker.before_query_meta";
+
+#ifdef USE_URMA
+std::string ReadFileContent(const std::string &path)
+{
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        return "";
+    }
+    std::ostringstream oss;
+    oss << ifs.rdbuf();
+    return oss.str();
+}
+
+bool FindLogLineWithTokens(const std::string &path, const std::vector<std::string> &tokens, std::string &matchedLine)
+{
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        return false;
+    }
+    std::string line;
+    while (std::getline(ifs, line)) {
+        bool allMatched = true;
+        for (const auto &token : tokens) {
+            if (line.find(token) == std::string::npos) {
+                allMatched = false;
+                break;
+            }
+        }
+        if (allMatched) {
+            matchedLine = line;
+            return true;
+        }
+    }
+    return false;
+}
+
+void AssertClientAccessLogContains(const std::string &path, const std::vector<std::string> &tokens)
+{
+    constexpr int retryTimes = 30;
+    constexpr auto retryInterval = std::chrono::milliseconds(100);
+    std::string matchedLine;
+    for (int i = 0; i < retryTimes; ++i) {
+        DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
+        if (FindLogLineWithTokens(path, tokens, matchedLine)) {
+            return;
+        }
+        std::this_thread::sleep_for(retryInterval);
+    }
+    FAIL() << "failed to find expected access log line in " << path << "\nexpected tokens: "
+           << VectorToString(tokens) << "\nfile content:\n"
+           << ReadFileContent(path);
+}
+
+void BuildParallelMSetInput(std::vector<std::string> &keys, std::vector<std::string> &rawValues,
+                            std::vector<StringView> &values, size_t keyCount, size_t valueSize)
+{
+    keys.reserve(keyCount);
+    rawValues.reserve(keyCount);
+    values.reserve(keyCount);
+    for (size_t i = 0; i < keyCount; ++i) {
+        keys.emplace_back("urma-parallel-mset-" + std::to_string(i) + "-" + GetStringUuid());
+        rawValues.emplace_back(valueSize, static_cast<char>('a' + (i % 26)));
+        values.emplace_back(rawValues.back());
+    }
+}
+#endif
 }  // namespace
 class UrmaObjectClientTest : public OCClientCommon {
 public:
@@ -1654,6 +1728,27 @@ TEST_F(UrmaCqeErrorTest, WorkerToClientGetRejectsClientPreRequestFallbackPayload
     ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos) << status.ToString();
 }
 
+TEST_F(UrmaCqeErrorTest, ClientPreRequestFallbackAccessLogRecordsTcp)
+{
+    FLAGS_log_monitor = true;
+    const std::string logPath = FLAGS_log_dir + "/" + "ds_client_access.log";
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    const std::string key = "key-get-client-fallback-log";
+    const std::string value(256 * 1024, 'a');
+    DS_ASSERT_OK(client->Set(key, value));
+    DS_ASSERT_OK(inject::Set("UrmaManager.GetMemoryBufferHandle", "1*return(K_OUT_OF_MEMORY)"));
+
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(key, getValue));
+    ASSERT_EQ(getValue, value);
+    DS_ASSERT_OK(inject::Clear("UrmaManager.GetMemoryBufferHandle"));
+
+    AssertClientAccessLogContains(logPath, { "DS_KV_CLIENT_GET", key, "transportType:TCP" });
+}
+
 class UrmaClientHeartbeatReconnectTest : public UrmaObjectClientTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -1952,6 +2047,62 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitFallback)
     for (size_t i = 0; i < keys.size(); i++) {
         ASSERT_EQ(values[i], std::string(valuesGet[i].data(), valuesGet[i].size()));
     }
+}
+
+TEST_F(UrmaFallbackTest, ParallelMSetAccessLogRecordsUb)
+{
+    FLAGS_log_monitor = true;
+    const std::string logPath = FLAGS_log_dir + "/" + "ds_client_access.log";
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    constexpr size_t keyCount = 40;
+    constexpr size_t valueSize = 128 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> rawValues;
+    std::vector<StringView> values;
+    BuildParallelMSetInput(keys, rawValues, values, keyCount, valueSize);
+
+    MSetParam param;
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(keys[0], getValue));
+    ASSERT_EQ(getValue, rawValues[0]);
+
+    AssertClientAccessLogContains(logPath, { "DS_KV_CLIENT_MSETNX", keys[0], "transportType:UB" });
+}
+
+TEST_F(UrmaFallbackTest, ParallelMSetFallbackAccessLogRecordsTcp)
+{
+    FLAGS_log_monitor = true;
+    const std::string logPath = FLAGS_log_dir + "/" + "ds_client_access.log";
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    constexpr size_t keyCount = 40;
+    constexpr size_t valueSize = 128 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> rawValues;
+    std::vector<StringView> values;
+    BuildParallelMSetInput(keys, rawValues, values, keyCount, valueSize);
+
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteError", "1*return()"));
+    MSetParam param;
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(client->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+    DS_ASSERT_OK(inject::Clear("UrmaManager.UrmaWriteError"));
+
+    std::string getValue;
+    DS_ASSERT_OK(client->Get(keys[0], getValue));
+    ASSERT_EQ(getValue, rawValues[0]);
+
+    AssertClientAccessLogContains(logPath, { "DS_KV_CLIENT_MSETNX", keys[0], "transportType:TCP" });
 }
 
 TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitRejectsFallbackPayloadAtOneMb)
