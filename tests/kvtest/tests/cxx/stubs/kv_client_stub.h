@@ -29,6 +29,13 @@ struct StubKVClient {
         return true;
     }
 
+    bool CreateAndSetRaw(const std::string &key, uint64_t size, const std::string &data) {
+        if (failSets) return false;
+        createCount++;
+        setCount++;
+        return true;
+    }
+
     bool Del(const std::vector<std::string> &keys) {
         delCount += static_cast<int>(keys.size());
         return true;

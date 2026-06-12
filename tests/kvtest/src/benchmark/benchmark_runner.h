@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 #include "common/simple_log.h"
+#include "common/config.h"
 
 // Key calculation utilities
 int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize);
@@ -181,4 +182,129 @@ PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey,
         }
     }
     return result;
+}
+
+// Result of a mixed set+get phase
+struct MixedPhaseResult {
+    PhaseResult setResult;
+    PhaseResult getResult;
+};
+
+// Get the round number for get threads based on key strategy
+inline int GetRoundForGet(MixedKeyStrategy strategy, int round) {
+    switch (strategy) {
+        case MixedKeyStrategy::SAME_KEYS: return round;
+        case MixedKeyStrategy::READ_PREV: return round > 0 ? round - 1 : -1;
+        case MixedKeyStrategy::INDEPENDENT: return 0;
+    }
+    return round;
+}
+
+// Run mixed set+get with multiple threads concurrently
+template<typename Client>
+MixedPhaseResult RunMixedPhase(
+    Client *client, int instanceId, int round, int keysPerRound,
+    int numSetThreads, int numGetThreads,
+    MixedKeyStrategy keyStrategy,
+    const std::string &setApi, const std::string &data) {
+    MixedPhaseResult result;
+    if (keysPerRound <= 0) return result;
+
+    int getRound = GetRoundForGet(keyStrategy, round);
+    bool skipGet = (getRound < 0) || (numGetThreads <= 0);
+
+    std::vector<PhaseResult> setResults(numSetThreads);
+    std::vector<PhaseResult> getResults(skipGet ? 0 : numGetThreads);
+    std::vector<std::thread> threads;
+
+    // Spawn set threads
+    for (int t = 0; t < numSetThreads; t++) {
+        threads.emplace_back([&, t]() {
+            auto range = ThreadKeyRange(keysPerRound, numSetThreads, t);
+            if (range.second == 0) return;
+            setResults[t] = RunSetPhase(client, instanceId, round, range.first, range.second, setApi, data);
+        });
+    }
+
+    // Spawn get threads
+    if (!skipGet) {
+        for (int t = 0; t < numGetThreads; t++) {
+            threads.emplace_back([&, t]() {
+                auto range = ThreadKeyRange(keysPerRound, numGetThreads, t);
+                if (range.second == 0) return;
+                getResults[t] = RunGetPhase(client, instanceId, getRound, range.first, range.second);
+            });
+        }
+    }
+
+    for (auto &t : threads) t.join();
+
+    // Merge results
+    for (auto &r : setResults) {
+        result.setResult.successCount += r.successCount;
+        result.setResult.latenciesMs.insert(result.setResult.latenciesMs.end(),
+                                            r.latenciesMs.begin(), r.latenciesMs.end());
+    }
+    if (!skipGet) {
+        for (auto &r : getResults) {
+            result.getResult.successCount += r.successCount;
+            result.getResult.latenciesMs.insert(result.getResult.latenciesMs.end(),
+                                                r.latenciesMs.begin(), r.latenciesMs.end());
+        }
+    }
+    return result;
+}
+
+// Multi-threaded round execution (test helper)
+template<typename Client>
+void RunBenchmarkRounds(Client *client, BenchmarkStats *stats, const BenchmarkParams &params) {
+    for (int round = 0; params.maxRounds == 0 || round < params.maxRounds; round++) {
+        // Set phase
+        {
+            std::vector<PhaseResult> threadResults(params.numThreads);
+            std::vector<std::thread> threads;
+            for (int t = 0; t < params.numThreads; t++) {
+                threads.emplace_back([&, t]() {
+                    auto range = ThreadKeyRange(params.keysPerRound, params.numThreads, t);
+                    if (range.second == 0) return;
+                    threadResults[t] = RunSetPhase(client, 0, round, range.first, range.second,
+                                                   params.setApi, params.data);
+                });
+            }
+            for (auto &t : threads) t.join();
+            for (auto &r : threadResults) stats->totalSet += r.successCount;
+        }
+
+        // Get phase
+        if (params.isGetMode) {
+            std::vector<PhaseResult> threadResults(params.numThreads);
+            std::vector<std::thread> threads;
+            for (int t = 0; t < params.numThreads; t++) {
+                threads.emplace_back([&, t]() {
+                    auto range = ThreadKeyRange(params.keysPerRound, params.numThreads, t);
+                    if (range.second == 0) return;
+                    threadResults[t] = RunGetPhase(client, 0, round, range.first, range.second);
+                });
+            }
+            for (auto &t : threads) t.join();
+            for (auto &r : threadResults) stats->totalGet += r.successCount;
+        }
+
+        // Del phase
+        if (params.cleanupMethod == "del") {
+            std::vector<PhaseResult> threadResults(params.numThreads);
+            std::vector<std::thread> threads;
+            for (int t = 0; t < params.numThreads; t++) {
+                threads.emplace_back([&, t]() {
+                    auto range = ThreadKeyRange(params.keysPerRound, params.numThreads, t);
+                    if (range.second == 0) return;
+                    threadResults[t] = RunDelPhase(client, 0, round, range.first, range.second);
+                });
+            }
+            for (auto &t : threads) t.join();
+            for (auto &r : threadResults) stats->totalDel += r.successCount;
+        }
+
+        stats->roundsCompleted++;
+    }
 }

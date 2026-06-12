@@ -17,6 +17,8 @@ TestMode ParseTestMode(const std::string &s) {
     if (s == "get_cross_node") return TestMode::GET_CROSS_NODE;
     if (s == "get_remote_direct") return TestMode::GET_REMOTE_DIRECT;
     if (s == "get_remote_cross") return TestMode::GET_REMOTE_CROSS;
+    if (s == "mixed_local") return TestMode::MIXED_LOCAL;
+    if (s == "mixed_cross_node") return TestMode::MIXED_CROSS_NODE;
     return TestMode::NONE;
 }
 
@@ -28,6 +30,17 @@ bool NeedsRemoteWorker(TestMode mode) {
 bool IsGetMode(TestMode mode) {
     return mode == TestMode::GET_LOCAL || mode == TestMode::GET_CROSS_NODE
         || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS;
+}
+
+bool IsMixedMode(TestMode mode) {
+    return mode == TestMode::MIXED_LOCAL || mode == TestMode::MIXED_CROSS_NODE;
+}
+
+std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s) {
+    if (s == "same_keys") return MixedKeyStrategy::SAME_KEYS;
+    if (s == "read_prev") return MixedKeyStrategy::READ_PREV;
+    if (s == "independent") return MixedKeyStrategy::INDEPENDENT;
+    return std::nullopt;
 }
 
 std::optional<RunMode> ParseRunMode(const std::string &s) {
@@ -202,6 +215,18 @@ bool LoadConfig(const std::string &path, Config &cfg) {
                 cfg.ttlSeconds = sp["ttl_second"];
             }
         }
+        if (j.contains("set_ratio")) {
+            cfg.setRatio = j["set_ratio"].get<double>();
+        }
+        if (j.contains("mixed_key_strategy")) {
+            auto parsed = ParseMixedKeyStrategy(j["mixed_key_strategy"].get<std::string>());
+            if (!parsed.has_value()) {
+                SLOG_ERROR("Unknown mixed_key_strategy '" << j["mixed_key_strategy"].get<std::string>()
+                          << "', must be same_keys/read_prev/independent");
+                return false;
+            }
+            cfg.mixedKeyStrategy = parsed.value();
+        }
 
         // Generate output directory: metrics_{ip}_{timestamp}
         if (cfg.outputDir.empty()) {
@@ -362,6 +387,17 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             SLOG_ERROR("cleanup_method must be 'del' or 'ttl'");
             return false;
         }
+        if (IsMixedMode(cfg.testMode)) {
+            if (cfg.setRatio <= 0.0 || cfg.setRatio >= 1.0) {
+                SLOG_ERROR("set_ratio must be in (0.0, 1.0) for mixed mode, got " << cfg.setRatio);
+                return false;
+            }
+            if (cfg.mixedKeyStrategy == MixedKeyStrategy::INDEPENDENT && cfg.cleanupMethod == "ttl") {
+                SLOG_ERROR("independent strategy is incompatible with cleanup_method=ttl "
+                          "(pre-populated keys would expire before benchmark reads them)");
+                return false;
+            }
+        }
     }
 
     auto joinStr = [](const std::vector<std::string> &v) -> std::string {
@@ -381,7 +417,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         << ", etcd=" << cfg.etcdAddress;
     if (cfg.testMode != TestMode::NONE) {
         const char *modeNames[] = {"none", "set_local", "set_remote", "get_local",
-                                   "get_cross_node", "get_remote_direct", "get_remote_cross"};
+                                   "get_cross_node", "get_remote_direct", "get_remote_cross",
+                                   "mixed_local", "mixed_cross_node"};
         log << ", test_mode=" << modeNames[static_cast<int>(cfg.testMode)]
             << ", worker_memory_mb=" << cfg.workerMemoryMb
             << ", num_threads=" << cfg.numThreads

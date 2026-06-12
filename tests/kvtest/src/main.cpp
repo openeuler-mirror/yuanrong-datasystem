@@ -24,6 +24,7 @@
 #include <memory>
 #include <thread>
 #include <algorithm>
+#include <cmath>
 
 using namespace datasystem;
 
@@ -43,13 +44,25 @@ static int RunBenchmarkMode(Config &cfg) {
     int keysPerRound = CalcKeysPerRound(cfg.workerMemoryMb, dataSize);
     int numThreads = cfg.numThreads;
     bool isGetMode = IsGetMode(cfg.testMode);
+    bool isMixedMode = IsMixedMode(cfg.testMode);
+    int numSetThreads = cfg.numThreads;
+    int numGetThreads = 0;
+    if (isMixedMode) {
+        numSetThreads = std::max(1, static_cast<int>(std::round(cfg.setRatio * cfg.numThreads)));
+        numGetThreads = cfg.numThreads - numSetThreads;
+        SLOG_INFO("Mixed mode: set_ratio=" << cfg.setRatio
+                  << " -> " << numSetThreads << " set threads, "
+                  << numGetThreads << " get threads"
+                  << " (strategy=" << static_cast<int>(cfg.mixedKeyStrategy) << ")");
+    }
 
     SLOG_INFO("Benchmark config: keys_per_round=" << keysPerRound
               << ", threads=" << numThreads
               << ", data_size=" << dataSize
               << ", set_api=" << cfg.setApi
               << ", cleanup=" << cfg.cleanupMethod
-              << ", is_get_mode=" << isGetMode);
+              << ", is_get_mode=" << isGetMode
+              << ", is_mixed_mode=" << isMixedMode);
 
     // --- Spawn child processes ---
     // children[0] = setChild, children[1] = getChild (optional), children[2] = delChild (optional)
@@ -106,7 +119,25 @@ static int RunBenchmarkMode(Config &cfg) {
     int64_t maxDurationMs = static_cast<int64_t>(cfg.durationSeconds) * 1000;
     auto benchStart = std::chrono::steady_clock::now();
 
-    for (int round = 0; cfg.totalRounds == 0 || round < cfg.totalRounds; round++) {
+    // Pre-populate get key space for independent strategy
+    if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::INDEPENDENT) {
+        SLOG_INFO("Pre-populating get keys (round 0)...");
+        ResultMsg preRes{};
+        if (!SendCommand(children[setChildIdx], CMD_RUN_SET, 0) ||
+            !RecvResult(children[setChildIdx], preRes)) {
+            SLOG_ERROR("Pre-population failed");
+            KillAllChildren(children);
+            return 1;
+        }
+        SLOG_INFO("Pre-populated " << preRes.successCount << " get keys");
+    }
+
+    int startRound = 0;
+    if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::INDEPENDENT) {
+        startRound = 1;  // round 0 is pre-populated, skip deletion
+    }
+
+    for (int round = startRound; cfg.totalRounds == 0 || round < startRound + cfg.totalRounds; round++) {
         if (!gRunning) break;
 
         if (maxDurationMs > 0) {
@@ -118,36 +149,66 @@ static int RunBenchmarkMode(Config &cfg) {
         auto roundStart = std::chrono::steady_clock::now();
         SLOG_INFO("Round " << round << " starting");
 
-        // --- Set phase ---
         ResultMsg setRes{};
-        if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round) ||
-            !RecvResult(children[setChildIdx], setRes)) {
-            SLOG_ERROR("Set phase failed (pipe error) in round " << round);
-            break;
-        }
-        stats.totalSet += setRes.successCount;
-
-        // --- Get phase ---
         ResultMsg getRes{};
-        if (isGetMode) {
-            size_t getIdx = (getChildIdx != SIZE_MAX) ? getChildIdx : setChildIdx;
-            if (!SendCommand(children[getIdx], CMD_RUN_GET, round) ||
-                !RecvResult(children[getIdx], getRes)) {
-                SLOG_ERROR("Get phase failed (pipe error) in round " << round);
+        ResultMsg delRes{};
+
+        if (isMixedMode) {
+            // --- Mixed mode: set+get concurrent ---
+            if (!SendMixedCommand(children[setChildIdx], round,
+                                  numSetThreads, numGetThreads, cfg.mixedKeyStrategy)) {
+                SLOG_ERROR("Mixed command failed (pipe error) in round " << round);
                 break;
             }
+            if (!RecvResult(children[setChildIdx], setRes)) {
+                SLOG_ERROR("Mixed set result failed (pipe error) in round " << round);
+                break;
+            }
+            if (!RecvResult(children[setChildIdx], getRes)) {
+                SLOG_ERROR("Mixed get result failed (pipe error) in round " << round);
+                break;
+            }
+            stats.totalSet += setRes.successCount;
             stats.totalGet += getRes.successCount;
+        } else {
+            // --- Sequential mode: set -> get -> del ---
+            // Set phase
+            if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round) ||
+                !RecvResult(children[setChildIdx], setRes)) {
+                SLOG_ERROR("Set phase failed (pipe error) in round " << round);
+                break;
+            }
+            stats.totalSet += setRes.successCount;
+
+            // Get phase
+            if (isGetMode) {
+                size_t getIdx = (getChildIdx != SIZE_MAX) ? getChildIdx : setChildIdx;
+                if (!SendCommand(children[getIdx], CMD_RUN_GET, round) ||
+                    !RecvResult(children[getIdx], getRes)) {
+                    SLOG_ERROR("Get phase failed (pipe error) in round " << round);
+                    break;
+                }
+                stats.totalGet += getRes.successCount;
+            }
         }
 
-        // --- Del phase ---
-        ResultMsg delRes{};
+        // Del phase
         if (delChildIdx != SIZE_MAX) {
-            if (!SendCommand(children[delChildIdx], CMD_RUN_DEL, round) ||
-                !RecvResult(children[delChildIdx], delRes)) {
-                SLOG_ERROR("Del phase failed (pipe error) in round " << round);
-                break;
+            // For read_prev: delay deletion by one round so get threads can read
+            // the previous round's keys before they're deleted. Round N deletes
+            // round N-1 (which was read by round N's get threads).
+            int delRound = round;
+            if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::READ_PREV) {
+                delRound = round - 1;  // delete previous round's keys
             }
-            stats.totalDel += delRes.successCount;
+            if (delRound >= startRound) {
+                if (!SendCommand(children[delChildIdx], CMD_RUN_DEL, delRound) ||
+                    !RecvResult(children[delChildIdx], delRes)) {
+                    SLOG_ERROR("Del phase failed (pipe error) in round " << round);
+                    break;
+                }
+                stats.totalDel += delRes.successCount;
+            }
         }
 
         auto roundEnd = std::chrono::steady_clock::now();
@@ -161,8 +222,8 @@ static int RunBenchmarkMode(Config &cfg) {
                 setRes.maxMs, setRes.totalLatMs, qps);
         }
 
-        // Record get metrics
-        if (isGetMode) {
+        // Record get metrics (mixed mode always has get; sequential only if isGetMode)
+        if (isMixedMode || isGetMode) {
             double qps = roundTotalMs > 0 ? getRes.successCount * 1000.0 / roundTotalMs : 0;
             benchMetrics.RecordPhase(round, "get", getRes.successCount,
                 getRes.avgMs, getRes.p50Ms, getRes.p90Ms, getRes.p99Ms,
@@ -187,6 +248,30 @@ static int RunBenchmarkMode(Config &cfg) {
         SLOG_INFO("Round " << round << " complete: set=" << setRes.successCount
                   << " get=" << getRes.successCount << " del=" << delRes.successCount
                   << " roundMs=" << roundTotalMs);
+    }
+
+    // --- Final cleanup for delayed-deletion strategies ---
+    if (gRunning && delChildIdx != SIZE_MAX) {
+        // read_prev: delete the last round's keys (skipped by delayed deletion)
+        if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::READ_PREV
+            && stats.roundsCompleted > 0) {
+            int lastRound = startRound + stats.roundsCompleted - 1;
+            ResultMsg finalDelRes{};
+            SLOG_INFO("read_prev final cleanup: deleting round " << lastRound);
+            if (SendCommand(children[delChildIdx], CMD_RUN_DEL, lastRound)) {
+                RecvResult(children[delChildIdx], finalDelRes);
+                stats.totalDel += finalDelRes.successCount;
+            }
+        }
+        // independent: delete pre-populated round 0 keys
+        if (isMixedMode && cfg.mixedKeyStrategy == MixedKeyStrategy::INDEPENDENT) {
+            ResultMsg finalDelRes{};
+            SLOG_INFO("independent final cleanup: deleting pre-populated round 0");
+            if (SendCommand(children[delChildIdx], CMD_RUN_DEL, 0)) {
+                RecvResult(children[delChildIdx], finalDelRes);
+                stats.totalDel += finalDelRes.successCount;
+            }
+        }
     }
 
     // --- Shutdown children ---

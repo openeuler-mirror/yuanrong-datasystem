@@ -467,3 +467,75 @@ TEST(LoadConfig_ModePipeline_InvalidRole) {
     ASSERT_FALSE(LoadConfig(path, cfg));
     std::remove(path.c_str());
 }
+
+// --- MixedMode tests ---
+
+TEST(ParseTestMode_MixedLocal) {
+    ASSERT_TRUE(ParseTestMode("mixed_local") == TestMode::MIXED_LOCAL);
+}
+
+TEST(ParseTestMode_MixedCrossNode) {
+    ASSERT_TRUE(ParseTestMode("mixed_cross_node") == TestMode::MIXED_CROSS_NODE);
+}
+
+TEST(IsMixedMode_MixedModes) {
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_LOCAL));
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_CROSS_NODE));
+    ASSERT_FALSE(IsMixedMode(TestMode::SET_LOCAL));
+    ASSERT_FALSE(IsMixedMode(TestMode::NONE));
+}
+
+TEST(ParseMixedKeyStrategy_All) {
+    ASSERT_TRUE(ParseMixedKeyStrategy("same_keys").value() == MixedKeyStrategy::SAME_KEYS);
+    ASSERT_TRUE(ParseMixedKeyStrategy("read_prev").value() == MixedKeyStrategy::READ_PREV);
+    ASSERT_TRUE(ParseMixedKeyStrategy("independent").value() == MixedKeyStrategy::INDEPENDENT);
+    ASSERT_TRUE(!ParseMixedKeyStrategy("unknown").has_value());
+    ASSERT_TRUE(!ParseMixedKeyStrategy("").has_value());
+}
+
+TEST(LoadConfig_MixedMode_InvalidStrategy) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "set_ratio":0.5,"mixed_key_strategy":"invalid_strategy"
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MixedMode_SetRatioOne) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "set_ratio":1.0
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MixedMode_IndependentPlusTTL) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "set_ratio":0.5,"mixed_key_strategy":"independent",
+        "cleanup_method":"ttl","set_param":{"ttl_second":10}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MixedMode_ValidRatio) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "set_ratio":0.7
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.setRatio, 0.7);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
