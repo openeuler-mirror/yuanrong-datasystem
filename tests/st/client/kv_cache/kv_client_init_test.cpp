@@ -17,18 +17,68 @@
 /**
  * Description: KV client initialization tests.
  */
+#include <functional>
 #include <memory>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/connection.h"
 
+DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_uint32(log_async_queue_size);
+
 namespace datasystem {
 namespace st {
+namespace {
+constexpr uint32_t FIRST_MAX_LOG_SIZE_MB = 123;
+constexpr uint32_t SECOND_MAX_LOG_SIZE_MB = 321;
+constexpr uint32_t FIRST_LOG_ASYNC_QUEUE_SIZE = 4096;
+constexpr uint32_t SECOND_LOG_ASYNC_QUEUE_SIZE = 8192;
+constexpr int32_t FIRST_ZMQ_CLIENT_IO_THREAD = 2;
+constexpr int32_t SECOND_ZMQ_CLIENT_IO_THREAD = 3;
+
+KVClientConfig BuildClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, int32_t zmqClientIoThread)
+{
+    KVClientConfig config;
+    auto status = KVClientConfig::Builder()
+                      .MaxLogSize(maxLogSize)
+                      .LogAsyncQueueSize(asyncQueueSize)
+                      .ZmqClientIoThread(zmqClientIoThread)
+                      .Build(config);
+    if (status.IsError()) {
+        LOG(ERROR) << "Build KVClientConfig failed: " << status.ToString();
+    }
+    return config;
+}
+
+bool CheckClientConfig(uint32_t maxLogSize, uint32_t asyncQueueSize, int32_t zmqClientIoThread)
+{
+    if (FLAGS_max_log_size != maxLogSize) {
+        LOG(ERROR) << "Unexpected max_log_size, expect: " << maxLogSize << ", actual: " << FLAGS_max_log_size;
+        return false;
+    }
+    if (FLAGS_log_async_queue_size != asyncQueueSize) {
+        LOG(ERROR) << "Unexpected log_async_queue_size, expect: " << asyncQueueSize
+                   << ", actual: " << FLAGS_log_async_queue_size;
+        return false;
+    }
+    if (FLAGS_zmq_client_io_thread != zmqClientIoThread) {
+        LOG(ERROR) << "Unexpected zmq_client_io_thread, expect: " << zmqClientIoThread
+                   << ", actual: " << FLAGS_zmq_client_io_thread;
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
 class KVClientInitTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -46,18 +96,108 @@ public:
 
 protected:
     std::shared_ptr<KVClient> client_;
+
+    void RunInChildProcess(const std::function<int()> &func)
+    {
+        auto pid = fork();
+        ASSERT_GE(pid, 0);
+        if (pid == 0) {
+            _exit(func());
+        }
+        int status;
+        ASSERT_EQ(waitpid(pid, &status, 0), pid);
+        ASSERT_TRUE(WIFEXITED(status));
+        ASSERT_EQ(WEXITSTATUS(status), 0);
+    }
+
+    ConnectOptions GetConnectOptions()
+    {
+        ConnectOptions connectOptions;
+        InitConnectOpt(0, connectOptions, 5000);
+        return connectOptions;
+    }
 };
 
 TEST_F(KVClientInitTest, FastTransportFailureFallsBack)
 {
-    ConnectOptions connectOptions;
-    InitConnectOpt(0, connectOptions, 5000);
-    client_ = std::make_shared<KVClient>(connectOptions);
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        KVClient client(connectOptions);
+        auto rc = inject::Set("FastTransportManager.Initialize", "return(3000)");
+        if (rc.IsError()) {
+            LOG(ERROR) << rc.ToString();
+            return 1;
+        }
+        auto status = client.Init();
+        if (status.GetCode() != StatusCode::K_URMA_ERROR) {
+            LOG(ERROR) << "Unexpected status: " << status.ToString();
+            return 1;
+        }
+        return 0;
+    });
+}
 
-    DS_ASSERT_OK(inject::Set("FastTransportManager.Initialize", "return(3000)"));
+TEST_F(KVClientInitTest, SameKVClientConfigKeepsProcessConfig)
+{
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+        KVClient firstClient(connectOptions);
+        if (firstClient.Init(config).IsError() || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE,
+                                                                     FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            return 1;
+        }
+        KVClient secondClient(connectOptions);
+        if (secondClient.Init(config).IsError() || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE,
+                                                                      FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            return 1;
+        }
+        return 0;
+    });
+}
 
-    auto status = client_->Init();
-    ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR);
+TEST_F(KVClientInitTest, DifferentKVClientConfigDoesNotOverrideProcessConfig)
+{
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        auto firstConfig =
+            BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+        KVClient firstClient(connectOptions);
+        if (firstClient.Init(firstConfig).IsError()
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            return 1;
+        }
+        auto secondConfig =
+            BuildClientConfig(SECOND_MAX_LOG_SIZE_MB, SECOND_LOG_ASYNC_QUEUE_SIZE, SECOND_ZMQ_CLIENT_IO_THREAD);
+        KVClient secondClient(connectOptions);
+        if (secondClient.Init(secondConfig).IsError()
+            || !CheckClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD)) {
+            return 1;
+        }
+        return 0;
+    });
+}
+
+TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)
+{
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        KVClient defaultClient(connectOptions);
+        if (defaultClient.Init().IsError()) {
+            return 1;
+        }
+        auto config = BuildClientConfig(FIRST_MAX_LOG_SIZE_MB, FIRST_LOG_ASYNC_QUEUE_SIZE, FIRST_ZMQ_CLIENT_IO_THREAD);
+        KVClient configuredClient(connectOptions);
+        if (configuredClient.Init(config).IsError()) {
+            return 1;
+        }
+        if (FLAGS_max_log_size == FIRST_MAX_LOG_SIZE_MB || FLAGS_log_async_queue_size == FIRST_LOG_ASYNC_QUEUE_SIZE
+            || FLAGS_zmq_client_io_thread == FIRST_ZMQ_CLIENT_IO_THREAD) {
+            LOG(ERROR) << "Config after default Init unexpectedly overrides process-level config.";
+            return 1;
+        }
+        return 0;
+    });
 }
 }  // namespace st
 }  // namespace datasystem

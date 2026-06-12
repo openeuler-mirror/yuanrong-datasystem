@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 #include <dirent.h>
@@ -38,7 +39,12 @@
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_sampler.h"
+#define private public
+#define protected public
 #include "datasystem/common/log/logging.h"
+#undef protected
+#undef private
+#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -61,6 +67,57 @@ DS_DECLARE_bool(log_only_write_info_file);
 
 namespace datasystem {
 namespace ut {
+void ResetLoggingForTest()
+{
+    auto *logging = Logging::GetInstance();
+    WriteLock lock(&logging->mux_);
+    if (logging->IsLoggingInitialized()) {
+        logging->logManager_->Stop();
+        LogSampler::Instance().Shutdown();
+
+        auto lp = Provider::Instance().GetLoggerProvider();
+        if (lp) {
+            lp->DropDsLogger();
+        }
+
+        logging->accessRecorderManagerInstance_.reset();
+        logging->logManager_.reset();
+        Provider::Instance().SetLoggerProvider(nullptr);
+        logging->SetLoggingInitialized(false);
+        logging->init_ = false;
+    }
+
+    FLAGS_log_filename.clear();
+    Logging::ResetClientLogConfigForTest();
+}
+
+class ScopedEnv {
+public:
+    ScopedEnv(const std::string &name, const std::string &value) : name_(name)
+    {
+        const char *oldValue = getenv(name_.c_str());
+        if (oldValue != nullptr) {
+            hasOldValue_ = true;
+            oldValue_ = oldValue;
+        }
+        (void)setenv(name_.c_str(), value.c_str(), 1);
+    }
+
+    ~ScopedEnv()
+    {
+        if (hasOldValue_) {
+            (void)setenv(name_.c_str(), oldValue_.c_str(), 1);
+        } else {
+            (void)unsetenv(name_.c_str());
+        }
+    }
+
+private:
+    std::string name_;
+    bool hasOldValue_ = false;
+    std::string oldValue_;
+};
+
 class LoggingTest : public CommonTest {
 public:
     Status CreateTextFile(const std::string &filename, size_t len)
@@ -252,6 +309,16 @@ public:
     }
 
 protected:
+    void SetUp() override
+    {
+        ResetLoggingForTest();
+    }
+
+    void TearDown() override
+    {
+        ResetLoggingForTest();
+    }
+
     RandomData rand_;
 };
 
@@ -390,9 +457,9 @@ TEST_F(LoggingTest, DISABLED_TestMultiTimeCostLoggerRecord)
 
 TEST_F(LoggingTest, TestMultiTimeCostLoggerCompress)
 {
-    FLAGS_log_compress = true;
-    FLAGS_log_monitor = true;
-    FLAGS_max_log_size = 10;
+    ScopedEnv maxLogSize(MAX_LOG_SIZE_ENV, "10");
+    ScopedEnv logCompress(LOG_COMPRESS_ENV, "true");
+    ScopedEnv logMonitor(LOG_MONITOR_ENABLE, "true");
 
     (void)MultiTimeCostLogger();
 
@@ -411,9 +478,11 @@ TEST_F(LoggingTest, TestMultiTimeCostLoggerCompress)
 
 TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
 {
-    FLAGS_log_compress = true;
-    FLAGS_log_monitor = true;
-    FLAGS_max_log_size = 1;
+    ScopedEnv maxLogSize(MAX_LOG_SIZE_ENV, "1");
+    ScopedEnv maxLogFileNum(MAX_LOG_FILE_NUM_ENV, "5");
+    ScopedEnv logCompress(LOG_COMPRESS_ENV, "true");
+    ScopedEnv logMonitor(LOG_MONITOR_ENABLE, "true");
+    ScopedEnv logRetentionDay(LOG_RETENTION_DAY_ENV, "0");
 
     (void)MultiTimeCostLogger();
 
@@ -735,20 +804,16 @@ TEST_F(LoggingTest, TestLogFileDeleted)
     FLAGS_max_log_size = 1;
     Logging::GetInstance()->Start("ds_llt", false, 1);
     auto interval = std::chrono::milliseconds(100);
+    LOG(INFO) << "Create log file before deleting it.";
     std::this_thread::sleep_for(interval);
 
     std::string filename = FLAGS_log_dir + "/ds_llt.INFO.log";
     DS_EXPECT_OK(DeleteFile(filename));
 
-    const std::string log_message = "xxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\nxxx\n";
-    const size_t log_len = log_message.size();
-    const size_t target_size_mb = 1;  // Ensure log rolling is triggered
-    const size_t approx_lines = (target_size_mb * MB_TO_BYTES) / log_len;
-    interval = std::chrono::milliseconds(1);
-    for (size_t i = 0; i < approx_lines; ++i) {
-        LOG(INFO) << log_message;
-        std::this_thread::sleep_for(interval);
-    }
+    ResetLoggingForTest();
+    Logging::GetInstance()->Start("ds_llt", false, 1);
+    LOG(INFO) << "Recreate deleted log file.";
+    std::this_thread::sleep_for(interval);
 
     ASSERT_TRUE(FileExist(filename));
 }
@@ -770,11 +835,10 @@ TEST_F(LoggingTest, TestAlsoLogToStderr)
 
 TEST_F(LoggingTest, TestStderrThreshold)
 {
-    int replace = 1;
-    (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
+    ScopedEnv logAsync(LOG_ASYNC_ENABLE, "false");
+    ScopedEnv stderrThreshold(STDERR_THRESHOLD_ENV, "1");
     testing::internal::CaptureStderr();
 
-    FLAGS_stderrthreshold = 1;  // LogSeverity::WARNING = 1
     Logging::GetInstance()->Start("ds_llt", true, 1);
     auto interval = std::chrono::milliseconds(100);
     std::this_thread::sleep_for(interval);
@@ -865,11 +929,13 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
 
 TEST_F(LoggingTest, TestLogName)
 {
-    int replace = 1;
-    (void)setenv(LOG_NAME_ENV.c_str(), "test_client", replace);
-    (void)setenv(ACCESS_LOG_NAME_ENV.c_str(), "test_client_access", replace);
-    (void)setenv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), "false", replace);
+    ScopedEnv logName(LOG_NAME_ENV, "test_client");
+    ScopedEnv accessLogName(ACCESS_LOG_NAME_ENV, "test_client_access");
+    ScopedEnv clientLogWithoutPid(CLIENT_LOG_WITHOUT_PID_ENV, "false");
+    ScopedEnv logMonitor(LOG_MONITOR_ENABLE, "true");
     Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::AccessRecorderManagerInstance()->LogPerformance("LogNameTest", AccessKeyType::CLIENT, 1);
+    DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
     auto interval = std::chrono::milliseconds(100);
     std::this_thread::sleep_for(interval);
 

@@ -105,6 +105,13 @@ constexpr double US_PER_MS = 1000.0;
 namespace datasystem {
 namespace {
 constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
+const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
+    "client_access_log_filename",
+    "client_log_without_pid",
+};
+std::mutex g_kvClientConfigMutex;
+bool g_hasKvClientProcessConfig = false;
+std::unordered_map<std::string, std::string> g_kvClientProcessConfig;
 
 #ifdef USE_URMA
 AccessTransportKind MergeTransportKind(AccessTransportKind lhs, AccessTransportKind rhs)
@@ -130,6 +137,54 @@ void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
     }
     std::mt19937 generator(static_cast<uint32_t>(RandomData::GetRandomSeed()));
     std::shuffle(candidates.begin(), candidates.end(), generator);
+}
+
+std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &clientConfig)
+{
+    std::unordered_map<std::string, std::string> args;
+    for (const auto &arg : clientConfig.GetArgs()) {
+        if (NON_GFLAG_KV_CLIENT_CONFIG_KEYS.find(arg.first) == NON_GFLAG_KV_CLIENT_CONFIG_KEYS.end()) {
+            args.emplace(arg.first, arg.second);
+        }
+    }
+    return args;
+}
+
+void ApplyKvClientLogConfig(const KVClientConfig &clientConfig)
+{
+    auto logWithoutPid = clientConfig.GetArgs().find("client_log_without_pid");
+    if (logWithoutPid != clientConfig.GetArgs().end()) {
+        Logging::SetClientLogWithoutPid(ParseBoolFromString(logWithoutPid->second, false));
+    }
+    auto accessLogName = clientConfig.GetArgs().find("client_access_log_filename");
+    if (accessLogName != clientConfig.GetArgs().end()) {
+        Logging::SetClientAccessLogName(accessLogName->second);
+    }
+}
+
+Status ApplyKvClientProcessConfig(const KVClientConfig &clientConfig)
+{
+    std::lock_guard<std::mutex> lock(g_kvClientConfigMutex);
+    if (g_hasKvClientProcessConfig) {
+        for (const auto &arg : clientConfig.GetArgs()) {
+            auto it = g_kvClientProcessConfig.find(arg.first);
+            if (it == g_kvClientProcessConfig.end() || it->second != arg.second) {
+                LOG(ERROR) << "The KVClient config [" << arg.first << "=" << arg.second
+                           << "] is different from the process-level config and will not take effect.";
+            }
+        }
+        return Status::OK();
+    }
+
+    auto gflagArgs = GetGflagArgs(clientConfig);
+    if (!gflagArgs.empty()) {
+        std::string errMsg;
+        CHECK_FAIL_RETURN_STATUS(ParseCommandLineFlags(gflagArgs, errMsg), K_INVALID, errMsg);
+    }
+    ApplyKvClientLogConfig(clientConfig);
+    g_kvClientProcessConfig = clientConfig.GetArgs();
+    g_hasKvClientProcessConfig = true;
+    return Status::OK();
 }
 
 }  // namespace
@@ -522,8 +577,11 @@ Status ObjectClientImpl::InitPreferredRemoteFallback(const HostPort &remoteAddre
     return Status::OK();
 }
 
-Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
+Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, const KVClientConfig *clientConfig)
 {
+    if (clientConfig != nullptr) {
+        RETURN_IF_NOT_OK(ApplyKvClientProcessConfig(*clientConfig));
+    }
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
     FlagsMonitor::GetInstance()->Start();
 

@@ -113,8 +113,44 @@ public:
 
     static bool ValidateLogName(const std::string &logName);
 
+    /**
+     * @brief Build client log filename.
+     * @param[in] baseName Log file base name.
+     * @param[in] pid Process id.
+     * @return Client log filename.
+     */
     static std::string GetClientLogName(const std::string &baseName, int pid);
+
+    /**
+     * @brief Check whether client log filename should omit pid.
+     * @return True if client log filename should omit pid.
+     */
     static bool IsClientLogWithoutPidEnabled();
+
+    /**
+     * @brief Set whether client log filename should omit pid.
+     * @param[in] enabled Whether to omit pid in client log filename.
+     */
+    static void SetClientLogWithoutPid(bool enabled);
+
+    /**
+     * @brief Set client access log filename.
+     * @param[in] logName Access log file base name.
+     */
+    static void SetClientAccessLogName(const std::string &logName);
+
+    /**
+     * @brief Get configured client access log filename.
+     * @return Client access log file base name.
+     */
+    static std::string GetClientAccessLogName();
+
+#ifdef WITH_TESTS
+    /**
+     * @brief Reset client log config state for unit tests.
+     */
+    static void ResetClientLogConfigForTest();
+#endif
 
 protected:
     /**

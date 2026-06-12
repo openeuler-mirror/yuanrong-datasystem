@@ -11,6 +11,7 @@ ds_cc_test(
     srcs = ["flags_test.cpp"],
     deps = [
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/flags:kv_client_config",
         "//tests/ut:ut_common",
     ],
 )

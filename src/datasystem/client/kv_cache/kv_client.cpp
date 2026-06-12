@@ -67,10 +67,16 @@ Status KVClient::ShutDown()
 
 Status KVClient::Init()
 {
+    KVClientConfig clientConfig;
+    return Init(clientConfig);
+}
+
+Status KVClient::Init(const KVClientConfig &clientConfig)
+{
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     (void)metrics::InitKvMetrics();
     bool needRollbackState;
-    auto rc = impl_->Init(needRollbackState, true);
+    auto rc = impl_->Init(needRollbackState, true, &clientConfig);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
     return rc;
 }

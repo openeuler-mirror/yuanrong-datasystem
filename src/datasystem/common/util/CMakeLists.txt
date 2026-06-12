@@ -3,6 +3,7 @@ add_subdirectory(queue)
 
 set(UTIL_SRCS
         uuid_generator.cpp
+        ../flags/kv_client_config.cpp
         uri.cpp
         file_util.cpp
         net_util.cpp

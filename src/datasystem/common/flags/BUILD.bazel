@@ -14,7 +14,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "ds_flags",
-    srcs = glob(["*.cpp"]),
+    srcs = glob(["*.cpp"], exclude = ["kv_client_config.cpp"]),
     hdrs = glob(["*.h"]),
     copts = [
         "-std=c++17",
@@ -25,5 +25,19 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
         "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "kv_client_config",
+    srcs = ["kv_client_config.cpp"],
+    copts = [
+        "-std=c++17",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:validator",
+        "@re2",
     ],
 )

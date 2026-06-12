@@ -788,6 +788,56 @@ public:
         return true;
     }
 
+    /**
+     * @brief Parse string to int and validate it is within [minValue, maxValue].
+     * @param[in] value String value to parse.
+     * @param[in] minValue Minimum allowed value.
+     * @param[in] maxValue Maximum allowed value.
+     * @param[out] out Parsed integer value.
+     * @param[out] errorReason Failure reason when return value is false.
+     * @return True if value is parsed successfully and within range.
+     */
+    static bool ParseIntInRange(const std::string &value, int minValue, int maxValue, int &out,
+                                std::string &errorReason)
+    {
+        try {
+            out = std::stoi(value);
+        } catch (const std::exception &) {
+            errorReason = "invalid integer format";
+            return false;
+        }
+        if (out < minValue || out > maxValue) {
+            errorReason = FormatString("must be in [%d,%d], got %d", minValue, maxValue, out);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief Parse string to uint32 and validate it is within [minValue, maxValue].
+     * @param[in] value String value to parse.
+     * @param[in] minValue Minimum allowed value.
+     * @param[in] maxValue Maximum allowed value.
+     * @param[out] out Parsed unsigned integer value.
+     * @param[out] errorReason Failure reason when return value is false.
+     * @return True if value is parsed successfully and within range.
+     */
+    static bool ParseUint32InRange(const std::string &value, uint32_t minValue, uint32_t maxValue, uint32_t &out,
+                                   std::string &errorReason)
+    {
+        try {
+            out = static_cast<uint32_t>(std::stoul(value));
+        } catch (const std::exception &) {
+            errorReason = "invalid integer format";
+            return false;
+        }
+        if (out < minValue || out > maxValue) {
+            errorReason = FormatString("must be in [%u,%u], got %u", minValue, maxValue, out);
+            return false;
+        }
+        return true;
+    }
+
     static bool ValidateSharedMemSize(const char *flagname, uint64_t value)
     {
         (void)flagname;

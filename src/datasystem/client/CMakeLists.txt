@@ -10,6 +10,7 @@ list(APPEND CLIENT_SRCS
         embedded_client_worker_api.cpp
         service_discovery.cpp
         context/context.cpp
+        ../common/flags/kv_client_config.cpp
         object_cache/client_worker_api/client_worker_base_api.cpp
         object_cache/client_worker_api/client_worker_local_api.cpp
         object_cache/client_worker_api/client_worker_remote_api.cpp

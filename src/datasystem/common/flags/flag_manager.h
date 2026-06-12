@@ -24,12 +24,13 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/utils/embedded_config.h"
-
 namespace datasystem {
+class EmbeddedConfig;
+class KVClientConfig;
 /**
  * @brief Report error.
  * @param[in] format Error message format.
@@ -213,12 +214,28 @@ public:
     void ParseCommandLineFlags(int argc, char **argv);
 
     /**
-     * @brief Looks for flags in argv and parses them.
-     * @param[in] config Command line argument counts.
+     * @brief Parse flags from name-value argument map.
+     * @param[in] args Flag name-value pairs.
+     * @param[out] errMsg Error message if parse failed.
+     * @return True on success; false otherwise.
+     */
+    bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg);
+
+    /**
+     * @brief Parse flags from embedded worker config.
+     * @param[in] config Embedded worker config.
      * @param[in] errMsg errMsg if prase failed.
      * @return return true if parse success.
      */
     bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
+
+    /**
+     * @brief Parse flags from KV client config.
+     * @param[in] config KV client config.
+     * @param[in] errMsg errMsg if prase failed.
+     * @return return true if parse success.
+     */
+    bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg);
 
     /**
      * @brief Get program invocation short name.
@@ -269,6 +286,13 @@ public:
     void GetAllFlags(std::vector<FlagInfo> &output) const;
 
     /**
+     * @brief Check whether a flag was explicitly specified.
+     * @param[in] name Flag name.
+     * @return True if the flag exists and was explicitly set.
+     */
+    bool WasFlagSpecified(const char *name) const;
+
+    /**
      * @brief Set version.
      * @param[in] version Version message.
      */
@@ -294,6 +318,15 @@ private:
      * @brief Validate default flags.
      */
     void ValidateDefaultFlagsLocked();
+
+    /**
+     * @brief Parse flags from argument map. Caller must hold mutex_.
+     * @param[in] args Flag name-value pairs.
+     * @param[out] errMsg Error message if parse failed.
+     * @return True on success; false otherwise.
+     */
+    bool ParseCommandLineFlagsFromArgsLocked(const std::unordered_map<std::string, std::string> &args,
+                                             std::string &errMsg);
 
     /**
      * @brief Parse flag value.

@@ -130,7 +130,7 @@ add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
-target_link_libraries(flags_ut ds_flags ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
+target_link_libraries(flags_ut ds_flags common_util ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
 add_datasystem_test(flags_ut)
 
 set(EMBEDDED_CLIENT_WORKER_API_UT_DEPEND_LIBS

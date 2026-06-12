@@ -19,12 +19,20 @@
  */
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "datasystem/utils/embedded_config.h"
+#include "datasystem/utils/kv_client_config.h"
+
+#include "datasystem/common/constants.h"
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -36,6 +44,19 @@ DS_DEFINE_uint64(uint64_flag, 64, "uint32 variable test");
 DS_DEFINE_int64(int64_flag, 64, "uint32 variable test");
 DS_DEFINE_string(str_flag, "default", "uint32 variable test");
 DS_DEFINE_double(double_flag, 1.0, "double variable test");
+DS_DEFINE_double(invalid_double_flag, 1.0, "invalid double variable test");
+
+DS_DECLARE_bool(alsologtostderr);
+DS_DECLARE_bool(log_async);
+DS_DECLARE_bool(log_compress);
+DS_DECLARE_bool(log_only_write_info_file);
+DS_DECLARE_bool(logtostderr);
+DS_DECLARE_int32(minloglevel);
+DS_DECLARE_uint32(log_async_queue_size);
+DS_DECLARE_uint32(log_retention_day);
+DS_DECLARE_uint32(max_log_file_num);
+DS_DECLARE_uint32(max_log_size);
+DS_DECLARE_uint32(stderrthreshold);
 
 int modifyCount = 0;
 int defaultCount = 0;
@@ -161,6 +182,112 @@ DS_DEFINE_validator(str_flag, &ValidateString);
 
 namespace datasystem {
 namespace ut {
+namespace {
+class EnvGuard {
+public:
+    explicit EnvGuard(std::vector<std::pair<std::string, std::string>> envs)
+    {
+        for (const auto &env : envs) {
+            const char *oldValue = std::getenv(env.first.c_str());
+            savedValues_.push_back(SavedEnv{ env.first, oldValue != nullptr, oldValue != nullptr ? oldValue : "" });
+            setenv(env.first.c_str(), env.second.c_str(), 1);
+        }
+    }
+
+    ~EnvGuard()
+    {
+        for (const auto &env : savedValues_) {
+            if (env.wasSet) {
+                setenv(env.name.c_str(), env.value.c_str(), 1);
+            } else {
+                unsetenv(env.name.c_str());
+            }
+        }
+    }
+
+private:
+    struct SavedEnv {
+        std::string name;
+        bool wasSet;
+        std::string value;
+    };
+    std::vector<SavedEnv> savedValues_;
+};
+
+class ClientLoggingFlagGuard {
+public:
+    ClientLoggingFlagGuard()
+        : maxLogSize_(FLAGS_max_log_size),
+          maxLogFileNum_(FLAGS_max_log_file_num),
+          logCompress_(FLAGS_log_compress),
+          v_(FLAGS_v),
+          minLogLevel_(FLAGS_minloglevel),
+          logRetentionDay_(FLAGS_log_retention_day),
+          logToStderr_(FLAGS_logtostderr),
+          alsoLogToStderr_(FLAGS_alsologtostderr),
+          stderrThreshold_(FLAGS_stderrthreshold),
+          logAsync_(FLAGS_log_async),
+          logAsyncQueueSize_(FLAGS_log_async_queue_size),
+          logOnlyWriteInfoFile_(FLAGS_log_only_write_info_file),
+          zmqClientIoThread_(FLAGS_zmq_client_io_thread)
+    {
+    }
+
+    ~ClientLoggingFlagGuard()
+    {
+        FLAGS_max_log_size = maxLogSize_;
+        FLAGS_max_log_file_num = maxLogFileNum_;
+        FLAGS_log_compress = logCompress_;
+        FLAGS_v = v_;
+        FLAGS_minloglevel = minLogLevel_;
+        FLAGS_log_retention_day = logRetentionDay_;
+        FLAGS_logtostderr = logToStderr_;
+        FLAGS_alsologtostderr = alsoLogToStderr_;
+        FLAGS_stderrthreshold = stderrThreshold_;
+        FLAGS_log_async = logAsync_;
+        FLAGS_log_async_queue_size = logAsyncQueueSize_;
+        FLAGS_log_only_write_info_file = logOnlyWriteInfoFile_;
+        FLAGS_zmq_client_io_thread = zmqClientIoThread_;
+    }
+
+private:
+    uint32_t maxLogSize_;
+    uint32_t maxLogFileNum_;
+    bool logCompress_;
+    int32_t v_;
+    int32_t minLogLevel_;
+    uint32_t logRetentionDay_;
+    bool logToStderr_;
+    bool alsoLogToStderr_;
+    uint32_t stderrThreshold_;
+    bool logAsync_;
+    uint32_t logAsyncQueueSize_;
+    bool logOnlyWriteInfoFile_;
+    int32_t zmqClientIoThread_;
+};
+
+void ApplyKvClientLogConfigFromConfig(const KVClientConfig &clientConfig)
+{
+    const auto &args = clientConfig.GetArgs();
+    auto logWithoutPid = args.find("client_log_without_pid");
+    if (logWithoutPid != args.end()) {
+        Logging::SetClientLogWithoutPid(ParseBoolFromString(logWithoutPid->second, false));
+    }
+    auto accessLogName = args.find("client_access_log_filename");
+    if (accessLogName != args.end()) {
+        Logging::SetClientAccessLogName(accessLogName->second);
+    }
+}
+
+class ClientLogConfigPriorityTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        Logging::ResetClientLogConfigForTest();
+    }
+};
+}  // namespace
+
 class FlagsTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -174,6 +301,7 @@ public:
         FLAGS_int64_flag = 64;
         FLAGS_str_flag = "default";
         FLAGS_double_flag = 1.0;
+        FLAGS_invalid_double_flag = 1.0;
     }
 };
 
@@ -192,6 +320,326 @@ TEST_F(FlagsTest, TestDefaultValue)
     ASSERT_GT(defaultCount, 0);
     // modifyCount should be 0 because no flags were modified
     ASSERT_EQ(modifyCount, 0);
+}
+
+TEST_F(FlagsTest, EmbeddedConfigKeepsArgs)
+{
+    EmbeddedConfig config;
+    config.LogDir("/tmp/ds_logs").MinLogLevel(1);
+    ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
+    ASSERT_EQ(config.GetArgs().at("minloglevel"), "1");
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsEmbeddedConfig)
+{
+    EmbeddedConfig config;
+    config.SetArg("str_flag", "configured");
+    std::string errMsg;
+    ASSERT_TRUE(ParseCommandLineFlags(config, errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_EQ(FLAGS_str_flag, "configured");
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsArgMap)
+{
+    std::unordered_map<std::string, std::string> args = { { "str_flag", "from_map" } };
+    std::string errMsg;
+    ASSERT_TRUE(ParseCommandLineFlags(args, errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_EQ(FLAGS_str_flag, "from_map");
+}
+
+TEST_F(FlagsTest, ExplicitLogMonitorConfigIsNotOverriddenByEnv)
+{
+    const char *envName = "DATASYSTEM_LOG_MONITOR_ENABLE";
+    const char *oldValue = std::getenv(envName);
+    std::string savedValue = oldValue != nullptr ? oldValue : "";
+    setenv(envName, "true", 1);
+
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().LogMonitorEnable(false).Build(config);
+    ASSERT_EQ(status, Status::OK());
+    std::string errMsg;
+    ASSERT_TRUE(ParseCommandLineFlags(config, errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_FALSE(FLAGS_log_monitor);
+    ASSERT_TRUE(WasCommandLineFlagSpecified("log_monitor"));
+
+    Logging::GetInstance()->Start("kv_client_test", true);
+    ASSERT_FALSE(FLAGS_log_monitor);
+
+    if (oldValue != nullptr) {
+        setenv(envName, savedValue.c_str(), 1);
+    } else {
+        unsetenv(envName);
+    }
+}
+
+TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
+{
+    ClientLoggingFlagGuard flagGuard;
+    EnvGuard envGuard({
+        { MAX_LOG_SIZE_ENV, "200" },
+        { MAX_LOG_FILE_NUM_ENV, "7" },
+        { LOG_COMPRESS_ENV, "false" },
+        { LOG_V, "3" },
+        { MIN_LOG_LEVEL, "2" },
+        { LOG_RETENTION_DAY_ENV, "5" },
+        { LOG_TO_STDERR_ENV, "true" },
+        { ALSO_LOG_TO_STDERR_ENV, "true" },
+        { STDERR_THRESHOLD_ENV, "3" },
+        { LOG_ASYNC_ENABLE, "false" },
+        { LOG_ASYNC_QUEUE_SIZE, "4096" },
+        { LOG_ONLY_WRITE_INFO_FILE_ENV, "false" },
+        { "DATASYSTEM_ZMQ_CLIENT_IO_THREAD", "3" },
+    });
+
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder()
+                        .MaxLogSize(100)
+                        .MaxLogFileNum(5)
+                        .LogCompress(true)
+                        .VLogLevel(0)
+                        .MinLogLevel(0)
+                        .LogRetentionDay(0)
+                        .LogToStderr(false)
+                        .AlsoLogToStderr(false)
+                        .StderrThreshold(2)
+                        .LogAsyncEnable(true)
+                        .LogAsyncQueueSize(DEFAULT_LOG_ASYNC_QUEUE_SIZE)
+                        .LogOnlyWriteInfoFile(true)
+                        .ZmqClientIoThread(1)
+                        .Build(config);
+    ASSERT_EQ(status, Status::OK());
+    std::string errMsg;
+    ASSERT_TRUE(ParseCommandLineFlags(config, errMsg));
+    ASSERT_TRUE(errMsg.empty());
+
+    Logging::GetInstance()->Start("kv_client_default_config_test", true);
+
+    EXPECT_EQ(FLAGS_max_log_size, 100u);
+    EXPECT_EQ(FLAGS_max_log_file_num, 5u);
+    EXPECT_TRUE(FLAGS_log_compress);
+    EXPECT_EQ(FLAGS_v, 0);
+    EXPECT_EQ(FLAGS_minloglevel, 0);
+    EXPECT_EQ(FLAGS_log_retention_day, 0u);
+    EXPECT_FALSE(FLAGS_logtostderr);
+    EXPECT_FALSE(FLAGS_alsologtostderr);
+    EXPECT_EQ(FLAGS_stderrthreshold, 2u);
+    EXPECT_TRUE(FLAGS_log_async);
+    EXPECT_EQ(FLAGS_log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE);
+    EXPECT_TRUE(FLAGS_log_only_write_info_file);
+    EXPECT_EQ(FLAGS_zmq_client_io_thread, 1);
+}
+
+TEST_F(ClientLogConfigPriorityTest, ExplicitClientAccessLogNameIsNotOverriddenByEnv)
+{
+    const char *envName = ACCESS_LOG_NAME_ENV.c_str();
+    const char *oldValue = std::getenv(envName);
+    std::string savedValue = oldValue != nullptr ? oldValue : "";
+    setenv(envName, "env_access_log", 1);
+
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().AccessLogName("kv_access_log").Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ApplyKvClientLogConfigFromConfig(config);
+    ASSERT_EQ(Logging::GetClientAccessLogName(), "kv_access_log");
+
+    if (oldValue != nullptr) {
+        setenv(envName, savedValue.c_str(), 1);
+    } else {
+        unsetenv(envName);
+    }
+}
+
+TEST_F(ClientLogConfigPriorityTest, ExplicitEmptyClientAccessLogNameIsNotOverriddenByEnv)
+{
+    const char *envName = ACCESS_LOG_NAME_ENV.c_str();
+    const char *oldValue = std::getenv(envName);
+    std::string savedValue = oldValue != nullptr ? oldValue : "";
+    setenv(envName, "env_access_log", 1);
+
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().AccessLogName("").Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ApplyKvClientLogConfigFromConfig(config);
+    ASSERT_EQ(Logging::GetClientAccessLogName(), "");
+
+    if (oldValue != nullptr) {
+        setenv(envName, savedValue.c_str(), 1);
+    } else {
+        unsetenv(envName);
+    }
+}
+
+TEST_F(ClientLogConfigPriorityTest, ClientAccessLogNameFallsBackToEnvWhenKvClientNotSpecified)
+{
+    const char *envName = ACCESS_LOG_NAME_ENV.c_str();
+    const char *oldValue = std::getenv(envName);
+    std::string savedValue = oldValue != nullptr ? oldValue : "";
+    setenv(envName, "env_access_log", 1);
+
+    ASSERT_EQ(Logging::GetClientAccessLogName(), "env_access_log");
+
+    if (oldValue != nullptr) {
+        setenv(envName, savedValue.c_str(), 1);
+    } else {
+        unsetenv(envName);
+    }
+}
+
+TEST_F(ClientLogConfigPriorityTest, ExplicitClientLogWithoutPidIsNotOverriddenByEnv)
+{
+    const char *envName = CLIENT_LOG_WITHOUT_PID_ENV.c_str();
+    const char *oldValue = std::getenv(envName);
+    std::string savedValue = oldValue != nullptr ? oldValue : "";
+    setenv(envName, "true", 1);
+
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().LogWithoutPid(false).Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ApplyKvClientLogConfigFromConfig(config);
+    ASSERT_EQ(Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, 12345), CLIENT_ACCESS_LOG_NAME + "_12345");
+
+    if (oldValue != nullptr) {
+        setenv(envName, savedValue.c_str(), 1);
+    } else {
+        unsetenv(envName);
+    }
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderBuildsEmptyConfigWhenNoSetterUsed)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_TRUE(config.GetArgs().empty());
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderReplacesOutputConfig)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().MaxLogSize(123).LogAsyncQueueSize(4096).Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().at("max_log_size"), "123");
+    ASSERT_EQ(config.GetArgs().at("log_async_queue_size"), "4096");
+
+    status = KVClientConfig::Builder().MaxLogFileNum(7).Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().size(), 1ul);
+    ASSERT_EQ(config.GetArgs().at("max_log_file_num"), "7");
+    ASSERT_EQ(config.GetArgs().count("max_log_size"), 0ul);
+    ASSERT_EQ(config.GetArgs().count("log_async_queue_size"), 0ul);
+
+    status = KVClientConfig::Builder().Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_TRUE(config.GetArgs().empty());
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderStoresExplicitValues)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder()
+                        .LogDir("/tmp/ds_logs")
+                        .LogName("client")
+                        .LogWithoutPid(false)
+                        .AccessLogName("client_access")
+                        .MinLogLevel(1)
+                        .VLogLevel(2)
+                        .StderrThreshold(3)
+                        .MaxLogSize(100)
+                        .MaxLogFileNum(7)
+                        .LogCompress(false)
+                        .LogRetentionDay(3)
+                        .LogToStderr(true)
+                        .AlsoLogToStderr(true)
+                        .LogOnlyWriteInfoFile(false)
+                        .LogAsyncEnable(false)
+                        .LogAsyncQueueSize(4096)
+                        .LogMonitorEnable(false)
+                        .MonitorConfigPath("/tmp/ds.config")
+                        .ZmqClientIoContext(8)
+                        .ZmqClientIoThread(2)
+                        .Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().at("log_dir"), "/tmp/ds_logs");
+    ASSERT_EQ(config.GetArgs().at("log_filename"), "client");
+    ASSERT_EQ(config.GetArgs().at("client_log_without_pid"), "false");
+    ASSERT_EQ(config.GetArgs().at("client_access_log_filename"), "client_access");
+    ASSERT_EQ(config.GetArgs().at("minloglevel"), "1");
+    ASSERT_EQ(config.GetArgs().at("v"), "2");
+    ASSERT_EQ(config.GetArgs().at("stderrthreshold"), "3");
+    ASSERT_EQ(config.GetArgs().at("max_log_size"), "100");
+    ASSERT_EQ(config.GetArgs().at("max_log_file_num"), "7");
+    ASSERT_EQ(config.GetArgs().at("log_compress"), "false");
+    ASSERT_EQ(config.GetArgs().at("log_retention_day"), "3");
+    ASSERT_EQ(config.GetArgs().at("logtostderr"), "true");
+    ASSERT_EQ(config.GetArgs().at("alsologtostderr"), "true");
+    ASSERT_EQ(config.GetArgs().at("log_only_write_info_file"), "false");
+    ASSERT_EQ(config.GetArgs().at("log_async"), "false");
+    ASSERT_EQ(config.GetArgs().at("log_async_queue_size"), "4096");
+    ASSERT_EQ(config.GetArgs().at("log_monitor"), "false");
+    ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "/tmp/ds.config");
+    ASSERT_EQ(config.GetArgs().at("zmq_client_io_context"), "8");
+    ASSERT_EQ(config.GetArgs().at("zmq_client_io_thread"), "2");
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderAggregatesInvalidValues)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder()
+                        .LogName("bad|name")
+                        .MinLogLevel(4)
+                        .MaxLogSize(0)
+                        .LogAsyncQueueSize(255)
+                        .ZmqClientIoThread(0)
+                        .Build(config);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MinLogLevel"));
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MaxLogSize"));
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogAsyncQueueSize"));
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("ZmqClientIoThread"));
+    EXPECT_TRUE(config.GetArgs().empty());
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderRejectsEmptyGflagStrings)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().LogDir("").Build(config);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogDir"));
+
+    status = KVClientConfig::Builder().LogName("").Build(config);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
+
+    status = KVClientConfig::Builder().MonitorConfigPath("").Build(config);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MonitorConfigPath"));
+    EXPECT_TRUE(config.GetArgs().empty());
+}
+
+TEST_F(FlagsTest, KVClientConfigBuilderRejectsInvalidAccessLogName)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().AccessLogName("client-access").Build(config);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
+    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("AccessLogName"));
+    EXPECT_TRUE(config.GetArgs().empty());
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsClearsErrorStateOnRetry)
+{
+    std::unordered_map<std::string, std::string> badArgs = { { "str_flag", "" } };
+    std::string errMsg;
+    ASSERT_FALSE(ParseCommandLineFlags(badArgs, errMsg));
+    ASSERT_FALSE(errMsg.empty());
+
+    std::unordered_map<std::string, std::string> goodArgs = { { "str_flag", "retry_ok" } };
+    ASSERT_TRUE(ParseCommandLineFlags(goodArgs, errMsg));
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_EQ(FLAGS_str_flag, "retry_ok");
 }
 
 TEST_F(FlagsTest, TestSetValue)
@@ -347,6 +795,19 @@ TEST_F(FlagsTest, TestGetAllFlags)
     // We modified 2 flags (uint32_flag and bool_flag)
     // But other tests may have modified other flags, so just check >= 2
     ASSERT_GE(modCount, 2);
+}
+
+TEST_F(FlagsTest, ParseBoolFromStringUsesGflagRules)
+{
+    ASSERT_TRUE(ParseBoolFromString("true", false));
+    ASSERT_TRUE(ParseBoolFromString("TRUE", false));
+    ASSERT_TRUE(ParseBoolFromString("1", false));
+    ASSERT_TRUE(ParseBoolFromString("yes", false));
+    ASSERT_FALSE(ParseBoolFromString("false", true));
+    ASSERT_FALSE(ParseBoolFromString("FALSE", true));
+    ASSERT_FALSE(ParseBoolFromString("0", true));
+    ASSERT_FALSE(ParseBoolFromString("invalid", false));
+    ASSERT_TRUE(ParseBoolFromString("invalid", true));
 }
 
 TEST_F(FlagsTest, TestGetBooleanEnv)
@@ -536,7 +997,7 @@ TEST_F(FlagsTest, WasSpecifiedDiffersFromIsDefault)
     for (const auto &fi : output) {
         if (fi.name == "uint32_flag") {
             // Value equals default, but was explicitly specified
-EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
+            EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
             EXPECT_TRUE(fi.wasSpecified);  // explicitly set -> wasSpecified=true
         }
     }
@@ -545,13 +1006,13 @@ EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
 TEST_F(FlagsTest, TestDoubleFlagRejectsNan)
 {
     std::string errMsg;
-    ASSERT_FALSE(SetCommandLineOption("double_flag", "nan", errMsg));
+    ASSERT_FALSE(SetCommandLineOption("invalid_double_flag", "nan", errMsg));
     ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
-    ASSERT_EQ(FLAGS_double_flag, 1.0);
+    ASSERT_EQ(FLAGS_invalid_double_flag, 1.0);
     std::vector<FlagInfo> output;
     GetAllFlags(output);
     for (const auto &fi : output) {
-        if (fi.name == "double_flag") {
+        if (fi.name == "invalid_double_flag") {
             EXPECT_TRUE(fi.isDefault);
             EXPECT_FALSE(fi.wasSpecified);
         }
@@ -561,17 +1022,17 @@ TEST_F(FlagsTest, TestDoubleFlagRejectsNan)
 TEST_F(FlagsTest, TestDoubleFlagRejectsInf)
 {
     std::string errMsg;
-    ASSERT_FALSE(SetCommandLineOption("double_flag", "inf", errMsg));
+    ASSERT_FALSE(SetCommandLineOption("invalid_double_flag", "inf", errMsg));
     ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
-    ASSERT_EQ(FLAGS_double_flag, 1.0);
+    ASSERT_EQ(FLAGS_invalid_double_flag, 1.0);
 }
 
 TEST_F(FlagsTest, TestDoubleFlagRejectsNegativeInf)
 {
     std::string errMsg;
-    ASSERT_FALSE(SetCommandLineOption("double_flag", "-inf", errMsg));
+    ASSERT_FALSE(SetCommandLineOption("invalid_double_flag", "-inf", errMsg));
     ASSERT_TRUE(errMsg.find("illegal value") != errMsg.npos);
-    ASSERT_EQ(FLAGS_double_flag, 1.0);
+    ASSERT_EQ(FLAGS_invalid_double_flag, 1.0);
 }
 
 TEST_F(FlagsTest, TestDoubleFlagAcceptsScientificNotation)

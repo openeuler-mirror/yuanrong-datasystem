@@ -276,5 +276,55 @@ TEST_F(ValidatorTest, ValidateSpillWatermarkRatios)
     FLAGS_spill_high_watermark_ratio = savedHigh;
     FLAGS_spill_low_watermark_ratio = savedLow;
 }
+
+TEST_F(ValidatorTest, ParseIntInRangeRejectsInvalidIntegerFormat)
+{
+    int value = 0;
+    std::string errorReason;
+    EXPECT_FALSE(Validator::ParseIntInRange("abc", 0, 3, value, errorReason));
+    EXPECT_EQ(errorReason, "invalid integer format");
+}
+
+TEST_F(ValidatorTest, ParseIntInRangeRejectsOutOfRangeValue)
+{
+    int value = 0;
+    std::string errorReason;
+    EXPECT_FALSE(Validator::ParseIntInRange("4", 0, 3, value, errorReason));
+    EXPECT_EQ(errorReason, "must be in [0,3], got 4");
+}
+
+TEST_F(ValidatorTest, ParseIntInRangeAcceptsValidValue)
+{
+    int value = 0;
+    std::string errorReason;
+    EXPECT_TRUE(Validator::ParseIntInRange("2", 0, 3, value, errorReason));
+    EXPECT_EQ(value, 2);
+    EXPECT_TRUE(errorReason.empty());
+}
+
+TEST_F(ValidatorTest, ParseUint32InRangeRejectsInvalidIntegerFormat)
+{
+    uint32_t value = 0;
+    std::string errorReason;
+    EXPECT_FALSE(Validator::ParseUint32InRange("abc", 256, 4096, value, errorReason));
+    EXPECT_EQ(errorReason, "invalid integer format");
+}
+
+TEST_F(ValidatorTest, ParseUint32InRangeRejectsOutOfRangeValue)
+{
+    uint32_t value = 0;
+    std::string errorReason;
+    EXPECT_FALSE(Validator::ParseUint32InRange("255", 256, 4096, value, errorReason));
+    EXPECT_EQ(errorReason, "must be in [256,4096], got 255");
+}
+
+TEST_F(ValidatorTest, ParseUint32InRangeAcceptsValidValue)
+{
+    uint32_t value = 0;
+    std::string errorReason;
+    EXPECT_TRUE(Validator::ParseUint32InRange("4096", 256, 4096, value, errorReason));
+    EXPECT_EQ(value, 4096U);
+    EXPECT_TRUE(errorReason.empty());
+}
 }  // namespace ut
 }  // namespace datasystem

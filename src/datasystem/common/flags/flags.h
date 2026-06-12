@@ -23,9 +23,13 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "datasystem/utils/embedded_config.h"
+namespace datasystem {
+class EmbeddedConfig;
+class KVClientConfig;
+}
 
 // clang-format off
 #define DS_DEFINE_TYPE(name, defvalue, meaning, type, shorttype, enumtype)                                 \
@@ -130,11 +134,35 @@ struct FlagInfo {
 void ParseCommandLineFlags(int argc, char **argv);
 
 /**
- * @brief Looks for flags in argv and parses them.
- * @param[in] config worker configs.
- * @param[in] errMsg errMsg if prase failed.
+ * @brief Parse flags from name-value argument map.
+ * @param[in] args Flag name-value pairs.
+ * @param[out] errMsg Error message if parse failed.
+ * @return True on success; false otherwise.
+ */
+bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg);
+
+/**
+ * @brief Parse flags from embedded worker config.
+ * @param[in] config Embedded worker config.
+ * @param[out] errMsg Error message if parse failed.
+ * @return True on success; false otherwise.
  */
 bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
+
+/**
+ * @brief Parse flags from KV client config.
+ * @param[in] config KV client config.
+ * @param[out] errMsg Error message if parse failed.
+ * @return True on success; false otherwise.
+ */
+bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg);
+
+/**
+ * @brief Check whether a flag was explicitly specified.
+ * @param[in] name Flag name.
+ * @return True if the flag was explicitly set via argv, EmbeddedConfig, or KVClientConfig.
+ */
+bool WasCommandLineFlagSpecified(const char *name);
 
 /**
  * @brief Get program invocation short name.
@@ -176,6 +204,14 @@ void SetVersionString(const std::string &version);
  * @param[in] description Usage message.
  */
 void SetUsageMessage(const std::string &description);
+
+/**
+ * @brief Parse bool value from string using the same rules as gflags.
+ * @param[in] value String value to parse.
+ * @param[in] defValue Default value if parsing fails.
+ * @return Parsed boolean value.
+ */
+bool ParseBoolFromString(const std::string &value, bool defValue = false);
 
 /**
  * @brief Get bool value from environment variable.

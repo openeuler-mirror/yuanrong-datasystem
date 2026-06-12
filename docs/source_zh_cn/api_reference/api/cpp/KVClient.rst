@@ -27,6 +27,25 @@ KVClient
     .. cpp:function:: Status Init()
  
        建立与数据系统 Worker 之间的连接并完成初始化。
+       语义上等价于传入未通过 Builder 设置任何字段的空 :cpp:class:`KVClientConfig`，
+       并调用 :cpp:func:`Init(const KVClientConfig &clientConfig) <Init>`。
+       进程内首次 ``Init`` 会固化该空配置快照；若此后再以显式配置调用 ``Init``，
+       新配置不会覆盖已生效设置。配置优先级与后续 ``Init`` 行为详见
+       :cpp:class:`KVClientConfig` 章节。
+ 
+       返回：
+           返回值状态码为 ``StatusCode::K_OK`` 时表示初始化成功，否则返回其他错误码。
+
+    .. cpp:function:: Status Init(const KVClientConfig &clientConfig)
+ 
+       使用显式客户端配置建立与数据系统 Worker 之间的连接并完成初始化。
+       配置项通过 :cpp:class:`KVClientConfig` 的 Builder 设置；仅在进程内**首次**
+       ``Init`` 时按优先级链生效并固化快照，后续 ``Init`` 传入不同配置时返回
+       ``StatusCode::K_OK`` 但不覆盖已固化配置。详见 :cpp:class:`KVClientConfig` 章节
+       中的「配置生效规则」。
+ 
+       参数：
+           - **clientConfig** - 客户端初始化配置，详见 :cpp:class:`KVClientConfig` 章节。
  
        返回：
            返回值状态码为 ``StatusCode::K_OK`` 时表示初始化成功，否则返回其他错误码。
