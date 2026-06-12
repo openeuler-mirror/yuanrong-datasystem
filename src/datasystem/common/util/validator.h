@@ -46,10 +46,10 @@ constexpr int32_t MS_PER_SECOND = 1000;
 constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
 
-DS_DECLARE_uint32(eviction_high_watermark_percent);
-DS_DECLARE_uint32(eviction_low_watermark_percent);
-DS_DECLARE_uint32(spill_high_watermark_percent);
-DS_DECLARE_uint32(spill_low_watermark_percent);
+DS_DECLARE_double(eviction_high_watermark_ratio);
+DS_DECLARE_double(eviction_low_watermark_ratio);
+DS_DECLARE_double(spill_high_watermark_ratio);
+DS_DECLARE_double(spill_low_watermark_ratio);
 
 using namespace datasystem;
 
@@ -116,83 +116,47 @@ public:
         return true;
     }
 
-    static bool ValidateEvictionHighWatermarkPercent(const char *flagName, uint32_t value)
+    static bool ValidateWatermarkHighRatio(const char *flagName, double value)
     {
-        if (!ValidateUint32(flagName, value)) {
-            return false;
-        }
-        constexpr uint32_t kMinHigh = 2;
-        constexpr uint32_t kMaxHigh = 100;
+        constexpr double kMinHigh = 0.02;
+        constexpr double kMaxHigh = 1.0;
         if (value < kMinHigh || value > kMaxHigh) {
-            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
-                                       kMinHigh, kMaxHigh);
+            LOG(ERROR) << FormatString("The %s flag is %g, which must be between %g and %g.", flagName, value, kMinHigh,
+                                       kMaxHigh);
             return false;
         }
         return true;
     }
 
-    static bool ValidateEvictionLowWatermarkPercent(const char *flagName, uint32_t value)
+    static bool ValidateWatermarkLowRatio(const char *flagName, double value)
     {
-        if (!ValidateUint32(flagName, value)) {
-            return false;
-        }
-        constexpr uint32_t kMinLow = 1;
-        constexpr uint32_t kMaxLow = 99;
+        constexpr double kMinLow = 0.01;
+        constexpr double kMaxLow = 0.99;
         if (value < kMinLow || value > kMaxLow) {
-            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value, kMinLow,
+            LOG(ERROR) << FormatString("The %s flag is %g, which must be between %g and %g.", flagName, value, kMinLow,
                                        kMaxLow);
             return false;
         }
         return true;
     }
 
-    static bool ValidateSpillHighWatermarkPercent(const char *flagName, uint32_t value)
+    static bool ValidateEvictionWatermarkRatioPair()
     {
-        if (!ValidateUint32(flagName, value)) {
-            return false;
-        }
-        constexpr uint32_t kMinHigh = 2;
-        constexpr uint32_t kMaxHigh = 100;
-        if (value < kMinHigh || value > kMaxHigh) {
-            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
-                                       kMinHigh, kMaxHigh);
-            return false;
-        }
-        return true;
-    }
-
-    static bool ValidateSpillLowWatermarkPercent(const char *flagName, uint32_t value)
-    {
-        if (!ValidateUint32(flagName, value)) {
-            return false;
-        }
-        constexpr uint32_t kMinLow = 1;
-        constexpr uint32_t kMaxLow = 99;
-        if (value < kMinLow || value > kMaxLow) {
-            LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value, kMinLow,
-                                       kMaxLow);
-            return false;
-        }
-        return true;
-    }
-
-    static bool ValidateEvictionWatermarkPercentPair()
-    {
-        if (FLAGS_eviction_high_watermark_percent <= FLAGS_eviction_low_watermark_percent) {
+        if (FLAGS_eviction_high_watermark_ratio <= FLAGS_eviction_low_watermark_ratio) {
             LOG(ERROR) << FormatString(
-                "eviction_high_watermark_percent (%u) must be greater than eviction_low_watermark_percent (%u).",
-                FLAGS_eviction_high_watermark_percent, FLAGS_eviction_low_watermark_percent);
+                "eviction_high_watermark_ratio (%g) must be greater than eviction_low_watermark_ratio (%g).",
+                FLAGS_eviction_high_watermark_ratio, FLAGS_eviction_low_watermark_ratio);
             return false;
         }
         return true;
     }
 
-    static bool ValidateSpillWatermarkPercentPair()
+    static bool ValidateSpillWatermarkRatioPair()
     {
-        if (FLAGS_spill_high_watermark_percent <= FLAGS_spill_low_watermark_percent) {
+        if (FLAGS_spill_high_watermark_ratio <= FLAGS_spill_low_watermark_ratio) {
             LOG(ERROR) << FormatString(
-                "spill_high_watermark_percent (%u) must be greater than spill_low_watermark_percent (%u).",
-                FLAGS_spill_high_watermark_percent, FLAGS_spill_low_watermark_percent);
+                "spill_high_watermark_ratio (%g) must be greater than spill_low_watermark_ratio (%g).",
+                FLAGS_spill_high_watermark_ratio, FLAGS_spill_low_watermark_ratio);
             return false;
         }
         return true;

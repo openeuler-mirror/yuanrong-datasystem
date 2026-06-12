@@ -24,10 +24,10 @@
 
 #include "ut/common.h"
 
-DS_DECLARE_uint32(eviction_high_watermark_percent);
-DS_DECLARE_uint32(eviction_low_watermark_percent);
-DS_DECLARE_uint32(spill_high_watermark_percent);
-DS_DECLARE_uint32(spill_low_watermark_percent);
+DS_DECLARE_double(eviction_high_watermark_ratio);
+DS_DECLARE_double(eviction_low_watermark_ratio);
+DS_DECLARE_double(spill_high_watermark_ratio);
+DS_DECLARE_double(spill_low_watermark_ratio);
 
 namespace datasystem {
 namespace ut {
@@ -223,58 +223,58 @@ TEST_F(ValidatorTest, ValidateFailed)
     ASSERT_FALSE(Validator::ValidateUnixDomainSocketDir("", "￥"));
 }
 
-TEST_F(ValidatorTest, ValidateEvictionWatermarkPercents)
+TEST_F(ValidatorTest, ValidateEvictionWatermarkRatios)
 {
-    auto savedHigh = FLAGS_eviction_high_watermark_percent;
-    auto savedLow = FLAGS_eviction_low_watermark_percent;
-    FLAGS_eviction_high_watermark_percent = 90;
-    FLAGS_eviction_low_watermark_percent = 80;
+    auto savedHigh = FLAGS_eviction_high_watermark_ratio;
+    auto savedLow = FLAGS_eviction_low_watermark_ratio;
+    FLAGS_eviction_high_watermark_ratio = 0.9;
+    FLAGS_eviction_low_watermark_ratio = 0.8;
 
-    EXPECT_TRUE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 90));
-    EXPECT_TRUE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 80));
-    EXPECT_FALSE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 1));
-    EXPECT_FALSE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 101));
-    EXPECT_FALSE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 0));
-    EXPECT_FALSE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 100));
+    EXPECT_TRUE(Validator::ValidateWatermarkHighRatio("eviction_high_watermark_ratio", 0.9));
+    EXPECT_TRUE(Validator::ValidateWatermarkLowRatio("eviction_low_watermark_ratio", 0.8));
+    EXPECT_FALSE(Validator::ValidateWatermarkHighRatio("eviction_high_watermark_ratio", 0.01));
+    EXPECT_FALSE(Validator::ValidateWatermarkHighRatio("eviction_high_watermark_ratio", 1.01));
+    EXPECT_FALSE(Validator::ValidateWatermarkLowRatio("eviction_low_watermark_ratio", 0.005));
+    EXPECT_FALSE(Validator::ValidateWatermarkLowRatio("eviction_low_watermark_ratio", 1.0));
 
-    FLAGS_eviction_high_watermark_percent = 75;
-    FLAGS_eviction_low_watermark_percent = 70;
-    EXPECT_TRUE(Validator::ValidateEvictionHighWatermarkPercent("eviction_high_watermark_percent", 75));
-    EXPECT_TRUE(Validator::ValidateEvictionLowWatermarkPercent("eviction_low_watermark_percent", 70));
-    EXPECT_TRUE(Validator::ValidateEvictionWatermarkPercentPair());
+    FLAGS_eviction_high_watermark_ratio = 0.75;
+    FLAGS_eviction_low_watermark_ratio = 0.70;
+    EXPECT_TRUE(Validator::ValidateWatermarkHighRatio("eviction_high_watermark_ratio", 0.75));
+    EXPECT_TRUE(Validator::ValidateWatermarkLowRatio("eviction_low_watermark_ratio", 0.70));
+    EXPECT_TRUE(Validator::ValidateEvictionWatermarkRatioPair());
 
-    FLAGS_eviction_high_watermark_percent = 80;
-    FLAGS_eviction_low_watermark_percent = 85;
-    EXPECT_FALSE(Validator::ValidateEvictionWatermarkPercentPair());
+    FLAGS_eviction_high_watermark_ratio = 0.80;
+    FLAGS_eviction_low_watermark_ratio = 0.85;
+    EXPECT_FALSE(Validator::ValidateEvictionWatermarkRatioPair());
 
-    FLAGS_eviction_high_watermark_percent = savedHigh;
-    FLAGS_eviction_low_watermark_percent = savedLow;
+    FLAGS_eviction_high_watermark_ratio = savedHigh;
+    FLAGS_eviction_low_watermark_ratio = savedLow;
 }
 
-TEST_F(ValidatorTest, ValidateSpillWatermarkPercents)
+TEST_F(ValidatorTest, ValidateSpillWatermarkRatios)
 {
-    auto savedHigh = FLAGS_spill_high_watermark_percent;
-    auto savedLow = FLAGS_spill_low_watermark_percent;
-    FLAGS_spill_high_watermark_percent = 80;
-    FLAGS_spill_low_watermark_percent = 60;
+    auto savedHigh = FLAGS_spill_high_watermark_ratio;
+    auto savedLow = FLAGS_spill_low_watermark_ratio;
+    FLAGS_spill_high_watermark_ratio = 0.8;
+    FLAGS_spill_low_watermark_ratio = 0.6;
 
-    EXPECT_TRUE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 80));
-    EXPECT_TRUE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 60));
-    EXPECT_FALSE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 1));
-    EXPECT_FALSE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 0));
+    EXPECT_TRUE(Validator::ValidateWatermarkHighRatio("spill_high_watermark_ratio", 0.8));
+    EXPECT_TRUE(Validator::ValidateWatermarkLowRatio("spill_low_watermark_ratio", 0.6));
+    EXPECT_FALSE(Validator::ValidateWatermarkHighRatio("spill_high_watermark_ratio", 0.01));
+    EXPECT_FALSE(Validator::ValidateWatermarkLowRatio("spill_low_watermark_ratio", 0.005));
 
-    FLAGS_spill_high_watermark_percent = 75;
-    FLAGS_spill_low_watermark_percent = 55;
-    EXPECT_TRUE(Validator::ValidateSpillHighWatermarkPercent("spill_high_watermark_percent", 75));
-    EXPECT_TRUE(Validator::ValidateSpillLowWatermarkPercent("spill_low_watermark_percent", 55));
-    EXPECT_TRUE(Validator::ValidateSpillWatermarkPercentPair());
+    FLAGS_spill_high_watermark_ratio = 0.75;
+    FLAGS_spill_low_watermark_ratio = 0.55;
+    EXPECT_TRUE(Validator::ValidateWatermarkHighRatio("spill_high_watermark_ratio", 0.75));
+    EXPECT_TRUE(Validator::ValidateWatermarkLowRatio("spill_low_watermark_ratio", 0.55));
+    EXPECT_TRUE(Validator::ValidateSpillWatermarkRatioPair());
 
-    FLAGS_spill_high_watermark_percent = 65;
-    FLAGS_spill_low_watermark_percent = 70;
-    EXPECT_FALSE(Validator::ValidateSpillWatermarkPercentPair());
+    FLAGS_spill_high_watermark_ratio = 0.65;
+    FLAGS_spill_low_watermark_ratio = 0.70;
+    EXPECT_FALSE(Validator::ValidateSpillWatermarkRatioPair());
 
-    FLAGS_spill_high_watermark_percent = savedHigh;
-    FLAGS_spill_low_watermark_percent = savedLow;
+    FLAGS_spill_high_watermark_ratio = savedHigh;
+    FLAGS_spill_low_watermark_ratio = savedLow;
 }
 }  // namespace ut
 }  // namespace datasystem

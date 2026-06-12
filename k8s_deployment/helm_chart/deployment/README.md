@@ -253,8 +253,8 @@ global:
 | global.performance.urmaPollSize | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
-| global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存驱逐阈值（MB），由 min(shared_memory_size_mb*0.1, eviction_reserve_mem_threshold_mb) 决定。当内存低于此阈值时，驱逐操作开始。有效范围为 100-102400。 |
-| global.performance.evictionHighWatermarkPercent | int | `90` | 内存使用率高水位线（百分比）。有效范围 2-100，必须大于 evictionLowWatermarkPercent。 |
-| global.performance.evictionLowWatermarkPercent | int | `80` | 内存使用率低水位线（百分比）。有效范围 1-99，必须小于 evictionHighWatermarkPercent。 |
-| global.performance.spillHighWatermarkPercent | int | `80` | Spill 目录使用率高水位线（占 spill_size_limit 的百分比）。有效范围 2-100。 |
-| global.performance.spillLowWatermarkPercent | int | `60` | Spill 目录使用率低水位线（占 spill_size_limit 的百分比）。有效范围 1-99。 |
+| global.performance.evictionReserveMemThresholdMB | int | `10240` | 内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, evictionReserveMemThresholdMB)；与 evictionHighWatermarkRatio 共同决定驱逐触发线。有效范围 100-102400 |
+| global.performance.evictionHighWatermarkRatio | float | `0.9` | 内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - evictionReserveMemThresholdMB) 时触发驱逐。有效范围 0.02-1.0，须大于 evictionLowWatermarkRatio |
+| global.performance.evictionLowWatermarkRatio | float | `0.8` | 内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio |
+| global.performance.spillHighWatermarkRatio | float | `0.8` | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio |
+| global.performance.spillLowWatermarkRatio | float | `0.6` | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio |

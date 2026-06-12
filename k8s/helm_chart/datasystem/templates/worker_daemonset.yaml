@@ -128,8 +128,8 @@ spec:
         - -yuanrong_iam_passphrase={{ $.Values.global.tenantAuth.yuanrong.yuanrongIamDir }}/yuanrong_iam.passphrase
         {{- end }}
         - -eviction_reserve_mem_threshold_mb={{ $.Values.global.spill.evictionReserveMemThresholdMB }}
-        - -eviction_high_watermark_percent={{ $.Values.global.spill.evictionHighWatermarkPercent }}
-        - -eviction_low_watermark_percent={{ $.Values.global.spill.evictionLowWatermarkPercent }}
+        - -eviction_high_watermark_ratio={{ $.Values.global.spill.evictionHighWatermarkRatio }}
+        - -eviction_low_watermark_ratio={{ $.Values.global.spill.evictionLowWatermarkRatio }}
         - -sc_worker_worker_direct_port={{ $.Values.global.rpc.scWorkerWorkerDirectPort }}
         - -sc_worker_worker_pool_size={{ $.Values.global.rpc.scWorkerWorkerPoolSize }}
         - -sc_gc_interval_ms={{ $.Values.global.rpc.scGcIntervalMs }}
@@ -206,8 +206,8 @@ spec:
         - -spill_file_max_size_mb={{ $.Values.global.spill.spillFileMaxSizeMb }}
         - -spill_file_open_limit={{ $.Values.global.spill.spillFileOpenLimit }}
         - -spill_enable_readahead={{ $.Values.global.spill.spillEnableReadahead }}
-        - -spill_high_watermark_percent={{ $.Values.global.spill.spillHighWatermarkPercent }}
-        - -spill_low_watermark_percent={{ $.Values.global.spill.spillLowWatermarkPercent }}
+        - -spill_high_watermark_ratio={{ $.Values.global.spill.spillHighWatermarkRatio }}
+        - -spill_low_watermark_ratio={{ $.Values.global.spill.spillLowWatermarkRatio }}
         - -spill_to_remote_worker={{ $.Values.global.spill.spillToRemoteWorker }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}

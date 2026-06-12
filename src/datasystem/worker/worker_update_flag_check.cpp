@@ -90,10 +90,10 @@ void AdjustNodeTimeoutFlags()
 
 bool ValidateWatermarkFlags()
 {
-    if (!Validator::ValidateEvictionWatermarkPercentPair()) {
+    if (!Validator::ValidateEvictionWatermarkRatioPair()) {
         return false;
     }
-    if (!Validator::ValidateSpillWatermarkPercentPair()) {
+    if (!Validator::ValidateSpillWatermarkRatioPair()) {
         return false;
     }
     RefreshWatermarkFactors();
