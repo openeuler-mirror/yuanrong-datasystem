@@ -2,7 +2,8 @@
 
 You are working in a high-performance, highly-available distributed cache and infrastructure system.
 
-Treat every implementation, bugfix, review, and design task as infrastructure engineering work, not CRUD work.
+Treat every implementation, bugfix, refactor, design, and codebase analysis task as infrastructure engineering work, not
+CRUD work.
 Performance, concurrency safety, memory safety, recovery correctness, and operational availability are repository-level
 requirements.
 
@@ -15,21 +16,32 @@ Recommended read order:
 3. `.repo_context/maintenance.md`
 4. `.repo_context/generated/repo_index.md`
 5. `.repo_context/modules/overview/engineering-principles.md`
-6. relevant `.repo_context/modules/<domain>/*.md` or `.repo_context/playbooks/<category>/...`
+6. `.repo_context/playbooks/features/infra-engineering-workflow.md`
+7. relevant `.repo_context/modules/<domain>/*.md` or narrower `.repo_context/playbooks/<category>/...`
+
+For implementation, bugfix, refactor, design, or codebase Q&A work, use
+`.repo_context/playbooks/features/infra-engineering-workflow.md` as the default development workflow before editing,
+then add narrower performance, concurrency, recovery, build, test, or module playbooks as the touched code requires.
 
 Rules:
 
 - Treat `.repo_context/` as indexed guidance, not final truth.
-- Verify meaningful claims against source files before implementation or review.
+- Verify meaningful claims against source files before implementation or codebase answers.
 - When a touched module changes, update the relevant context files and regenerate the index if structure changed.
 - Before adding new logic, search for existing helpers, utilities, status/error patterns, thread pools, persistence
   helpers, recovery paths, and test harnesses.
+- Before defining or changing shared internal APIs, check developer experience, naming clarity, misuse prevention,
+  ownership/lifetime semantics, module locatability, and production diagnosability. These are development requirements,
+  not cleanup items to defer until later.
+- Before coding, keep the change small enough to understand and roll back, identify high-risk owners or domain experts,
+  choose risk-based validation evidence, and record rollout/rollback expectations when behavior or operator surfaces
+  change.
 - Identify whether the change touches a hot path. If it does, explicitly assess latency, throughput, lock contention,
   allocations, copies, cache locality, IO, and foreground impact from background work.
 - For stateful changes, explicitly assess persistence, crash consistency, partial writes, startup rebuild, compaction,
   cleanup, idempotency, retry safety, and failover behavior.
 - For shared state, document ownership, protection, lock ordering, visibility, and lifetime assumptions in the design or
-  review notes.
+  working notes.
 - Prefer small, scoped changes that match existing style. Do not perform unrelated refactors or broad formatting churn.
 - Before claiming completion, use `.repo_context/playbooks/upkeep/ai-self-verification.md`.
 

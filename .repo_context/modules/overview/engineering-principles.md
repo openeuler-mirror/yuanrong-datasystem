@@ -5,7 +5,7 @@
 - Status:
   - `active`
 - Last verified against source:
-  - `2026-05-14`
+  - `2026-06-13`
 - Canonical source roots:
   - `AGENTS.md`
   - `CLAUDE.md`
@@ -18,7 +18,7 @@
   - `.skills`
 - Why this module exists:
   - define repository-level engineering standards for AI and human contributors;
-  - keep performance, concurrency, memory safety, persistence, recovery, and review expectations visible before local
+  - keep performance, concurrency, memory safety, persistence, recovery, and engineering expectations visible before local
     implementation details;
   - route future feature, bugfix, and review tasks to the smallest relevant playbook.
 
@@ -112,7 +112,7 @@ Prefer:
 - narrow critical sections with no blocking IO while locked
 - clear object lifetime handoff for async work
 
-Treat raw pointers, detached threads, captured references, shared futures, and `shared_ptr` cycles as review-critical
+Treat raw pointers, detached threads, captured references, shared futures, and `shared_ptr` cycles as safety-critical
 surfaces. Use `.repo_context/playbooks/features/concurrency-and-memory-safety.md` for changes in shared state,
 threading, async queues, lock behavior, or buffer ownership.
 
@@ -141,7 +141,7 @@ Keep module boundaries explicit:
 - explicit startup, shutdown, and recovery lifecycle
 
 Functions should normally do one job. If a function grows beyond about 50 lines, assess whether it should be split into
-validation, prepare, execute, commit, cleanup, rollback, or error-handling pieces. This is a review trigger, not a blind
+validation, prepare, execute, commit, cleanup, rollback, or error-handling pieces. This is a design trigger, not a blind
 mechanical rule.
 
 ## Constants And Magic Numbers
@@ -168,6 +168,18 @@ Every non-trivial change must choose tests from the risk surface:
 
 Use existing test registration and labels from `.repo_context/modules/quality/tests-and-reproduction.md`. If tests are
 not practical, record the reason and the best available verification.
+
+## Development Gate
+
+Use `.repo_context/playbooks/features/infra-engineering-workflow.md` before coding product, build, test, configuration,
+or workflow changes. The development pass must make these choices explicit before the implementation grows:
+
+- whether the work is one coherent, narrow change or must be split;
+- which module or domain owner is responsible for any high-risk surface;
+- which validation evidence matches the implementation risk;
+- how externally visible behavior rolls out, rolls back, and stays compatible;
+- how production bug fixes connect symptom, trigger, root cause, regression guard, and prevention signal;
+- which security or trust boundaries are touched.
 
 ## Review Gate
 
