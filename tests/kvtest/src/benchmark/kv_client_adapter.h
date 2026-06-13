@@ -48,6 +48,38 @@ public:
         return rc.IsOk();
     }
 
+    bool MSet(const std::vector<std::string> &keys, const std::string &data) {
+        std::vector<datasystem::StringView> vals;
+        vals.reserve(keys.size());
+        for (size_t i = 0; i < keys.size(); i++) {
+            vals.emplace_back(datasystem::StringView(data));
+        }
+        datasystem::MSetParam mParam;
+        mParam.writeMode = param_.writeMode;
+        mParam.ttlSecond = param_.ttlSecond;
+        std::vector<std::string> failedKeys;
+        auto rc = client_->MSet(keys, vals, failedKeys, mParam);
+        return rc.IsOk() && failedKeys.empty();
+    }
+
+    bool MGet(const std::vector<std::string> &keys, std::vector<std::string> &out) {
+        out.clear();
+        out.resize(keys.size());
+        std::vector<datasystem::Optional<datasystem::Buffer>> buffers;
+        auto rc = client_->Get(keys, buffers);
+        if (!rc.IsOk()) return false;
+        for (size_t i = 0; i < buffers.size(); i++) {
+            if (buffers[i]) {
+                auto size = buffers[i]->GetSize();
+                out[i].assign(static_cast<const char*>(buffers[i]->ImmutableData()),
+                              size > 0 ? static_cast<size_t>(size) : 0);
+            } else {
+                return false;  // any missing buffer = failure
+            }
+        }
+        return true;
+    }
+
     bool Del(const std::vector<std::string> &keys) {
         std::vector<std::string> failedKeys;
         auto rc = client_->Del(keys, failedKeys);

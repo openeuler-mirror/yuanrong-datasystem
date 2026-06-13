@@ -910,6 +910,10 @@ def cmd_gen_config(args):
             cfg['duration_seconds'] = args.duration
         if args.ttl > 0:
             cfg['set_param'] = {'ttl_second': args.ttl}
+        cfg['set_ratio'] = args.set_ratio
+        cfg['mixed_key_strategy'] = args.mixed_key_strategy
+        cfg['mset_batch_size'] = args.mset_batch_size
+        cfg['mget_batch_size'] = args.mget_batch_size
     else:
         # Pipeline / Cache
         writer_pipeline = _parse_pipeline(args.pipeline)
@@ -1006,13 +1010,27 @@ def _add_gen_config_args(p):
     # Benchmark mode
     p.add_argument('--test-mode',
                    choices=['set_local', 'set_remote', 'get_local',
-                            'get_cross_node', 'get_remote_direct', 'get_remote_cross'],
+                            'get_cross_node', 'get_remote_direct', 'get_remote_cross',
+                            'mixed_local_set_get', 'mixed_remote_set_get',
+                            'mixed_local_set_cross_get', 'mixed_remote_set_remote_cross_get',
+                            'mset_local', 'mset_remote',
+                            'mget_local', 'mget_cross_node',
+                            'mget_remote_direct', 'mget_remote_cross'],
                    help='Benchmark test mode (required for benchmark mode)')
     p.add_argument('--worker-memory-mb', type=int, default=0,
                    help='Worker shared memory in MB (required for benchmark mode)')
     p.add_argument('--set-api', default='string_view',
                    choices=['string_view', 'create_buffer'],
                    help='Set API path (default: string_view)')
+    p.add_argument('--set-ratio', type=float, default=0.5,
+                   help='Set thread ratio for mixed modes (default: 0.5)')
+    p.add_argument('--mixed-key-strategy', default='same_keys',
+                   choices=['same_keys', 'read_prev', 'independent'],
+                   help='Key strategy for mixed modes (default: same_keys)')
+    p.add_argument('--mset-batch-size', type=int, default=8,
+                   help='Keys per MSet call (default: 8)')
+    p.add_argument('--mget-batch-size', type=int, default=8,
+                   help='Keys per MGet call (default: 8)')
     p.add_argument('--duration', type=int, default=0,
                    help='Benchmark duration in seconds (0 = infinite)')
     p.add_argument('--total-rounds', type=int, default=0,

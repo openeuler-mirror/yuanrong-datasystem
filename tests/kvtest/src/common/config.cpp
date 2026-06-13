@@ -17,23 +17,54 @@ TestMode ParseTestMode(const std::string &s) {
     if (s == "get_cross_node") return TestMode::GET_CROSS_NODE;
     if (s == "get_remote_direct") return TestMode::GET_REMOTE_DIRECT;
     if (s == "get_remote_cross") return TestMode::GET_REMOTE_CROSS;
-    if (s == "mixed_local") return TestMode::MIXED_LOCAL;
-    if (s == "mixed_cross_node") return TestMode::MIXED_CROSS_NODE;
+    if (s == "mixed_local_set_get") return TestMode::MIXED_LOCAL_SET_GET;
+    if (s == "mixed_remote_set_get") return TestMode::MIXED_REMOTE_SET_GET;
+    if (s == "mixed_local_set_cross_get") return TestMode::MIXED_LOCAL_SET_CROSS_GET;
+    if (s == "mixed_remote_set_remote_cross_get") return TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET;
+    if (s == "mset_local") return TestMode::MSET_LOCAL;
+    if (s == "mset_remote") return TestMode::MSET_REMOTE;
+    if (s == "mget_local") return TestMode::MGET_LOCAL;
+    if (s == "mget_cross_node") return TestMode::MGET_CROSS_NODE;
+    if (s == "mget_remote_direct") return TestMode::MGET_REMOTE_DIRECT;
+    if (s == "mget_remote_cross") return TestMode::MGET_REMOTE_CROSS;
     return TestMode::NONE;
 }
 
 bool NeedsRemoteWorker(TestMode mode) {
-    return mode == TestMode::SET_REMOTE || mode == TestMode::GET_CROSS_NODE
-        || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS;
+    return mode == TestMode::SET_REMOTE
+        || mode == TestMode::GET_CROSS_NODE
+        || mode == TestMode::GET_REMOTE_DIRECT
+        || mode == TestMode::GET_REMOTE_CROSS
+        || mode == TestMode::MIXED_REMOTE_SET_GET
+        || mode == TestMode::MIXED_LOCAL_SET_CROSS_GET
+        || mode == TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET
+        || mode == TestMode::MSET_REMOTE
+        || mode == TestMode::MGET_CROSS_NODE
+        || mode == TestMode::MGET_REMOTE_DIRECT
+        || mode == TestMode::MGET_REMOTE_CROSS;
 }
 
 bool IsGetMode(TestMode mode) {
     return mode == TestMode::GET_LOCAL || mode == TestMode::GET_CROSS_NODE
-        || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS;
+        || mode == TestMode::GET_REMOTE_DIRECT || mode == TestMode::GET_REMOTE_CROSS
+        || mode == TestMode::MGET_LOCAL || mode == TestMode::MGET_CROSS_NODE
+        || mode == TestMode::MGET_REMOTE_DIRECT || mode == TestMode::MGET_REMOTE_CROSS;
 }
 
 bool IsMixedMode(TestMode mode) {
-    return mode == TestMode::MIXED_LOCAL || mode == TestMode::MIXED_CROSS_NODE;
+    return mode == TestMode::MIXED_LOCAL_SET_GET
+        || mode == TestMode::MIXED_REMOTE_SET_GET
+        || mode == TestMode::MIXED_LOCAL_SET_CROSS_GET
+        || mode == TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET;
+}
+
+bool IsMSetMode(TestMode mode) {
+    return mode == TestMode::MSET_LOCAL || mode == TestMode::MSET_REMOTE;
+}
+
+bool IsMGetMode(TestMode mode) {
+    return mode == TestMode::MGET_LOCAL || mode == TestMode::MGET_CROSS_NODE
+        || mode == TestMode::MGET_REMOTE_DIRECT || mode == TestMode::MGET_REMOTE_CROSS;
 }
 
 std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s) {
@@ -112,6 +143,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("enable_jitter")) cfg.enableJitter = j["enable_jitter"];
         if (j.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = j["enable_cross_node_connection"];
         if (j.contains("batch_keys_count")) cfg.batchKeysCount = j["batch_keys_count"];
+        if (j.contains("mset_batch_size")) cfg.msetBatchSize = j["mset_batch_size"];
+        if (j.contains("mget_batch_size")) cfg.mgetBatchSize = j["mget_batch_size"];
         if (j.contains("cpu_affinity")) cfg.cpuAffinity = j["cpu_affinity"].get<std::string>();
         if (j.contains("key_pool_size")) cfg.keyPoolSize = j["key_pool_size"];
         if (j.contains("inference_delay_ms")) cfg.inferenceDelayMs = j["inference_delay_ms"];
@@ -320,6 +353,14 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         SLOG_ERROR("batch_keys_count must be >= 1, got " << cfg.batchKeysCount);
         return false;
     }
+    if ((IsMSetMode(cfg.testMode) || IsMGetMode(cfg.testMode)) && cfg.msetBatchSize < 1) {
+        SLOG_ERROR("mset_batch_size must be >= 1 for MSet/MGet modes, got " << cfg.msetBatchSize);
+        return false;
+    }
+    if (IsMGetMode(cfg.testMode) && cfg.mgetBatchSize < 1) {
+        SLOG_ERROR("mget_batch_size must be >= 1 for MGet modes, got " << cfg.mgetBatchSize);
+        return false;
+    }
     if (cfg.connectTimeoutMs <= 0) {
         SLOG_ERROR("connect_timeout_ms must be > 0, got " << cfg.connectTimeoutMs);
         return false;
@@ -388,6 +429,10 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             return false;
         }
         if (IsMixedMode(cfg.testMode)) {
+            if (cfg.numThreads < 2) {
+                SLOG_ERROR("Mixed mode requires num_threads >= 2, got " << cfg.numThreads);
+                return false;
+            }
             if (cfg.setRatio <= 0.0 || cfg.setRatio >= 1.0) {
                 SLOG_ERROR("set_ratio must be in (0.0, 1.0) for mixed mode, got " << cfg.setRatio);
                 return false;
@@ -416,9 +461,17 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         << ", port=" << cfg.listenPort
         << ", etcd=" << cfg.etcdAddress;
     if (cfg.testMode != TestMode::NONE) {
-        const char *modeNames[] = {"none", "set_local", "set_remote", "get_local",
-                                   "get_cross_node", "get_remote_direct", "get_remote_cross",
-                                   "mixed_local", "mixed_cross_node"};
+        const char *modeNames[] = {
+            "none", "set_local", "set_remote", "get_local",
+            "get_cross_node", "get_remote_direct", "get_remote_cross",
+            "mixed_local_set_get", "mixed_remote_set_get",
+            "mixed_local_set_cross_get", "mixed_remote_set_remote_cross_get",
+            "mset_local", "mset_remote", "mget_local",
+            "mget_cross_node", "mget_remote_direct", "mget_remote_cross",
+        };
+        static_assert(sizeof(modeNames) / sizeof(modeNames[0]) ==
+                          static_cast<int>(TestMode::MGET_REMOTE_CROSS) + 1,
+                      "modeNames must cover all TestMode values");
         log << ", test_mode=" << modeNames[static_cast<int>(cfg.testMode)]
             << ", worker_memory_mb=" << cfg.workerMemoryMb
             << ", num_threads=" << cfg.numThreads

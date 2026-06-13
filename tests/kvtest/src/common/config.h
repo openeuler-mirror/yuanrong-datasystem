@@ -20,8 +20,16 @@ enum class TestMode {
     GET_CROSS_NODE,
     GET_REMOTE_DIRECT,
     GET_REMOTE_CROSS,
-    MIXED_LOCAL,
-    MIXED_CROSS_NODE,
+    MIXED_LOCAL_SET_GET,
+    MIXED_REMOTE_SET_GET,
+    MIXED_LOCAL_SET_CROSS_GET,
+    MIXED_REMOTE_SET_REMOTE_CROSS_GET,
+    MSET_LOCAL,
+    MSET_REMOTE,
+    MGET_LOCAL,
+    MGET_CROSS_NODE,
+    MGET_REMOTE_DIRECT,
+    MGET_REMOTE_CROSS,
 };
 
 enum class MixedKeyStrategy { SAME_KEYS = 0, READ_PREV = 1, INDEPENDENT = 2 };
@@ -32,6 +40,8 @@ TestMode ParseTestMode(const std::string &s);
 bool NeedsRemoteWorker(TestMode mode);
 bool IsGetMode(TestMode mode);
 bool IsMixedMode(TestMode mode);
+bool IsMSetMode(TestMode mode);
+bool IsMGetMode(TestMode mode);
 std::optional<MixedKeyStrategy> ParseMixedKeyStrategy(const std::string &s);
 std::optional<RunMode> ParseRunMode(const std::string &s);
 
@@ -56,6 +66,8 @@ struct Config {
     bool enableJitter = true; // randomize sleep to stagger requests
     bool enableCrossNodeConnection = true; // allow failover to standby workers on other nodes
     int batchKeysCount = 1;                 // batch 操作的 key 数量，1 = 单 key 兼容
+    int msetBatchSize = 8;   // keys per MSet call
+    int mgetBatchSize = 8;   // keys per MGet call
     int metricsIntervalMs = 3000;
     std::string metricsFile;  // resolved in LoadConfig: outputDir_/latency_timeseries.csv
     std::string outputDir;    // e.g. metrics_192.168.1.10_20260519_171440

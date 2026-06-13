@@ -62,6 +62,53 @@ PhaseResult RunGetPhase(Client *client, int instanceId, int round, int startKey,
 template<typename Client>
 PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey, int numKeys);
 
+template<typename Client>
+PhaseResult RunMSetPhase(Client *client, int instanceId, int round, int startKey, int numKeys,
+                         int batchSize, const std::string &data) {
+    PhaseResult result;
+    for (int offset = 0; offset < numKeys; offset += batchSize) {
+        int batchEnd = std::min(offset + batchSize, numKeys);
+        std::vector<std::string> keys;
+        keys.reserve(batchEnd - offset);
+        for (int i = offset; i < batchEnd; i++) {
+            keys.push_back(MakeBenchKey(instanceId, round, startKey + i));
+        }
+        auto start = std::chrono::steady_clock::now();
+        bool ok = client->MSet(keys, data);
+        auto end = std::chrono::steady_clock::now();
+        if (ok) {
+            result.successCount += keys.size();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            result.latenciesMs.push_back(ms);
+        }
+    }
+    return result;
+}
+
+template<typename Client>
+PhaseResult RunMGetPhase(Client *client, int instanceId, int round, int startKey, int numKeys,
+                         int batchSize) {
+    PhaseResult result;
+    for (int offset = 0; offset < numKeys; offset += batchSize) {
+        int batchEnd = std::min(offset + batchSize, numKeys);
+        std::vector<std::string> keys;
+        keys.reserve(batchEnd - offset);
+        for (int i = offset; i < batchEnd; i++) {
+            keys.push_back(MakeBenchKey(instanceId, round, startKey + i));
+        }
+        std::vector<std::string> out;
+        auto start = std::chrono::steady_clock::now();
+        bool ok = client->MGet(keys, out);
+        auto end = std::chrono::steady_clock::now();
+        if (ok) {
+            result.successCount += keys.size();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            result.latenciesMs.push_back(ms);
+        }
+    }
+    return result;
+}
+
 // Thread barrier for phase synchronization
 class Barrier {
 public:
@@ -184,11 +231,6 @@ PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey,
     return result;
 }
 
-// Result of a mixed set+get phase
-struct MixedPhaseResult {
-    PhaseResult setResult;
-    PhaseResult getResult;
-};
 
 // Get the round number for get threads based on key strategy
 inline int GetRoundForGet(MixedKeyStrategy strategy, int round) {
@@ -200,60 +242,6 @@ inline int GetRoundForGet(MixedKeyStrategy strategy, int round) {
     return round;
 }
 
-// Run mixed set+get with multiple threads concurrently
-template<typename Client>
-MixedPhaseResult RunMixedPhase(
-    Client *client, int instanceId, int round, int keysPerRound,
-    int numSetThreads, int numGetThreads,
-    MixedKeyStrategy keyStrategy,
-    const std::string &setApi, const std::string &data) {
-    MixedPhaseResult result;
-    if (keysPerRound <= 0) return result;
-
-    int getRound = GetRoundForGet(keyStrategy, round);
-    bool skipGet = (getRound < 0) || (numGetThreads <= 0);
-
-    std::vector<PhaseResult> setResults(numSetThreads);
-    std::vector<PhaseResult> getResults(skipGet ? 0 : numGetThreads);
-    std::vector<std::thread> threads;
-
-    // Spawn set threads
-    for (int t = 0; t < numSetThreads; t++) {
-        threads.emplace_back([&, t]() {
-            auto range = ThreadKeyRange(keysPerRound, numSetThreads, t);
-            if (range.second == 0) return;
-            setResults[t] = RunSetPhase(client, instanceId, round, range.first, range.second, setApi, data);
-        });
-    }
-
-    // Spawn get threads
-    if (!skipGet) {
-        for (int t = 0; t < numGetThreads; t++) {
-            threads.emplace_back([&, t]() {
-                auto range = ThreadKeyRange(keysPerRound, numGetThreads, t);
-                if (range.second == 0) return;
-                getResults[t] = RunGetPhase(client, instanceId, getRound, range.first, range.second);
-            });
-        }
-    }
-
-    for (auto &t : threads) t.join();
-
-    // Merge results
-    for (auto &r : setResults) {
-        result.setResult.successCount += r.successCount;
-        result.setResult.latenciesMs.insert(result.setResult.latenciesMs.end(),
-                                            r.latenciesMs.begin(), r.latenciesMs.end());
-    }
-    if (!skipGet) {
-        for (auto &r : getResults) {
-            result.getResult.successCount += r.successCount;
-            result.getResult.latenciesMs.insert(result.getResult.latenciesMs.end(),
-                                                r.latenciesMs.begin(), r.latenciesMs.end());
-        }
-    }
-    return result;
-}
 
 // Multi-threaded round execution (test helper)
 template<typename Client>
