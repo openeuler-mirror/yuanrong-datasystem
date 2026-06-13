@@ -45,10 +45,17 @@ static int RunBenchmarkMode(Config &cfg) {
     int numThreads = cfg.numThreads;
     bool isGetMode = IsGetMode(cfg.testMode);
     bool isMixedMode = IsMixedMode(cfg.testMode);
+    bool isMSetMode = IsMSetMode(cfg.testMode);
+    bool isMGetMode = IsMGetMode(cfg.testMode);
     int numSetThreads = cfg.numThreads;
     int numGetThreads = 0;
     if (isMixedMode) {
+        if (cfg.numThreads < 2) {
+            SLOG_ERROR("Mixed mode requires num_threads >= 2, got " << cfg.numThreads);
+            return 1;
+        }
         numSetThreads = std::max(1, static_cast<int>(std::round(cfg.setRatio * cfg.numThreads)));
+        numSetThreads = std::min(numSetThreads, cfg.numThreads - 1);
         numGetThreads = cfg.numThreads - numSetThreads;
         SLOG_INFO("Mixed mode: set_ratio=" << cfg.setRatio
                   << " -> " << numSetThreads << " set threads, "
@@ -62,7 +69,9 @@ static int RunBenchmarkMode(Config &cfg) {
               << ", set_api=" << cfg.setApi
               << ", cleanup=" << cfg.cleanupMethod
               << ", is_get_mode=" << isGetMode
-              << ", is_mixed_mode=" << isMixedMode);
+              << ", is_mixed_mode=" << isMixedMode
+              << ", is_mset_mode=" << isMSetMode
+              << ", is_mget_mode=" << isMGetMode);
 
     // --- Spawn child processes ---
     // children[0] = setChild, children[1] = getChild (optional), children[2] = delChild (optional)
@@ -82,7 +91,7 @@ static int RunBenchmarkMode(Config &cfg) {
     setChildIdx = children.size() - 1;
 
     // getChild: only if setClient != getClient (cross-node modes)
-    if (isGetMode && NeedsSeparateGetChild(cfg.testMode)) {
+    if ((isGetMode || isMixedMode || isMGetMode) && NeedsSeparateGetChild(cfg.testMode)) {
         children.push_back(SpawnChild(cfg, ROLE_GET));
         if (children.back().pid <= 0) {
             SLOG_ERROR("Failed to spawn getChild");
@@ -154,22 +163,63 @@ static int RunBenchmarkMode(Config &cfg) {
         ResultMsg delRes{};
 
         if (isMixedMode) {
-            // --- Mixed mode: set+get concurrent ---
-            if (!SendMixedCommand(children[setChildIdx], round,
-                                  numSetThreads, numGetThreads, cfg.mixedKeyStrategy)) {
-                SLOG_ERROR("Mixed command failed (pipe error) in round " << round);
+            // --- Mixed mode: concurrent set+get via dual child processes ---
+            int getRound = GetRoundForGet(cfg.mixedKeyStrategy, round);
+            bool skipGet = (getRound < 0);
+
+            // Send Set command
+            if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round, numSetThreads)) {
+                SLOG_ERROR("Set command failed (pipe error) in round " << round);
                 break;
             }
+
+            // Send Get command (skip for read_prev round 0)
+            if (!skipGet) {
+                if (!SendCommand(children[getChildIdx], CMD_RUN_GET, getRound, numGetThreads)) {
+                    SLOG_ERROR("Get command failed (pipe error) in round " << round);
+                    break;
+                }
+            }
+
+            // Collect results
             if (!RecvResult(children[setChildIdx], setRes)) {
-                SLOG_ERROR("Mixed set result failed (pipe error) in round " << round);
+                SLOG_ERROR("Set result failed (pipe error) in round " << round);
                 break;
             }
-            if (!RecvResult(children[setChildIdx], getRes)) {
-                SLOG_ERROR("Mixed get result failed (pipe error) in round " << round);
+            if (!skipGet) {
+                if (!RecvResult(children[getChildIdx], getRes)) {
+                    SLOG_ERROR("Get result failed (pipe error) in round " << round);
+                    break;
+                }
+            }
+
+            stats.totalSet += setRes.successCount;
+            stats.totalGet += getRes.successCount;
+        } else if (isMGetMode) {
+            // --- MGet mode: sequential MSet -> MGet (matching GET_* pattern) ---
+            // MSet phase (write data first)
+            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round, numSetThreads) ||
+                !RecvResult(children[setChildIdx], setRes)) {
+                SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
                 break;
             }
             stats.totalSet += setRes.successCount;
+
+            // MGet phase (read after write completes)
+            if (!SendCommand(children[getChildIdx], CMD_RUN_MGET, round, numGetThreads) ||
+                !RecvResult(children[getChildIdx], getRes)) {
+                SLOG_ERROR("MGet phase failed (pipe error) in round " << round);
+                break;
+            }
             stats.totalGet += getRes.successCount;
+        } else if (isMSetMode) {
+            // --- MSet mode: MSet only (write-only, no get phase) ---
+            if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round) ||
+                !RecvResult(children[setChildIdx], setRes)) {
+                SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
+                break;
+            }
+            stats.totalSet += setRes.successCount;
         } else {
             // --- Sequential mode: set -> get -> del ---
             // Set phase

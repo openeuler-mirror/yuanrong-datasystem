@@ -10,6 +10,7 @@
 
 #include <unistd.h>
 #include <sys/wait.h>
+#include <cstdlib>
 #include <csignal>
 #include <chrono>
 #include <cstdio>
@@ -22,12 +23,14 @@
 
 // --- Pipe protocol types ---
 
-enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2, CMD_RUN_DEL = 3, CMD_RUN_MIXED = 4 };
+enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2,
+                          CMD_RUN_DEL = 3, CMD_RUN_MSET = 4, CMD_RUN_MGET = 5 };
 enum ChildRole : int32_t { ROLE_SET = 0, ROLE_GET = 1, ROLE_DEL = 2 };
 
 struct CmdMsg {
     int32_t cmd = 0;
     int32_t round = 0;
+    int32_t numThreads = 0;
 };
 
 struct ResultMsg {
@@ -47,12 +50,6 @@ struct InitMsg {
     char errorMsg[256] = {};
 };
 
-// Extra parameters for CMD_RUN_MIXED (sent after CmdMsg)
-struct MixedParams {
-    int32_t numSetThreads = 0;
-    int32_t numGetThreads = 0;
-    int32_t keyStrategy = 0;  // MixedKeyStrategy as int32_t
-};
 
 // --- Pipe I/O helpers ---
 
@@ -93,11 +90,21 @@ struct ChildProcess {
 inline bool RoleUsesServiceDiscovery(ChildRole role, TestMode testMode) {
     switch (role) {
         case ROLE_SET:
-            return testMode == TestMode::SET_LOCAL || testMode == TestMode::GET_LOCAL ||
-                   testMode == TestMode::GET_REMOTE_CROSS ||
-                   testMode == TestMode::MIXED_LOCAL || testMode == TestMode::MIXED_CROSS_NODE;
+            return testMode == TestMode::SET_LOCAL
+                || testMode == TestMode::GET_LOCAL
+                || testMode == TestMode::GET_REMOTE_CROSS
+                || testMode == TestMode::MIXED_LOCAL_SET_GET
+                || testMode == TestMode::MIXED_LOCAL_SET_CROSS_GET
+                || testMode == TestMode::MSET_LOCAL
+                || testMode == TestMode::MGET_LOCAL
+                || testMode == TestMode::MGET_REMOTE_CROSS;
         case ROLE_GET:
-            return testMode == TestMode::GET_LOCAL || testMode == TestMode::GET_CROSS_NODE;
+            return testMode == TestMode::GET_LOCAL
+                || testMode == TestMode::GET_CROSS_NODE
+                || testMode == TestMode::MIXED_LOCAL_SET_GET
+                || testMode == TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET
+                || testMode == TestMode::MGET_LOCAL
+                || testMode == TestMode::MGET_CROSS_NODE;
         case ROLE_DEL:
             return RoleUsesServiceDiscovery(ROLE_SET, testMode);
     }
@@ -106,7 +113,10 @@ inline bool RoleUsesServiceDiscovery(ChildRole role, TestMode testMode) {
 
 // Whether a separate getChild is needed (vs reusing setChild)
 inline bool NeedsSeparateGetChild(TestMode testMode) {
-    return testMode == TestMode::GET_CROSS_NODE || testMode == TestMode::GET_REMOTE_CROSS;
+    return testMode == TestMode::GET_CROSS_NODE
+        || testMode == TestMode::GET_REMOTE_CROSS
+        || IsMixedMode(testMode)
+        || IsMGetMode(testMode);
 }
 
 // --- Create KVClient for a role ---
@@ -158,7 +168,8 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
 inline PhaseResult RunPhaseMultiThread(
     KVClientAdapter *adapter, ChildCmd phase, int round,
     int numThreads, int keysPerRound, const std::string &setApi,
-    const std::string &data, int instanceId) {
+    const std::string &data, int instanceId,
+    int msetBatchSize = 8, int mgetBatchSize = 8) {
     std::vector<PhaseResult> threadResults(numThreads);
     std::vector<std::thread> threads;
 
@@ -178,6 +189,14 @@ inline PhaseResult RunPhaseMultiThread(
                     break;
                 case CMD_RUN_DEL:
                     threadResults[t] = RunDelPhase(adapter, instanceId, round, startKey, numKeys);
+                    break;
+                case CMD_RUN_MSET:
+                    threadResults[t] = RunMSetPhase(adapter, instanceId, round, startKey, numKeys,
+                                                    msetBatchSize, data);
+                    break;
+                case CMD_RUN_MGET:
+                    threadResults[t] = RunMGetPhase(adapter, instanceId, round, startKey, numKeys,
+                                                    mgetBatchSize);
                     break;
                 default:
                     break;
@@ -235,6 +254,14 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
 
     SLOG_INFO("Child process started, role=" << roleName << ", pid=" << getpid());
 
+    // Disable SDK-internal thread pools. Benchmark children already use
+    // RunPhaseMultiThread; nested SDK pools (ParallelFor, parallel memcpy)
+    // cause SIGSEGV when multiple threads call batch APIs concurrently.
+    setenv("CLIENT_MEMORY_COPY_THREAD_NUM", "0", 1);
+    setenv("CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY", "0", 1);
+    setenv("CLIENT_MEMCOPY_PARALLEL_THRESHOLD", "2147483647", 1);
+    setenv("CLIENT_PARALLEL_THREAD_MIN_NUM", "0", 1);
+
     // 2. Create KVClient for this role
     auto client = CreateClientForRole(role, cfg);
 
@@ -268,80 +295,30 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
         if (!ReadExact(readFd, &cmd, sizeof(cmd))) break;
         if (cmd.cmd == CMD_EXIT) break;
 
-        if (cmd.cmd == CMD_RUN_MIXED) {
-            // Read extra parameters for mixed mode
-            MixedParams mp{};
-            if (!ReadExact(readFd, &mp, sizeof(mp))) break;
-
-            MixedKeyStrategy strategy = static_cast<MixedKeyStrategy>(mp.keyStrategy);
-            int getRound = GetRoundForGet(strategy, cmd.round);
-            bool skipGet = (getRound < 0) || (mp.numGetThreads <= 0);
-
-            // Spawn set threads
-            std::vector<PhaseResult> setResults(mp.numSetThreads);
-            std::vector<std::thread> threads;
-            for (int t = 0; t < mp.numSetThreads; t++) {
-                threads.emplace_back([&, t]() {
-                    auto range = ThreadKeyRange(keysPerRound, mp.numSetThreads, t);
-                    if (range.second == 0) return;
-                    setResults[t] = RunSetPhase(&adapter, cfg.instanceId, cmd.round, range.first,
-                                                range.second, cfg.setApi, data);
-                });
-            }
-
-            // Spawn get threads
-            std::vector<PhaseResult> getResults(skipGet ? 0 : mp.numGetThreads);
-            if (!skipGet) {
-                for (int t = 0; t < mp.numGetThreads; t++) {
-                    threads.emplace_back([&, t]() {
-                        auto range = ThreadKeyRange(keysPerRound, mp.numGetThreads, t);
-                        if (range.second == 0) return;
-                        getResults[t] = RunGetPhase(&adapter, cfg.instanceId, getRound,
-                                                     range.first, range.second);
-                    });
-                }
-            }
-
-            for (auto &t : threads) t.join();
-
-            // Merge and send set result
-            PhaseResult mergedSet;
-            for (auto &r : setResults) {
-                mergedSet.successCount += r.successCount;
-                mergedSet.latenciesMs.insert(mergedSet.latenciesMs.end(),
-                                             r.latenciesMs.begin(), r.latenciesMs.end());
-            }
-            ResultMsg setMsg = PhaseResultToMsg(mergedSet);
-            if (!WriteExact(writeFd, &setMsg, sizeof(setMsg))) break;
-
-            // Merge and send get result
-            PhaseResult mergedGet;
-            if (!skipGet) {
-                for (auto &r : getResults) {
-                    mergedGet.successCount += r.successCount;
-                    mergedGet.latenciesMs.insert(mergedGet.latenciesMs.end(),
-                                                 r.latenciesMs.begin(), r.latenciesMs.end());
-                }
-            }
-            ResultMsg getMsg = PhaseResultToMsg(mergedGet);
-            if (!WriteExact(writeFd, &getMsg, sizeof(getMsg))) break;
-
-            SLOG_INFO("Child " << roleName << " round=" << cmd.round
-                      << " MIXED set=" << mergedSet.successCount
-                      << " get=" << mergedGet.successCount);
+        ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
+        PhaseResult result;
+        if (phase == CMD_RUN_MSET) {
+            // MSet is a batch API; the SDK does not support concurrent MSet
+            // calls from multiple threads. Run on a single thread, processing
+            // all keys in batches of cfg.msetBatchSize.
+            result = RunMSetPhase(&adapter, cfg.instanceId, cmd.round, 0,
+                                  keysPerRound, cfg.msetBatchSize, data);
+        } else if (phase == CMD_RUN_MGET) {
+            result = RunMGetPhase(&adapter, cfg.instanceId, cmd.round, 0,
+                                  keysPerRound, cfg.mgetBatchSize);
         } else {
-            // Existing set/get/del phases
-            ChildCmd phase = static_cast<ChildCmd>(cmd.cmd);
-            PhaseResult result = RunPhaseMultiThread(
-                &adapter, phase, cmd.round, cfg.numThreads, keysPerRound,
-                cfg.setApi, data, cfg.instanceId);
-
-            ResultMsg msg = PhaseResultToMsg(result);
-            if (!WriteExact(writeFd, &msg, sizeof(msg))) break;
-
-            SLOG_INFO("Child " << roleName << " round=" << cmd.round
-                      << " phase=" << cmd.cmd << " ok=" << result.successCount);
+            int nThreads = cmd.numThreads > 0 ? cmd.numThreads : cfg.numThreads;
+            result = RunPhaseMultiThread(
+                &adapter, phase, cmd.round, nThreads, keysPerRound,
+                cfg.setApi, data, cfg.instanceId,
+                cfg.msetBatchSize, cfg.mgetBatchSize);
         }
+
+        ResultMsg msg = PhaseResultToMsg(result);
+        if (!WriteExact(writeFd, &msg, sizeof(msg))) break;
+
+        SLOG_INFO("Child " << roleName << " round=" << cmd.round
+                  << " phase=" << cmd.cmd << " ok=" << result.successCount);
     }
 
     SLOG_INFO("Child " << roleName << " waiting 3s for in-flight operations to complete...");
@@ -403,8 +380,9 @@ inline bool WaitForInit(ChildProcess &cp) {
     return cp.initOk;
 }
 
-inline bool SendCommand(const ChildProcess &cp, ChildCmd cmd, int32_t round) {
-    CmdMsg msg{cmd, round};
+inline bool SendCommand(const ChildProcess &cp, ChildCmd cmd, int32_t round,
+                        int32_t numThreads = 0) {
+    CmdMsg msg{cmd, round, numThreads};
     return WriteExact(cp.toChildFd, &msg, sizeof(msg));
 }
 
@@ -412,14 +390,6 @@ inline bool RecvResult(const ChildProcess &cp, ResultMsg &result) {
     return ReadExact(cp.fromChildFd, &result, sizeof(result));
 }
 
-inline bool SendMixedCommand(const ChildProcess &cp, int32_t round,
-                              int32_t numSetThreads, int32_t numGetThreads,
-                              MixedKeyStrategy keyStrategy) {
-    CmdMsg cmd{CMD_RUN_MIXED, round};
-    if (!WriteExact(cp.toChildFd, &cmd, sizeof(cmd))) return false;
-    MixedParams params{numSetThreads, numGetThreads, static_cast<int32_t>(keyStrategy)};
-    return WriteExact(cp.toChildFd, &params, sizeof(params));
-}
 
 inline void ShutdownChild(ChildProcess &cp) {
     if (cp.pid <= 0) return;

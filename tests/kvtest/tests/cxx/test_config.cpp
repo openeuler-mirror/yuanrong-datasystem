@@ -470,19 +470,36 @@ TEST(LoadConfig_ModePipeline_InvalidRole) {
 
 // --- MixedMode tests ---
 
-TEST(ParseTestMode_MixedLocal) {
-    ASSERT_TRUE(ParseTestMode("mixed_local") == TestMode::MIXED_LOCAL);
+TEST(ParseTestMode_MixedLocalSetGet) {
+    ASSERT_TRUE(ParseTestMode("mixed_local_set_get") == TestMode::MIXED_LOCAL_SET_GET);
 }
 
-TEST(ParseTestMode_MixedCrossNode) {
-    ASSERT_TRUE(ParseTestMode("mixed_cross_node") == TestMode::MIXED_CROSS_NODE);
+TEST(ParseTestMode_MixedRemoteSetGet) {
+    ASSERT_TRUE(ParseTestMode("mixed_remote_set_get") == TestMode::MIXED_REMOTE_SET_GET);
+}
+
+TEST(ParseTestMode_MixedLocalSetCrossGet) {
+    ASSERT_TRUE(ParseTestMode("mixed_local_set_cross_get") == TestMode::MIXED_LOCAL_SET_CROSS_GET);
+}
+
+TEST(ParseTestMode_MixedRemoteSetRemoteCrossGet) {
+    ASSERT_TRUE(ParseTestMode("mixed_remote_set_remote_cross_get") == TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET);
 }
 
 TEST(IsMixedMode_MixedModes) {
-    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_LOCAL));
-    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_CROSS_NODE));
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_LOCAL_SET_GET));
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_REMOTE_SET_GET));
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_LOCAL_SET_CROSS_GET));
+    ASSERT_TRUE(IsMixedMode(TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET));
     ASSERT_FALSE(IsMixedMode(TestMode::SET_LOCAL));
     ASSERT_FALSE(IsMixedMode(TestMode::NONE));
+}
+
+TEST(NeedsRemoteWorker_MixedModes) {
+    ASSERT_FALSE(NeedsRemoteWorker(TestMode::MIXED_LOCAL_SET_GET));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MIXED_REMOTE_SET_GET));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MIXED_LOCAL_SET_CROSS_GET));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MIXED_REMOTE_SET_REMOTE_CROSS_GET));
 }
 
 TEST(ParseMixedKeyStrategy_All) {
@@ -496,7 +513,7 @@ TEST(ParseMixedKeyStrategy_All) {
 TEST(LoadConfig_MixedMode_InvalidStrategy) {
     auto path = WriteTempConfig(R"({
         "etcd_address":"x:1","listen_port":9000,
-        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "test_mode":"mixed_local_set_get","worker_memory_mb":4096,
         "set_ratio":0.5,"mixed_key_strategy":"invalid_strategy"
     })");
     Config cfg;
@@ -507,8 +524,19 @@ TEST(LoadConfig_MixedMode_InvalidStrategy) {
 TEST(LoadConfig_MixedMode_SetRatioOne) {
     auto path = WriteTempConfig(R"({
         "etcd_address":"x:1","listen_port":9000,
-        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "test_mode":"mixed_local_set_get","worker_memory_mb":4096,
         "set_ratio":1.0
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MixedMode_NumThreadsOne) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mixed_local_set_get","worker_memory_mb":4096,
+        "num_threads":1,"set_ratio":0.5
     })");
     Config cfg;
     ASSERT_FALSE(LoadConfig(path, cfg));
@@ -518,7 +546,7 @@ TEST(LoadConfig_MixedMode_SetRatioOne) {
 TEST(LoadConfig_MixedMode_IndependentPlusTTL) {
     auto path = WriteTempConfig(R"({
         "etcd_address":"x:1","listen_port":9000,
-        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "test_mode":"mixed_local_set_get","worker_memory_mb":4096,
         "set_ratio":0.5,"mixed_key_strategy":"independent",
         "cleanup_method":"ttl","set_param":{"ttl_second":10}
     })");
@@ -527,10 +555,120 @@ TEST(LoadConfig_MixedMode_IndependentPlusTTL) {
     std::remove(path.c_str());
 }
 
+// --- MSet/MGet ParseTestMode tests ---
+
+TEST(ParseTestMode_MsetLocal) {
+    ASSERT_TRUE(ParseTestMode("mset_local") == TestMode::MSET_LOCAL);
+}
+
+TEST(ParseTestMode_MsetRemote) {
+    ASSERT_TRUE(ParseTestMode("mset_remote") == TestMode::MSET_REMOTE);
+}
+
+TEST(ParseTestMode_MgetLocal) {
+    ASSERT_TRUE(ParseTestMode("mget_local") == TestMode::MGET_LOCAL);
+}
+
+TEST(ParseTestMode_MgetCrossNode) {
+    ASSERT_TRUE(ParseTestMode("mget_cross_node") == TestMode::MGET_CROSS_NODE);
+}
+
+TEST(ParseTestMode_MgetRemoteDirect) {
+    ASSERT_TRUE(ParseTestMode("mget_remote_direct") == TestMode::MGET_REMOTE_DIRECT);
+}
+
+TEST(ParseTestMode_MgetRemoteCross) {
+    ASSERT_TRUE(ParseTestMode("mget_remote_cross") == TestMode::MGET_REMOTE_CROSS);
+}
+
+TEST(NeedsRemoteWorker_MSetMGet) {
+    ASSERT_FALSE(NeedsRemoteWorker(TestMode::MSET_LOCAL));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MSET_REMOTE));
+    ASSERT_FALSE(NeedsRemoteWorker(TestMode::MGET_LOCAL));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MGET_CROSS_NODE));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MGET_REMOTE_DIRECT));
+    ASSERT_TRUE(NeedsRemoteWorker(TestMode::MGET_REMOTE_CROSS));
+}
+
+TEST(IsGetMode_MGetModes) {
+    ASSERT_TRUE(IsGetMode(TestMode::MGET_LOCAL));
+    ASSERT_TRUE(IsGetMode(TestMode::MGET_CROSS_NODE));
+    ASSERT_TRUE(IsGetMode(TestMode::MGET_REMOTE_DIRECT));
+    ASSERT_TRUE(IsGetMode(TestMode::MGET_REMOTE_CROSS));
+    ASSERT_FALSE(IsGetMode(TestMode::MSET_LOCAL));
+    ASSERT_FALSE(IsGetMode(TestMode::MSET_REMOTE));
+}
+
+TEST(IsMSetMode_All) {
+    ASSERT_TRUE(IsMSetMode(TestMode::MSET_LOCAL));
+    ASSERT_TRUE(IsMSetMode(TestMode::MSET_REMOTE));
+    ASSERT_FALSE(IsMSetMode(TestMode::SET_LOCAL));
+    ASSERT_FALSE(IsMSetMode(TestMode::MGET_LOCAL));
+}
+
+TEST(IsMGetMode_All) {
+    ASSERT_TRUE(IsMGetMode(TestMode::MGET_LOCAL));
+    ASSERT_TRUE(IsMGetMode(TestMode::MGET_CROSS_NODE));
+    ASSERT_TRUE(IsMGetMode(TestMode::MGET_REMOTE_DIRECT));
+    ASSERT_TRUE(IsMGetMode(TestMode::MGET_REMOTE_CROSS));
+    ASSERT_FALSE(IsMGetMode(TestMode::MSET_LOCAL));
+    ASSERT_FALSE(IsMGetMode(TestMode::GET_LOCAL));
+}
+
+TEST(LoadConfig_MsetMGet_BatchSizeDefault) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mset_local","worker_memory_mb":4096
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.msetBatchSize, 8);
+    ASSERT_EQ(cfg.mgetBatchSize, 8);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MsetMGet_BatchSizeCustom) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mset_local","worker_memory_mb":4096,
+        "mset_batch_size":32,"mget_batch_size":16
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.msetBatchSize, 32);
+    ASSERT_EQ(cfg.mgetBatchSize, 16);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MsetBatchSize_Invalid) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mset_local","worker_memory_mb":4096,
+        "mset_batch_size":0
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_MgetBatchSize_Invalid) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"mget_local","worker_memory_mb":4096,
+        "mget_batch_size":0
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+
 TEST(LoadConfig_MixedMode_ValidRatio) {
     auto path = WriteTempConfig(R"({
         "etcd_address":"x:1","listen_port":9000,
-        "test_mode":"mixed_local","worker_memory_mb":4096,
+        "test_mode":"mixed_local_set_get","worker_memory_mb":4096,
         "set_ratio":0.7
     })");
     Config cfg;

@@ -8,7 +8,7 @@
 |------|------|---------|
 | **Pipeline 模式** | Writer/Reader 角色分离，持续运行，QPS 控制，HTTP 通知机制 | [pipeline-guide.md](pipeline-guide.md) |
 | **Cache 模式** | cacheGetOrCreate 流水线，Key Pool 管理，动态命中率控制 | [cache-guide.md](cache-guide.md) |
-| **Benchmark 模式** | 6 种 Set/Get 测试模式，round-based 执行，per-phase 计时 | [benchmark-guide.md](benchmark-guide.md) |
+| **Benchmark 模式** | 16 种 Set/Get 测试模式（含 mixed 混合 + MSet/MGet 批量），round-based 执行 | [benchmark-guide.md](benchmark-guide.md) |
 
 **共同特性：** 多节点部署、内置指标采集（CSV + HTML 报告）、CPU 亲和性、远程部署。
 
@@ -144,7 +144,7 @@ cd tests/kvtest
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `test_mode` | string | — | 测试模式：`set_local` / `set_remote` / `get_local` / `get_cross_node` / `get_remote_direct` / `get_remote_cross` |
+| `test_mode` | string | — | 测试模式（16 种），详见 [benchmark-guide.md](benchmark-guide.md) |
 | `worker_memory_mb` | int | 0 | Worker 共享内存上限（MB），用于计算每轮 key 数 |
 | `duration_seconds` | int | 0 | 总运行时长（秒），0 = 不限时 |
 | `total_rounds` | int | 0 | 总轮数，0 = 不限轮 |

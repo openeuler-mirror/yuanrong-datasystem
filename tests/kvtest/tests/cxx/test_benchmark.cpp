@@ -205,6 +205,69 @@ TEST(RunBenchmarkRounds_SingleRound) {
     ASSERT_EQ(stats.totalDel.load(), 10);
 }
 
+// --- MSet/MGet phase tests ---
+
+TEST(BenchmarkWorker_MSetPhase) {
+    StubKVClient client;
+    auto result = RunMSetPhase(&client, 0, 0, 0, 10, 3, "data");
+    ASSERT_EQ(result.successCount, 10);
+    ASSERT_EQ(client.msetCount.load(), 10);
+}
+
+TEST(BenchmarkWorker_MSetPhase_ExactBatch) {
+    StubKVClient client;
+    // 9 keys, batchSize=3 -> 3 batches of exactly 3
+    auto result = RunMSetPhase(&client, 0, 0, 0, 9, 3, "data");
+    ASSERT_EQ(result.successCount, 9);
+    ASSERT_EQ(client.msetCount.load(), 9);
+}
+
+TEST(BenchmarkWorker_MSetPhase_PartialBatch) {
+    StubKVClient client;
+    // 10 keys, batchSize=3 -> batches of 3, 3, 3, 1
+    auto result = RunMSetPhase(&client, 0, 0, 0, 10, 3, "data");
+    ASSERT_EQ(result.successCount, 10);
+    ASSERT_EQ(client.msetCount.load(), 10);
+}
+
+TEST(BenchmarkWorker_MSetPhase_SingleBatch) {
+    StubKVClient client;
+    // 5 keys, batchSize=10 -> single batch of 5
+    auto result = RunMSetPhase(&client, 0, 0, 0, 5, 10, "data");
+    ASSERT_EQ(result.successCount, 5);
+    ASSERT_EQ(client.msetCount.load(), 5);
+}
+
+TEST(BenchmarkWorker_MSetPhase_Failure) {
+    StubKVClient client;
+    client.failSets = true;
+    auto result = RunMSetPhase(&client, 0, 0, 0, 6, 3, "data");
+    ASSERT_EQ(result.successCount, 0);
+    ASSERT_EQ(result.latenciesMs.size(), 0u);
+}
+
+TEST(BenchmarkWorker_MGetPhase) {
+    StubKVClient client;
+    auto result = RunMGetPhase(&client, 0, 0, 0, 10, 3);
+    ASSERT_EQ(result.successCount, 10);
+    ASSERT_EQ(client.mgetCount.load(), 10);
+}
+
+TEST(BenchmarkWorker_MGetPhase_ExactBatch) {
+    StubKVClient client;
+    auto result = RunMGetPhase(&client, 0, 0, 0, 9, 3);
+    ASSERT_EQ(result.successCount, 9);
+    ASSERT_EQ(client.mgetCount.load(), 9);
+}
+
+TEST(BenchmarkWorker_MGetPhase_Failure) {
+    StubKVClient client;
+    client.failGets = true;
+    auto result = RunMGetPhase(&client, 0, 0, 0, 6, 3);
+    ASSERT_EQ(result.successCount, 0);
+    ASSERT_EQ(result.latenciesMs.size(), 0u);
+}
+
 TEST(RunBenchmarkRounds_MultipleRounds) {
     StubKVClient client;
     BenchmarkStats stats;
@@ -225,62 +288,41 @@ TEST(RunBenchmarkRounds_MultipleRounds) {
     ASSERT_EQ(stats.totalDel.load(), 12);
 }
 
-// --- Mixed phase tests ---
+// --- GetRoundForGet tests ---
 
-TEST(RunMixedPhase_BasicSplit) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 0, 10, 4, 2,
-                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 10);
-    ASSERT_EQ(result.getResult.successCount, 10);
-    ASSERT_EQ(client.setCount.load(), 10);
-    ASSERT_EQ(client.getCount.load(), 10);
+TEST(GetRoundForGet_SameKeys_RoundZero) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::SAME_KEYS, 0), 0);
 }
 
-TEST(RunMixedPhase_AllSetThreads) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 0, 8, 4, 0,
-                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 8);
-    ASSERT_EQ(result.getResult.successCount, 0);
-    ASSERT_EQ(client.setCount.load(), 8);
-    ASSERT_EQ(client.getCount.load(), 0);
+TEST(GetRoundForGet_SameKeys_RoundOne) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::SAME_KEYS, 1), 1);
 }
 
-TEST(RunMixedPhase_ReadPrevRoundZero) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 0, 10, 2, 2,
-                                MixedKeyStrategy::READ_PREV, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 10);
-    ASSERT_EQ(result.getResult.successCount, 0);
-    ASSERT_EQ(client.setCount.load(), 10);
-    ASSERT_EQ(client.getCount.load(), 0);
+TEST(GetRoundForGet_SameKeys_RoundFive) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::SAME_KEYS, 5), 5);
 }
 
-TEST(RunMixedPhase_ReadPrevRoundOne) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 1, 10, 2, 2,
-                                MixedKeyStrategy::READ_PREV, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 10);
-    ASSERT_EQ(result.getResult.successCount, 10);
-    ASSERT_EQ(client.setCount.load(), 10);
-    ASSERT_EQ(client.getCount.load(), 10);
+TEST(GetRoundForGet_ReadPrev_RoundZero) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::READ_PREV, 0), -1);
 }
 
-TEST(RunMixedPhase_IndependentStrategy) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 5, 10, 2, 2,
-                                MixedKeyStrategy::INDEPENDENT, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 10);
-    ASSERT_EQ(result.getResult.successCount, 10);
-    ASSERT_EQ(client.setCount.load(), 10);
-    ASSERT_EQ(client.getCount.load(), 10);
+TEST(GetRoundForGet_ReadPrev_RoundOne) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::READ_PREV, 1), 0);
 }
 
-TEST(RunMixedPhase_EmptyKeys) {
-    StubKVClient client;
-    auto result = RunMixedPhase(&client, 0, 0, 0, 2, 2,
-                                MixedKeyStrategy::SAME_KEYS, "string_view", "data");
-    ASSERT_EQ(result.setResult.successCount, 0);
-    ASSERT_EQ(result.getResult.successCount, 0);
+TEST(GetRoundForGet_ReadPrev_RoundFive) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::READ_PREV, 5), 4);
 }
+
+TEST(GetRoundForGet_Independent_RoundZero) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::INDEPENDENT, 0), 0);
+}
+
+TEST(GetRoundForGet_Independent_RoundFive) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::INDEPENDENT, 5), 0);
+}
+
+TEST(GetRoundForGet_Independent_RoundHundred) {
+    ASSERT_EQ(GetRoundForGet(MixedKeyStrategy::INDEPENDENT, 100), 0);
+}
+
