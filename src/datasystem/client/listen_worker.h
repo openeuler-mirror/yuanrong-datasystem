@@ -50,6 +50,7 @@ constexpr int INVALID_SOCKET_FD = -1;
 enum class SwitchTriggerReason : uint8_t {
     WORKER_UNAVAILABLE = 0,
     VOLUNTARY_SCALE_DOWN,
+    URMA_DATA_PLANE_FAILURE,
 };
 
 class FdReleaseHelper {

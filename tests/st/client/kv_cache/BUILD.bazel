@@ -383,3 +383,18 @@ ds_cc_test(
         "//src/datasystem/common/util:raii",
     ],
 )
+
+ds_cc_test(
+    name = "kv_client_urma_failover_test",
+    srcs = ["kv_client_urma_failover_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client:urma_success_rate_tracker",
+        "//src/datasystem/client:service_discovery",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:timer",
+    ],
+)

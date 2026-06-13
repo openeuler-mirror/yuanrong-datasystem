@@ -194,6 +194,8 @@ private:
                                                               "enable_hash_ring_self_healing",
                                                               "shared_disk_arena_per_tenant",
                                                               "enable_lossless_data_exit_mode",
+                                                              "urma_failover_success_rate_ratio",
+                                                              "urma_failover_min_sample_count",
 #ifdef WITH_TESTS
                                                               "inject_actions"
 #endif

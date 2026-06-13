@@ -4,6 +4,7 @@ list(APPEND CLIENT_SRCS
         datasystem.cpp
         client_worker_common_api.cpp
         listen_worker.cpp
+        urma_success_rate_tracker.cpp
         mmap_manager.cpp
         client_flags_monitor.cpp
         embedded_client_worker_api.cpp
