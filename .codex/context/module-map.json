@@ -1,6 +1,7 @@
 {
   "defaults": [
     ".repo_context/modules/overview/engineering-principles.md",
+    ".repo_context/playbooks/features/infra-engineering-workflow.md",
     ".repo_context/modules/quality/tests-and-reproduction.md"
   ],
   "routes": [

@@ -1,6 +1,6 @@
 ---
 name: ds-pr-review
-description: Use when reviewing yuanrong-datasystem code, tests, scripts, docs, diffs, commits, pull requests, PR descriptions, or design changes for correctness, design-contract compliance, hot-path performance, concurrency and C++ safety, persistence, recovery, public API/config/docs coverage, Bazel/CMake build support, sensitive-information exposure, testing, context-update risk, and GitCode PR review-comment publishing.
+description: Use when reviewing yuanrong-datasystem code, tests, scripts, docs, diffs, commits, pull requests, PR descriptions, or design changes for correctness, design-contract compliance, internal/public API design quality, naming clarity, developer experience, abstraction boundaries, module locatability, production diagnosability, misuse prevention, ownership/lifecycle safety, hot-path performance, concurrency and C++ safety, persistence, recovery, public API/config/docs coverage, Bazel/CMake build support, sensitive-information exposure, testing, operability, risk-calibrated comment quality, context-update risk, and GitCode PR review-comment publishing.
 ---
 
 # Datasystem PR Review
@@ -85,6 +85,11 @@ Publishing rules:
 - Lead with findings, ordered by severity.
 - Prioritize correctness, data integrity, recovery, availability, hot-path performance, concurrency safety, and missing
   tests.
+- Treat widely used internal APIs as semi-public APIs. Review whether they are clear, hard to misuse, maintainable, and
+  friendly to future developers, not only whether the current patch compiles or passes the happy path.
+- Calibrate findings by impact. Block on correctness, data integrity, recovery, availability, hot-path performance,
+  concurrency, memory safety, security, build, public contract, or serious maintainability regressions. Treat subjective
+  polish as a local note, `suggestion`, or `nit`, and do not publish it as a blocking finding.
 - Check source code, tests, scripts, docs, PR descriptions, and commit messages for sensitive information exposure.
 - Do not quote secrets or private values in review output; identify the category and location, then ask for redaction or
   rotation when needed.
@@ -98,8 +103,10 @@ Publishing rules:
 
 ## Strict Review Passes
 
-For large or AI-assisted PRs, run these passes explicitly. Do not limit the review to modified diff lines when the change
-creates or reshapes a shared module.
+For large, AI-assisted, cross-module, hot-path, shared-interface, public-boundary, persistence/recovery, concurrency, or
+security-sensitive PRs, run these passes explicitly. For narrow low-risk changes, apply the passes that match the touched
+surface, but do not skip any gate that the code path actually triggers. Do not limit the review to modified diff lines
+when the change creates or reshapes a shared module.
 
 1. Claim traceability:
    - Map PR-description and design-document claims to actual code, tests, docs, and measurement evidence.
@@ -109,15 +116,23 @@ creates or reshapes a shared module.
    - Review the whole touched module, not only modified lines.
    - Flag scattered call-site logic, duplicate helpers, dead code, unused compatibility shims, and patch-like wrappers.
    - Prefer centralizing behavior in the owning abstraction over exposing infrastructure details to business call sites.
+   - For shared internal interfaces, inspect call-site ergonomics across the whole module and adjacent modules, not only
+     the edited call site.
+   - Review names of shared types, functions, modes, flags, and helper APIs. Names should expose semantic intent,
+     ownership, lifetime, sync/async behavior, and error-handling expectations without requiring hidden context.
+   - Check module locatability: an on-call engineer should be able to identify the owning module, entrypoint, state owner,
+     dependency boundary, and expected signal path without reverse-engineering unrelated code.
 3. Functional and design-contract correctness:
    - Check startup, runtime update, local/remote, SDK, worker, embedded, and config propagation paths where applicable.
    - Verify default values, explicit default values, derived values, sticky user values, validation, and idempotency.
 4. Hot-path performance gate:
-   - Treat SDK/client/worker/access-log/config paths as hot until source inspection proves otherwise.
+   - Treat SDK, boundary adapters, client/worker/master/common infrastructure, config, RPC, metrics, logging, storage,
+     and scheduler paths as hot until source inspection proves otherwise.
    - Check latency, throughput, allocations, copies, string formatting, lock/atomic contention, map lookups, logging,
      exporter IO, background work interference, and queue/backpressure behavior.
    - Compare against explicit targets in the design or PR, for example concurrency 32 and QPS 4000.
-   - For sampling/logging, inspect sampled-out and sampled-in paths separately.
+   - For guard, lazy, deferred, sampling, logging, cache, or fast-reject APIs, inspect both rejected/skipped and accepted
+     paths. Check caller-side argument evaluation, not only the callee body.
 5. Minimal implementation and reuse:
    - Search for existing utilities, config helpers, status patterns, test fixtures, and build targets before accepting new
      mechanisms.
@@ -125,6 +140,7 @@ creates or reshapes a shared module.
 6. C++ safety and concurrency:
    - Review ownership, lifetime, nullability, raw pointers, reference captures, async callbacks, singleton/static
      lifetime, RAII, memory bounds, use-after-free risk, lock order, shutdown, and thread visibility.
+   - For RAII or one-shot objects with destructor side effects, check copy/move/delete semantics and moved-from safety.
    - Use Google C++ guidance as a reference for readability, ownership clarity, self-contained headers,
      include-what-you-use, and avoiding surprising or dangerous constructs.
 7. Public interface and docs:
@@ -134,15 +150,108 @@ creates or reshapes a shared module.
    - Check Bazel and CMake when both exist for the touched area.
    - Verify that targets depend on implementation objects, not only headers, and that public headers/package manifests are
      updated when needed.
+   - Check API signatures against all call sites after facade or shared-header changes, including language bindings,
+     CMake globbed sources, Bazel-only tests, and package entry points.
 9. Tests:
    - Check whether tests would fail before the fix and assert the intended semantics.
    - Flag default tests expected to run longer than 8 seconds unless they are explicitly manual/performance-only and
      documented.
    - Inspect flakiness risk from sleeps, wall-clock durations, randomness, thread scheduling, and shared global flags.
-10. Discussion lifecycle:
-   - Review existing comments before publishing new ones.
+   - Require invariant tests for shared abstractions: misuse prevention, error paths, async lifetime, move/copy behavior,
+     skipped/fast-reject path cost, and boundary input validation where applicable.
+   - Prefer behavior, state, and invariant tests through public or semi-public APIs. Avoid tests that only lock in private
+     call ordering or implementation interactions unless that ordering is itself the contract.
+10. Production diagnosability and locatability:
+   - For new or reshaped modules, ask whether a production bug can be quickly narrowed to the right owner, state machine,
+     request path, background task, config, or boundary layer from symptoms and available telemetry.
+   - Flag code that hides behavior behind overly generic wrappers, stringly typed dispatch, global registries, implicit
+     background work, cross-module side effects, or multi-hop callbacks without clear ownership and signal correlation.
+   - Check logs, metrics, traces, error codes, request IDs, object keys, worker/master/client identity, config source, and
+     state-transition evidence where relevant. Signals must help locate the module without exposing sensitive data or
+     adding hot-path overhead.
+   - Analyze complexity of new code for incident response, not only for local readability: long control flows, duplicated
+     branches, hidden retries, implicit defaults, and spread-out state updates increase mean time to diagnose.
+11. Discussion lifecycle:
+   - Review existing unresolved and resolved comments before publishing new ones.
    - Resolve only comments that current code actually fixes.
    - Reopen or reply to incorrectly resolved comments when the issue remains, and state the source-backed reason.
+
+## System-Wide Design Gates
+
+Apply these gates to every module in the system. They are not specific to any one feature area.
+
+1. Internal API design:
+   - Treat internal APIs used across files, modules, or ownership boundaries as semi-public APIs.
+   - Check whether the API has a single clear responsibility, a small surface area, stable semantics, and one obvious
+     recommended usage path.
+   - Do not accept an interface that merely works while pushing policy, lifecycle, synchronization, or formatting details
+     into business call sites.
+2. Developer experience:
+   - Review from the perspective of the next developer adding a similar feature.
+   - Flag APIs that require reading implementation code, old review threads, or hidden invariants to use correctly.
+   - Treat names as part of the interface. Names should make ownership, lifetime, mode, lazy/deferred behavior,
+     concurrency expectations, and error semantics obvious at the call site.
+   - Calling code should express business intent; infrastructure mechanics should stay inside the owning abstraction.
+3. Misuse prevention:
+   - Check common wrong usages, not only the intended happy path.
+   - Prefer interfaces that make incorrect ownership, nullability, ordering, or mode choices fail at compile time or in
+     focused tests instead of relying on comments.
+4. Ownership and lifetime:
+   - Audit `Ref`, `View`, `Owned`, `Provider`, callback, handle, buffer, iterator, and pointer-style APIs.
+   - Verify who owns the object, who may extend its lifetime, whether it may cross threads or async boundaries, and who is
+     responsible for release or completion.
+   - References and views are only acceptable when the use is same-scope and synchronous; async/shared use needs owned
+     state or explicit shared lifetime.
+5. Hot-path argument cost:
+   - Inspect caller expressions for expensive work before guarded/lazy/deferred APIs are entered.
+   - Flag premature string formatting, proto serialization, container construction, copies, JNI/pybind conversion, memory
+     allocation, locks, IO, time reads, atomics, and CAS in paths that are meant to be skipped, rejected, cached, or lazy.
+6. Abstraction boundaries:
+   - Review boundaries between common infrastructure, client, worker, master, SDKs, storage, RPC, persistence, config, and
+     operations code.
+   - Do not let infrastructure expose internal policy to business modules, and do not let one business special case
+     pollute a shared abstraction.
+   - Cross-boundary data structures should be minimal, explicit, and stable.
+7. Minimal implementation and reuse:
+   - Verify that existing helpers, status/error patterns, thread pools, serializers, config paths, metrics, persistence
+     utilities, and test harnesses cannot reasonably serve the need before accepting new mechanisms.
+   - Special cases should stay local unless multiple call sites genuinely need a shared API.
+8. Consistency and learnability:
+   - A capability should have one recommended style across the system.
+   - Flag mixed old/new styles, compatibility shims without owners, duplicate helpers, and examples or tests that teach a
+     non-recommended pattern.
+   - Equivalent concepts should have equivalent names. Do not accept different names for the same lifecycle or mode, or
+     one name that means different things across modules, unless the difference is documented and source-backed.
+9. Cross-language and boundary layers:
+   - Treat C API, JNI, pybind, RPC, protobuf, CLI, K8s/Helm, config files, and generated artifacts as system boundaries.
+   - Check nullability, length-delimited versus NUL-terminated data, encoding, ownership transfer, buffer copies,
+     exception/error propagation, ABI/API compatibility, and documentation synchronization.
+   - Logging, metrics, tracing, or diagnostics added at a boundary must not change the boundary's error behavior.
+10. Build closure:
+   - Check not only Bazel/CMake dependencies, but also source-level signature compatibility across all direct and indirect
+     consumers.
+   - Shared headers and facade changes require grepping call sites and considering language bindings, package targets,
+     tests, and generated code.
+11. Test contracts:
+   - Tests should encode design invariants, not only happy-path behavior.
+   - Cover concurrency, async lifetime, error paths, boundary inputs, move/copy semantics, recovery/persistence, dynamic
+     config, and hot-path performance where relevant.
+   - Prefer behavior and state assertions through public or semi-public APIs. Keep implementation-interaction assertions
+     only when they describe a stable contract, such as lock-free fast rejection, single-shot completion, or ordering.
+   - Default tests must be fast; long-running stress or soak coverage belongs in manual, nightly, or performance targets.
+12. Operability:
+   - Review whether the change can be deployed, observed, diagnosed, throttled, rolled back, and documented.
+   - Check logs, metrics, error codes, config defaults, compatibility behavior, and failure-mode visibility.
+   - Check production locatability: from an alert, user report, or error log, an on-call engineer should know which module
+     owns the behavior, which entrypoint to inspect first, which state/config changed, and which telemetry correlates the
+     failing request across boundaries.
+   - Reject diagnosability that depends on reading source-only hidden invariants, guessing cross-module side effects, or
+     enabling high-cost debug logging on hot paths.
+13. Review discussion lifecycle:
+   - Pull current discussions before every serious review round.
+   - Check resolved comments against current source when the area changed or the PR is AI-assisted.
+   - Avoid duplicate findings; when a previous comment exists, reply or reopen with source-backed evidence instead of
+     posting a semantic duplicate.
 
 ## Comment Quality Gate
 
@@ -151,7 +260,10 @@ creates or reshapes a shared module.
 - Wrap identifiers, flags, file names, and short code fragments in backticks.
 - Put multi-line code in fenced blocks. Prefer `example_code` instead of embedding code in `problem` or `suggestion`.
 - Include a concrete fix direction. For design/API/performance findings, include a code sketch when it reduces ambiguity.
-- Do not publish comments that are only stylistic unless style affects correctness, safety, performance, or maintainability.
+- Do not publish comments that are only stylistic unless style affects correctness, safety, performance, API clarity,
+  developer misuse risk, or maintainability.
+- Use `critical` or high severity only for findings that can break correctness, safety, performance targets, build
+  closure, public contracts, or long-term code health. Use lower severity, `suggestion`, or `nit` for localized cleanup.
 - Do not publish speculative concerns as findings. Ask an open question locally when evidence is insufficient.
 
 ## Sensitive Information Gate
@@ -185,16 +297,16 @@ Finding JSON contract:
     {
       "path": "src/datasystem/common/log/access_recorder.h",
       "diff_line_index": 42,
-      "line": 181,
+      "line": 140,
       "type": "design",
       "severity": "critical",
-      "title": "收敛采样细节到 AccessRecorder",
-      "evidence": "`AccessRecorderGuard` 在调用点暴露 `ShouldRecord()` 和手工 `RequestParam` 构造。",
-      "problem": "采样判断和请求参数构造散落在业务调用点。",
-      "impact": "这会削弱模块内聚性，并让 sampled-out 热路径更容易重新引入字符串构造或二次采样风险。",
-      "suggestion": "保留 lazy `AccessRecorder::Record(...)` 接口，只在 sampled-in 后构造请求参数。",
-      "example_code": "AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);\\nStatus rc = impl_->Get(keys, subTimeoutMs, buffers);\\naccessPoint.Record(rc, buffers.size(), [&](RequestParam &req) {\\n    req.objectKey = objectKeysToString(keys);\\n});",
-      "verification": "执行 access-recorder 单元测试，并用 dry-run 确认 Markdown 渲染。"
+      "title": "收敛 AccessRecorder 参数构造职责",
+      "evidence": "`AccessRecorder` 让调用方自行判断采样、填参和写出。",
+      "problem": "共享接口把采样、延迟构造和记录顺序暴露给业务调用点。",
+      "impact": "新增调用点容易漏状态码、参数填充或资源释放，降低模块内聚性。",
+      "suggestion": "把采样和延迟填参收敛到 owning abstraction，调用方只表达记录意图。",
+      "example_code": "access.Record(rc, [&](RequestParam &req) {\\n  req.objectKey = objectKeysToString(keys);\\n});",
+      "verification": "补充接口误用和延迟填参单测，并用 dry-run 确认 Markdown 渲染。"
     }
   ]
 }

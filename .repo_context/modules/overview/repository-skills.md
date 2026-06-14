@@ -26,7 +26,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-log-analysis/SKILL.md`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
 - Last verified against source:
-  - `2026-06-09`
+  - `2026-06-13`
 
 ## Purpose
 
@@ -42,8 +42,8 @@ when a natural-language request should invoke one of them.
 
 | Skill | Canonical use | Source-backed trigger phrases | Ambiguous mentions that require confirmation |
 | --- | --- | --- | --- |
-| `ds-infra-engineering` | route implementation, debugging, refactor, design, and codebase Q&A through repository-level infrastructure engineering gates | “实现/修复/重构/分析 datasystem 代码”, “修改 worker/client/common/master”, “性能/并发/恢复相关改动”, “infra engineering” | broad discussion of engineering philosophy without asking for codebase-specific analysis |
-| `ds-pr-review` | review code, tests, scripts, docs, diffs, PRs, commits, or designs using strict infrastructure gates for correctness, design-contract compliance, hot-path performance, concurrency/C++ safety, public API/config/docs coverage, Bazel/CMake support, sensitive-information exposure, test quality, discussion lifecycle, and rendered comment quality; when the target is a GitCode PR/MR number or URL, prepare a review bundle and publish validated high-confidence findings back to the PR page through the YuanRong PR review workflow | “review this diff”, “检查这个 PR”, “检视 1031”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review; explicitly requesting local-only review |
+| `ds-infra-engineering` | route implementation, debugging, refactor, design, and codebase Q&A through repository-level development gates for change decomposition, risk classification, qualified ownership, module boundaries, internal/public API quality, developer experience, misuse prevention, ownership/lifetime, production locatability, rollout/rollback, security boundaries, hot-path performance, concurrency, recovery, build/test behavior, and context updates | “实现/修复/重构/分析 datasystem 代码”, “修改 worker/client/common/master”, “性能/并发/恢复相关改动”, “infra engineering” | broad discussion of engineering philosophy without asking for codebase-specific analysis |
+| `ds-pr-review` | review code, tests, scripts, docs, diffs, PRs, commits, or designs using strict infrastructure gates for correctness, design-contract compliance, internal/public API quality, naming clarity, developer experience, module locatability, production diagnosability, hot-path performance, concurrency/C++ safety, public API/config/docs coverage, Bazel/CMake support, sensitive-information exposure, behavior-focused test quality, discussion lifecycle, and risk-calibrated rendered comments; when the target is a GitCode PR/MR number or URL, prepare a review bundle and publish validated high-confidence findings back to the PR page through the YuanRong PR review workflow | “review this diff”, “检查这个 PR”, “检视 1031”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review; explicitly requesting local-only review |
 | `ds-self-verify` | verify diff, tests, context updates, and infra risk before Codex claims work is complete or PR-ready, using the shared AI self-verification playbook | “完成前自检”, “self verify”, “准备提交/PR前检查”, Codex is about to claim completion after file changes | general questions about verification policy |
 | `ds-create-pr` | create a GitCode PR for a pushed branch with a template-compliant PR body | “创建PR”, “提交PR”, “开PR”, “create pull request”, “open a PR”, “发起合并请求” | mentions of PR review policy, PR template, or PR conflicts without asking to create a PR |
 | `ds-refresh-docs` | rebuild and publish online Chinese docs from the latest upstream `master` into `doc_pages`, then automatically open the GitCode PR | “更新在线文档”, “刷新在线文档”, “发布在线文档”, “refresh online docs”, “update zh-cn latest docs” | mentions of online docs, docs publishing, or `doc_pages` without clearly asking to refresh or publish |

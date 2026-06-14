@@ -14,7 +14,7 @@
   - `.skills/*/scripts/*`
   - `.repo_context/modules/overview/repository-skills.md`
 - Last verified against source:
-  - `2026-05-14`
+  - `2026-06-14`
 
 ## Purpose
 
@@ -82,11 +82,20 @@ Examples that should not trigger:
 - “解释一下 ds-refresh-docs 的流程”
 - “检查一下 ds-create-pr 为什么失败”
 
+Examples that should not trigger `ds-infra-engineering`:
+
+- pure documentation or wording changes that do not change commands, config semantics, API behavior, release behavior,
+  operator behavior, `.repo_context` routing, or `.skills` routing
+- formatting-only, typo-only, comment-only, or Markdown rendering fixes that do not change code, scripts, build
+  behavior, test behavior, or development workflow semantics
+- CI/YAML changes that only adjust comments, display names, or non-functional metadata; changes to build, test, release,
+  dependency, cache, permission, timeout, security, or validation behavior should still trigger `ds-infra-engineering`
+
 ## Current Registration Table
 
 | Skill | Trigger now | Confirm first when |
 | --- | --- | --- |
-| `ds-infra-engineering` | implementation, debugging, refactor, design, or codebase Q&A touches runtime/client/worker/master/common infra, performance, concurrency, or recovery-sensitive code | user only asks broad engineering philosophy unrelated to the repository |
+| `ds-infra-engineering` | implementation, debugging, refactor, design, or codebase Q&A touches runtime/client/worker/master/common infra, shared APIs, module boundaries, change decomposition, risk validation, rollout/rollback, production diagnosability, performance, concurrency, persistence, security boundaries, or recovery-sensitive code | user only asks broad engineering philosophy unrelated to the repository |
 | `ds-pr-review` | user asks to review a diff, PR, commit, code change, or design; for GitCode PR/MR numbers or URLs, use the prepare -> JSON findings -> publish workflow and post high-confidence findings back to the PR page | user asks only how review policy works, or explicitly asks for local-only review |
 | `ds-self-verify` | Codex changed files and is preparing to claim completion, or user explicitly asks for completion self-check using the shared AI self-verification playbook | user asks only what self-verification means |
 | `ds-log-analysis` | user asks to analyze KVCache access/resource logs or generate a report | user only asks about log format or script internals |

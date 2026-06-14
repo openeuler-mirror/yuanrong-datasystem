@@ -5,8 +5,9 @@ context is small or a long task is compacted.
 
 ## What It Does
 
-- `SessionStart`: injects a short repository snapshot, current git state, and
-  the most relevant `.repo_context/` entries.
+- `SessionStart`: injects a short repository snapshot, current git state, the
+  default infrastructure engineering workflow, and the most relevant
+  `.repo_context/` entries.
 - `UserPromptSubmit`: adds a compact context-routing reminder for coding,
   debugging, review, and analysis prompts.
 - `PreToolUse`: routes pending tool calls to the smallest likely context docs

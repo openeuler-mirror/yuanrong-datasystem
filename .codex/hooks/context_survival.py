@@ -21,11 +21,15 @@ MAX_RECENT_TOOLS = 8
 
 DEFAULT_CONTEXT_DOCS = [
     ".repo_context/modules/overview/engineering-principles.md",
+    ".repo_context/playbooks/features/infra-engineering-workflow.md",
     ".repo_context/modules/quality/tests-and-reproduction.md",
 ]
 
 DEFAULT_ROUTE_MAP = [
-    (["src/datasystem/worker/object_cache", "src/datasystem/worker"], [".repo_context/modules/runtime/worker-runtime.md"]),
+    (
+        ["src/datasystem/worker/object_cache", "src/datasystem/worker"],
+        [".repo_context/modules/runtime/worker-runtime.md"],
+    ),
     (["src/datasystem/master"], [".repo_context/modules/overview/repository-overview.md"]),
     (
         ["src/datasystem/common/kvstore/etcd", "third_party/protos/etcd"],
@@ -51,7 +55,10 @@ DEFAULT_ROUTE_MAP = [
             ".repo_context/modules/quality/test-suite-design.md",
         ],
     ),
-    (["build.sh", "CMakeLists.txt", "cmake", "src/datasystem/CMakeLists.txt"], [".repo_context/modules/quality/cmake-build/README.md"]),
+    (
+        ["build.sh", "CMakeLists.txt", "cmake", "src/datasystem/CMakeLists.txt"],
+        [".repo_context/modules/quality/cmake-build/README.md"],
+    ),
     ([".skills"], [".repo_context/modules/overview/repository-skills.md"]),
     ([".repo_context"], [".repo_context/README.md", ".repo_context/index.md", ".repo_context/maintenance.md"]),
 ]
@@ -162,7 +169,10 @@ PATH_RE = re.compile(
 )
 
 KEYWORD_PATHS = [
-    (re.compile(r"\bworker\b|object[_ -]?cache|batch\s*get|batchget", re.IGNORECASE), "src/datasystem/worker/object_cache"),
+    (
+        re.compile(r"\bworker\b|object[_ -]?cache|batch\s*get|batchget", re.IGNORECASE),
+        "src/datasystem/worker/object_cache",
+    ),
     (re.compile(r"\bmaster\b|metadata", re.IGNORECASE), "src/datasystem/master"),
     (re.compile(r"\betcd\b|keep\s*alive|lease", re.IGNORECASE), "src/datasystem/common/kvstore/etcd"),
     (re.compile(r"\bclient\b|\bsdk\b|python\s*api", re.IGNORECASE), "src/datasystem/client"),
@@ -196,7 +206,10 @@ DESTRUCTIVE_PATTERNS = [
     (re.compile(r"\bgit\s+reset\s+--hard\b"), "destructive git reset is blocked"),
     (re.compile(r"\bgit\s+checkout\s+--\s+"), "destructive git checkout is blocked"),
     (re.compile(r"\bgit\s+clean\s+-[A-Za-z]*[fdx][A-Za-z]*\b"), "destructive git clean is blocked"),
-    (re.compile(r"\brm\s+-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*\s+(?:/|\.|\*|~|\$HOME|\.git)(?:\s|$)"), "destructive rm is blocked"),
+    (
+        re.compile(r"\brm\s+-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*\s+(?:/|\.|\*|~|\$HOME|\.git)(?:\s|$)"),
+        "destructive rm is blocked",
+    ),
     (re.compile(r"\bsudo\b"), "sudo is blocked by repository hook policy"),
     (re.compile(r"chmod\s+-R\s+777\b"), "world-writable recursive chmod is blocked"),
 ]
@@ -209,7 +222,9 @@ def evaluate_bash_command(command: str) -> CommandDecision:
         if pattern.search(command):
             return CommandDecision(blocked=True, reason=reason)
     if RTK_EXPECTED.search(command) and not command.lstrip().startswith("rtk "):
-        return CommandDecision(advisory="Repository convention: prefix shell commands with `rtk` to reduce transcript noise.")
+        return CommandDecision(
+            advisory="Repository convention: prefix shell commands with `rtk` to reduce transcript noise."
+        )
     return CommandDecision()
 
 
@@ -316,7 +331,10 @@ def handle_session_start(payload: dict[str, Any]) -> dict[str, Any]:
         "",
         "Core rules:",
         "- Treat `.repo_context/` as an index; load only the smallest relevant docs.",
-        "- Before large code work: read `.repo_context/README.md`, `index.md`, `maintenance.md`, generated repo index, then route to module docs.",
+        "- Before implementation, bugfix, refactor, design, or codebase Q&A: use "
+        "`.repo_context/playbooks/features/infra-engineering-workflow.md`.",
+        "- Before large code work: read `.repo_context/README.md`, `index.md`, `maintenance.md`, "
+        "generated repo index, then route to module docs.",
         "- Prefix shell commands with `rtk` in this repository.",
         "- Keep `.codex/context/working-state.md` current across compaction or long sessions.",
         "",
