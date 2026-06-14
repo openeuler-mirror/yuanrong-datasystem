@@ -35,7 +35,9 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log_manager.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
@@ -498,21 +500,49 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
 {
     (void)unsetenv(ACCESS_LOG_NAME_ENV.c_str());
     FLAGS_log_monitor = true;
+    Trace::Instance().Invalidate();
+    LogSampler::Instance().ResetForTest();
     const std::string sampledKey = "access-log-sampled";
     const std::string rejectedKey = "access-log-rejected";
     const std::string unlimitedKey = "access-log-unlimited";
     {
         AccessRecorderManager clientManager;
         DS_ASSERT_OK(clientManager.Init(true, false));
-        Trace::Instance().SetRequestLogTrace(true);
-        Trace::Instance().SetRequestSampleDecision(true, true);
+        TraceGuard sampledGuard = Trace::Instance().SetRequestTraceUUID();
+        LogSampleUserConfig sampledCfg;
+        sampledCfg.requestSampleRate = 1.0;
+        sampledCfg.requestSampleRateExplicit = true;
+        sampledCfg.accessSampleRate = 1.0;
+        sampledCfg.accessSampleRateExplicit = true;
+        sampledCfg.diagnosticSampleRate = 1.0;
+        sampledCfg.diagnosticSampleRateExplicit = true;
+        ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(sampledCfg));
         DS_ASSERT_OK(clientManager.LogPerformance("sampled", AccessKeyType::CLIENT, 1, 0, "1",
                                                   "{Object_key:" + sampledKey + "}", ""));
         DS_ASSERT_OK(clientManager.LogPerformance("sampled-empty", AccessKeyType::CLIENT, 1));
-        Trace::Instance().SetRequestSampleDecision(true, false);
+    }
+
+    {
+        AccessRecorderManager clientManager;
+        DS_ASSERT_OK(clientManager.Init(true, false));
+        TraceGuard rejectedGuard = Trace::Instance().SetRequestTraceUUID();
+        LogSampleUserConfig rejectedCfg;
+        rejectedCfg.requestSampleRate = 0.0;
+        rejectedCfg.requestSampleRateExplicit = true;
+        rejectedCfg.accessSampleRate = 0.0;
+        rejectedCfg.accessSampleRateExplicit = true;
+        rejectedCfg.diagnosticSampleRate = 1.0;
+        rejectedCfg.diagnosticSampleRateExplicit = true;
+        ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(rejectedCfg));
         DS_ASSERT_OK(clientManager.LogPerformance("rejected", AccessKeyType::CLIENT, 1, 0, "1",
                                                   "{Object_key:" + rejectedKey + "}", ""));
-        Trace::Instance().SetRequestSampleDecision(false, false);
+    }
+
+    {
+        AccessRecorderManager clientManager;
+        DS_ASSERT_OK(clientManager.Init(true, false));
+        TraceGuard unlimitedGuard = Trace::Instance().SetRequestTraceUUID();
+        LogSampler::Instance().ResetForTest();
         DS_ASSERT_OK(clientManager.LogPerformance("unlimited", AccessKeyType::CLIENT, 1, 0, "1",
                                                   "{Object_key:" + unlimitedKey + "}", ""));
     }
@@ -520,13 +550,21 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     {
         AccessRecorderManager workerManager;
         DS_ASSERT_OK(workerManager.Init(false, false));
-        Trace::Instance().SetRequestLogTrace(true);
-        Trace::Instance().SetRequestSampleDecision(true, true);
+        TraceGuard workerGuard = Trace::Instance().SetRequestTraceUUID();
+        LogSampleUserConfig workerCfg;
+        workerCfg.requestSampleRate = 1.0;
+        workerCfg.requestSampleRateExplicit = true;
+        workerCfg.accessSampleRate = 1.0;
+        workerCfg.accessSampleRateExplicit = true;
+        workerCfg.diagnosticSampleRate = 1.0;
+        workerCfg.diagnosticSampleRateExplicit = true;
+        ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(workerCfg));
         DS_ASSERT_OK(workerManager.LogPerformance("worker", AccessKeyType::ACCESS, 1, 0, "1",
                                                   "{Object_key:access-log-worker}", ""));
         DS_ASSERT_OK(workerManager.LogPerformance("request-out", AccessKeyType::REQUEST_OUT, 1, 0, "1",
                                                   "{Object_key:access-log-request-out}", ""));
     }
+    LogSampler::Instance().ResetForTest();
     Trace::Instance().SetRequestLogTrace(false);
     Trace::Instance().SetRequestSampleDecision(false, false);
 
@@ -556,7 +594,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     ASSERT_NE(sampledLine.find("logSampled:true"), std::string::npos);
     ASSERT_NE(sampledEmptyLine.find("{logSampled:true}"), std::string::npos);
     ASSERT_EQ(rejectedLine.find("logSampled:true"), std::string::npos);
-    ASSERT_EQ(unlimitedLine.find("logSampled:true"), std::string::npos);
+    ASSERT_NE(unlimitedLine.find("logSampled:true"), std::string::npos);
     ASSERT_EQ(std::count(sampledLine.begin(), sampledLine.end(), '|'),
               std::count(rejectedLine.begin(), rejectedLine.end(), '|'));
 

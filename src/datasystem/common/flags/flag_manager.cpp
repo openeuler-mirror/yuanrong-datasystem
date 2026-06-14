@@ -23,6 +23,7 @@
 #include <cstring>
 #include <iostream>
 #include <mutex>
+#include <securec.h>
 #include <stdarg.h>
 #include <string>
 #include <type_traits>
@@ -416,7 +417,7 @@ bool Flag::ParseAssignFromDouble(const std::string &value, std::string &errMsg)
     char *end;
     errno = 0;
     double parsed = strtod(value.c_str(), &end);
-    if (errno != 0 || end == value.c_str() || *end != '\0' || !std::isfinite(parsed)) {
+if (errno != 0 || end == value.c_str() || *end != '\0' || !std::isfinite(parsed)) {
         errMsg = IllegalValueMessage(value);
         return false;
     }

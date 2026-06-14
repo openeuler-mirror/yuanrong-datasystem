@@ -2797,7 +2797,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     workerOperationTimeCost.Clear();
     Timer timer;
     PerfPoint point(PerfKey::WORKER_EXIST_PRE_PROCESS);
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXIST);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXIST);
+    access.ObjectKeysRef(req.object_keys());
     INJECT_POINT("Exist.Sleep");
     auto clientId = ClientKey::Intern(req.client_id());
     VLOG(1) << "Exist start from client:" << clientId;
@@ -2851,9 +2852,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         rsp.add_exists(existKeys.count(key));
     }
 
-    RequestParam reqParam;
-    reqParam.objectKey = ObjectKeysToAbbrStr(req.object_keys());
-    posixPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     const auto totalExistUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Exist", totalExistMs);

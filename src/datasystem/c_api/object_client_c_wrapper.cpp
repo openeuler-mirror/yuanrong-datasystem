@@ -75,8 +75,7 @@ void OCFreeClient(ObjectClient_p clientPtr)
 
 struct StatusC ObjectExecutePut(ObjectClient_p clientPtr, const char *cObjKey, size_t cObjKeyLen, const char *cVal,
                                 size_t cValLen, const char **cNestedObjectKeys, const size_t *cNestedObjKeyLenArray,
-                                const size_t cNestedObjectKeysNum, const char *cConsistencyType,
-                                datasystem::RequestParam *reqParam)
+                                const size_t cNestedObjectKeysNum, const char *cConsistencyType)
 {
     std::string errorMsg;
     CheckNullptr(clientPtr, "clientPtr", errorMsg);
@@ -88,12 +87,13 @@ struct StatusC ObjectExecutePut(ObjectClient_p clientPtr, const char *cObjKey, s
     }
     // cNestedObjectKeys is an optional parameter and may be nullptr.
     std::unordered_set<std::string> nestedObjectKeysSet;
-    if (cNestedObjectKeys != nullptr) {
+    if (cNestedObjectKeys != nullptr && cNestedObjKeyLenArray != nullptr) {
         for (size_t i = 0; i < cNestedObjectKeysNum; i++) {
-            std::string objectKey(cNestedObjectKeys[i], cNestedObjKeyLenArray[i]);
-            (void)nestedObjectKeysSet.insert(objectKey);
+            if (cNestedObjectKeys[i] != nullptr) {
+                std::string objectKey(cNestedObjectKeys[i], cNestedObjKeyLenArray[i]);
+                (void)nestedObjectKeysSet.insert(objectKey);
+            }
         }
-        (*reqParam).nestedKey = objectKeysToString(cNestedObjectKeys, cNestedObjectKeysNum);
     }
     auto client = reinterpret_cast<std::shared_ptr<datasystem::object_cache::ObjectClientImpl> *>(clientPtr);
     std::string consistencyType(cConsistencyType);
@@ -108,8 +108,6 @@ struct StatusC ObjectExecutePut(ObjectClient_p clientPtr, const char *cObjKey, s
     if (rc.IsError()) {
         return ToStatusC(rc);
     }
-    (*reqParam).writeMode = std::to_string(static_cast<int>(createParam.writeMode));
-    (*reqParam).consistencyType = consistencyType;
     return StatusC{ datasystem::K_OK, {} };
 }
 
@@ -118,11 +116,20 @@ struct StatusC OCPut(ObjectClient_p clientPtr, const char *cObjKey, size_t cObjK
                      const size_t cNestedObjectKeysNum, const char *cConsistencyType)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
-    datasystem::RequestParam reqParam;
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_PUT);
     StatusC rc = ObjectExecutePut(clientPtr, cObjKey, cObjKeyLen, cVal, cValLen, cNestedObjectKeys,
-                                  cNestedObjKeyLenArray, cNestedObjectKeysNum, cConsistencyType, &reqParam);
-    accessPoint.Record(rc.code, std::to_string(cValLen), reqParam, rc.errMsg);
+                                  cNestedObjKeyLenArray, cNestedObjectKeysNum, cConsistencyType);
+    std::string_view objectKey = (cObjKey != nullptr) ? std::string_view(cObjKey, cObjKeyLen) : std::string_view("", 0);
+    std::string_view consistencyTypeView =
+        (cConsistencyType != nullptr) ? std::string_view(cConsistencyType) : std::string_view("", 0);
+    access.ObjectKeyRef(objectKey);
+    if (cNestedObjectKeys != nullptr) {
+        access.NestedKeysRef(cNestedObjectKeys, cNestedObjKeyLenArray, cNestedObjectKeysNum);
+    }
+    access.ConsistencyTypeText(consistencyTypeView)
+        .Result(rc.code, rc.errMsg)
+        .DataSize(cValLen)
+        .Record();
     return rc;
 }
 
@@ -130,34 +137,33 @@ struct StatusC OCGet(ObjectClient_p clientPtr, const char **cObjKeys, const size
                      uint32_t cTimeoutMs, char **cVals, size_t *valsLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GET);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GET);
     size_t totalSize = 0;
-    datasystem::RequestParam reqParam;
-    StatusC rc =
-        ExecuteGetArray(clientPtr, cObjKeys, cObjKeysLen, objsNum, cTimeoutMs, cVals, valsLen, &totalSize, &reqParam);
-    accessPoint.Record(rc.code, std::to_string(totalSize), reqParam, rc.errMsg);
+    StatusC rc = ExecuteGetArray(clientPtr, cObjKeys, cObjKeysLen, objsNum, cTimeoutMs, cVals, valsLen, &totalSize);
+    if (cObjKeys != nullptr) {
+        access.ObjectKeysRef(cObjKeys, cObjKeysLen, objsNum);
+    }
+    access.TimeoutMs(cTimeoutMs)
+        .Result(rc.code, rc.errMsg)
+        .DataSize(totalSize)
+        .Record();
     return rc;
 }
 
 struct StatusC OCExecuteGIncreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, const size_t *cObjKeysLen,
                                      uint64_t cObjKeysNum, char *cRemoteClientId, size_t cRemoteClientIdLen,
-                                     char **cFailedObjKeys, size_t *failedObjKeysCount,
-                                     datasystem::RequestParam *reqParam)
+                                     char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
     std::string errorMsg;
     CheckNullptr(clientPtr, "clientPtr", errorMsg);
     CheckNullptr(cObjKeys, "cObjKeys", errorMsg);
-    CheckNullptr(reqParam, "reqParam", errorMsg);
-    CheckNullptr(cObjKeys, "cObjKeys", errorMsg);
     if (!errorMsg.empty()) {
         return MakeStatusC(datasystem::K_INVALID, errorMsg);
     }
-    // cNestedObjectKeys is an optional parameter and may be nullptr.
     std::string remoteClientId;
     if (cRemoteClientId != nullptr) {
         remoteClientId = std::string(cRemoteClientId, cRemoteClientIdLen);
     }
-    (*reqParam).objectKey = datasystem::objectKeysToString(cObjKeys, cObjKeysNum);
     auto client = reinterpret_cast<std::shared_ptr<datasystem::object_cache::ObjectClientImpl> *>(clientPtr);
     std::vector<std::string> objKeysVec = GetObjKeysVector(cObjKeys, cObjKeysLen, cObjKeysNum);
     std::vector<std::string> failedObjectKeys;
@@ -179,33 +185,34 @@ struct StatusC OCGIncreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, c
                               char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GINCREASEREF);
-    datasystem::RequestParam reqParam;
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GINCREASEREF);
     StatusC rc = OCExecuteGIncreaseRef(clientPtr, cObjKeys, cObjKeysLen, cObjKeysNum, cRemoteClientId,
-                                       cRemoteClientIdLen, cFailedObjKeys, failedObjKeysCount, &reqParam);
-    accessPoint.Record(rc.code, "0", reqParam, rc.errMsg);
+                                       cRemoteClientIdLen, cFailedObjKeys, failedObjKeysCount);
+    if (cObjKeys != nullptr) {
+        access.ObjectKeysRef(cObjKeys, cObjKeysLen, cObjKeysNum);
+    }
+    std::string_view remoteClientIdView =
+        (cRemoteClientId != nullptr) ? std::string_view(cRemoteClientId, cRemoteClientIdLen) : std::string_view("", 0);
+    access.RemoteClientId(remoteClientIdView)
+        .Result(rc.code, rc.errMsg)
+        .Record();
     return rc;
 }
 
 struct StatusC OCExecuteGDecreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, const size_t *cObjKeysLen,
                                      uint64_t cObjKeysNum, char *cRemoteClientId, size_t cRemoteClientIdLen,
-                                     char **cFailedObjKeys, size_t *failedObjKeysCount,
-                                     datasystem::RequestParam *reqParam)
+                                     char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
     std::string errorMsg;
     CheckNullptr(clientPtr, "clientPtr", errorMsg);
     CheckNullptr(cObjKeys, "cObjKeys", errorMsg);
-    CheckNullptr(reqParam, "reqParam", errorMsg);
-    CheckNullptr(cObjKeys, "cObjKeys", errorMsg);
     if (!errorMsg.empty()) {
         return MakeStatusC(datasystem::K_INVALID, errorMsg);
     }
-    // cRemoteClientId is an optional parameter and may be nullptr.
     std::string remoteClientId;
     if (cRemoteClientId != nullptr) {
         remoteClientId = std::string(cRemoteClientId, cRemoteClientIdLen);
     }
-    (*reqParam).objectKey = datasystem::objectKeysToString(cObjKeys, cObjKeysNum);
     auto client = reinterpret_cast<std::shared_ptr<datasystem::object_cache::ObjectClientImpl> *>(clientPtr);
     std::vector<std::string> failedObjectKeys;
     std::vector<std::string> objKeysVec = GetObjKeysVector(cObjKeys, cObjKeysLen, cObjKeysNum);
@@ -227,21 +234,25 @@ struct StatusC OCDeccreaseRef(ObjectClient_p clientPtr, const char **cObjKeys, c
                               char **cFailedObjKeys, size_t *failedObjKeysCount)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GDECREASEREF);
-    datasystem::RequestParam reqParam;
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_GDECREASEREF);
     StatusC rc = OCExecuteGDecreaseRef(clientPtr, cObjKeys, cObjKeysLen, cObjKeysNum, cRemoteClientId,
-                                       cRemoteClientIdLen, cFailedObjKeys, failedObjKeysCount, &reqParam);
-    accessPoint.Record(rc.code, "0", reqParam, rc.errMsg);
+                                       cRemoteClientIdLen, cFailedObjKeys, failedObjKeysCount);
+    if (cObjKeys != nullptr) {
+        access.ObjectKeysRef(cObjKeys, cObjKeysLen, cObjKeysNum);
+    }
+    std::string_view remoteClientIdView =
+        (cRemoteClientId != nullptr) ? std::string_view(cRemoteClientId, cRemoteClientIdLen) : std::string_view("", 0);
+    access.RemoteClientId(remoteClientIdView)
+        .Result(rc.code, rc.errMsg)
+        .Record();
     return rc;
 }
 
-struct StatusC OCExecuteReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClientId, size_t cRemoteClientIdLen,
-                                     datasystem::RequestParam *reqParam)
+struct StatusC OCExecuteReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClientId, size_t cRemoteClientIdLen)
 {
     std::string errorMsg;
     CheckNullptr(clientPtr, "clientPtr", errorMsg);
     CheckNullptr(cRemoteClientId, "cRemoteClientId", errorMsg);
-    CheckNullptr(reqParam, "reqParam", errorMsg);
     if (!errorMsg.empty()) {
         return MakeStatusC(datasystem::K_INVALID, errorMsg);
     }
@@ -257,10 +268,11 @@ struct StatusC OCExecuteReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClie
 struct StatusC OCReleaseGRefs(ObjectClient_p clientPtr, char *cRemoteClientId, size_t cRemoteClientIdLen)
 {
     datasystem::TraceGuard traceGuard = datasystem::Trace::Instance().SetRequestTraceUUID();
-    datasystem::AccessRecorder accessPoint(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_RELEASEGREFS);
-    datasystem::RequestParam reqParam;
-    StatusC rc = OCExecuteReleaseGRefs(clientPtr, cRemoteClientId, cRemoteClientIdLen, &reqParam);
-    accessPoint.Record(rc.code, "0", reqParam, rc.errMsg);
+    auto access = datasystem::AccessRecorder::Object(datasystem::AccessRecorderKey::DS_OBJECT_CLIENT_RELEASEGREFS);
+    StatusC rc = OCExecuteReleaseGRefs(clientPtr, cRemoteClientId, cRemoteClientIdLen);
+    std::string_view remoteClientIdView =
+        (cRemoteClientId != nullptr) ? std::string_view(cRemoteClientId, cRemoteClientIdLen) : std::string_view("", 0);
+    access.RemoteClientId(remoteClientIdView).Result(rc.code, rc.errMsg).Record();
     return rc;
 }
 

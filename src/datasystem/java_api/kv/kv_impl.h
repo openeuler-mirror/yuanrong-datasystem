@@ -24,6 +24,7 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/java_api/jni_util.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/kv_client.h"
 
 namespace datasystem {
 namespace java_api {
@@ -31,17 +32,29 @@ using datasystem::ConnectOptions;
 using datasystem::CreateParam;
 using datasystem::object_cache::ObjectClientImpl;
 
-Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobject valueJO, jobject paramJO);
+struct JavaKvAccessFields {
+    std::string key;
+    std::vector<std::string> keys;
+    SetParam setParam;
+    uint64_t dataSize = 0;
+};
+
+Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobject valueJO, jobject paramJO,
+                                 JavaKvAccessFields *accessFields);
 
 Status SetHeapBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jbyteArray byteArray, jlong size,
-                               jobject paramJO);
+                               jobject paramJO, JavaKvAccessFields *accessFields);
 
-Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs, jint &totalSize, jobject &heapBuffer);
+Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs, jint &totalSize,
+                        jobject &heapBuffer, JavaKvAccessFields *accessFields);
 
-Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeoutMs, jint &totalSize, jobject &ListJO);
+Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeoutMs, jint &totalSize,
+                         jobject &ListJO, JavaKvAccessFields *accessFields);
 
-Status DelKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, std::vector<std::string> &failedKeys);
+Status DelKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, std::vector<std::string> &failedKeys,
+                        JavaKvAccessFields *accessFields);
 
-Status DelKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, std::vector<std::string> &failedKeys);
+Status DelKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, std::vector<std::string> &failedKeys,
+                         JavaKvAccessFields *accessFields);
 }  // namespace java_api
 }  // namespace datasystem

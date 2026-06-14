@@ -55,6 +55,7 @@
 #include "datasystem/common/util/queue/shm_circular_queue.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_heartbeat.pb.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/meta_transport.pb.h"

@@ -23,7 +23,6 @@
 #include "datasystem/client/stream_cache/stream_client_impl.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/perf/perf_manager.h"
-#include "datasystem/utils/optional.h"
 
 namespace datasystem {
 StreamClient::StreamClient(ConnectOptions connectOptions)
@@ -78,20 +77,12 @@ Status StreamClient::CreateProducer(const std::string &streamName, std::shared_p
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_CREATE_PRODUCER_ALL);
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_CREATE_PRODUCER);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_CREATE_PRODUCER);
     auto rc = impl_->CreateProducer(streamName, outProducer, producerConf);
-    StreamRequestParam reqParam;
-    reqParam.streamName = streamName;
-    reqParam.delayFlushTime = Optional<int64_t>(producerConf.delayFlushTime);
-    reqParam.pageSize = Optional<int64_t>(producerConf.pageSize);
-    reqParam.maxStreamSize = Optional<uint64_t>(producerConf.maxStreamSize);
-    reqParam.autoCleanup = Optional<bool>(producerConf.autoCleanup);
-    reqParam.retainForNumConsumers = Optional<uint64_t>(producerConf.retainForNumConsumers);
-    reqParam.encryptStream = Optional<bool>(producerConf.encryptStream);
-    reqParam.streamMode = Optional<int32_t>(producerConf.streamMode);
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(streamName).DelayFlushTime(producerConf.delayFlushTime).PageSize(producerConf.pageSize)
+        .MaxStreamSize(producerConf.maxStreamSize).AutoCleanup(producerConf.autoCleanup)
+        .RetainForNumConsumers(producerConf.retainForNumConsumers).EncryptStream(producerConf.encryptStream)
+        .StreamMode(producerConf.streamMode).Result(rc).Record();
     return rc;
 }
 
@@ -100,16 +91,10 @@ Status StreamClient::Subscribe(const std::string &streamName, const struct Subsc
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_CREATE_SUB_ALL);
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_SUBSCRIBE);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_SUBSCRIBE);
     std::string consumerId;
     auto rc = impl_->Subscribe(streamName, config, outConsumer, autoAck);
-    StreamRequestParam reqParam;
-    reqParam.streamName = streamName;
-    reqParam.subscriptionName = config.subscriptionName;
-    reqParam.autoAck = Optional<bool>(autoAck);
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(streamName).SubscriptionName(config.subscriptionName).AutoAck(autoAck).Result(rc).Record();
     return rc;
 }
 
@@ -117,41 +102,27 @@ Status StreamClient::DeleteStream(const std::string &streamName)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_DELETE_STREAM_ALL);
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_DELETE_STREAM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_DELETE_STREAM);
     auto rc = impl_->DeleteStream(streamName);
-    StreamRequestParam reqParam;
-    reqParam.streamName = streamName;
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(streamName).Result(rc).Record();
     return rc;
 }
 
 Status StreamClient::QueryGlobalProducersNum(const std::string &streamName, uint64_t &gProducerNum)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_QUERY_PRODUCERS_NUM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_QUERY_PRODUCERS_NUM);
     auto rc = impl_->QueryGlobalProducersNum(streamName, gProducerNum);
-    StreamRequestParam reqParam;
-    reqParam.streamName = streamName;
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    rspParam.count = Optional<uint64_t>(gProducerNum);
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(streamName).Count(gProducerNum).Result(rc).Record();
     return rc;
 }
 
 Status StreamClient::QueryGlobalConsumersNum(const std::string &streamName, uint64_t &gConsumerNum)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_QUERY_CONSUMERS_NUM);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_QUERY_CONSUMERS_NUM);
     auto rc = impl_->QueryGlobalConsumersNum(streamName, gConsumerNum);
-    StreamRequestParam reqParam;
-    reqParam.streamName = streamName;
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    rspParam.count = Optional<uint64_t>(gConsumerNum);
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(streamName).Count(gConsumerNum).Result(rc).Record();
     return rc;
 }
 }  // namespace datasystem

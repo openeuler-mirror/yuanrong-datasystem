@@ -25,7 +25,6 @@
 #include <string>
 
 #include "datasystem/common/log/spdlog/log_param.h"
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
 #include "datasystem/common/log/spdlog/logger_provider.h"
 
 namespace datasystem {
@@ -45,7 +44,8 @@ public:
 
 class LogMessageImpl {
 public:
-    LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog = false);
+    LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog = false,
+                   bool samplerChecked = false);
 
     ~LogMessageImpl();
 
@@ -60,35 +60,25 @@ public:
     }
 
 private:
-    /**
-     * @brief Initialize the logger and log prefix.
-     */
     void Init();
 
-    /**
-     * @brief Flush the log buffer content.
-     */
     void Flush();
 
-    /**
-     * @brief Output log content to the spdlog sink (file and stderr).
-     */
     void ToSpdlog();
 
-    /**
-     * @brief Output log content to standard error stream (stderr).
-     */
     void ToStderr();
 
     std::shared_ptr<ds_spdlog::logger> logger_;
+    LogSeverity logSeverity_;
     ds_spdlog::level::level_enum level_;
     ds_spdlog::source_loc sourceLoc_;
     static std::string podName_;
     LogStreamBuf streamBuf_;
     std::ostream logStream_;
     bool forceLog_;
+    bool samplerChecked_;
     size_t msgSize_;
-    bool skip_ = false;  // Request-level log sampling: dropped by limiter
+    bool skip_ = false;
 };
 
 }  // namespace datasystem

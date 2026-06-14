@@ -67,4 +67,7 @@ DS_DECLARE_int32(oc_worker_worker_direct_port);
 DS_DECLARE_int32(sc_worker_worker_direct_port);
 DS_DECLARE_bool(enable_pipeline_h2d);
 DS_DECLARE_int32(pipeline_h2d_thread_num);
+DS_DECLARE_double(request_sample_rate);
+DS_DECLARE_double(access_sample_rate);
+DS_DECLARE_double(diagnostic_sample_rate);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

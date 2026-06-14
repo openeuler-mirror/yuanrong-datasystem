@@ -27,6 +27,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
@@ -54,19 +55,18 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     workerOperationTimeCost.Clear();
     Timer timer;
     PerfPoint point(PerfKey::WORKER_CREATE_OBJECT);
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_CREATE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_CREATE);
+    access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     VLOG(1) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
         req.object_key(), req.data_size());
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });
-    RequestParam reqParam;
-    reqParam.objectKey = req.object_key().substr(0, LOG_OBJECT_KEY_SIZE_LIMIT);
     if (remainingTimeMs <= 0) {
         Status rc =  Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
             FormatString("The create request process time has exceeded the request timeout time (remaining: %lld ms)",
             remainingTimeMs));
-        posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
+        access.Result(rc).Record();
         return rc;
     }
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
@@ -74,7 +74,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
-    posixPoint.Record(rc.GetCode(), std::to_string(req.data_size()), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     point.Record();
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;

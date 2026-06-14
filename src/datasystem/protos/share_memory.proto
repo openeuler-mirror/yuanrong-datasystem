@@ -21,6 +21,13 @@ import "datasystem/protos/meta_transport.proto";
 
 option cc_enable_arenas = true;
 
+message LogSampleConfigPb {
+    bool enabled = 1;
+    uint32 access_sample_ppm = 2;
+    uint32 request_sample_ppm = 3;
+    uint32 diagnostic_sample_ppm = 4;
+}
+
 message GetClientFdReqPb {
     bytes client_id = 1;
     repeated int32 worker_fds = 2;
@@ -85,7 +92,7 @@ message RegisterClientRspPb {
     string exclusive_conn_sockpath = 21;
     bool support_multi_shm_ref_count = 22;
     FastTransportMode fast_transport_mode = 23;
-    int32 log_rate_limit = 24;
+    LogSampleConfigPb log_sample_config = 24;
 
     // put to the end, the previous data is used to generate AK and SK signatures.
     uint64 timestamp = 100;
@@ -127,6 +134,7 @@ message HeartbeatRspPb{
     repeated int64 expired_worker_fds = 5;
     repeated string available_workers = 6;
     bool unhealthy = 7;
+    LogSampleConfigPb log_sample_config = 8;
 }
 
 message GetSocketPathReqPb {

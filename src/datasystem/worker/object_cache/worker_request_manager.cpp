@@ -320,11 +320,9 @@ Status GetRequest::ReturnToClient(const Status &rc)
     uint64_t totalSize = 0;
     Raii raii([this, &totalSize, &lastRc] {
         GetReqPb reqPb;
-        RequestParam reqParam;
-        reqParam.subTimeout = std::to_string(subTimeout_);
-        reqParam.objectKey = ObjectKeysToAbbrStr(rawObjectKeys_);
-        StatusCode code = lastRc.GetCode() == K_NOT_FOUND ? K_OK : lastRc.GetCode();
-        recorder_.Record(code, std::to_string(totalSize), reqParam, lastRc.GetMsg());
+        Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
+        recorder_->ObjectKeysSummaryRef(rawObjectKeys_).SubTimeoutMs(subTimeout_).DataSize(totalSize)
+            .Result(accessRc).Record();
     });
     std::map<std::string, uint64_t> needDeleteObjects;
     Raii deleteRaii([this, &needDeleteObjects] {

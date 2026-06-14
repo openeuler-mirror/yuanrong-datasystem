@@ -28,15 +28,15 @@
 #include <unordered_set>
 #include <utility>
 
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
-
-#include <securec.h>
-
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/flags/flags.h"
+
+#include <securec.h>
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
@@ -320,47 +320,127 @@ bool Flags::IsToHandle(const std::unordered_map<std::string, std::string> &flagM
     return true;
 }
 
-void Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
+bool Flags::ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap)
 {
-    for (const auto &kv : flagMap) {
-        std::string flagName = kv.first;
-        // The glag parameter of the log level is specially processed.
-        // Determines whether to take effect on the worker.
-        if (!IsToHandle(flagMap, flagName)) {
-            continue;
+    static const std::unordered_set<std::string> samplerFlagNames = {
+        "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
+    };
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = FLAGS_request_sample_rate;
+    cfg.accessSampleRate = FLAGS_access_sample_rate;
+    cfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
+    cfg.requestSampleRateExplicit = (flagMap.count("request_sample_rate") > 0);
+    cfg.accessSampleRateExplicit = (flagMap.count("access_sample_rate") > 0);
+    cfg.diagnosticSampleRateExplicit = (flagMap.count("diagnostic_sample_rate") > 0);
+
+    std::unordered_map<std::string, std::string> candidates;
+    for (const auto &name : samplerFlagNames) {
+        auto it = flagMap.find(name);
+        if (it == flagMap.end() || !IsToHandle(flagMap, name)) continue;
+        std::string newVal = it->second;
+        if (ValidateSpecial(name, newVal)) {
+            LOG(ERROR) << FormatString("Sampler flag %s=%s validation failed, aborting batch commit", name, newVal);
+            return false;
         }
-        std::string newVal = kv.second;
-        std::string currVal;
-        bool getResult = GetCommandLineOption(flagName.c_str(), currVal);
-        if (!getResult) {
-            return;
+        candidates[name] = newVal;
+    }
+    if (candidates.empty()) {
+        if (cfg.requestSampleRateExplicit || cfg.accessSampleRateExplicit || cfg.diagnosticSampleRateExplicit) {
+            LogSampler::Instance().UpdateConfigFromFlags(cfg);
         }
-        if (currVal != newVal) {
-            if (ValidateSpecial(flagName, newVal)) {
-                continue;
+        return true;
+    }
+    return CommitSamplerFlagsTransaction(candidates, cfg);
+}
+
+bool Flags::CommitSamplerFlagsTransaction(
+    const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg)
+{
+    std::unordered_map<std::string, std::string> prevVals;
+    std::string errMsg;
+    for (const auto &kv : candidates) {
+        std::string prevVal;
+        GetCommandLineOption(kv.first.c_str(), prevVal);
+        prevVals[kv.first] = prevVal;
+        if (!SetCommandLineOption(kv.first.c_str(), kv.second, errMsg)) {
+            LOG(ERROR) << errMsg;
+            for (const auto &prev : prevVals) {
+                std::string revertErrMsg;
+                SetCommandLineOption(prev.first.c_str(), prev.second, revertErrMsg);
             }
-            std::string errMsg;
-            if (!SetCommandLineOption(flagName.c_str(), newVal, errMsg)) {
-                LOG(ERROR) << errMsg;
-            }
-            // Sync log rate limit to the rate limiter singleton
-            if (flagName == "log_rate_limit") {
-                try {
-                    LogRateLimiter::Instance().SetRate(std::stoi(newVal));
-                } catch (const std::exception &e) {
-                    LOG(ERROR) << "Failed to sync log_rate_limit: " << e.what();
-                }
-            }
-#ifdef WITH_TESTS
-            if (flagName == "inject_actions") {
-                LOG_IF_ERROR(inject::ClearAll(), "clear all inject actions failed");
-                LOG_IF_ERROR(inject::SetByString(newVal), "set inject actions failed");
-            }
-#endif
-            LOG(INFO) << FormatString("The flag parameter is successfully changed: %s=%s --> %s", flagName, currVal,
-                                      newVal);
+            return false;
         }
     }
+    LogSampleUserConfig updatedCfg;
+    updatedCfg.requestSampleRate = FLAGS_request_sample_rate;
+    updatedCfg.accessSampleRate = FLAGS_access_sample_rate;
+    updatedCfg.diagnosticSampleRate = FLAGS_diagnostic_sample_rate;
+    updatedCfg.requestSampleRateExplicit = cfg.requestSampleRateExplicit;
+    updatedCfg.accessSampleRateExplicit = cfg.accessSampleRateExplicit;
+    updatedCfg.diagnosticSampleRateExplicit = cfg.diagnosticSampleRateExplicit;
+    if (!LogSampler::Instance().UpdateConfigFromFlags(updatedCfg)) {
+        for (const auto &prev : prevVals) {
+            std::string revertErrMsg;
+            SetCommandLineOption(prev.first.c_str(), prev.second, revertErrMsg);
+        }
+        LOG(ERROR) << FormatString("LogSampler batch commit failed, retaining previous sampler config");
+        return false;
+    }
+    return true;
+}
+
+void Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
+{
+    static const std::unordered_set<std::string> samplerFlagNames = {
+        "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
+    };
+    bool hasSamplerFlags = false;
+    for (const auto &kv : flagMap) {
+        if (samplerFlagNames.count(kv.first)) {
+            hasSamplerFlags = true;
+            break;
+        }
+    }
+    if (hasSamplerFlags) {
+        ValidateAndCommitSamplerFlags(flagMap);
+    }
+    for (const auto &kv : flagMap) {
+        if (!samplerFlagNames.count(kv.first)) {
+            UpdateSingleFlag(flagMap, kv.first, kv.second);
+        }
+    }
+}
+
+void Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
+                             const std::string &flagName, const std::string &newVal)
+{
+    if (!IsToHandle(flagMap, flagName)) {
+        return;
+    }
+    std::string currVal;
+    bool getResult = GetCommandLineOption(flagName.c_str(), currVal);
+    if (!getResult) {
+        return;
+    }
+    if (currVal == newVal) {
+        return;
+    }
+    if (ValidateSpecial(flagName, newVal)) {
+        return;
+    }
+    std::string errMsg;
+    if (!SetCommandLineOption(flagName.c_str(), newVal, errMsg)) {
+        LOG(ERROR) << errMsg;
+        return;
+    }
+#ifdef WITH_TESTS
+    if (flagName == "inject_actions") {
+        LOG_IF_ERROR(inject::ClearAll(), "clear all inject actions failed");
+        LOG_IF_ERROR(inject::SetByString(newVal), "set inject actions failed");
+    }
+#endif
+    LOG(INFO) << FormatString("The flag parameter is successfully changed: %s=%s --> %s", flagName, currVal,
+                              newVal);
 }
 
 void Flags::TrimSpace(std::string &value)

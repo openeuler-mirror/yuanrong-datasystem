@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -60,13 +61,12 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     workerOperationTimeCost.Clear();
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-    AccessRecorder posixPoint(AccessRecorderKey::DS_POSIX_EXPIRE);
-    RequestParam reqParam;
-    reqParam.objectKey = objectKeysToString({ req.object_keys().begin(), req.object_keys().end() });
     LOG(INFO) << "Expire start from client:" << req.client_id();
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
+    access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());
 
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
@@ -91,7 +91,6 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
             const std::vector<std::string> &currentIds = item.second;
             rc = ExpireFromMaster(currentIds, workerAddr, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
             if (rc.IsError()) {
-                posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
                 return rc;
             }
             return Status::OK();
@@ -114,7 +113,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     }
     objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
     *rsp.mutable_failed_object_keys() = { objKeysExpireFailed.begin(), objKeysExpireFailed.end() };
-    posixPoint.Record(rc.GetCode(), std::to_string(0), reqParam, rc.GetMsg());
+    access.Result(rc).Record();
     workerOperationTimeCost.Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
     LOG(INFO) << FormatString("The operations of Expire %s", workerOperationTimeCost.GetInfo());
     return rc;

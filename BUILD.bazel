@@ -59,7 +59,6 @@ cc_shared_library(
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/log/spdlog:log_rate_limiter",
         "//src/datasystem/client:client_flags_monitor",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:datasystem",

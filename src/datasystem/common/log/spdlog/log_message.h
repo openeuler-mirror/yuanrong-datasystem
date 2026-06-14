@@ -33,6 +33,8 @@ class LogMessage {
 public:
     LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog = false);
 
+    LogMessage(LogSeverity logSeverity, const char *file, int line, bool forceLog, bool samplerChecked);
+
     /**
      * @brief Return the output stream for log content.
      */

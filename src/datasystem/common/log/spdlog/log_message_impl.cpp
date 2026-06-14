@@ -28,6 +28,7 @@
 #include <sys/syscall.h>
 
 #include "datasystem/common/log/log_time.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -100,12 +101,15 @@ static DsLogger GetMessageLogger()
 
 std::string LogMessageImpl::podName_ = Provider::GetPodName();
 
-LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog)
-    : level_(ToSpdlogLevel(logSeverity)),
+LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog,
+                               bool samplerChecked)
+    : logSeverity_(logSeverity),
+      level_(ToSpdlogLevel(logSeverity)),
       sourceLoc_{ file, line, "" },
       streamBuf_(g_ThreadLogData, MAX_LOG_SIZE),
       logStream_(&streamBuf_),
-      forceLog_(forceLog)
+      forceLog_(forceLog),
+      samplerChecked_(samplerChecked)
 {
     Init();
 }
@@ -125,15 +129,14 @@ void LogMessageImpl::Init()
     PerfPoint point(PerfKey::LOG_MESSAGE_INIT);
     logger_ = GetMessageLogger();
     if (logger_) {
-        // Backstop for direct LogMessage construction that bypasses LOG macros. forceLog only skips request sampling;
-        // common initialization and formatting must stay outside this branch.
-        if (!forceLog_) {
-            auto &trace = Trace::Instance();
-            uint64_t traceHash = trace.IsRequestLogTrace() ? trace.GetCachedHash() : uint64_t(0);
-            if (!LogRateLimiter::Instance().ShouldLog(level_, traceHash)) {
-                skip_ = true;
-                return;
-            }
+        // Backstop for direct LogMessage construction that bypasses LOG macros.
+        // When samplerChecked=true (macro path), sampler check was already done at macro level.
+        // When samplerChecked=false (direct construction), do sampler backstop only when enabled.
+        if (!samplerChecked_ && logSeverity_ != LogSeverity::FATAL
+            && LogSampler::Instance().IsSamplerEnabledFast()
+            && !LogSampler::Instance().ShouldCreateRuntimeLog(logSeverity_, forceLog_)) {
+            skip_ = true;
+            return;
         }
         AppendLogMessageImplPrefix(podName_, logStream_);
     }

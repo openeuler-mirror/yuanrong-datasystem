@@ -536,7 +536,7 @@ TEST_F(FlagsTest, WasSpecifiedDiffersFromIsDefault)
     for (const auto &fi : output) {
         if (fi.name == "uint32_flag") {
             // Value equals default, but was explicitly specified
-            EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
+EXPECT_TRUE(fi.isDefault);     // value == default -> isDefault=true
             EXPECT_TRUE(fi.wasSpecified);  // explicitly set -> wasSpecified=true
         }
     }

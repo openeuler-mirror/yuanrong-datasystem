@@ -8,21 +8,9 @@ ds_cc_library(
     hdrs = [
         "log_message.h",
         "log_param.h",
-    ],
-)
-
-ds_cc_library(
-    name = "log_rate_limiter",
-    srcs = [
-        "log_rate_limiter.cpp",
-    ],
-    hdrs = [
-        "log_rate_limiter.h",
         "log_severity.h",
     ],
     deps = [
-        ":ds_spdlog_header",
-        "//src/datasystem/common/log:log_base",
         "@ds-spdlog//:ds-spdlog",
     ],
 )
@@ -44,9 +32,9 @@ ds_cc_library(
     ],
     deps = [
         ":ds_spdlog_header",
-        ":log_rate_limiter",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:log_base",
+        "//src/datasystem/common/log:log_sampler",
         "//src/datasystem/common/perf:common_perf",
         "@ds-spdlog//:ds-spdlog",
     ],

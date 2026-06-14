@@ -22,6 +22,8 @@
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
+#include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/utils/status.h"
@@ -69,10 +71,10 @@ Status HeteroClient::ShutDown()
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     if (impl_) {
         bool needRollbackState;
-        AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_SHUTDOWN);
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_SHUTDOWN);
         auto rc = impl_->ShutDown(needRollbackState);
         impl_->CompleteHandler(rc.IsError(), needRollbackState);
-        accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
+        access.Result(rc).Record();
         return rc;
     }
     return Status::OK();
@@ -81,11 +83,11 @@ Status HeteroClient::ShutDown()
 Status HeteroClient::Init()
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_INIT);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_INIT);
     bool needRollbackState;
     auto rc = impl_->Init(needRollbackState, true);
     impl_->CompleteHandler(rc.IsError(), needRollbackState);
-    accessPoint.Record(rc.GetCode(), "0", {}, rc.GetMsg());
+    access.Result(rc).Record();
     return rc;
 }
 
@@ -111,14 +113,9 @@ Status HeteroClient::Delete(const std::vector<std::string> &keys, std::vector<st
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DELETE);
     auto rc = impl_->Delete(keys, failedKeys);
-    accessPoint.Record(
-        rc.GetCode(), "0",
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        rc.GetMsg());
+    access.ObjectKeysSummaryRef(keys).Result(rc).Record();
     return rc;
 }
 
@@ -156,9 +153,9 @@ Status HeteroClient::GenerateKey(const std::string &prefix, std::string &key)
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_GENERATEKEY);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_GENERATEKEY);
     auto ret = impl_->GenerateKey(key, prefix);
-    accessPoint.Record(ret.GetCode(), "0", RequestParam{ .objectKey = key }, ret.GetMsg());
+    access.ObjectKeyRef(key).Result(ret).Record();
     return ret;
 }
 
@@ -167,14 +164,12 @@ Status HeteroClient::DevPublish(const std::vector<std::string> &keys, const std:
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVPUBLISH);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVPUBLISH);
     auto ret = impl_->DevPublish(keys, devBlobList, futureVec);
-    accessPoint.Record(
-        ret.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys)
+        .DataSizeProvider([&devBlobList] { return CalculateDataSize(devBlobList); })
+        .Result(ret)
+        .Record();
     return ret;
 }
 
@@ -183,14 +178,12 @@ Status HeteroClient::DevSubscribe(const std::vector<std::string> &keys, const st
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVSUBSCRIBE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVSUBSCRIBE);
     auto ret = impl_->DevSubscribe(keys, devBlobList, futureVec);
-    accessPoint.Record(
-        ret.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys)
+        .DataSizeProvider([&devBlobList] { return CalculateDataSize(devBlobList); })
+        .Result(ret)
+        .Record();
     return ret;
 }
 
@@ -199,14 +192,9 @@ Status HeteroClient::DevDelete(const std::vector<std::string> &keys, std::vector
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DEV_DELETE);
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVDELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVDELETE);
     auto ret = impl_->DeleteDevObjects(keys, failedKeys);
-    accessPoint.Record(
-        ret.GetCode(), "0",
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys).Result(ret).Record();
     return ret;
 }
 
@@ -214,14 +202,9 @@ Status HeteroClient::DevLocalDelete(const std::vector<std::string> &keys, std::v
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVLOCALDELETE);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVLOCALDELETE);
     auto ret = impl_->DevLocalDelete(keys, failedKeys);
-    accessPoint.Record(
-        ret.GetCode(), "0",
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys).Result(ret).Record();
     return ret;
 }
 
@@ -238,14 +221,12 @@ Status HeteroClient::DevMSet(const std::vector<std::string> &keys, const std::ve
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVMSET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVMSET);
     auto ret = impl_->DevMSet(keys, devBlobList, failedKeys);
-    accessPoint.Record(
-        ret.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys)
+        .DataSizeProvider([&devBlobList] { return CalculateDataSize(devBlobList); })
+        .Result(ret)
+        .Record();
     return ret;
 }
 
@@ -254,14 +235,12 @@ Status HeteroClient::DevMGet(const std::vector<std::string> &keys, std::vector<D
 {
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_DEVMGET);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_DEVMGET);
     auto ret = impl_->DevMGet(keys, devBlobList, failedKeys, subTimeoutMs);
-    accessPoint.Record(
-        ret.GetCode(), std::to_string(CalculateDataSize(devBlobList)),
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        ret.GetMsg());
+    access.ObjectKeysSummaryRef(keys)
+        .DataSizeProvider([&devBlobList] { return CalculateDataSize(devBlobList); })
+        .Result(ret)
+        .Record();
     return ret;
 }
 
@@ -274,33 +253,23 @@ Status HeteroClient::HealthCheck(ServerState &state)
 
 Status HeteroClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 {
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_EXIST);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_EXIST);
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     auto rc = impl_->Exist(keys, exists, false, false);
-    accessPoint.Record(
-        rc.GetCode(), "0",
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        rc.GetMsg());
+    access.ObjectKeysSummaryRef(keys).Result(rc).Record();
     return rc;
 }
 
 Status HeteroClient::GetMetaInfo(const std::vector<std::string> &keys, bool isDevKey, std::vector<MetaInfo> &metaInfos,
                                  std::vector<std::string> &failKeys)
 {
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_GETMETAINFO);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_GETMETAINFO);
     RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
     PerfPoint point(PerfKey::CLIENT_GET_META_INFO);
     auto rc = impl_->GetMetaInfo(keys, isDevKey, metaInfos, failKeys);
-    accessPoint.Record(
-        rc.GetCode(), "0",
-        RequestParam{
-            .objectKey = FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-            keys.size()) },
-        rc.GetMsg());
+    access.ObjectKeysSummaryRef(keys).Result(rc).Record();
     return rc;
 }
 

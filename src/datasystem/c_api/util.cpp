@@ -344,8 +344,7 @@ void FreeClient(void *clientPtr)
 }
 
 struct StatusC ExecuteGetArray(void *clientPtr, const char **cObjKeys, const size_t *cObjKeysLen, uint64_t cObjKeysNum,
-                               uint32_t ctimeoutms, char **cVals, size_t *valsLen, size_t *totalSize,
-                               datasystem::RequestParam *reqParam)
+                               uint32_t ctimeoutms, char **cVals, size_t *valsLen, size_t *totalSize)
 {
     std::string errorMsg;
     CheckNullptr(clientPtr, "clientPtr", errorMsg);
@@ -356,8 +355,6 @@ struct StatusC ExecuteGetArray(void *clientPtr, const char **cObjKeys, const siz
     if (!errorMsg.empty()) {
         return MakeStatusC(datasystem::K_INVALID, errorMsg);
     }
-    (*reqParam).objectKey = datasystem::objectKeysToString(cObjKeys, cObjKeysNum);
-    (*reqParam).timeout = std::to_string(ctimeoutms);
     auto client = reinterpret_cast<std::shared_ptr<datasystem::object_cache::ObjectClientImpl> *>(clientPtr);
     std::vector<std::string> objsVec = GetObjKeysVector(cObjKeys, cObjKeysLen, cObjKeysNum);
     std::vector<datasystem::Optional<datasystem::Buffer>> buffers;

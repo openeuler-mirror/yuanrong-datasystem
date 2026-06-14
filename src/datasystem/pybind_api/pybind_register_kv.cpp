@@ -166,7 +166,7 @@ PybindDefineRegisterer g_pybind_define_f_StateValueBuffer(
                      return stateValBuffer.ImmutableData(withLatch, timeoutSeconds);
                  })
             .def("RLatch", [](StateValueBuffer &stateValBuffer,
-                              uint64_t timeoutSeconds = 60) { return stateValBuffer.RLatch(timeoutSeconds); })
+                             uint64_t timeoutSeconds = 60) { return stateValBuffer.RLatch(timeoutSeconds); })
             .def("UnRLatch", [](StateValueBuffer &stateValBuffer) { return stateValBuffer.UnRLatch(); })
             .def("MutableData", [](StateValueBuffer &stateValBuffer) {
                 auto ptr = stateValBuffer.MutableData();
@@ -202,7 +202,6 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                                         .port = port,
                                         .connectTimeoutMs = connectTimeoutMs,
                                         .requestTimeoutMs = reqTimeoutMs,
-
                                         .token = token,
                                         .clientPublicKey = clientPublicKey,
                                         .clientPrivateKey = clientPrivateKey,
@@ -217,92 +216,96 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         }))
         .def("Init",
              [](ObjectClientImpl &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 bool needRollbackState;
-                 auto rc = client.Init(needRollbackState, true);
-                 client.CompleteHandler(rc.IsError(), needRollbackState);
-                 return rc;
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                bool needRollbackState;
+                auto rc = client.Init(needRollbackState, true);
+                client.CompleteHandler(rc.IsError(), needRollbackState);
+                return rc;
              })
         .def("Set",
              [](ObjectClientImpl &client, const std::string &key, const py::buffer &val, WriteMode writeMode,
                 uint32_t ttlSecond) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 py::buffer_info info(val.request());
-                 StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
-                 SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
-                 Status rc = client.Set(key, strView, param);
-                 RequestParam reqParam;
-                 reqParam.objectKey = key.substr(0, LOG_TOTAL_KEYS_SIZE_LIMIT);
-                 reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
-                 reqParam.ttlSecond = std::to_string(ttlSecond);
-                 accessPoint.Record(rc.GetCode(), std::to_string(info.size), reqParam, rc.GetMsg());
-                 return rc;
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                py::buffer_info info(val.request());
+                StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
+                SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+                Status rc = client.Set(key, strView, param);
+                access.ObjectKeyRef(key)
+                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
+                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
+                    .Result(rc)
+                    .DataSize(info.size)
+                    .Record();
+                return rc;
              })
         .def("SetValue",
              [](ObjectClientImpl &client, const py::buffer &val, WriteMode writeMode, uint32_t ttlSecond) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 py::buffer_info info(val.request());
-                 StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
-                 SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_SET);
-                 std::string key;
-                 auto rc = client.Set(strView, param, key);
-                 RequestParam reqParam;
-                 reqParam.objectKey = key.substr(0, LOG_TOTAL_KEYS_SIZE_LIMIT);
-                 reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
-                 reqParam.ttlSecond = std::to_string(ttlSecond);
-                 accessPoint.Record(rc.GetCode(), std::to_string(info.size), reqParam);
-                 return key;
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                py::buffer_info info(val.request());
+                StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
+                SetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond };
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+                std::string key;
+                auto rc = client.Set(strView, param, key);
+                access.ObjectKeyRef(key)
+                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
+                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
+                    .Result(rc)
+                    .DataSize(info.size)
+                    .Record();
+                return key;
              })
         .def("MSet",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, const std::vector<py::buffer> &vals,
                 WriteMode writeMode, uint32_t ttlSecond, ExistenceOpt existenceOpt) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<StringView> values;
-                 MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
-                 uint64_t totalSize = 0;
-                 for (const auto &val : vals) {
-                     py::buffer_info info(val.request());
-                     totalSize += info.size;
-                     StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
-                     values.emplace_back(strView);
-                 }
-                 std::vector<std::string> outFailedKeys;
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
-                 auto rc = client.MSet(keys, values, param, outFailedKeys);
-                 RequestParam reqParam;
-                 reqParam.objectKey = objectKeysToString(keys);
-                 reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
-                 reqParam.timeout = std::to_string(ttlSecond);
-                 accessPoint.Record(rc.GetCode(), std::to_string(totalSize), reqParam);
-                 return std::make_pair(rc, std::move(outFailedKeys));
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<StringView> values;
+                MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
+                uint64_t totalSize = 0;
+                for (const auto &val : vals) {
+                    py::buffer_info info(val.request());
+                    totalSize += info.size;
+                    StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
+                    values.emplace_back(strView);
+                }
+                std::vector<std::string> outFailedKeys;
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
+                auto rc = client.MSet(keys, values, param, outFailedKeys);
+                access.ObjectKeysRef(keys)
+                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
+                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
+                    .Result(rc)
+                    .DataSize(totalSize)
+                    .Record();
+                return std::make_pair(rc, std::move(outFailedKeys));
              })
         .def("MSetTx",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, const std::vector<py::buffer> &vals,
                 WriteMode writeMode, uint32_t ttlSecond, ExistenceOpt existenceOpt) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<StringView> values;
-                 MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
-                 uint64_t totalSize = 0;
-                 for (const auto &val : vals) {
-                     py::buffer_info info(val.request());
-                     totalSize += info.size;
-                     StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
-                     values.emplace_back(strView);
-                 }
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
-                 Status rc = client.MSet(keys, values, param);
-                 RequestParam reqParam;
-                 reqParam.objectKey = objectKeysToString(keys);
-                 reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
-                 reqParam.timeout = std::to_string(ttlSecond);
-                 accessPoint.Record(rc.GetCode(), std::to_string(totalSize), reqParam);
-                 return rc;
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<StringView> values;
+                MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
+                uint64_t totalSize = 0;
+                for (const auto &val : vals) {
+                    py::buffer_info info(val.request());
+                    totalSize += info.size;
+                    StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
+                    values.emplace_back(strView);
+                }
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
+                Status rc = client.MSet(keys, values, param);
+                access.ObjectKeysRef(keys)
+                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
+                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
+                    .Result(rc)
+                    .DataSize(totalSize)
+                    .Record();
+                return rc;
              })
         .def("MCreate",
-            [](ObjectClientImpl &client, const std::vector<std::string> &keys,
-            const std::vector<uint64_t> &sizes, WriteMode writeMode, uint32_t ttlSecond) {
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys,
+                const std::vector<uint64_t> &sizes, WriteMode writeMode, uint32_t ttlSecond) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 FullParam param;
                 param.writeMode = writeMode;
@@ -324,40 +327,38 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                         pyBuffers.append(std::make_shared<StateValueBuffer>(std::move(buf)));
                     }
                 }
-                AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
-                RequestParam reqParam;
-                reqParam.objectKey = objectKeysToString(keys);
-                reqParam.writeMode = std::to_string(static_cast<int>(writeMode));
-                reqParam.timeout = std::to_string(ttlSecond);
-                accessPoint.Record(status.GetCode(), std::to_string(totalSize), reqParam);
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MCREATE);
+                access.ObjectKeysRef(keys)
+                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
+                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
+                    .Result(status)
+                    .DataSize(totalSize)
+                    .Record();
                 return std::make_pair(status, std::move(pyBuffers));
-            })
+             })
         .def("MSetBuffer",
-        [](ObjectClientImpl &client, const std::vector<std::shared_ptr<StateValueBuffer>> &sv_buffers) {
-            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-            std::vector<std::shared_ptr<Buffer>> buffers;
-            for (const auto &svb : sv_buffers) {
-                if (svb) {
-                    buffers.push_back(svb->GetBuffer());
+             [](ObjectClientImpl &client, const std::vector<std::shared_ptr<StateValueBuffer>> &sv_buffers) {
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<std::shared_ptr<Buffer>> buffers;
+                for (const auto &svb : sv_buffers) {
+                    if (svb) {
+                        buffers.push_back(svb->GetBuffer());
+                    }
                 }
-            }
-            auto status = client.MSet(buffers);
-            return status;
-        })
+                auto status = client.MSet(buffers);
+                return status;
+             })
         .def("MGetBuffer",
-            [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                 std::vector<Optional<Buffer>> buffers;
                 py::list vals;
                 uint64_t totalSize = 0;
                 Status lastRc;
-                
-                AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&accessPoint, &totalSize, &lastRc, keys, timeout_ms] {
-                    RequestParam reqParam;
-                    reqParam.objectKey = objectKeysToString(keys);
-                    reqParam.timeout = std::to_string(timeout_ms);
-                    accessPoint.Record(lastRc.GetCode(), std::to_string(totalSize), reqParam, lastRc.GetMsg());
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                    Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
+                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
                 });
 
                 lastRc = client.Get(keys, timeout_ms, buffers);
@@ -383,160 +384,151 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                     }
                 }
                 return std::make_pair(lastRc, std::move(vals));
-            })
+             })
         .def("GetReadOnlyBuffers",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<Optional<Buffer>> buffers;
-                 py::list pyList;
-                 uint64_t totalSize = 0;
-                 Status lastRc;
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-                 Raii raii([&accessPoint, &totalSize, &lastRc, keys, timeout_ms] {
-                     RequestParam reqParam;
-                     reqParam.objectKey = objectKeysToString(keys);
-                     reqParam.timeout = std::to_string(timeout_ms);
-                     accessPoint.Record(lastRc.GetCode(), std::to_string(totalSize), reqParam, lastRc.GetMsg());
-                 });
-                 Status rc = client.Get(keys, timeout_ms, buffers);
-                 lastRc = rc;
-                 if (rc.IsError()) {
-                     return std::make_pair(rc, std::move(pyList));
-                 }
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<Optional<Buffer>> buffers;
+                py::list pyList;
+                uint64_t totalSize = 0;
+                Status lastRc;
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                    Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
+                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
+                });
+                Status rc = client.Get(keys, timeout_ms, buffers);
+                lastRc = rc;
+                if (rc.IsError()) {
+                    return std::make_pair(rc, std::move(pyList));
+                }
 
-                 for (auto &buffer : buffers) {
-                     if (!buffer) {
-                         pyList.append(py::none());
-                         continue;
-                     }
-                     std::shared_ptr<StateValueBuffer> stateValueBuffer =
-                         std::make_shared<StateValueBuffer>(std::make_shared<Buffer>(std::move(buffer.value())));
+                for (auto &buffer : buffers) {
+                    if (!buffer) {
+                        pyList.append(py::none());
+                        continue;
+                    }
+                    std::shared_ptr<StateValueBuffer> stateValueBuffer =
+                        std::make_shared<StateValueBuffer>(std::make_shared<Buffer>(std::move(buffer.value())));
 
-                     pyList.append(py::cast(stateValueBuffer));
-                     totalSize += stateValueBuffer->GetSize();
-                 }
-                 return std::make_pair(rc, std::move(pyList));
+                    pyList.append(py::cast(stateValueBuffer));
+                    totalSize += stateValueBuffer->GetSize();
+                }
+                return std::make_pair(rc, std::move(pyList));
              })
         .def("Get",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t timeout_ms) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<Optional<Buffer>> buffers;
-                 py::list vals;
-                 uint64_t totalSize = 0;
-                 Status lastRc;
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-                 Raii raii([&accessPoint, &totalSize, &lastRc, keys, timeout_ms] {
-                     RequestParam reqParam;
-                     reqParam.objectKey = objectKeysToString(keys);
-                     reqParam.timeout = std::to_string(timeout_ms);
-                     accessPoint.Record(lastRc.GetCode(), std::to_string(totalSize), reqParam, lastRc.GetMsg());
-                 });
-                 Status rc = client.Get(keys, timeout_ms, buffers);
-                 lastRc = rc;
-                 if (rc.IsError()) {
-                     return std::make_pair(rc, std::move(vals));
-                 }
-                 for (auto &buffer : buffers) {
-                     if (!buffer) {
-                         vals.append(py::none());
-                         continue;
-                     }
-                     Status status = buffer->RLatch();
-                     if (status.IsOk()) {
-                         py::bytes tmp(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-                         uint64_t tmpSize = buffer->GetSize();
-                         status = buffer->UnRLatch();
-                         if (status.IsOk()) {
-                             totalSize += tmpSize;
-                             vals.append(std::move(tmp));
-                         }
-                     }
-                     if (status.IsError()) {
-                         LOG(ERROR) << "RLatch failed:" << status.ToString();
-                         vals.append(py::none());
-                     }
-                 }
-                 return std::make_pair(rc, std::move(vals));
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<Optional<Buffer>> buffers;
+                py::list vals;
+                uint64_t totalSize = 0;
+                Status lastRc;
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                    Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
+                    access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
+                });
+                Status rc = client.Get(keys, timeout_ms, buffers);
+                lastRc = rc;
+                if (rc.IsError()) {
+                    return std::make_pair(rc, std::move(vals));
+                }
+                for (auto &buffer : buffers) {
+                    if (!buffer) {
+                        vals.append(py::none());
+                        continue;
+                    }
+                    Status status = buffer->RLatch();
+                    if (status.IsOk()) {
+                        py::bytes tmp(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+                        uint64_t tmpSize = buffer->GetSize();
+                        status = buffer->UnRLatch();
+                        if (status.IsOk()) {
+                            totalSize += tmpSize;
+                            vals.append(std::move(tmp));
+                        }
+                    }
+                    if (status.IsError()) {
+                        LOG(ERROR) << "RLatch failed:" << status.ToString();
+                        vals.append(py::none());
+                    }
+                }
+                return std::make_pair(rc, std::move(vals));
              })
         .def("ReadSpecifyOffsetData",
              [](ObjectClientImpl &client, const std::vector<ReadParam> &readParams) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<Optional<Buffer>> buffers;
-                 py::list vals;
-                 uint64_t totalSize = 0;
-                 Status lastRc;
-                 std::vector<std::string> keys;
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<Optional<Buffer>> buffers;
+                py::list vals;
+                uint64_t totalSize = 0;
+                Status lastRc;
 
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_GET);
-                 Raii raii([&accessPoint, &totalSize, &lastRc, &keys, readParams] {
-                     RequestParam reqParam;
-                     std::vector<std::string> keys;
-                     for (const auto &readParam : readParams) {
-                         keys.emplace_back(readParam.key);
-                     }
-                     reqParam.objectKey = objectKeysToString(keys);
-                     accessPoint.Record(lastRc.GetCode(), std::to_string(totalSize), reqParam, lastRc.GetMsg());
-                 });
-                 lastRc = client.Read(readParams, buffers);
-                 if (lastRc.IsError()) {
-                     return std::make_pair(lastRc, std::move(vals));
-                 }
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+                Raii raii([&access, &totalSize, &lastRc, readParams] {
+                    std::vector<std::string> keys;
+                    for (const auto &readParam : readParams) {
+                        keys.emplace_back(readParam.key);
+                    }
+                    Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
+                    access.ObjectKeysRef(keys).Result(accessRc).DataSize(totalSize).Record();
+                });
+                lastRc = client.Read(readParams, buffers);
+                if (lastRc.IsError()) {
+                    return std::make_pair(lastRc, std::move(vals));
+                }
 
-                 for (auto &buffer : buffers) {
-                     if (!buffer) {
-                         vals.append(py::none());
-                         continue;
-                     }
-                     std::shared_ptr<StateValueBuffer> stateValueBuffer =
-                         std::make_shared<StateValueBuffer>(std::make_shared<Buffer>(std::move(buffer.value())));
+                for (auto &buffer : buffers) {
+                    if (!buffer) {
+                        vals.append(py::none());
+                        continue;
+                    }
+                    std::shared_ptr<StateValueBuffer> stateValueBuffer =
+                        std::make_shared<StateValueBuffer>(std::make_shared<Buffer>(std::move(buffer.value())));
 
-                     vals.append(py::cast(stateValueBuffer));
-                     totalSize += stateValueBuffer->GetSize();
-                 }
-                 return std::make_pair(lastRc, std::move(vals));
+                    vals.append(py::cast(stateValueBuffer));
+                    totalSize += stateValueBuffer->GetSize();
+                }
+                return std::make_pair(lastRc, std::move(vals));
              })
         .def("Del",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<std::string> failedKeys;
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_DELETE);
-                 auto status = client.Delete(keys, failedKeys);
-                 RequestParam reqParam;
-                 reqParam.objectKey = objectKeysToString(keys);
-                 accessPoint.Record(status.GetCode(), "0", reqParam, status.GetMsg());
-                 return std::make_pair(status, std::move(failedKeys));
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<std::string> failedKeys;
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_DELETE);
+                auto status = client.Delete(keys, failedKeys);
+                access.ObjectKeysRef(keys).Result(status).Record();
+                return std::make_pair(status, std::move(failedKeys));
              })
         .def("generate_key",
              [](ObjectClientImpl &client, const std::string &prefix) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::string key;
-                 Status rc = client.GenerateKey(key, prefix);
-                 return std::make_pair(rc, std::move(key));
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::string key;
+                Status rc = client.GenerateKey(key, prefix);
+                return std::make_pair(rc, std::move(key));
              })
         .def("exist",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 std::vector<bool> exists;
-                 AccessRecorder accessPoint(AccessRecorderKey::DS_KV_CLIENT_EXIST);
-                 Status rc = client.Exist(keys, exists, true, false);
-                 RequestParam reqParam;
-                 reqParam.objectKey = objectKeysToString(keys);
-                 accessPoint.Record(rc.GetCode(), "0", reqParam, rc.GetMsg());
-                 return std::make_pair(rc, std::move(exists));
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<bool> exists;
+                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
+                Status rc = client.Exist(keys, exists, true, false);
+                access.ObjectKeysRef(keys).Result(rc).Record();
+                return std::make_pair(rc, std::move(exists));
              })
-        .def("expire", [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t ttlSecond) {
-            TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-            std::vector<std::string> failedKeys;
-            Status rc = client.Expire(keys, ttlSecond, failedKeys);
-            return std::make_pair(rc, std::move(failedKeys));
-        })
+        .def("expire",
+             [](ObjectClientImpl &client, const std::vector<std::string> &keys, uint32_t ttlSecond) {
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                std::vector<std::string> failedKeys;
+                Status rc = client.Expire(keys, ttlSecond, failedKeys);
+                return std::make_pair(rc, std::move(failedKeys));
+             })
         .def("HealthCheck",
              [](ObjectClientImpl &client) {
-                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                 ServerState state;
-                 Status healthState = client.HealthCheck(state);
-                 return healthState;
-             });
+                TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                ServerState state;
+                Status healthState = client.HealthCheck(state);
+                return healthState;
+            });
 });
 
 PybindDefineRegisterer g_pybind_define_f_ReadParam("ReadParam", PRIORITY_LOW, [](const py::module *m) {

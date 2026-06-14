@@ -110,25 +110,57 @@ openYuanrong datasystem 的日志分为以下类型：
 
 ## 日志采样
 
-大流量场景下，可通过 `log_rate_limit` 参数控制每秒采样请求数，避免高频请求日志产生过多磁盘 I/O。
+LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` first-N 限速机制。
 
 ### 工作原理
 
-- 采样粒度是“请求（traceId）”，不是“单条日志”
-- `log_rate_limit=N` 表示每秒最多采样 `N` 个新请求（trace）
-- 对采样到的请求：链路日志完整打印（INFO/WARNING/ERROR/FATAL）
-- 对未采样请求：链路日志全部丢弃（包含 WARNING/ERROR/FATAL）
-- 仅 SDK 请求 trace 参与采样；后台线程日志即使带 traceId 也不参与采样
-- 采样决策会随 RPC 元数据传播，跨 client/worker 保持同一 trace 的一致采样结果
-- 不带 traceId 的后台日志（例如 worker/client 后台线程日志）不参与该采样逻辑
+- 三类独立采样率：`request_sample_rate`、`access_sample_rate`、`diagnostic_sample_rate`（各 0.0–1.0，默认 1.0=全量保留）
+- 采样粒度是"请求（traceId）"，不是"单条日志"
+- 请求采样决策随 RPC 元数据传播（LogSampleState），跨 client/worker 保持同一 trace 的一致结果
+- request sampled-in 时，该请求的 INFO/VLOG/ERROR/WARNING/PLOG 都直接输出（请求日志完整性优先）
+- request reject 只直接阻断 INFO/VLOG；diagnostic/access 不把 reject 当作直接丢弃条件，继续各自补采样
+- 仅 SDK 请求 trace 参与采样；后台线程日志不受本方案控制
+- 配置权威源：worker；client 通过 register/heartbeat 接收 worker 下发的 `LogSampleConfigPb`
+
+### 派生规则（request-only derivation）
+
+当仅显式配置 `request_sample_rate`，而未显式设置 `access_sample_rate` 或 `diagnostic_sample_rate` 时，两者自动按以下公式派生：
+
+- `access_sample_rate = min(1.0, request_sample_rate × 3)` （简称 3r 规则）
+- `diagnostic_sample_rate = min(1.0, request_sample_rate × 4)` （简称 4r 规则）
+
+**示例：** 仅设置 `request_sample_rate=0.2` → effective `access=0.6`, `diagnostic=0.8`
+
+### 显式 1.0 阻止派生
+
+即使 `access_sample_rate=1.0` 与默认值相同，显式设置也意味着"用户明确要求全量保留 access 日志"，**阻止自动派生**。这与"未设置时默认 1.0"有本质区别：
+
+| 配置 | access effective 值 | 派生行为 |
+|------|---------------------|----------|
+| 仅 `request_sample_rate=0.2` | 0.6 (派生) | 派生生效 |
+| `request_sample_rate=0.2` + `access_sample_rate=1.0`(显式) | 1.0 (显式) | 派生被阻止 |
+| `request_sample_rate=0.2` + `access_sample_rate=0.3`(显式) | 0.3 (显式) | 派生被阻止 |
+
+### Sticky Explicit 行为
+
+一旦某个采样率被显式设置（如 `access_sample_rate=0.3`），后续仅修改 `request_sample_rate` 的动态更新不会覆盖已显式设置的值。这防止了配置漂移导致的意外日志量变化。
+
+**示例：**
+1. 首次配置 `request=0.2` → access 派生 0.6
+2. 动态更新显式 `access=0.3` → access 固定 0.3，标记为 ever-explicit
+3. 再次更新 `request=0.1` → access 仍为 0.3（不会被派生覆盖为 0.3×3=0.3，而是保持显式值）
 
 ### 配置方式
 
 | 场景 | 配置方式 | 示例 |
 |------|----------|------|
-| Worker 命令行 | `--log_rate_limit=N` 启动参数 | `./datasystem_worker --log_rate_limit=20` |
-| Embedded Worker | `EmbeddedConfig::LogRateLimit(N)` | `config.LogRateLimit(20)` |
-| Standalone Client | 环境变量 `DATASYSTEM_LOG_RATE_LIMIT` | `export DATASYSTEM_LOG_RATE_LIMIT=20` |
-| 运行时动态修改 | 修改 `datasystem.config` 中 `log_rate_limit` 值 | — |
+| Worker 命令行 | `--request_sample_rate=0.5`（仅 request 触发派生） | `./datasystem_worker --request_sample_rate=0.5` |
+| Worker 命令行（阻止派生） | `--request_sample_rate=0.5 --access_sample_rate=1.0` | access=1.0（显式），阻止 3r 派生 |
+| K8s Helm | `values.yaml` 中仅设置 `requestSampleRate: 0.5`（access/diagnostic 留空） | 自动派生 |
+| K8s Helm（阻止派生） | `values.yaml` 中设置 `accessSampleRate: 1.0` | access=1.0（显式） |
+| dscli | `dscli start --request_sample_rate 0.2`（仅传 request） | 自动派生 |
+| Embedded Worker | `config.RequestSampleRate(0.5)`（仅 request 触发派生） | `config.RequestSampleRate(0.5)` |
+| Embedded Worker（阻止派生） | `config.RequestSampleRate(0.5).AccessSampleRate(1.0)` | access=1.0（显式） |
+| 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
-默认值为 `0`（不限速），完全向后兼容。
+默认值均为 `1.0`（全量保留），完全向后兼容。

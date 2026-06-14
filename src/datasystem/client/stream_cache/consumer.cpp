@@ -21,6 +21,7 @@
 
 #include "datasystem/client/stream_cache/consumer_impl.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/utils/optional.h"
 
@@ -68,14 +69,9 @@ Status Consumer::Close()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(impl_->CheckAndSetInUse(), "Close");
     Raii unsetRaii([this]() { impl_->UnsetInUse(); });
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    AccessRecorder recorder(AccessRecorderKey::DS_STREAM_CLOSE_CONSUMER);
+    auto access = AccessRecorder::Stream(AccessRecorderKey::DS_STREAM_CLOSE_CONSUMER);
     auto rc = impl_->Close();
-    StreamRequestParam reqParam;
-    reqParam.streamName = impl_->GetStreamName();
-    reqParam.consumerId = impl_->GetConsumerId();
-    StreamResponseParam rspParam;
-    rspParam.msg = rc.GetMsg();
-    recorder.Record(rc.GetCode(), reqParam, rspParam);
+    access.StreamName(impl_->GetStreamName()).ConsumerId(impl_->GetConsumerId()).Result(rc).Record();
     return rc;
 }
 

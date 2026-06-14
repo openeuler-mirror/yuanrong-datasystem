@@ -52,6 +52,7 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
@@ -178,8 +179,7 @@ inline void ReadOptFromEnv(ConnectOptions &connectOptions)
     ReadParamFromEnv(connectOptions);
 }
 
-void AccessRecord(AccessRecorder &accessPoint, const Status &rc, const std::vector<DeviceBlobList> &BlobLists,
-                  const std::vector<std::string> &keys)
+static uint64_t CalculateDeviceBlobSize(const std::vector<DeviceBlobList> &BlobLists)
 {
     uint64_t totalSize = 0;
     const uint64_t max_val = std::numeric_limits<uint64_t>::max();
@@ -193,12 +193,8 @@ void AccessRecord(AccessRecorder &accessPoint, const Status &rc, const std::vect
             }
         }
     }
-    RequestParam reqParam =
-        RequestParam{ .objectKey =
-                          FormatString("%s+count:%s", keys.empty() ? "" : keys[0].substr(0, LOG_OBJECT_KEY_SIZE_LIMIT),
-                                       keys.size()) };
-    accessPoint.Record(rc.GetCode(), std::to_string(totalSize), reqParam, rc.GetMsg());
-};
+    return totalSize;
+}
 
 struct AsyncMGetH2DState {
     std::promise<AsyncResult> promise;
@@ -1300,38 +1296,53 @@ Status ObjectClientImpl::MGetH2D(const std::vector<std::string> &objectKeys,
                                  uint64_t timeoutMs)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MGET_H2D);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_MGETH2D);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_MGETH2D);
+    access.ObjectKeysSummaryRef(objectKeys)
+        .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); });
 
     auto rc = CheckMGetH2DInput(objectKeys, devBlobList);
     if (rc.IsError()) {
         failedKeys.clear();
-        AccessRecord(accessPoint, rc, devBlobList, objectKeys);
+        access.Result(rc).Record();
         return rc;
     }
     UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
 
     auto status = MGetH2DImpl(objectKeys, devBlobList, timeoutMs, failedKeys);
-    AccessRecord(accessPoint, status, devBlobList, objectKeys);
+    access.Result(status).Record();
     return status;
 }
+
+namespace {
+std::shared_future<AsyncResult> FastFailAsyncResult(const Status &rc)
+{
+    std::promise<AsyncResult> promise;
+    std::shared_future<AsyncResult> future = promise.get_future().share();
+    promise.set_value({ rc, {} });
+    return future;
+}
+}  // namespace
 
 std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector<std::string> &objectKeys,
                                                                const std::vector<DeviceBlobList> &devBlobList,
                                                                uint64_t timeoutMs)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNCMGET_H2D);
-    auto accessPoint = std::make_shared<AccessRecorder>(AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMGETH2D);
+    auto access = std::make_shared<ObjectAccessRecorder>(
+        AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMGETH2D));
 
     auto rc = CheckMGetH2DInput(objectKeys, devBlobList);
     if (rc.IsError()) {
-        std::promise<AsyncResult> promise;
-        std::shared_future<AsyncResult> future = promise.get_future().share();
-        promise.set_value({ rc, {} });
-        AccessRecord(*accessPoint, rc, devBlobList, objectKeys);
-        return future;
+        access->ObjectKeysSummaryRef(objectKeys)
+            .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); })
+            .Result(rc)
+            .Record();
+        return FastFailAsyncResult(rc);
     }
 
     auto asyncState = std::make_shared<AsyncMGetH2DState>(objectKeys, devBlobList);
+    access->ObjectKeysSummaryRef(asyncState->objectKeys)
+        .DataSizeProvider([asyncState] { return CalculateDeviceBlobSize(asyncState->devBlobList); });
     std::shared_future<AsyncResult> future = asyncState->promise.get_future().share();
     UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
@@ -1364,16 +1375,17 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMGetH2D(const std::vector
             return Status::OK();
         });
 
-    asyncGetCopyPool_->Execute(
-        [this, traceContext, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
-            auto rc = asyncState->rpcFuture.get();
-            if (rc.IsOk()) {
-                rc = HostDataCopy2Device(asyncState->devBlobList, asyncState->existBufferList);
-            }
-            AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
-            asyncState->promise.set_value({ rc, asyncState->failedKeys });
-        });
+    auto copyCompleteTask = [this, traceContext,
+        asyncState = std::move(asyncState), access = std::move(access)]() mutable {
+        TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
+        auto rc = asyncState->rpcFuture.get();
+        if (rc.IsOk()) {
+            rc = HostDataCopy2Device(asyncState->devBlobList, asyncState->existBufferList);
+        }
+        access->Result(rc).Record();
+        asyncState->promise.set_value({ rc, asyncState->failedKeys });
+    };
+    asyncGetCopyPool_->Execute(std::move(copyCompleteTask));
     return future;
 }
 
@@ -1621,15 +1633,17 @@ Status ObjectClientImpl::MSetD2H(const std::vector<std::string> &objectKeys,
                                  const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_MSET_D2H);
-    AccessRecorder accessPoint(AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_MSETD2H);
+    access.ObjectKeysSummaryRef(objectKeys)
+        .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); });
     auto rc = CheckMSetD2HInput(objectKeys, devBlobList, setParam);
     if (rc.IsError()) {
-        AccessRecord(accessPoint, rc, devBlobList, objectKeys);
+        access.Result(rc).Record();
         return rc;
     }
     UpdateClientRemoteH2DConfig(devBlobList[0].deviceIdx);
     auto status = MSetD2HImpl(objectKeys, devBlobList, setParam);
-    AccessRecord(accessPoint, status, devBlobList, objectKeys);
+    access.Result(status).Record();
     return status;
 }
 
@@ -1638,26 +1652,32 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncMSetD2H(const std::vector
                                                                const SetParam &setParam)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNCMSET_D2H);
-    std::shared_ptr<AccessRecorder> accessPoint =
-        std::make_shared<AccessRecorder>(AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMSETD2H);
+    auto access = std::make_shared<ObjectAccessRecorder>(
+        AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_ASYNCMSETD2H));
     auto rc = CheckMSetD2HInput(objectKeys, devBlobList, setParam);
     if (rc.IsError()) {
         std::promise<AsyncResult> promise;
         std::shared_future<AsyncResult> future = promise.get_future().share();
         promise.set_value({ rc, objectKeys });
-        AccessRecord(*accessPoint, rc, devBlobList, objectKeys);
+        access->ObjectKeysSummaryRef(objectKeys)
+            .DataSizeProvider([&devBlobList] { return CalculateDeviceBlobSize(devBlobList); })
+            .Result(rc)
+            .Record();
         return future;
     }
 
     auto asyncState = std::make_shared<AsyncMSetD2HState>(objectKeys, devBlobList, setParam);
+    access->ObjectKeysSummaryRef(asyncState->objectKeys)
+        .DataSizeProvider([asyncState] { return CalculateDeviceBlobSize(asyncState->devBlobList); });
     UpdateClientRemoteH2DConfig(asyncState->devBlobList[0].deviceIdx);
 
     auto traceContext = Trace::Instance().GetContext();
     return asyncSetRPCPool_->Submit(
-        [this, traceContext, asyncState = std::move(asyncState), accessPoint = std::move(accessPoint)]() mutable {
+        [this, traceContext,
+         asyncState = std::move(asyncState), access = std::move(access)]() mutable {
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             auto rc = MSetD2HImpl(asyncState->objectKeys, asyncState->devBlobList, asyncState->setParam);
-            AccessRecord(*accessPoint, rc, asyncState->devBlobList, asyncState->objectKeys);
+            access->Result(rc).Record();
             return AsyncResult{ rc, {} };
         });
 }
@@ -3715,15 +3735,16 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
 std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const std::vector<std::string> &objKeys)
 {
     auto traceContext = Trace::Instance().GetContext();
-    auto accessPoint = std::make_shared<AccessRecorder>(AccessRecorderKey::DS_HETERO_CLIENT_ASYNC_DEVDELETE);
-    return asyncDevDeletePool_->Submit([this, traceContext, objKeys, accessPoint]() {
+    auto access = std::make_shared<ObjectAccessRecorder>(
+        AccessRecorder::Object(AccessRecorderKey::DS_HETERO_CLIENT_ASYNC_DEVDELETE));
+    return asyncDevDeletePool_->Submit([this, traceContext, objKeys, access]() {
         PerfPoint perfPoint(PerfKey::HETERO_CLIENT_ASYNC_DEV_DELETE_IMPL);
         TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
         AsyncResult result;
         std::vector<std::string> failList;
         result.status = DeleteDevObjects(objKeys, failList);
         result.failedList = std::move(failList);
-        AccessRecord(*accessPoint, result.status, {}, objKeys);
+        access->ObjectKeysSummaryRef(objKeys).Result(result.status).Record();
         return result;
     });
 }

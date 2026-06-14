@@ -22,7 +22,7 @@
 
 #include <gtest/gtest.h>
 
-#include "datasystem/common/log/spdlog/log_rate_limiter.h"
+#include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/thread_local.h"
 
@@ -34,7 +34,7 @@ protected:
     void SetUp() override
     {
         Trace::Instance().Invalidate();
-        LogRateLimiter::Instance().Reset();
+        LogSampler::Instance().ResetForTest();
         reqTimeoutDuration.Init();
         g_MetaRocksDbName.clear();
     }
@@ -42,7 +42,7 @@ protected:
     void TearDown() override
     {
         Trace::Instance().Invalidate();
-        LogRateLimiter::Instance().Reset();
+        LogSampler::Instance().ResetForTest();
         g_MetaRocksDbName.clear();
     }
 };
@@ -51,7 +51,11 @@ TEST_F(ZmqTraceSamplingMetaTest, UpdateMetaSkipsDecisionForNonRequestTrace)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceNewID("background-trace");
     Trace::Instance().SetRequestLogTrace(false);
-    LogRateLimiter::Instance().SetRate(1);
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.5;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
 
     MetaPb meta;
     UpdateMetaByThreadLocalValue(meta);
@@ -63,19 +67,25 @@ TEST_F(ZmqTraceSamplingMetaTest, UpdateMetaSkipsDecisionForNonRequestTrace)
 TEST_F(ZmqTraceSamplingMetaTest, UpdateMetaCarriesDecisionForRequestTrace)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    LogRateLimiter::Instance().SetRate(1);
+    LogSampler::Instance().SetSaltForTest(0);
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.5;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
 
     MetaPb meta;
     UpdateMetaByThreadLocalValue(meta);
 
     EXPECT_FALSE(meta.trace_id().empty());
-    EXPECT_EQ(meta.log_sample_state(), LOG_SAMPLE_ADMIT);
+    bool admitted = false;
+    Trace::Instance().GetRequestSampleDecision(admitted);
+    EXPECT_EQ(meta.log_sample_state(), admitted ? LOG_SAMPLE_ADMIT : LOG_SAMPLE_REJECT);
 }
 
-TEST_F(ZmqTraceSamplingMetaTest, UpdateMetaUsesUndecidedWhenRequestHasNoLocalSampling)
+TEST_F(ZmqTraceSamplingMetaTest, UpdateMetaUsesUndecidedWhenSamplerDisabled)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    LogRateLimiter::Instance().SetRate(0);
 
     MetaPb meta;
     UpdateMetaByThreadLocalValue(meta);
@@ -104,7 +114,12 @@ TEST_F(ZmqTraceSamplingMetaTest, SetTraceContextFromMetaRestoresRequestFields)
 TEST_F(ZmqTraceSamplingMetaTest, CreateMetaDataCarriesThreadLocalRequestFlag)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    LogRateLimiter::Instance().SetRate(1);
+    LogSampler::Instance().SetSaltForTest(0);
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.5;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
 
     MetaPb meta = CreateMetaData("svc", 1, -1, "client-id");
     EXPECT_NE(meta.log_sample_state(), LOG_SAMPLE_NONE);
@@ -130,7 +145,12 @@ TEST_F(ZmqTraceSamplingMetaTest, SetTraceContextFromMetaNoneClearsRequestFields)
 
 TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaAllowsWorkerLocalSamplingDecision)
 {
-    LogRateLimiter::Instance().SetRate(1);
+    LogSampler::Instance().SetSaltForTest(UINT64_MAX);
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.5;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
 
     MetaPb meta;
     meta.set_trace_id("rpc-trace-undecided");
@@ -141,15 +161,10 @@ TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaAllowsWorkerLocalSamplingDecision)
     bool admitted = false;
     EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
     EXPECT_TRUE(admitted);
-    EXPECT_TRUE(LogRateLimiter::Instance().ShouldLog(ds_spdlog::level::info, Trace::Instance().GetCachedHash()));
-    EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
-    EXPECT_TRUE(admitted);
 }
 
-TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaRemainsUndecidedWhenReceiverHasNoLocalSampling)
+TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaRemainsUndecidedWhenReceiverSamplerDisabled)
 {
-    LogRateLimiter::Instance().SetRate(0);
-
     MetaPb meta;
     meta.set_trace_id("rpc-trace-undecided-no-rate");
     meta.set_log_sample_state(LOG_SAMPLE_UNDECIDED);
@@ -158,8 +173,46 @@ TEST_F(ZmqTraceSamplingMetaTest, UndecidedMetaRemainsUndecidedWhenReceiverHasNoL
     ASSERT_TRUE(Trace::Instance().IsRequestLogTrace());
     bool admitted = false;
     EXPECT_FALSE(Trace::Instance().GetRequestSampleDecision(admitted));
-    EXPECT_TRUE(LogRateLimiter::Instance().ShouldLog(ds_spdlog::level::info, Trace::Instance().GetCachedHash()));
-    EXPECT_FALSE(Trace::Instance().GetRequestSampleDecision(admitted));
+}
+
+TEST_F(ZmqTraceSamplingMetaTest, SamplerDisabledReturnsUndecidedForRequestTrace)
+{
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+
+    MetaPb meta;
+    UpdateMetaByThreadLocalValue(meta);
+    EXPECT_EQ(meta.log_sample_state(), LOG_SAMPLE_UNDECIDED);
+}
+
+TEST_F(ZmqTraceSamplingMetaTest, FullRateReturnsUndecidedNotAdmit)
+{
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 1.0;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
+
+    MetaPb meta;
+    UpdateMetaByThreadLocalValue(meta);
+    EXPECT_EQ(meta.log_sample_state(), LOG_SAMPLE_UNDECIDED);
+}
+
+TEST_F(ZmqTraceSamplingMetaTest, ZeroRateReturnsReject)
+{
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+
+    LogSampleUserConfig cfg;
+    cfg.requestSampleRate = 0.0;
+    cfg.requestSampleRateExplicit = true;
+    LogSampler::Instance().UpdateConfigFromFlags(cfg);
+
+    MetaPb meta;
+    UpdateMetaByThreadLocalValue(meta);
+    EXPECT_EQ(meta.log_sample_state(), LOG_SAMPLE_REJECT);
+    bool admitted = true;
+    EXPECT_TRUE(Trace::Instance().GetRequestSampleDecision(admitted));
+    EXPECT_FALSE(admitted);
 }
 
 }  // namespace ut

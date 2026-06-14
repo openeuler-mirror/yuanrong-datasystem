@@ -41,6 +41,7 @@ set(WORKER_DEPEND_LIBS
         master_heartbeat_protos
         posix_protos
         share_memory_protos
+        common_log_proto
         worker_object_cache
         worker_stream_cache
         rpc_stub_cache_mgr

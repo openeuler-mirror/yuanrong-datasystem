@@ -896,7 +896,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status CreateProducerInternal(
-        const CreateProducerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+        const CreateProducerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
         std::shared_ptr<ServerUnaryWriterReader<CreateProducerRspPb, CreateProducerReqPb>> serverApi);
 
     /**
@@ -907,7 +907,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status CloseProducerInternal(
-        const CloseProducerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+        const CloseProducerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
         std::shared_ptr<ServerUnaryWriterReader<CloseProducerRspPb, CloseProducerReqPb>> serverApi);
 
     /**
@@ -917,7 +917,7 @@ private:
      * @param[in] serverApi Used to read request from client and write response to client.
      * @return K_OK on success; the error code otherwise.
      */
-    Status SubscribeInternal(const SubscribeReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+    Status SubscribeInternal(const SubscribeReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
                              std::shared_ptr<ServerUnaryWriterReader<SubscribeRspPb, SubscribeReqPb>> serverApi);
 
     /**
@@ -928,7 +928,7 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status CloseConsumerInternal(
-        const CloseConsumerReqPb &req, std::shared_ptr<AccessRecorderStreamWrap> recorder,
+        const CloseConsumerReqPb &req, std::shared_ptr<StreamAccessRecorder> recorder,
         std::shared_ptr<ServerUnaryWriterReader<CloseConsumerRspPb, CloseConsumerReqPb>> serverApi);
 
     /**
