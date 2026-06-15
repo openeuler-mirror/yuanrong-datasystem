@@ -7,6 +7,7 @@
 #include "external/hccl_network_pub.h"
 #include "runtime/dev.h"
 #include "external/adapter_rts_common.h"
+#include "tools/env.h"
 
 std::shared_ptr<RdmaAgent> RdmaAgent::instances[MAX_LOCAL_DEVICES];
 std::mutex RdmaAgent::instanceMutex;
@@ -15,18 +16,29 @@ Status RdmaAgent::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaAgent> &out
 {
     std::lock_guard<std::mutex> lock(instanceMutex);
 
-    if (deviceId >= MAX_LOCAL_DEVICES) {
-        return Status::Error(ErrorCode::OUT_OF_RANGE, "DeviceId " + std::to_string(deviceId) + " out of range.");
+    // Prefer runtime logic ID and only normalize when the runtime rejects it.
+    uint32_t logicDeviceId = deviceId;
+    uint32_t phyId = 0;
+    HcclResult phyResult = hrtGetDevicePhyIdByIndex(logicDeviceId, phyId, true);
+
+    if (phyResult != HCCL_SUCCESS) {
+        if (!TryMapVisibleToLogicDeviceId(deviceId, logicDeviceId)) {
+            ACL_CHECK_STATUS(rtGetDeviceIndexByPhyId(deviceId, &logicDeviceId));
+        }
+        ACL_CHECK_STATUS(hrtGetDevicePhyIdByIndex(logicDeviceId, phyId, true));
     }
 
-    if (!instances[deviceId]) {
-        uint32_t phyId;
-        ACL_CHECK_STATUS(hrtGetDevicePhyIdByIndex(deviceId, phyId, true));
-        instances[deviceId] = std::make_shared<RdmaAgent>(deviceId, phyId);
-        CHECK_STATUS(instances[deviceId]->init());
+    if (logicDeviceId >= MAX_LOCAL_DEVICES) {
+        return Status::Error(ErrorCode::OUT_OF_RANGE,
+                             "LogicDeviceId " + std::to_string(logicDeviceId) + " out of range.");
     }
 
-    outAgent = instances[deviceId];
+    if (!instances[logicDeviceId]) {
+        instances[logicDeviceId] = std::make_shared<RdmaAgent>(logicDeviceId, phyId);
+        CHECK_STATUS(instances[logicDeviceId]->init());
+    }
+
+    outAgent = instances[logicDeviceId];
     return Status::Success();
 }
 
@@ -78,4 +90,9 @@ Status RdmaAgent::getDeviceIpv4(union hccp_ip_addr *ipv4Addr)
     }
 
     return Status::Error(ErrorCode::NOT_FOUND, "IPv4 device IP not found");
+}
+
+uint32_t RdmaAgent::getPhyId() const
+{
+    return phyId;
 }

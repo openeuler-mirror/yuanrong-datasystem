@@ -197,6 +197,7 @@ Result BatchReadOne(TransferEngine *engine, const std::string &peerHost, uint16_
         {static_cast<size_t>(length)});
 }
 
+#if !(defined(TRANSFER_ENGINE_TEST_WITH_P2P_BACKEND) && TRANSFER_ENGINE_TEST_WITH_P2P_BACKEND)
 Result RunInProcessTransferCase(bool registerOwnerMemory, ErrorCode *requesterCode, std::string *requesterMsg,
                                 std::vector<uint8_t> *dst)
 {
@@ -233,6 +234,7 @@ Result RunInProcessTransferCase(bool registerOwnerMemory, ErrorCode *requesterCo
     (void)owner.Finalize();
     return Result::OK();
 }
+#endif
 
 struct ForkedTransferPipes {
     int ready[2] = {-1, -1};
