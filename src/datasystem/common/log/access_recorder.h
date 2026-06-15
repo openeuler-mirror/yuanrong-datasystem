@@ -323,7 +323,8 @@ public:
     ~ObjectAccessRecorder() = default;
 
     ObjectAccessRecorder &ObjectKeyRef(std::string_view key);
-    ObjectAccessRecorder &ObjectKeyOwned(std::string key);
+    ObjectAccessRecorder &ObjectKeyOwned(const std::string &key);
+    ObjectAccessRecorder &ObjectKeyOwned(std::string &&key);
     template <typename Provider>
     ObjectAccessRecorder &ObjectKeyProvider(Provider &&provider)
     {

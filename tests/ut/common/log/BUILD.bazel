@@ -33,6 +33,17 @@ ds_cc_test(
     name = "log_performance_test",
     timeout = "long",
     srcs = ["log_performance_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# LogSampler快速确定性测试（默认跑，无manual tag）
+ds_cc_test(
+    name = "log_sampler_fast_test",
+    srcs = ["log_sampler_fast_test.cpp"],
     deps = [
         "//src/datasystem/common/log:common_log",
         "//tests/ut:ut_common",

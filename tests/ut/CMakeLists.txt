@@ -58,6 +58,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/log/log_performance_test\\.cpp$)
 
 if (NOT BUILD_WITH_RDMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
@@ -128,6 +129,12 @@ add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
+add_ds_ut_executable(log_perf_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/log/log_performance_test.cpp"
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+target_link_libraries(log_perf_ut PRIVATE ${DS_UT_DEPEND_LIBS})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
 target_link_libraries(flags_ut ds_flags ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)

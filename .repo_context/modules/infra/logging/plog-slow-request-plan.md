@@ -10,15 +10,20 @@
   - preserve the design for request slow logs that bypass request log sampling when a Set/Get latency segment is slow.
 - Related context:
   - `get-latency-trace-plan.md` is about client access-log latency summaries.
-  - This file is about worker/master/runtime logs that must still appear when `log_rate_limit` sampling drops normal request
+  - This file is about worker/master/runtime logs that must still appear when request log sampling drops normal request
     logs.
+
+> **Historical note (PR 1064):** This plan was written before the LogSampler migration replaced
+> `log_rate_limit` / `LogRateLimiter` with `LogSampler`. The PLOG semantics described here remain
+> valid under `LogSampler`. References to `log_rate_limit` and `LogRateLimiter` are historical
+> and must not be used for new development.
 
 ## Problem And Constraints
 
 - Current production-like setup:
   - `enable_urma=true`
   - `enable_worker_worker_batch_get=true`
-  - `log_rate_limit=100`
+  - `request_sample_rate=0.0001` (previously `log_rate_limit=100`; historical — do not use `log_rate_limit`)
 - Requirement:
   - Set/Get P99.99 latency should stay within `2 ms`.
   - When a Set/Get request is slow but the request trace is not sampled, logs must still expose the slow segment.
@@ -65,7 +70,7 @@ Implementation direction:
 
 - Add a force-log path to `LogMessage`/`LogMessageImpl`.
 - Add `ShouldCreateLogMessage(severity, forceLog)` or an equivalent overload.
-- Skip `LogRateLimiter::ShouldLog(...)` only when `forceLog` is true.
+- Skip `LogSampler` admission check only when `forceLog` is true. (Historical: previously `LogRateLimiter::ShouldLog`; removed by PR 1064.)
 - Make the public macro preserve the original log condition separately from the slow force condition, so existing sampled
   logs do not disappear for fast requests.
 - Keep normal `LOG`, `VLOG`, `LOG_EVERY_N`, and error/fatal behavior unchanged.

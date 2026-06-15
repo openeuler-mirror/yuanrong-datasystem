@@ -225,15 +225,21 @@ global contention, CAS, and queues on the logging hot path is more important tha
   `RequestSampleRate(double)`, `AccessSampleRate(double)`, `DiagnosticSampleRate(double)`.
   These provide type safety, discoverability, and range validation over the `SetArg/SetArgs` string approach.
   `SetArg/SetArgs` remains available as an alternative.
-  New internal API: `ShouldRecordAccess(AccessRecorderKey)` used only by
-  facade internals. Call sites use typed `AccessRecorder::Object/Stream/RequestOut` facades.
+  Call sites use typed `AccessRecorder::Object/Stream/RequestOut` facades to describe cheap
+  values, same-scope references, or providers for expensive fields, then call `Record()`.
+  Sampling decisions, sampled-out fast return, elapsed time, request formatting, and exporter
+  writes are owned by `AccessRecorder`. `ShouldRecordAccess(AccessRecorderKey)` is an internal
+  sampler API used by recorder internals. Ordinary business call sites must not add
+  `ShouldRecordAccess()` or `ShouldRecord()` branches for access logging.
 - Internal entrypoints:
   - `ShouldCreateLogMessage()` -> classification-first runtime lightweight sampler entrypoint.
   - `ShouldCreatePlogMessage()` -> severity check + runtime lightweight sampler entrypoint with PLOG classified as `DIAGNOSTIC`, before PLOG stream payload evaluation.
   - `LogMessageImpl::Init()` -> defensive backstop; PLOG (`forceLog_=true`) skips request reject as a direct drop
     condition only.
-  - `ShouldRecordAccess(AccessRecorderKey)` / access guard -> hot-path precheck before constructing `AccessRecorder`
-    and `RequestParam`; `AccessRecorder::Record()` keeps a fallback check before `RequestParam::ToString()`.
+  - `ShouldRecordAccess(AccessRecorderKey)` -> internal sampler API used by `AccessRecorder` facade
+    internals at construction time. Business call sites use `AccessRecorder::Object/Stream/RequestOut`
+    facades with setter methods that short-circuit when sampled-out. `AccessRecorder::Record()` keeps
+    a final gate before `RequestParam::ToString()`.
 - RPC: `MetaPb.log_sample_state` is used for complete request-log sampled-in consistency. Per-event supplement sampling
   decisions are process-local and are not propagated.
 - `logSampled:true` means ordinary request INFO is visible / not rejected under current request-level sampling semantics;
@@ -600,7 +606,7 @@ Files: `access_recorder.cpp` plus selected hot access paths.
    inside `AccessRecorder`; ordinary business call sites must not add `ShouldRecordAccess()` / `ShouldRecord()` branches.
 2. First implementation must cover C++ client KV/Object hot APIs, C/Python/Java wrappers, worker-side corresponding
    request access entrypoints, and existing shared wrapper / RAII paths.
-3. Disabled/pass-through or `access_sample_rate=1.0`: access guard returns true after only the lightweight enabled/rate
+3. Disabled/pass-through or `access_sample_rate=1.0`: sampler internal API returns true after only the lightweight enabled/rate
    check; it must not map key/type or build event keys.
 4. Non-100% access rate: guard maps `AccessRecorderKey -> AccessKeyType`; `REQUEST_OUT` returns true; only
    `CLIENT`/`ACCESS` enters access logic.
@@ -711,7 +717,7 @@ This is a hard pre-merge gate:
 - A coefficient of `0.0`: non-sampled-in logs for that supplement path must return before stream payload / `ToString()`
   evaluation; request sampled-in diagnostic/access still emits under complete-request semantics.
 - Partial enablement: access-only sampling must not slow runtime-log paths; request-only sampling may make diagnostic or
-  access guard read/create the request sampled-in decision, but must not build per-event keys or run diagnostic/access
+  sampler internal API read/create the request sampled-in decision, but must not build per-event keys or run diagnostic/access
   hashing when request is sampled in.
 - Coefficients in `(0.0,1.0)`: sampler-only benchmark must prove no heap allocation, mutex, system time read, global
   atomic contention, or CAS retry.
@@ -803,7 +809,7 @@ atomic write hotspots.
 | `common/log` | New `LogSampler`, config parser, threshold snapshot, lightweight hash |
 | `log.h` | `ShouldCreateLogMessage()`: FATAL bypass + classification-first random sampling; `ShouldCreatePlogMessage()` pre-payload sampling |
 | `log_message_impl.cpp` | Backstop + PLOG skips request reject as a direct drop condition, but still checks sampled-in / `diagnostic_sample_rate` |
-| `access_recorder.cpp` / hot access paths | `ShouldRecordAccess(AccessRecorderKey)` / guard before recorder and request-param construction; fallback inside `Record()` before `ToString()` |
+| `access_recorder.cpp` / hot access paths | `AccessRecorder` facade: `Object/Stream/RequestOut` builders with sampled-out setter no-op and provider deferred evaluation; `ShouldRecordAccess()` internal API at construction; `Record()` final gate before `ToString()` |
 | `logging.cpp` | worker-side three sample-rate gflags + validation; no client env var |
 | `flags.cpp` / `flags.h` | Trust list + two-phase parse-commit config sync |
 | `share_memory.proto` | Add `LogSampleConfigPb`; `RegisterClientRspPb reserved 24` and `log_sample_config = 25`; `HeartbeatRspPb.log_sample_config = 8` |
@@ -818,7 +824,7 @@ Implementation order:
 2. `ShouldCreateLogMessage()`: FATAL/CHECK bypass + classification-first random sampling; request sampled-in preserves
    complete request logs, while request reject applies directly only to ordinary request INFO/VLOG.
 3. PLOG integration with macro-level `ShouldCreatePlogMessage()` precheck.
-4. Access integration: implement access guard and `Record()` fallback, then cover C++ client KV/Object, C/Python/Java
+4. Access integration: implement AccessRecorder facade and `Record()` final gate, then cover C++ client KV/Object, C/Python/Java
    wrappers, worker corresponding request access entrypoints, and shared wrapper/RAII paths.
 5. Worker three-parameter config, structured proto propagation, and client register/heartbeat application.
 6. Random-distribution, access pre-drop, and 4000+ QPS with 32 concurrent threads performance validation; do not merge implementation until this passes.

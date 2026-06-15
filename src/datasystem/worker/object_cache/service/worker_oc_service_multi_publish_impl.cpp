@@ -76,7 +76,11 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
     }).DataSizeProvider([&req]() -> uint64_t {
         return req.object_info().empty() ? 0 : req.object_info(0).data_size();
     });
-    CHECK_FAIL_RETURN_STATUS(!req.object_info().empty(), K_INVALID, "The list of object info is empty.");
+    if (req.object_info().empty()) {
+        Status rc(K_INVALID, __LINE__, __FILE__, "The list of object info is empty.");
+        access.Result(rc).Record();
+        return rc;
+    }
     Status status = MultiPublishImpl(req, resp, payloads, clientId);
     access.Result(status).Record();
     auto totalMs = timer.ElapsedMilliSecond();

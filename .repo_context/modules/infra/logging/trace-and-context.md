@@ -22,7 +22,7 @@
   - `Trace::Instance()` is `thread_local`.
   - `SetTraceUUID()` generates a new UUID-based trace ID unless the current thread already has one.
   - `SetRequestTraceUUID()` creates a root trace, marks it as a request-log-sampling trace for public SDK request APIs,
-    and creates a local sampling decision immediately when local `log_rate_limit` is enabled.
+    and creates a local sampling decision immediately when LogSampler is enabled.
   - `SetPrefix()` stores a trace prefix, currently set from `Context::SetTraceId`.
   - `SetTraceNewID()` is for propagating an existing trace ID across threads.
   - `GetContext()` / `SetTraceContext()` capture and restore trace ID, request marker, and request sampling decision together.
@@ -54,8 +54,8 @@
   - non-request/background work uses `Trace::Instance().SetTraceUUID()` or imported trace IDs without request markers;
   - asynchronous or cross-thread request flows capture and reapply full `TraceContext` explicitly;
   - ZMQ `MetaPb` carries one request-log sampling state (`NONE`, `UNDECIDED`, `ADMIT`, `REJECT`) and callsites restore both `trace_id` and request-sampling context when importing request context;
-  - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogRateLimiter`
-    only owns the per-second atomic admission counter;
+  - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogSampler`
+    owns the sampling decision and precomputed threshold; no per-second counter is used;
   - sub-operations can append sub-trace state without replacing the root trace.
 - Review implication:
   - any new async boundary that forgets to capture and restore trace state can make observability look randomly broken even when business logic still works.

@@ -356,7 +356,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
                     access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
                 });
@@ -393,7 +393,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
                     access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
                 });
@@ -424,7 +424,7 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 uint64_t totalSize = 0;
                 Status lastRc;
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, keys, timeout_ms] {
+                Raii raii([&access, &totalSize, &lastRc, &keys, timeout_ms] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
                     access.ObjectKeysRef(keys).TimeoutMs(timeout_ms).Result(accessRc).DataSize(totalSize).Record();
                 });
@@ -464,13 +464,17 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                 Status lastRc;
 
                 auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-                Raii raii([&access, &totalSize, &lastRc, readParams] {
+                access.ObjectKeyProvider([&readParams] {
                     std::vector<std::string> keys;
+                    keys.reserve(readParams.size());
                     for (const auto &readParam : readParams) {
                         keys.emplace_back(readParam.key);
                     }
+                    return objectKeysToString(keys);
+                });
+                Raii raii([&access, &totalSize, &lastRc] {
                     Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
-                    access.ObjectKeysRef(keys).Result(accessRc).DataSize(totalSize).Record();
+                    access.Result(accessRc).DataSize(totalSize).Record();
                 });
                 lastRc = client.Read(readParams, buffers);
                 if (lastRc.IsError()) {

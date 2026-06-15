@@ -289,7 +289,17 @@ ObjectAccessRecorder &ObjectAccessRecorder::ObjectKeyRef(std::string_view key)
     return *this;
 }
 
-ObjectAccessRecorder &ObjectAccessRecorder::ObjectKeyOwned(std::string key)
+ObjectAccessRecorder &ObjectAccessRecorder::ObjectKeyOwned(const std::string &key)
+{
+    if (!core_.ShouldRecordInternal()) {
+        return *this;
+    }
+    state_.objectKey.kind = ObjectKeyState::OWNED;
+    state_.objectKey.owned = key;
+    return *this;
+}
+
+ObjectAccessRecorder &ObjectAccessRecorder::ObjectKeyOwned(std::string &&key)
 {
     if (!core_.ShouldRecordInternal()) {
         return *this;

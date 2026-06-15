@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <dirent.h>
 #include <fstream>
 #include <iomanip>
@@ -39,7 +40,6 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/log_sampler.h"
-#include "datasystem/common/log/access_recorder.h"
 
 DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_bool(logtostderr);
@@ -105,6 +105,12 @@ public:
         cfg.requestSampleRate = requestRate;
         cfg.requestSampleRateExplicit = true;
         LogSampler::Instance().UpdateConfigFromFlags(cfg);
+    }
+
+    void StartLoggingWithoutSampler()
+    {
+        LogSampler::Instance().ResetForTest();
+        StartLogging();
     }
 
     void StartLoggingWithSamplerConfig(double requestRate, double accessRate, double diagnosticRate)
@@ -250,8 +256,12 @@ public:
 
     struct PureLogResult {
         double rate = 0;
+        double accessRate = 0;
+        double diagnosticRate = 0;
         bool directLog = false;
         bool expensivePayload = false;
+        bool samplerOnly = false;
+        std::string samplerMode;
         int totalRequests = 0;
         double elapsedSec = 0.0;
         double achievedQps = 0.0;
@@ -300,7 +310,8 @@ public:
         }
     }
 
-PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, bool expensivePayload, bool directLog)
+    PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, bool expensivePayload,
+                                     bool directLog, const std::string &samplerMode = "")
     {
         StartLoggingWithSamplerRate(requestRate);
 
@@ -364,6 +375,12 @@ PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, 
         result.rate = requestRate;
         result.directLog = directLog;
         result.expensivePayload = expensivePayload;
+        result.samplerMode = samplerMode.empty()
+            ? (std::fabs(requestRate - 1.0) < 1e-9
+                   ? "sampler-through"
+                   : (std::fabs(requestRate) < 1e-9 ? "sampler-reject" : "sampler-half"))
+            : samplerMode;
+        result.samplerOnly = false;
         result.totalRequests = totalRequests;
         result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
         result.achievedQps = totalRequests / result.elapsedSec;
@@ -378,7 +395,8 @@ PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, 
     }
 
     PureLogResult RunPureLogWorkloadMultiRate(double requestRate, double accessRate, double diagnosticRate,
-                                               const std::string &marker, bool expensivePayload, bool directLog)
+                                               const std::string &marker, bool expensivePayload, bool directLog,
+                                               const std::string &samplerMode = "")
     {
         StartLoggingWithSamplerConfig(requestRate, accessRate, diagnosticRate);
 
@@ -440,8 +458,93 @@ PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, 
 
         PureLogResult result;
         result.rate = requestRate;
+        result.accessRate = accessRate;
+        result.diagnosticRate = diagnosticRate;
         result.directLog = directLog;
         result.expensivePayload = expensivePayload;
+        result.samplerMode = samplerMode.empty() ? "multi-rate" : samplerMode;
+        result.samplerOnly = false;
+        result.totalRequests = totalRequests;
+        result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
+        result.achievedQps = totalRequests / result.elapsedSec;
+        result.p50Us = CalculatePercentile(allLatencies, 0.50);
+        result.p95Us = CalculatePercentile(allLatencies, 0.95);
+        result.p99Us = CalculatePercentile(allLatencies, 0.99);
+        result.avgUs = CalculateAvgLatency(allLatencies);
+        result.maxUs = *std::max_element(allLatencies.begin(), allLatencies.end());
+        result.writtenSamples = CountInfoLogLinesWithMarker(marker);
+        result.payloadBuilds = payloadBuilds.load(std::memory_order_relaxed);
+        return result;
+    }
+
+    PureLogResult RunPureLogWorkloadNoSampler(const std::string &marker, bool expensivePayload)
+    {
+        StartLoggingWithoutSampler();
+
+        constexpr int requestsPerThread = PURE_LOG_PER_THREAD_QPS * PURE_LOG_DURATION_SEC;
+        constexpr int totalRequests = PURE_LOG_THREAD_COUNT * requestsPerThread;
+        const std::string payload = GenerateLogPayload(64);
+
+        std::atomic<int> ready{ 0 };
+        std::atomic<bool> start{ false };
+        std::atomic<int> payloadBuilds{ 0 };
+        std::chrono::steady_clock::time_point scheduledStart;
+        std::vector<std::vector<double>> threadLatencies(PURE_LOG_THREAD_COUNT);
+        std::vector<std::thread> threads;
+        threads.reserve(PURE_LOG_THREAD_COUNT);
+
+        for (int threadId = 0; threadId < PURE_LOG_THREAD_COUNT; ++threadId) {
+            threads.emplace_back([&, threadId]() {
+                threadLatencies[threadId].reserve(requestsPerThread);
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+
+                const auto period = std::chrono::microseconds(1000000 / PURE_LOG_PER_THREAD_QPS);
+                for (int i = 0; i < requestsPerThread; ++i) {
+                    std::this_thread::sleep_until(scheduledStart + period * i);
+
+                    auto begin = std::chrono::high_resolution_clock::now();
+                    {
+                        TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                        EmitPureLogLine(false, expensivePayload, marker, payload, threadId, i, payloadBuilds);
+                    }
+                    auto end = std::chrono::high_resolution_clock::now();
+                    threadLatencies[threadId].push_back(
+                        std::chrono::duration<double, std::micro>(end - begin).count());
+                }
+                Trace::Instance().Invalidate();
+            });
+        }
+
+        while (ready.load(std::memory_order_acquire) != PURE_LOG_THREAD_COUNT) {
+            std::this_thread::yield();
+        }
+        scheduledStart = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        start.store(true, std::memory_order_release);
+
+        for (auto &thread : threads) {
+            thread.join();
+        }
+        const auto finish = std::chrono::steady_clock::now();
+        Provider::Instance().FlushLogs();
+
+        std::vector<double> allLatencies;
+        allLatencies.reserve(totalRequests);
+        for (auto &latencies : threadLatencies) {
+            allLatencies.insert(allLatencies.end(), latencies.begin(), latencies.end());
+        }
+        EXPECT_EQ(allLatencies.size(), static_cast<size_t>(totalRequests));
+
+        PureLogResult result;
+        result.rate = 0;
+        result.accessRate = 0;
+        result.diagnosticRate = 0;
+        result.directLog = false;
+        result.expensivePayload = expensivePayload;
+        result.samplerMode = "no-sampler";
+        result.samplerOnly = false;
         result.totalRequests = totalRequests;
         result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
         result.achievedQps = totalRequests / result.elapsedSec;
@@ -457,7 +560,9 @@ PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, 
 
     void PrintPureLogResult(const std::string &tag, const PureLogResult &result)
     {
-        std::cout << tag << " rate=" << result.rate << " directLog=" << result.directLog
+        std::cout << tag << " samplerMode=" << result.samplerMode << " samplerOnly=" << result.samplerOnly
+                  << " rate=" << result.rate << " accessRate=" << result.accessRate
+                  << " diagnosticRate=" << result.diagnosticRate << " directLog=" << result.directLog
                   << " expensivePayload=" << result.expensivePayload << " threads=" << PURE_LOG_THREAD_COUNT
                   << " targetQps=" << PURE_LOG_TARGET_QPS << " durationSec=" << PURE_LOG_DURATION_SEC
                   << " totalRequests=" << result.totalRequests << " elapsedSec=" << std::fixed
@@ -466,68 +571,6 @@ PureLogResult RunPureLogWorkload(double requestRate, const std::string &marker, 
                   << " p99Us=" << result.p99Us << " maxUs=" << result.maxUs
                   << " writtenSamples=" << result.writtenSamples << " payloadBuilds=" << result.payloadBuilds
                   << std::endl;
-    }
-
-    struct AccessRecorderResult {
-        double avgUs = 0.0;
-        double p50Us = 0.0;
-        double p99Us = 0.0;
-        int totalCalls = 0;
-        int sampledInCalls = 0;
-        int sampledOutCalls = 0;
-    };
-
-    AccessRecorderResult RunAccessRecorderWorkload(double accessRate, double requestRate, int callsPerThread,
-                                                    int threadCount)
-    {
-        StartLoggingWithSamplerConfig(requestRate, accessRate, 1.0);
-
-        std::atomic<int> sampledIn{ 0 };
-        std::atomic<int> sampledOut{ 0 };
-        std::vector<std::vector<double>> threadLatencies(threadCount);
-        std::vector<std::thread> threads;
-        threads.reserve(threadCount);
-
-        for (int t = 0; t < threadCount; t++) {
-            threads.emplace_back([&, t]() {
-                threadLatencies[t].reserve(callsPerThread);
-                for (int i = 0; i < callsPerThread; i++) {
-                    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
-                    auto begin = std::chrono::high_resolution_clock::now();
-                    {
-                        auto ap = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
-                        if (LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
-                            ap.ObjectKeyRef("bench_key").TimeoutMs(100).Result(0).DataSize(100).Record();
-                            sampledIn.fetch_add(1, std::memory_order_relaxed);
-                        } else {
-                            sampledOut.fetch_add(1, std::memory_order_relaxed);
-                        }
-                    }
-                    auto end = std::chrono::high_resolution_clock::now();
-                    threadLatencies[t].push_back(
-                        std::chrono::duration<double, std::micro>(end - begin).count());
-                }
-            });
-        }
-
-        for (auto &thread : threads) {
-            thread.join();
-        }
-
-        std::vector<double> allLatencies;
-        allLatencies.reserve(callsPerThread * threadCount);
-        for (auto &latencies : threadLatencies) {
-            allLatencies.insert(allLatencies.end(), latencies.begin(), latencies.end());
-        }
-
-        AccessRecorderResult result;
-        result.totalCalls = callsPerThread * threadCount;
-        result.sampledInCalls = sampledIn.load(std::memory_order_relaxed);
-        result.sampledOutCalls = sampledOut.load(std::memory_order_relaxed);
-        result.avgUs = CalculateAvgLatency(allLatencies);
-        result.p50Us = CalculatePercentile(allLatencies, 0.50);
-        result.p99Us = CalculatePercentile(allLatencies, 0.99);
-        return result;
     }
 
 private:
@@ -704,7 +747,7 @@ TEST_F(LogPerformanceTest, MultiThreadThroughput)
 TEST_F(LogPerformanceTest, LEVEL1_RequestLogSampleRateHalfPureLoggingQps4000)
 {
     const std::string marker = "pure-log-sample-rate-qps4000-rate-" + std::to_string(PURE_LOG_SAMPLE_RATE);
-    auto result = RunPureLogWorkload(PURE_LOG_SAMPLE_RATE, marker, false, false);
+    auto result = RunPureLogWorkload(PURE_LOG_SAMPLE_RATE, marker, false, false, "sampler-half");
     PrintPureLogResult("PURE_LOG_SAMPLE_RATE_RESULT", result);
 
     EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
@@ -714,7 +757,7 @@ TEST_F(LogPerformanceTest, LEVEL1_RequestLogSampleRateHalfPureLoggingQps4000)
 TEST_F(LogPerformanceTest, LEVEL1_RequestLogSampleRateHalfRejectedExpensivePayloadQps4000)
 {
     const std::string marker = "pure-log-sample-rate-expensive-rate-qps4000-" + std::to_string(PURE_LOG_SAMPLE_RATE);
-    auto result = RunPureLogWorkload(PURE_LOG_SAMPLE_RATE, marker, true, false);
+    auto result = RunPureLogWorkload(PURE_LOG_SAMPLE_RATE, marker, true, false, "sampler-half");
     PrintPureLogResult("PURE_LOG_SAMPLE_RATE_EXPENSIVE_RESULT", result);
 
     EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
@@ -725,69 +768,28 @@ TEST_F(LogPerformanceTest, LEVEL1_RequestLogSampleRateHalfRejectedExpensivePaylo
 
 TEST_F(LogPerformanceTest, LEVEL1_SamplerPassThroughMacroOverheadQps4000)
 {
-    auto direct = RunPureLogWorkload(1.0, "pure-log-passthrough-direct", true, true);
-    auto macro = RunPureLogWorkload(1.0, "pure-log-passthrough-macro", true, false);
-    PrintPureLogResult("PURE_LOG_PASSTHROUGH_DIRECT_RESULT", direct);
-    PrintPureLogResult("PURE_LOG_PASSTHROUGH_MACRO_RESULT", macro);
+    auto noSampler = RunPureLogWorkloadNoSampler("pure-log-nosampler-baseline", true);
+    auto samplerThrough = RunPureLogWorkload(1.0, "pure-log-sampler-through", true, false, "sampler-through");
+    PrintPureLogResult("PURE_LOG_NOSAMPLER_BASELINE_RESULT", noSampler);
+    PrintPureLogResult("PURE_LOG_SAMPLER_THROUGH_RESULT", samplerThrough);
 
-    EXPECT_GE(direct.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
-    EXPECT_GE(macro.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
-    EXPECT_EQ(direct.payloadBuilds, direct.totalRequests);
-    EXPECT_EQ(macro.payloadBuilds, macro.totalRequests);
+    EXPECT_GE(noSampler.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_GE(samplerThrough.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_EQ(samplerThrough.payloadBuilds, samplerThrough.totalRequests);
 
-    EXPECT_LE(macro.p99Us, direct.p99Us * 1.01);
-    EXPECT_LE(macro.avgUs, direct.avgUs * 1.01);
+    EXPECT_LE(samplerThrough.p99Us, noSampler.p99Us * 1.01);
+    EXPECT_LE(samplerThrough.avgUs, noSampler.avgUs * 1.01);
 }
 
 TEST_F(LogPerformanceTest, LEVEL1_RequestRejectFastPathQps4000)
 {
     auto result = RunPureLogWorkloadMultiRate(0.0, 1.0, 1.0,
-                                               "pure-log-reject-fast-path-qps4000", true, false);
+                                               "pure-log-reject-fast-path-qps4000", true, false, "sampler-reject");
     PrintPureLogResult("PURE_LOG_REJECT_FAST_PATH_RESULT", result);
 
     EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
     EXPECT_EQ(result.payloadBuilds, 0);
     EXPECT_LT(result.p99Us, 50000.0);
-}
-
-TEST_F(LogPerformanceTest, ACCESS_LEVEL1_SampledOutFastPath)
-{
-    auto result = RunAccessRecorderWorkload(0.0, 0.0, 10000, 1);
-    std::cout << "ACCESS_SAMPLED_OUT" << " avgUs=" << std::fixed << std::setprecision(OUTPUT_PRECISION)
-              << result.avgUs << " p50Us=" << result.p50Us << " p99Us=" << result.p99Us
-              << " totalCalls=" << result.totalCalls << " sampledIn=" << result.sampledInCalls
-              << " sampledOut=" << result.sampledOutCalls << std::endl;
-
-    EXPECT_EQ(result.sampledInCalls, 0);
-    EXPECT_GT(result.sampledOutCalls, 0);
-    EXPECT_LT(result.p99Us, 2000.0);
-}
-
-TEST_F(LogPerformanceTest, ACCESS_LEVEL1_SampledInFullPath)
-{
-    auto result = RunAccessRecorderWorkload(1.0, 1.0, 10000, 1);
-    std::cout << "ACCESS_SAMPLED_IN" << " avgUs=" << std::fixed << std::setprecision(OUTPUT_PRECISION)
-              << result.avgUs << " p50Us=" << result.p50Us << " p99Us=" << result.p99Us
-              << " totalCalls=" << result.totalCalls << " sampledIn=" << result.sampledInCalls
-              << " sampledOut=" << result.sampledOutCalls << std::endl;
-
-    EXPECT_GT(result.sampledInCalls, 0);
-    EXPECT_EQ(result.sampledOutCalls, 0);
-    EXPECT_LT(result.p99Us, 5000.0);
-}
-
-TEST_F(LogPerformanceTest, ACCESS_LEVEL1_SampledMixedDistribution)
-{
-    auto result = RunAccessRecorderWorkload(0.5, 0.0, 50000, 1);
-    std::cout << "ACCESS_SAMPLED_MIXED" << " avgUs=" << std::fixed << std::setprecision(OUTPUT_PRECISION)
-              << result.avgUs << " p50Us=" << result.p50Us << " p99Us=" << result.p99Us
-              << " totalCalls=" << result.totalCalls << " sampledIn=" << result.sampledInCalls
-              << " sampledOut=" << result.sampledOutCalls << std::endl;
-
-    EXPECT_GT(result.sampledInCalls, 0);
-    EXPECT_GT(result.sampledOutCalls, 0);
-    double inRatio = static_cast<double>(result.sampledInCalls) / result.totalCalls;
-    EXPECT_NEAR(inRatio, 0.5, 0.1);
 }
 
 TEST_F(LogPerformanceTest, LEVEL1_SamplerOnlyDecisionCostQps4000)
@@ -843,29 +845,20 @@ TEST_F(LogPerformanceTest, LEVEL1_SamplerOnlyDecisionCostQps4000)
     double p99 = allLatencies[allLatencies.size() * 99 / 100];
 
     std::cout << "SAMPLER_ONLY_QPS=" << std::fixed << std::setprecision(OUTPUT_PRECISION)
-              << achievedQps << " p50=" << p50 << " p99=" << p99 << std::endl;
+              << achievedQps << " p50=" << p50 << " p99=" << p99
+              << " samplerMode=sampler-only samplerOnly=true" << std::endl;
     EXPECT_GE(achievedQps, PURE_LOG_TARGET_QPS * 0.95);
     EXPECT_LT(p99, 10.0);
 }
 
-TEST_F(LogPerformanceTest, LEVEL1_AccessRecorderSampledOutDoesNotBuildFields)
+TEST_F(LogPerformanceTest, LEVEL1_NoSamplerBaselineQps4000)
 {
-    StartLoggingWithSamplerConfig(0.0, 0.0, 1.0);
-    LogSampler::Instance().SetSaltForTest(0);
-    std::atomic<int> providerCalls{ 0 };
-    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    auto result = RunPureLogWorkloadNoSampler("pure-log-nosampler-baseline-qps4000", true);
+    PrintPureLogResult("PURE_LOG_NOSAMPLER_BASELINE_QPS4000_RESULT", result);
 
-    for (int i = 0; i < 10000; ++i) {
-        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
-        access.ObjectKeyProvider([&] {
-                  providerCalls.fetch_add(1, std::memory_order_relaxed);
-                  return std::string("expensive-key");
-              })
-              .Result(Status::OK())
-              .Record();
-    }
-
-    EXPECT_EQ(providerCalls.load(), 0);
+    EXPECT_GE(result.achievedQps, PURE_LOG_TARGET_QPS * 0.95);
+    EXPECT_EQ(result.payloadBuilds, result.totalRequests);
+    EXPECT_LT(result.p99Us, 50000.0);
 }
 
 }  // namespace ut

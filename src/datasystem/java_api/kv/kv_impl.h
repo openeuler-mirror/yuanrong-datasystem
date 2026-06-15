@@ -21,6 +21,7 @@
 #include <jni.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/java_api/jni_util.h"
 #include "datasystem/utils/status.h"
@@ -32,29 +33,22 @@ using datasystem::ConnectOptions;
 using datasystem::CreateParam;
 using datasystem::object_cache::ObjectClientImpl;
 
-struct JavaKvAccessFields {
-    std::string key;
-    std::vector<std::string> keys;
-    SetParam setParam;
-    uint64_t dataSize = 0;
-};
-
 Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobject valueJO, jobject paramJO,
-                                 JavaKvAccessFields *accessFields);
+                                 ObjectAccessRecorder &access);
 
 Status SetHeapBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jbyteArray byteArray, jlong size,
-                               jobject paramJO, JavaKvAccessFields *accessFields);
+                               jobject paramJO, ObjectAccessRecorder &access);
 
 Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs, jint &totalSize,
-                        jobject &heapBuffer, JavaKvAccessFields *accessFields);
+                        jobject &heapBuffer, ObjectAccessRecorder &access);
 
 Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeoutMs, jint &totalSize,
-                         jobject &ListJO, JavaKvAccessFields *accessFields);
+                         jobject &ListJO, ObjectAccessRecorder &access);
 
 Status DelKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, std::vector<std::string> &failedKeys,
-                        JavaKvAccessFields *accessFields);
+                        ObjectAccessRecorder &access);
 
 Status DelKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, std::vector<std::string> &failedKeys,
-                         JavaKvAccessFields *accessFields);
+                         ObjectAccessRecorder &access);
 }  // namespace java_api
 }  // namespace datasystem
