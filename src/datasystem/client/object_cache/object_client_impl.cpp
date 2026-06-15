@@ -225,6 +225,25 @@ struct AsyncMSetD2HState {
 };
 
 namespace object_cache {
+namespace {
+void NotifySwitchToExpectedWorker(const HostPort &target)
+{
+    const std::string targetAddress = target.ToString();
+    INJECT_POINT_NO_RETURN("client.switch_worker_expected_1", [&targetAddress](const std::string &expectedAddress) {
+        if (targetAddress == expectedAddress) {
+            INJECT_POINT_NO_RETURN("client.switch_worker_expected_1.matched", []() { return true; });
+        }
+        return true;
+    });
+    INJECT_POINT_NO_RETURN("client.switch_worker_expected_2", [&targetAddress](const std::string &expectedAddress) {
+        if (targetAddress == expectedAddress) {
+            INJECT_POINT_NO_RETURN("client.switch_worker_expected_2.matched", []() { return true; });
+        }
+        return true;
+    });
+}
+}  // namespace
+
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
 {
     (void)Provider::Instance();
@@ -978,6 +997,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         candidateListenWorker->StopListenWorker(true);
         return StandbySwitchAttemptResult::ABORT;
     }
+    NotifySwitchToExpectedWorker(candidateWorkerApi->hostPort_);
     LOG(INFO) << FormatString("[Switch] client %s wait for worker %s ready success", GetClientId(),
                               candidateWorkerApi->hostPort_.ToString());
     return StandbySwitchAttemptResult::SWITCHED;
@@ -1018,6 +1038,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalS
         }
         MarkWorkerAvailableLocked();
     }
+    NotifySwitchToExpectedWorker(localAddress);
     LOG(INFO) << "[Switch] LOCAL_WORKER replaced with same-host worker at " << localAddress.ToString();
     return StandbySwitchAttemptResult::SWITCHED;
 }
@@ -1072,19 +1093,22 @@ bool ObjectClientImpl::TrySwitchBackToLocalWorker()
     bool scaleDown = localListenWorker->IsWorkerVoluntaryScaleDown();
     bool healthy = localWorkerApi->healthy_;
     if (s.IsOk() && !scaleDown && healthy) {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        if (currentNode_ == LOCAL_WORKER) {
-            return true;
+        {
+            std::lock_guard<std::mutex> lock(switchNodeMutex_);
+            if (currentNode_ == LOCAL_WORKER) {
+                return true;
+            }
+            if (currentNode_ != current || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+                return false;
+            }
+            LOG(INFO) << "[Switch] Restore local worker success.";
+            if (currentListenWorker != nullptr) {
+                currentListenWorker->SetSwitched();
+            }
+            currentNode_ = LOCAL_WORKER;
+            MarkWorkerAvailableLocked();
         }
-        if (currentNode_ != current || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
-            return false;
-        }
-        LOG(INFO) << "[Switch] Restore local worker success.";
-        if (currentListenWorker != nullptr) {
-            currentListenWorker->SetSwitched();
-        }
-        currentNode_ = LOCAL_WORKER;
-        MarkWorkerAvailableLocked();
+        NotifySwitchToExpectedWorker(localWorkerApi->hostPort_);
         return true;
     } else {
         constexpr int times = 10;
@@ -1222,6 +1246,7 @@ bool ObjectClientImpl::RecoverPreferredLocalWorker()
         return false;
     }
 
+    NotifySwitchToExpectedWorker(localAddress);
     LOG(INFO) << "[Switch] Preferred same-node worker recovered at " << localAddress.ToString();
     return true;
 }
@@ -3752,28 +3777,10 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
     RETURN_IF_NOT_OK(CheckValidObjectKey(prefixKey));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IsClientReady(), "Generate key failed.");
 
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK_APPEND_MSG(GetAvailableWorkerApi(workerApi, raii), "Generate key failed.");
-
-    auto workerId = workerApi->workerId_;
-    CHECK_FAIL_RETURN_STATUS(!workerId.empty(), K_RUNTIME_ERROR, "The worker id is empty!");
-    std::string suffix = ";" + workerId;
     if (prefixKey.empty()) {
-        key = GetStringUuid() + suffix;
+        key = GetStringUuid();
     } else {
-        key = prefixKey + suffix;
-    }
-    return Status::OK();
-}
-
-Status ObjectClientImpl::GetPrefix(const std::string &key, std::string &prefix)
-{
-    std::size_t pos = key.find_last_of(';');
-    if (pos != std::string::npos) {
-        prefix = key.substr(0, pos);
-    } else {
-        RETURN_STATUS_LOG_ERROR(K_INVALID, "key is in wrong format: " + key);
+        key = prefixKey;
     }
     return Status::OK();
 }

@@ -1599,6 +1599,22 @@ public:
         ASSERT_NE(failureSign, predictableHashKey);
     }
 
+    void GenerateHashKeyToWorkerInAz(const std::string &azName, uint32_t workerIndex, std::string &key)
+    {
+        std::string value;
+        auto ringPrefix = "/" + azName + ETCD_RING_PREFIX;
+        DS_ASSERT_OK(db_->Get(ringPrefix, "", value));
+        HashRingPb ring;
+        ASSERT_TRUE(ring.ParseFromString(value));
+
+        HostPort workerAddr;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
+        auto worker = ring.workers().find(workerAddr.ToString());
+        ASSERT_TRUE(worker != ring.workers().end()) << ring.ShortDebugString();
+        ASSERT_GT(worker->second.hash_tokens_size(), 0) << ring.ShortDebugString();
+        key = "a_key_hash_to_" + std::to_string(worker->second.hash_tokens(0) - 1);
+    }
+
     void TestScaleUp1()
     {
         std::string injectStr = "";
@@ -1608,7 +1624,8 @@ public:
 
         SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
         std::string key1;
-        (void)clients_[1]->GenerateKey("key", key1);
+        SetWorkerHashInjection({ 0, 1, 2, 3 });
+        GenerateHashKeyToWorkerInAz(azNames_[1], 1, key1);
         std::string val1 = "val1";
         std::string val2 = "val2";
         DS_ASSERT_OK(clients_[0]->Set(key1, val1, param));
@@ -1769,7 +1786,6 @@ TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestScaleUp1)
 {
     TestScaleUp1();
 }
-
 
 // Test basic scale down
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, LEVEL2_TestScaleDown1)

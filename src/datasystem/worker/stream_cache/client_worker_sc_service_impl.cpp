@@ -1642,7 +1642,7 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
         auto masterAddress = metaAddrInfo.GetAddressAndSaveDbName();
         return masterAddress.ToString() == masterAddr;
     }
-    return etcdCM_->IsInRange(hashRanges, streamName, "");
+    return etcdCM_->IsInRange(hashRanges, streamName);
 }
 
 Status ClientWorkerSCServiceImpl::CheckConnection(const std::string &streamName)

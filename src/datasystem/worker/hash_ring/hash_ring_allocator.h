@@ -118,11 +118,9 @@ public:
      * @brief Update hash when src node failed.
      * @param[in] worker The failed worker address.
      * @param[out] ring The old ring to update.
-     * @param[out] isVoluntaryNodeAddInfoExist worker is voluntary scale down worker and addnodeinfo exist.
      * @return Status of the call.
      */
-    Status UpdateHashWhenSrcWorkerFailed(const std::string &worker, HashRingPb &ring,
-                                         bool &isVoluntaryNodeAddInfoExist);
+    Status UpdateHashWhenSrcWorkerFailed(const std::string &worker, HashRingPb &ring);
 
 #ifdef WITH_TESTS
     /**
@@ -151,13 +149,12 @@ public:
     /**
      * @brief Remove worker from a working ring automatically.
      * @param[in] workerId The worker to be removed.
-     * @param[in] workerUuid The worker's uuid.
      * @param[in] excludeAddrs The exclude worker address.
      * @param[out] hashRing The changed hash ring.
      * @return Status of the call.
      */
-    Status RemoveNodeVoluntarily(const std::string &workerId, const std::string &standbyWorkerId, uint32_t hashVal,
-                                 const std::unordered_set<std::string> &excludeAddrs, HashRingPb &hashRing);
+    Status RemoveNodeVoluntarily(const std::string &workerId, const std::unordered_set<std::string> &excludeAddrs,
+                                 HashRingPb &hashRing);
 
     /**
      * @brief Print information of this ring.

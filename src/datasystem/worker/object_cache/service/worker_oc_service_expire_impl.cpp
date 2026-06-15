@@ -129,12 +129,8 @@ Status WorkerOcServiceExpireImpl::TryExpireObjKeyFromOtherAZ(std::unordered_set<
                                                              ExpireRspPb &rsp)
 {
     for (auto iter = absentObj.begin(); iter != absentObj.end();) {
-        if (!HasWorkerId(*iter)) {
-            objectKeys.insert(std::move(*iter));
-            iter = absentObj.erase(iter);
-        } else {
-            ++iter;
-        }
+        objectKeys.insert(std::move(*iter));
+        iter = absentObj.erase(iter);
     }
     RETURN_OK_IF_TRUE(objectKeys.empty());
     LOG(INFO) << "Try expire some miss objs from other az: " << VectorToString(objectKeys);

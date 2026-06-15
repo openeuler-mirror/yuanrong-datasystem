@@ -61,19 +61,16 @@ public:
                              const worker::HashRange &ranges, bool isNetworkRecovery)>>;
     using SyncClusterNodes = EventSubscribers<HASH_RING_MODIFY, std::function<void(const std::set<std::string> &)>>;
     using RecoverMetaRanges =
-        EventSubscribers<RECOVER_META_RANGES, std::function<Status(const std::vector<std::string> &workerUuids,
-                                                                   const worker::HashRange &extraRanges)>>;
+        EventSubscribers<RECOVER_META_RANGES, std::function<Status(const worker::HashRange &extraRanges)>>;
     using RecoverAsyncTaskRanges = EventSubscribers<
         RECOVER_RANGES_WHEN_VOLUNTARY_SCALE_DOWN_FINISH,
-        std::function<Status(const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges)>>;
+        std::function<Status(const worker::HashRange &extraRanges)>>;
     using ClearDataWithoutMeta = EventSubscribers<
         CLEAR_DATA_WITHOUT_META,
         std::function<Status(const worker::HashRange &ranges, const std::string &workerAddr,
-                             const worker::HashRange &halfCompletedRanges, const std::vector<std::string> &uuids)>>;
+                             const worker::HashRange &halfCompletedRanges)>>;
     using LocalClearDataWithoutMeta =
-        EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META,
-                         std::function<Status(const worker::HashRange &ranges,
-                                              const std::vector<std::string> &uuids)>>;
+        EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META, std::function<Status(const worker::HashRange &ranges)>>;
     using LocalClearDataWithoutMetaFinish =
         EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META_FINISH,
                          std::function<Status(const worker::HashRange &clearRanges)>>;

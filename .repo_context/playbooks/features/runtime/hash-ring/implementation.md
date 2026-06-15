@@ -101,13 +101,13 @@
   - full-ring protobuf parse/serialize compatibility;
   - migration completion after subscriber success;
   - terminal nature of local `FAIL` state;
-  - `from == end` as UUID metadata migration marker;
-  - update-map retention while a worker is waiting for UUID restoration.
+  - normal hash-range ownership and wraparound semantics;
+  - unfinished scale-task recovery from persisted task records.
 - Must not change without explicit review:
   - when workers are erased from `HashRingPb.workers`;
   - self-healing policy that deletes task records;
   - writer-candidate count or periodic CAS cadence;
-  - `key_with_worker_id_meta_map` semantics.
+  - persisted `add_node_info` and `del_node_info` task semantics.
 - Must verify in source before claiming:
   - object-cache/stream-cache event behavior;
   - local metadata-holder routing behavior;
@@ -129,7 +129,7 @@
 - Negative-path verification:
   - source worker fails during scale-up;
   - destination/joining worker fails during scale-up;
-  - worker restarts with `update_worker_map`;
+  - worker restarts with unfinished `add_node_info` or `del_node_info`;
   - health-check sees stale ring with self-healing off and on.
 
 ## Review Checklist

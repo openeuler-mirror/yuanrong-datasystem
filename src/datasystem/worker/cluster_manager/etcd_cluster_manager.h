@@ -30,7 +30,6 @@
 #include <sstream>
 #include <functional>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -178,21 +177,12 @@ public:
                                        bool isDRst = false);
 
     /**
-     * @brief Check object key hash value in range or check object's uuid in uuids
-     * @param[in] objKey Object key.
-     * @param[in] ranges Hash range.
-     * @param[in] uuids worker uuids.
-     * @return object key hash value in range or not.
-     */
-    bool NeedToClear(const std::string &objKey, const worker::HashRange &ranges, const std::vector<std::string> &uuids);
-
-    /**
      * @brief Check object key hash value in range or not
      * @param[in] ranges Hash range.
      * @param[in] objKey Object key.
      * @return Whether object key hash value in range.
      */
-    bool IsInRange(const worker::HashRange &ranges, const std::string &objKey, const std::string &dbName);
+    bool IsInRange(const worker::HashRange &ranges, const std::string &objKey);
 
     /**
      * @brief Check if a worker node is in the pre-leaving state.
@@ -286,7 +276,6 @@ public:
         std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>> &objKeysGrpByMaster,
         std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster)
     {
-        WorkerId2MetaInfoType workerId2MetaInfo;
         Hash2MetaInfoType hash2MetaInfo;
         bool disableCache = objectKeys.size() == 1;
         if (targetIndexs) {
@@ -294,7 +283,7 @@ public:
                 const auto &objectKey = objectKeys[index];
                 MetaAddrInfo metaAddrInfo;
                 std::optional<Status> rc;
-                FetchDestAddrFromAnywhere(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, disableCache);
+                FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
                 auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
                 con.emplace_back(std::make_pair(objectKey, index));
             }
@@ -303,7 +292,7 @@ public:
                 const auto &objectKey = objectKeys[i];
                 MetaAddrInfo metaAddrInfo;
                 std::optional<Status> rc;
-                FetchDestAddrFromAnywhere(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, disableCache);
+                FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
                 auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
                 con.emplace_back(std::make_pair(objectKey, i));
             }
@@ -351,20 +340,6 @@ public:
         return objKeysGrpByMaster;
     }
 
-    struct TransparentStringHash {
-        using is_transparent = void;
-
-        size_t operator()(const std::string &key) const
-        {
-            return std::hash<std::string>{}(key);
-        }
-
-        size_t operator()(const std::string_view &sv) const noexcept
-        {
-            return std::hash<std::string_view>{}(sv);
-        }
-    };
-
     /**
      * @brief Groups ObjectKeys by their corresponding worker.
      * @param[in] objectKeys Container(Vector or list) of objectkeys
@@ -376,7 +351,6 @@ public:
         const container &objectKeys, std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
         std::optional<std::unordered_map<std::string, Status>> &errInfos)
     {
-        WorkerId2MetaInfoType workerId2MetaInfo;
         Hash2MetaInfoType hash2MetaInfo;
         bool disableCache = objectKeys.size() == 1;
         // go through objectKeys and group them by master and db name.
@@ -386,7 +360,7 @@ public:
             rc.emplace();
             INJECT_POINT_NO_RETURN(
                 "EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere");
-            FetchDestAddrFromAnywhere(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, disableCache);
+            FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
             auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
             con.emplace_back(objectKey);
             if (rc->IsOk()) {
@@ -704,13 +678,6 @@ public:
     }
 
     /**
-     * @brief Get other az name by worker id.
-     * @param[in] workerId The worker Id.
-     * @return Other az names.
-     */
-    std::string GetOtherAzNameByWorkerIdInefficient(const std::string &workerId);
-
-    /**
      * @brief Construct cluster info via etcd.
      * @param[in] etcdStore The pointer of etcd store.
      * @param[out] clusterInfo The necessary cluster information at startup.
@@ -732,7 +699,6 @@ public:
     std::string GetWorkerAddress() const;
 
 protected:
-    using WorkerId2MetaInfoType = std::unordered_map<std::string, MetaAddrInfo, TransparentStringHash, std::equal_to<>>;
     using Hash2MetaInfoType = std::pair<std::map<HashPosition, std::pair<Range, MetaAddrInfo>>, int64_t>;
 
     /**
@@ -1075,32 +1041,6 @@ protected:
                                        std::optional<RouteInfo> &routeInfo);
 
     /**
-     * @brief Process GetMetaAddress in case[cross_cluster_get_meta_from_worker = true; hasWorkerId = true].
-     * @param[in] objKey Object key.
-     * @param[in] workerIdInObjKey The workerId in objectKey.
-     * @param[out] dbName The dbName.
-     * @param[out] masterAddr The address of the master that manages metadata for objKey.
-     * @param[out] isFromOtherAz If the master is in other az or not.
-     * @return Status of the call.
-     */
-    Status ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWorkerId(const std::string &objKey,
-                                                                      const std::string &workerIdInObjKey,
-                                                                      std::string &dbName, HostPort &masterAddr,
-                                                                      bool &isFromOtherAz,
-                                                                      std::optional<RouteInfo> &routeInfo);
-
-    /**
-     * @brief Process GetMetaAddress in case[cross_cluster_get_meta_from_worker = false; hasWorkerId = true].
-     * @param[in] workerIdInObjKey The workerId in objectKey.
-     * @param[out] dbName The dbName.
-     * @param[out] masterAddr The address of the master that manages metadata for objKey.
-     * @return Status of the call.
-     */
-    Status ProcessGetMetaAddressIfNotAllowMetaAccessAcrossAZWithWorkerId(const std::string &workerIdInObjKey,
-                                                                         std::string &dbName, HostPort &masterAddr,
-                                                                         std::optional<RouteInfo> &routeInfo);
-
-    /**
      * @brief Query master address in other az using consistent hash algorithm.
      * @param[in] iter A pointer of hash ring in other az
      * @param[in] objKey Object key.
@@ -1171,37 +1111,18 @@ protected:
             return;
         }
         for (auto &objKey : emptyIt->second) {
-            auto workerId = SplitWorkerIdFromObjecId(ExtractObjectId(objKey));
-            auto &con = objKeysUndecidedMaster.try_emplace(std::string(workerId)).first->second;
+            auto &con = objKeysUndecidedMaster.try_emplace("").first->second;
             (void)con.emplace(ExtractObjectId(std::move(objKey)));
         }
         (void)objKeysGrpByMaster.erase(emptyIt);
     }
 
-    bool IfHitCacheWhenRouting(const std::string &objectKey, WorkerId2MetaInfoType &workerId2MetaInfo,
-                               Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo);
-    void ProcessNotHitCacheWhenRouting(const std::string &objectKey, WorkerId2MetaInfoType &workerId2MetaInfo,
-                                       Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
-                                       MetaAddrInfo &metaAddrInfo, bool disableCache);
-    void FetchDestAddrFromAnywhere(const std::string &objectKey, WorkerId2MetaInfoType &workerId2MetaInfo,
-                                   Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
-                                   MetaAddrInfo &metaAddrInfo, bool disableCache);
-    template <typename Map>
-    const typename Map::value_type *FindHetero(const Map &mp, const std::string_view &key)
-    {
-        size_t bucketCount = mp.bucket_count();
-        if (bucketCount == 0) {
-            return nullptr;
-        }
-        size_t h = mp.hash_function()(key);
-        size_t b = h % bucketCount;
-        for (auto it = mp.begin(b); it != mp.end(b); ++it) {
-            if (mp.key_eq()(it->first, key)) {
-                return &(*it);
-            }
-        }
-        return nullptr;
-    }
+    bool IfHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                               std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo);
+    void ProcessNotHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                       std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo, bool disableCache);
+    void FetchDestAddrFromAnywhere(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                   std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo, bool disableCache);
 
     using TbbNodeTable = tbb::concurrent_hash_map<HostPort, std::unique_ptr<ClusterNode>, HashCompare>;
 

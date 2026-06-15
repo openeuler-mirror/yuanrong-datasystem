@@ -1065,13 +1065,14 @@ TEST_F(OCClientDistMasterDfxTest, LEVEL1_MasterTimeout)
     InitTestClient(0, objClient0_, timeoutMs_);
     InitTestClient(1, objClient1_, timeoutMs_);
 
+    SetWorkerHashInjection();
+
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(20000)"));
     sleep(5); // 5 > node_timeout_s
 
     {
         // fail if no success objects
-        std::string objectKey;
-        DS_ASSERT_OK(objClient1_->GenerateObjectKey("afinityobj1", objectKey));
+        std::string objectKey = GetObjectKeyHashToWorker(db_.get(), 1);
         std::vector<std::string> failObjects;
         auto status = (objClient1_->GIncreaseRef({ objectKey }, failObjects));
         DS_EXPECT_NOT_OK(status);
@@ -1079,10 +1080,8 @@ TEST_F(OCClientDistMasterDfxTest, LEVEL1_MasterTimeout)
     }
     {
         // success if partly fail, and return the fail ids
-        std::string objectKey1;
-        DS_ASSERT_OK(objClient1_->GenerateObjectKey("obj1", objectKey1));
-        std::string objectKey0;
-        DS_ASSERT_OK(objClient0_->GenerateObjectKey("obj0", objectKey0));
+        std::string objectKey1 = GetObjectKeyHashToWorker(db_.get(), 1);
+        std::string objectKey0 = GetObjectKeyHashToWorker(db_.get(), 0);
 
         std::vector<std::string> failObjects;
         DS_EXPECT_OK(objClient1_->GIncreaseRef({ objectKey0, objectKey1 }, failObjects));

@@ -570,10 +570,10 @@ class TestKVClientMethods(unittest.TestCase):
         Context.set_trace_id("test_generate_key")
         client = KVClient(self.host, self.port)
         client.init()
-        generate_key_len = 73
+        generate_key_len = 36
         key = client.generate_key()
         self.assertEqual(len(key), generate_key_len)
-        self.assertNotEqual(key.find(';'), -1)
+        self.assertEqual(key.find(';'), -1)
 
     def test_set_evictable_value(self):
         """

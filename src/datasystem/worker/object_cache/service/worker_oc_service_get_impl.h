@@ -498,23 +498,20 @@ private:
     /**
      * @brief Query metadata from different AZ in the etcd.
      * @param[in] objectKeys The object keys need to get from ETCD.
-     * @param[in] workerId The workerId which objects belong to. Be empty if we get objects meta from hash table.
      * @param[in] getLocalAz If need query from local AZ.
      * @param[out] queryMetas The vector stored meta info.
      */
-    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys, const std::string &workerId,
-                                 bool getLocalAz, std::vector<master::QueryMetaInfoPb> &queryMetas,
+    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys, bool getLocalAz,
+                                 std::vector<master::QueryMetaInfoPb> &queryMetas,
                                  std::vector<std::string> &absentObjectKeys);
 
     /**
      * @brief The specific implementation of query Meta, including construct message and query from ETCD manager.
      * @param[in] azName The name of AZ.
      * @param[in] objKey The object keys need to get from ETCD.
-     * @param[in] workerId The workerId which objects belong to. Be empty if we get objects meta from hash table.
      * @param[out] queryMetas The vector stored meta info.
      */
     Status ConstructKeyAndQueryMetaFromEtcd(const std::string &azName, const std::string &objKey,
-                                            const std::string &workerId,
                                             std::vector<master::QueryMetaInfoPb> &queryMetas);
 
     /**
@@ -790,7 +787,7 @@ private:
      * @param[out] status Status of the call.
      */
     void TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr, ReadObjectKV &objectKV,
-                                 Status &status, bool isBatchGet);
+                                 Status &status);
 
     /**
      * @brief Try to get object from L2 cache when object not found in other worker.

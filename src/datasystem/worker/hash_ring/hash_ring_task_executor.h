@@ -91,17 +91,6 @@ public:
     Status SubmitScaleDownTaskRecoverFromEtcd(const HashRingPb &currRing);
 
     /**
-     * @brief Get the Scale Down Migrate Uuid Task object
-     * @param[in] removeWorkerAddr Remove worker addr
-     * @param[in] currRing Current ring
-     * @param[in] isVoluntaryDownNodeFault is voluntary down node fault
-     * @param[out] taskInfos Migrate task info.
-     * @return Status
-     */
-    Status ExcuteScaleDownMigrateUuidTask(const std::string &removeWorkerAddr, const HashRingPb &currRing,
-                                          bool isVoluntaryDownNodeFault, ScaleDownMigrationTaskInfo &taskInfos);
-
-    /**
      * @brief submit recovery async task for voluntary scale down worker.
      * @param[in] oldRing The ring before change.
      * @param[in] newRing The ring after change.
@@ -166,31 +155,51 @@ private:
      * @brief Erase specific del_node_info in hash ring.
      * @param[in] currRing The ring to be erased from.
      * @param[in] processedNodes Indicate which part of the del_node_info to be erased.
-     * @param[in] allSubstitueUuidList Indicate the list of substitute uuids to overwrite.
      * @return Hash ring after erasure.
      */
-    HashRingPb EraseFinishedDelNodeInfo(const HashRingPb &ring, const std::vector<std::string> &processedNodes,
-                                        const std::vector<std::string> &allSubstitueUuidList) const;
+    HashRingPb EraseFinishedDelNodeInfo(const HashRingPb &ring,
+                                        const std::vector<std::string> &processedNodes) const;
+
+    /**
+     * @brief Check whether the ring has scale-down nodes that only need finalize cleanup.
+     * @param[in] ring The current hash ring.
+     * @return True if at least one del_node_info entry has no changed ranges.
+     */
+    bool HasFinalizeOnlyScaleDownNode(const HashRingPb &ring) const;
+
+    /**
+     * @brief Recover metadata and data for all scale-down nodes in del_node_info.
+     * @param[in] ring The current hash ring.
+     * @return Processed scale-down node addresses.
+     */
+    std::vector<std::string> RecoverScaleDownNodes(const HashRingPb &ring);
+
+    /**
+     * @brief Remove finished scale-down nodes from etcd by CAS.
+     * @param[in] processedNodes Scale-down node addresses handled by this executor.
+     */
+    void ClearFinishedScaleDownNodes(const std::vector<std::string> &processedNodes);
+
+    /**
+     * @brief Execute scale-down recovery loaded from etcd in the worker thread pool.
+     * @param[in] currRing The current hash ring.
+     */
+    void ExecuteScaleDownTaskRecoverFromEtcd(const HashRingPb &currRing);
 
     /**
      * @brief Recover the metadata and data of the faulty worker.
-     * @param[in] currRing The current hash ring.
      * @param[in] removeNode The target node to remove.
-     * @param[in] allSubstitueUuidList The list of substitute uuids.
      */
     void RecoverMetaAndDataOfFaultWorker(
-        const HashRingPb &currRing,
-        const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode,
-        std::vector<std::string> &allSubstitueUuidList);
+        const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
 
     /**
      * @brief Recover meta and data of fault worker from replica.
      * @param[in] recorverDbName need recover db name.
-     * @param[in] currRing current ring
      * @param[in] removeNode The target node to remove.
      */
     void RecoverMetaAndDataOfFaultWorkerByStandbyMaster(
-        const std::string &scaleDownWorkerDbName, const HashRingPb &currRing,
+        const std::string &scaleDownWorkerDbName,
         const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
 
     /**
@@ -206,45 +215,18 @@ private:
         const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
 
     /**
-     * @brief Get workerId by hash
-     * @param[in] ring The hash ring
-     * @param[in] hash The hash value of worker
-     * @param[out] workerId
-     * @return Status of the call.
-     */
-    static Status GetWorkerByHash(const HashRingPb &ring, uint32_t hash, std::string &workerId);
-
-    /**
      * @brief Get unfinished hash ranges of current worker from changeNodePb.
-     * @param[in] ring The hash ring
      * @param[in] changeNode The changeNodePb.
-     * @param[out] workerId
      * @return Hash ranges.
      */
-    HashRange GetWorkHashRangeFromChangeNodePb(const HashRingPb &ring, const ChangeNodePb &changeNode,
-                                               std::string &workerId);
+    HashRange GetWorkHashRangeFromChangeNodePb(const ChangeNodePb &changeNode);
 
     /**
      * @brief Get the Work Hash Range From Change Node Pb By Db Name object
-     * @param[in] ring The hash ring
      * @param[in] changeNode The changeNodePb.
-     * @param[out] workerId WorkerId.
      * @return ScaleDownMigrationTaskInfo
      */
-    ScaleDownMigrationTaskInfo GetWorkHashRangeFromChangeNodePbByDbName(const HashRingPb &ring,
-                                                                        const ChangeNodePb &changeNodePb,
-                                                                        std::string &workerId);
-
-    /**
-     * @brief Erase specific del_node_info in hash ring.
-     * @param[in] removeWorkerAddr The removing worker.
-     * @param[in] currRing The ring to be erased from.
-     * @param[out] allSubstituteUuidList Indicate the list of substitute uuids to overwrite.
-     * @return Hash ring after erasure.
-     */
-    Status RecoverMetaWithWorkerIdOfFaultyWorker(const std::string &removeWorkerAddr, const HashRingPb &currRing,
-                                                 std::vector<std::string> &allSubstituteUuidList,
-                                                 bool isVoluntaryDownNodeFault = false);
+    ScaleDownMigrationTaskInfo GetWorkHashRangeFromChangeNodePbByDbName(const ChangeNodePb &changeNodePb);
 
     /**
      * @brief Clear data without meta.
@@ -256,9 +238,8 @@ private:
     /**
      * @brief Clear data without meta.
      * @param[in] ranges Hash rranges.
-     * @param[in] uuids Remove node uuids.
      */
-    void ClearDataWithoutMeta(const HashRange &ranges, const std::vector<std::string> &uuids);
+    void ClearDataWithoutMeta(const HashRange &ranges);
 
     /**
      * @brief Clear device client metadata for scaled-in worker nodes if current node is the metadata master
@@ -269,14 +250,6 @@ private:
      * @return Status of the call.
      */
     void ClearDevClientMetaForScaledInWorker(const HashRingPb &currRing);
-
-    /**
-     * @brief Get remove node Key with uuid info.
-     * @param[in] currRing current hash ring info.
-     * @param[out] uuids Key with uuids info.
-     */
-    void GetRemoveNodeKeyWithUuidsInfo(const HashRingPb &currRing, const std::string &removeNodeAddr,
-                                       std::vector<std::string> &uuids);
 
     /**
      * @brief recovery async task for voluntary scale down worker.
@@ -318,12 +291,9 @@ private:
      * @brief Clear the finished hash_tokens of the scale-down node.
      * @param[in] ring The ring.
      * @param[in] srcNode The source worker.
-     * @param[in] destAddr The destination worker.
      * @param[in] finishRanges The finish ranges.
-     * @param[in] uuidRangeFinished Is the range of uuid finished or not.
      */
-    void ClearTokenForScaleDown(HashRingPb &ring, const std::string &srcNode, const std::string &destAddr,
-                                HashRange &finishRanges, bool uuidRangeFinished) const;
+    void ClearTokenForScaleDown(HashRingPb &ring, const std::string &srcNode, HashRange &finishRanges) const;
 
     /**
      * @brief Retry hash ring task.

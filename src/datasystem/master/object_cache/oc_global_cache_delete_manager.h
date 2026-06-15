@@ -101,13 +101,10 @@ public:
     /**
      * @brief Recover global cache info table.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[in] workerUuids Obtains the data of specified worker uuids. If the value is empty, obtains the data of the
-     * current worker.
-     * @param[in] extraRanges Obtains the data of specified hash ranges if not empty.
+     * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverDeletedIds(bool isFromRocksdb, const std::vector<std::string> &workerUuids = {},
-                             const worker::HashRange &extraRanges = {});
+    Status RecoverDeletedIds(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
 
     /**
      * @brief Get the version of the deleting objects.

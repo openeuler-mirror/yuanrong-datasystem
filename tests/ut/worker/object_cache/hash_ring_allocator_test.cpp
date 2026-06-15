@@ -308,38 +308,6 @@ TEST_F(HashRingAllocatorTest, RemoveJoiningNode)
     ASSERT_TRUE(differencer.Compare(expectRing, outRing));
 }
 
-TEST_F(HashRingAllocatorTest, Volun)
-{
-    std::string hashRingJsonStr = R"({"clusterId": "127.0.0.1:9254","workers": {
-        "127.0.0.1:3333": {"hashTokens": [90000, 270000], "workerUuid": "uuid_of_3333", "state": "ACTIVE"},
-        "127.0.0.1:1111": {"hashTokens": [30000, 180000], "workerUuid": "uuid_of_1111", "state": "LEAVING",
-        "needScaleDown": true},
-        "127.0.0.1:2222": {"hashTokens": [60000, 120000], "workerUuid": "uuid_of_2222", "state": "ACTIVE"}
-        },
-        "clusterHasInit": true, "addNodeInfo": {
-        "127.0.0.1:3333": {"changedRanges": [{
-            "workerId": "127.0.0.1:1111", "from": 120000, "end": 180000, "lostAllRange": true, "finished": true}
-        ]},
-        "127.0.0.1:2222": {"changedRanges": [{
-            "workerId": "127.0.0.1:1111", "from": 270000, "end": 30000, "lostAllRange": true},
-        {
-            "workerId": "127.0.0.1:1111", "from": 2222222, "end": 2222222, "lostAllRange": true}]}},
-        "keyWithWorkerIdMetaMap": {
-            "uuid_of_4444": "127.0.0.1:1111"
-        }}
-    )";
-    HashRingPb hashRing;
-    auto rc = google::protobuf::util::JsonStringToMessage(hashRingJsonStr, &hashRing);
-    ASSERT_TRUE(rc.ok());
-    HashRingAllocator ac(hashRing);
-    ac.RemoveNode("127.0.0.1:1111", hashRing);
-    LOG(INFO) << worker::HashRingToJsonString(hashRing);
-    ASSERT_TRUE(hashRing.del_node_info().size() == 1); // del node info size 1
-    std::string node = "127.0.0.1:1111";
-    int changedRangesSize = 3;
-    ASSERT_TRUE((*hashRing.mutable_del_node_info())[node].changed_ranges().size() == changedRangesSize);
-}
-
 TEST_F(HashRingAllocatorTest, RemoveVoluntaryScaleDownNode)
 {
     std::string hashRingJsonStr = R"({

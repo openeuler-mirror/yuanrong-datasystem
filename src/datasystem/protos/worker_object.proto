@@ -383,8 +383,7 @@ message ClearDataReqPb {
   }
   repeated LostRangesPb ranges = 1;
   repeated string objKeys_migrate_finished = 2;
-  repeated string worker_ids = 3; // remove workers uuids
-  string standby_worker = 4;
+  string standby_worker = 3;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

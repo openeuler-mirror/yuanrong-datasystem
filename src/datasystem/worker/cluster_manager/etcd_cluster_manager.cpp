@@ -132,11 +132,6 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
                                                                return;
                                                            });
 
-    GetLocalWorkerUuidEvent::GetInstance().AddSubscriber("GET_LOCAL_WORKER_UUID", [this](std::string &workerId) {
-        workerId = GetLocalWorkerUuid();
-        return;
-    });
-
     HashRingEvent::CheckNeedRedirect::GetInstance().AddSubscriber(
         "NEED_REDIRECT", [this](const std::string &id, HostPort &masterAddr, bool &needRedirect) {
             needRedirect = NeedRedirect(id, masterAddr);
@@ -179,7 +174,6 @@ Status EtcdClusterManager::Shutdown()
     HashRingEvent::GetFailedWorkers::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     HashRingEvent::GetDbPrimaryLocation::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     GetHashRangeNonBlockEvent::GetInstance().RemoveSubscriber("GET_HASH_RANGE_NON_BLOCK");
-    GetLocalWorkerUuidEvent::GetInstance().RemoveSubscriber("GET_LOCAL_WORKER_UUID");
     HashRingEvent::CheckNeedRedirect::GetInstance().RemoveSubscriber("NEED_REDIRECT");
     EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().RemoveSubscriber("QUERY_MASTER_ADDR_IN_OTHER_AZ");
     EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().RemoveSubscriber(
@@ -245,20 +239,9 @@ Status EtcdClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterIn
     return Status::OK();
 }
 
-bool EtcdClusterManager::NeedToClear(const std::string &objKey, const worker::HashRange &ranges,
-                                     const std::vector<std::string> &uuids)
+bool EtcdClusterManager::IsInRange(const worker::HashRange &ranges, const std::string &objKey)
 {
-    std::string uuid;
-    if (TrySplitWorkerIdFromObjecId(objKey, uuid).IsOk()) {
-        return std::find(uuids.begin(), uuids.end(), uuid) != uuids.end();
-    }
-    return hashRing_->HashInRange(ranges, objKey);
-}
-
-bool EtcdClusterManager::IsInRange(const worker::HashRange &ranges, const std::string &objKey,
-                                   const std::string &dbName)
-{
-    return hashRing_->IsInRange(ranges, objKey, dbName);
+    return hashRing_->IsInRange(ranges, objKey);
 }
 
 bool EtcdClusterManager::IsPreLeaving(const std::string &workerAddr)
@@ -1329,40 +1312,6 @@ bool EtcdClusterManager::NeedRedirect(const std::string &objKey, HostPort &maste
     return hashRing_->NeedRedirect(objKey, masterAddr);
 }
 
-Status EtcdClusterManager::ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWorkerId(
-    const std::string &objKey, const std::string &workerIdInObjKey, std::string &dbName, HostPort &masterAddr,
-    bool &isFromOtherAz, std::optional<RouteInfo> &routeInfo)
-{
-    auto rc = hashRing_->GetUuidInCurrCluster(workerIdInObjKey, dbName, routeInfo);
-    RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
-
-    if (rc.GetCode() != K_NOT_FOUND) {
-        RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
-        VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objKey, dbName, masterAddr.ToString());
-        return Status::OK();
-    }
-
-    for (auto &i : otherAzHashRings_) {
-        if (i.second->GetUuidInCurrCluster(workerIdInObjKey, dbName, routeInfo).IsOk()) {
-            VLOG(1) << FormatString("%s is in az: %s", objKey, i.first);
-            isFromOtherAz = true;
-            RETURN_IF_NOT_OK(i.second->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
-            VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objKey, dbName,
-                                    masterAddr.ToString());
-            return Status::OK();
-        }
-    }
-    RETURN_STATUS(K_NOT_FOUND, "Cannot find workerId: " + workerIdInObjKey);
-}
-
-Status EtcdClusterManager::ProcessGetMetaAddressIfNotAllowMetaAccessAcrossAZWithWorkerId(
-    const std::string &workerIdInObjKey, std::string &dbName, HostPort &masterAddr, std::optional<RouteInfo> &routeInfo)
-{
-    RETURN_IF_NOT_OK(hashRing_->GetUuidInCurrCluster(workerIdInObjKey, dbName, routeInfo));
-    RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
-    return Status::OK();
-}
-
 Status EtcdClusterManager::ProcessGetMetaAddressByHash(const std::string &objKey, std::string &dbName,
                                                        HostPort &masterAddr, std::optional<RouteInfo> &routeInfo)
 {
@@ -1375,7 +1324,6 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
                                                             std::optional<RouteInfo> &routeInfo)
 {
     Timer timer;
-    bool isFromOtherAz = false;
     HostPort masterAddr;
     std::string dbName;
     if (IsCentralized()) {
@@ -1383,23 +1331,10 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
         metaAddrInfo.SetAddress(masterAddr);
         return Status::OK();
     }
-    std::string workerIdInObjKey;
-    bool hasWorkerId = TrySplitWorkerIdFromObjecId(objKey, workerIdInObjKey).IsOk();
-    if (!hasWorkerId) {
-        RETURN_IF_NOT_OK(ProcessGetMetaAddressByHash(objKey, dbName, masterAddr, routeInfo));
-    } else if (FLAGS_cross_cluster_get_meta_from_worker) {
-        RETURN_IF_NOT_OK(ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWorkerId(
-            objKey, workerIdInObjKey, dbName, masterAddr, isFromOtherAz, routeInfo));
-    } else {
-        RETURN_IF_NOT_OK(ProcessGetMetaAddressIfNotAllowMetaAccessAcrossAZWithWorkerId(workerIdInObjKey, dbName,
-                                                                                       masterAddr, routeInfo));
-    }
+    RETURN_IF_NOT_OK(ProcessGetMetaAddressByHash(objKey, dbName, masterAddr, routeInfo));
 
     metaAddrInfo.SetAddress(masterAddr);
     metaAddrInfo.SetDbName(dbName);
-    if (isFromOtherAz) {
-        metaAddrInfo.MarkMetaIsFromOtherAz();
-    }
     if (!IsCentralized()) {
         const uint64_t us = static_cast<uint64_t>(timer.ElapsedMicroSecond());
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY))
@@ -1861,19 +1796,6 @@ Status EtcdClusterManager::GetMasterAddrInOtherAzForHashKey(
     return iter->second->GetWorkerAddrByUuidForMetadata(dbName, masterHostPort);
 }
 
-std::string EtcdClusterManager::GetOtherAzNameByWorkerIdInefficient(const std::string &workerId)
-{
-    std::string dbName;
-    std::optional<RouteInfo> routeInfo;
-    for (auto &i : otherAzHashRings_) {
-        if (i.second->GetUuidInCurrCluster(workerId, dbName, routeInfo).IsOk()) {
-            VLOG(1) << FormatString("%s is in az: %s", workerId, i.first);
-            return i.first;
-        }
-    }
-    return "";
-}
-
 std::string EtcdClusterManager::GetWorkerAddress() const
 {
     return workerAddress_.ToString();
@@ -1916,9 +1838,8 @@ Status EtcdClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, Clu
     return Status::OK();
 }
 
-bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, WorkerId2MetaInfoType &workerId2MetaInfo,
-                                               Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
-                                               MetaAddrInfo &metaAddrInfo)
+bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                               std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo)
 {
     auto preReturnIfHitCache = [&](const MetaAddrInfo &dest) {
         metaAddrInfo = dest;
@@ -1926,15 +1847,6 @@ bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Wor
             rc = metaAddrInfo.GetRc();
         }
     };
-    auto workerId = SplitWorkerIdFromObjecId(objectKey);
-    if (!workerId.empty()) {
-        auto ptr = FindHetero(workerId2MetaInfo, workerId);
-        if (!ptr) {
-            return false;
-        }
-        preReturnIfHitCache(ptr->second);
-        return true;
-    }
     const auto &hashRingCache = hash2MetaInfo.first;
 #ifdef WITH_TESTS
     std::stringstream ss;
@@ -1982,7 +1894,6 @@ bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Wor
 }
 
 void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &objectKey,
-                                                       WorkerId2MetaInfoType &workerId2MetaInfo,
                                                        Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
                                                        MetaAddrInfo &metaAddrInfo, bool disableCache)
 {
@@ -2003,8 +1914,6 @@ void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &object
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, std::monostate>) {
                 return;
-            } else if constexpr (std::is_same_v<T, std::string>) {
-                workerId2MetaInfo.emplace(arg, metaAddrInfo);
             } else if constexpr (std::is_same_v<T, Range>) {
                 auto &cacheVersion = hash2MetaInfo.second;
                 auto &cache = hash2MetaInfo.first;
@@ -2021,17 +1930,16 @@ void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &object
         routeInfo->payload);
 }
 
-void EtcdClusterManager::FetchDestAddrFromAnywhere(const std::string &objectKey,
-                                                   WorkerId2MetaInfoType &workerId2MetaInfo,
-                                                   Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
-                                                   MetaAddrInfo &metaAddrInfo, bool disableCache)
+void EtcdClusterManager::FetchDestAddrFromAnywhere(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                                   std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo,
+                                                   bool disableCache)
 {
     if (disableCache) {
-        ProcessNotHitCacheWhenRouting(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, true);
+        ProcessNotHitCacheWhenRouting(objectKey, hash2MetaInfo, rc, metaAddrInfo, true);
         return;
     }
-    if (!IfHitCacheWhenRouting(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo)) {
-        ProcessNotHitCacheWhenRouting(objectKey, workerId2MetaInfo, hash2MetaInfo, rc, metaAddrInfo, false);
+    if (!IfHitCacheWhenRouting(objectKey, hash2MetaInfo, rc, metaAddrInfo)) {
+        ProcessNotHitCacheWhenRouting(objectKey, hash2MetaInfo, rc, metaAddrInfo, false);
     }
 }
 

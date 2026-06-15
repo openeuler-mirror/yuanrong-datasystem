@@ -228,8 +228,11 @@ TEST_F(KVClientSpillRemoteTcpTest, RemoteConcurrentSetGetDelDuringMigration)
 
 TEST_F(KVClientSpillRemoteTcpTest, NodeSelectorTest)
 {
-    // Create 8 objects on worker1, below high water mark but close
-    const int objectNumWorker1 = 8;
+    HostPort worker2Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr));  // worker index is 2
+
+    // Create 9 objects on worker1, below high water mark but not enough for another 5MB object.
+    const int objectNumWorker1 = 9;
     std::string value = GenRandomString(valueSize_);
     for (int i = 0; i < objectNumWorker1; ++i) {
         std::string key = "object1_" + std::to_string(i);
@@ -246,23 +249,34 @@ TEST_F(KVClientSpillRemoteTcpTest, NodeSelectorTest)
     for (int i = 1; i < objectNumWorker0; ++i) {
         client_->Set(value);
     }
-    sleep(2);  // sleep 2s to wait for migration complete
 
     // Check that spilled objects migrate to worker2 (more free memory)
     std::stringstream table;
-    table << ETCD_META_TABLE_PREFIX << ETCD_WORKER_SUFFIX << "/";
-    // Construct etcd key
-    auto splitKey = Split(migrateKey, ";");
-    ASSERT_EQ(splitKey.size(), 2);  // generated key is 2 parts
-    auto etcdKey = table.str() + master::Hash2Str(MurmurHash3_32(splitKey[1])) + "/" + migrateKey;
+    table << ETCD_META_TABLE_PREFIX << ETCD_HASH_SUFFIX << "/";
+    // Construct etcd key using hash-based routing (no worker UUID)
+    auto etcdKey = table.str() + master::Hash2Str(MurmurHash3_32(migrateKey)) + "/" + migrateKey;
 
-    RangeSearchResult res;
-    DS_ASSERT_OK(db_->RawGet(etcdKey, res));
     datasystem::ObjectMetaPb meta;
-    ASSERT_TRUE(meta.ParseFromString(res.value));
-    HostPort worker2Addr;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr)); // worker index is 2
-    ASSERT_EQ(meta.primary_address(), worker2Addr.ToString());
+    const int retryTimes = 30;
+    const int retryIntervalMs = 200;
+    bool migrated = false;
+    Status lastRc;
+    for (int i = 0; i < retryTimes; ++i) {
+        RangeSearchResult res;
+        lastRc = db_->RawGet(etcdKey, res);
+        if (lastRc.IsError()) {
+            usleep(retryIntervalMs * MS_PER_SECOND);
+            continue;
+        }
+        ASSERT_TRUE(meta.ParseFromString(res.value));
+        if (meta.primary_address() == worker2Addr.ToString()) {
+            migrated = true;
+            break;
+        }
+        usleep(retryIntervalMs * MS_PER_SECOND);
+    }
+    DS_ASSERT_OK(lastRc);
+    ASSERT_TRUE(migrated) << meta.DebugString();
 }
 
 class KVClientSpillRemoteTcpDfxTest : public OCClientCommon {

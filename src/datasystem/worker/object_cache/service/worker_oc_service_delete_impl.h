@@ -118,23 +118,6 @@ private:
      */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
 
-    /**
-     * @brief Extract the cross az keys with offline master from objKeysGrpByMasterId.
-     * @param[in,out] objKeysGrpByMasterId All keys group by master
-     * @param[in,out] errInfos Keys that cannot find master or master is offline
-     * @param[out] crossAzOfflineWorkerIdKeys The cross az keys with offline master.
-     */
-    void ExtractCrossAzOfflineWorkerIdKeyWithEmptyAddress(
-        std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMasterId,
-        std::unordered_map<std::string, Status> &errInfos,
-        std::unordered_map<std::string, std::vector<std::string>> &crossAzOfflineWorkerIdKeys);
-
-    /**
-     * @brief Delete the cross az keys with offline master.
-     * @param keys The cross az keys with offline master.
-     */
-    void DeleteCrossAzKeyWhenMasterFailed(const std::unordered_map<std::string, std::vector<std::string>> &keys);
-
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };

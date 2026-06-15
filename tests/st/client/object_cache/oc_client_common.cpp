@@ -22,6 +22,10 @@
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr char HASH_TO_WORKER_KEY_PREFIX[] = "a_key_hash_to_";
+}
+
 void OCClientCommon::GetWorkerUuids(EtcdStore *db, std::unordered_map<HostPort, std::string> &uuidMap)
 {
     std::string value;
@@ -48,6 +52,61 @@ std::unique_ptr<EtcdStore> OCClientCommon::InitTestEtcdInstance(std::string azNa
         (void)db->CreateTable(ETCD_CLUSTER_TABLE, prefix + "/" + ETCD_CLUSTER_TABLE);
     }
     return db;
+}
+
+void OCClientCommon::SetWorkerHashInjection(const std::vector<uint32_t> &workerIndexes)
+{
+    if (workerIndexes.empty()) {
+        for (size_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
+        }
+        return;
+    }
+    for (auto workerIndex : workerIndexes) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, workerIndex, "MurmurHash3", "return()"));
+    }
+}
+
+void OCClientCommon::SetWorkerHashInjection(std::initializer_list<uint32_t> workerIndexes)
+{
+    SetWorkerHashInjection(std::vector<uint32_t>(workerIndexes));
+}
+
+void OCClientCommon::GetObjectKeysHashToWorker(EtcdStore *db, uint32_t workerIndex, size_t objectCount,
+                                               std::vector<std::string> &objectKeys)
+{
+    ASSERT_NE(db, nullptr);
+    std::string value;
+    DS_ASSERT_OK(db->Get(ETCD_RING_PREFIX, "", value));
+    HashRingPb ring;
+    ASSERT_TRUE(ring.ParseFromString(value));
+    HostPort workerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+    std::map<uint32_t, std::string> tokenWorkers;
+    for (const auto &worker : ring.workers()) {
+        for (auto token : worker.second.hash_tokens()) {
+            tokenWorkers.emplace(token, worker.first);
+        }
+    }
+    objectKeys.clear();
+    for (auto iter = tokenWorkers.begin(); iter != tokenWorkers.end() && objectKeys.size() < objectCount; ++iter) {
+        if (iter->second != workerAddress.ToString()) {
+            continue;
+        }
+        auto prev = iter == tokenWorkers.begin() ? std::prev(tokenWorkers.end()) : std::prev(iter);
+        uint32_t distance = iter->first - prev->first;
+        for (uint32_t offset = 1; offset <= distance && objectKeys.size() < objectCount; ++offset) {
+            objectKeys.emplace_back(HASH_TO_WORKER_KEY_PREFIX + std::to_string(iter->first - offset));
+        }
+    }
+    ASSERT_EQ(objectKeys.size(), objectCount);
+}
+
+std::string OCClientCommon::GetObjectKeyHashToWorker(EtcdStore *db, uint32_t workerIndex)
+{
+    std::vector<std::string> objectKeys;
+    GetObjectKeysHashToWorker(db, workerIndex, 1, objectKeys);
+    return objectKeys.front();
 }
 }  // namespace st
 }  // namespace datasystem

@@ -272,7 +272,7 @@ public:
      * @param[in] objKey ObjKey to be checked.
      * @return Return true if the hash of objKey is in range.
      */
-    bool IsInRange(const HashRange &ranges, const std::string &objKey, const std::string &dbName);
+    bool IsInRange(const HashRange &ranges, const std::string &objKey);
 
     /**
      * @brief Get hash range stored in cluster manager. It can return empty ranges.
@@ -433,26 +433,11 @@ public:
     using HashFunction = uint32_t (*)(const std::string &);
     static const HashFunction hashFunction_;
 
-    /**
-     * @brief Check whether the worker ID belongs to the current AZ. If yes, the worker ID after rehashing is returned.
-     * @param[in] oldUuid Original worker ID.
-     * @param[out] newUuid The rehashed worker ID.
-     * @return Status of the call.
-     */
-    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid, std::optional<RouteInfo> &routeInfo);
-
     HashRingPb GetHashRingPb()
     {
         std::shared_lock<std::shared_timed_mutex> lck(mutex_);
         return ringInfo_;
     }
-
-    /**
-     * @brief Clean invalid map for workerUuid and workerAddr in hashRing.
-     * @param[in] expiredUuids The invalid worker uuids.
-     * @return Status of the call.
-     */
-    Status RemoveExpiredMap(const std::set<std::string> &expiredUuids);
 
 protected:
     enum HashState {
@@ -716,25 +701,6 @@ protected:
                                 std::string &outWorkerUuid, std::string &outWorkerAddr);
 
     /**
-     * @brief Get the worker uuid from update_worker_map.
-     * @param[in] ring The hash ring.
-     * @return Return the reused uuid.
-     */
-    std::string GetReusedUuid(HashRingPb &ring) const;
-
-    /**
-     * @brief Clear worker map on interval.
-     */
-    void ClearWorkerMapOnInterval();
-
-    /**
-     * @brief Add upgrade range.
-     * @param[in] ring The ring.
-     * @param[in] workers The workers to process.
-     */
-    void AddUpgradeRange(HashRingPb &ring, std::set<std::string> &workers);
-
-    /**
      * @brief Get the worker uuid from ring.
      * @param[in] workerAddr The worker address.
      * @param[out] uuid The uuid.
@@ -747,13 +713,6 @@ protected:
      * @param[in] ring The ring.
      */
     void SubmitMigrateDataTaskIfNeed(const HashRingPb &ring);
-
-    /**
-     * @brief Check if workerId is in UpdateWorkerMap
-     * @param[in] workerId The workerId.
-     * @return T/F
-     */
-    bool IsInUpdateWorkerMap(const std::string &workerId);
 
     /**
      * @brief Wait hash ring workable.

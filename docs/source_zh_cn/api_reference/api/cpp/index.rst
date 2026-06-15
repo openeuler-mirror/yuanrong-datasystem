@@ -72,7 +72,7 @@ KV接口
     * - :cpp:func:`KVClient::Del`
       - 删除指定键值对。
     * - :cpp:func:`KVClient::GenerateKey`
-      - 生成带有 Worker ID 的键。
+      - 生成键。
     * - :cpp:func:`KVClient::QuerySize`
       - 查询对象键的大小。
     * - :cpp:func:`KVClient::HealthCheck`
@@ -160,8 +160,6 @@ Object接口
       - 获取指定租户的object keys的大小和位置。
     * - :cpp:func:`ObjectClient::GenerateKey`
       - 生成一个唯一的key，提供给Put接口使用。。
-    * - :cpp:func:`ObjectClient::GetPrefix`
-      - 获取指定key的前缀。
     * - :cpp:func:`KVClient::HealthCheck`
       - 检查连接的 Worker 是否健康。
 

@@ -16,13 +16,7 @@
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"
 #include <google/protobuf/util/json_util.h>
 
-#include "datasystem/common/flags/flags.h"
-#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/container_util.h"
-#include "datasystem/common/util/timer.h"
-
-DS_DEFINE_uint32(rolling_update_timeout_s, 1800,
-                 "Maximum duration of the rolling upgrade, default value is 1800 seconds.");
 
 namespace datasystem {
 namespace worker {
@@ -45,16 +39,13 @@ void GenerateHashRingUuidMap(const HashRingPb &ringInfo, std::map<std::string, H
         if (kv.second.worker_uuid().empty()) {
             continue;
         }
-        if (ringInfo.update_worker_map().find(kv.first) == ringInfo.update_worker_map().end()) {
-            workerUuid2AddrMap[kv.second.worker_uuid()] = workerHostPort;
-        }
+        workerUuid2AddrMap[kv.second.worker_uuid()] = workerHostPort;
         relatedWorkerMap[kv.second.worker_uuid()] = workerHostPort;
         workerAddr2UuidMap[workerAddr] = kv.second.worker_uuid();
     }
 }
 
-Status GetWorkerAddrByUuidForAddressing(const HashRingPb &ringInfo,
-                                        const std::map<std::string, HostPort> &workerUuid2AddrMap,
+Status GetWorkerAddrByUuidForAddressing(const std::map<std::string, HostPort> &workerUuid2AddrMap,
                                         const std::string &workerUuid, HostPort &workerAddr)
 {
     // from workable worker in current ring
@@ -64,18 +55,10 @@ Status GetWorkerAddrByUuidForAddressing(const HashRingPb &ringInfo,
         return Status::OK();
     }
 
-    // maybe scale down, rehash with uuid
-    auto substitute = ringInfo.key_with_worker_id_meta_map().find(workerUuid);
-    if (substitute != ringInfo.key_with_worker_id_meta_map().end()) {
-        VLOG(1) << "node has been remove, try to rehash to other worker";
-        return workerAddr.ParseString(substitute->second);
-    }
-
     return Status(K_NOT_FOUND, FormatString("Can not find the address of workerUuid %s", workerUuid));
 }
 
-Status GetWorkerAddrByUuidForMetadata(const HashRingPb &ringInfo,
-                                      const std::map<std::string, HostPort> &workerUuid2AddrMap,
+Status GetWorkerAddrByUuidForMetadata(const std::map<std::string, HostPort> &workerUuid2AddrMap,
                                       const std::string &workerUuid, HostPort &workerAddr)
 {
     // from workable worker in current ring
@@ -83,13 +66,6 @@ Status GetWorkerAddrByUuidForMetadata(const HashRingPb &ringInfo,
     if (it != workerUuid2AddrMap.end()) {
         workerAddr = it->second;
         return Status::OK();
-    }
-
-    // maybe scale down, find workerAddr from update_worker_map
-    for (const auto &it : ringInfo.update_worker_map()) {
-        if (it.second.worker_uuid() == workerUuid) {
-            return workerAddr.ParseString(it.first);
-        }
     }
 
     return Status(K_NOT_FOUND, FormatString("Can not find the address of workerUuid %s", workerUuid));
@@ -153,15 +129,10 @@ bool DecrementalDelNodeInfo(const HashRingPb &oldRing, const HashRingPb &newRing
 Status GetWorkeridByWorkerAddr(const HashRingPb &currRing, const std::string &addr, std::string &workerId)
 {
     auto worker = currRing.workers().find(addr);
-    if (worker != currRing.workers().end() && !worker->second.worker_uuid().empty()) {
-        workerId = worker->second.worker_uuid();
-        return Status::OK();
-    }
-    auto updateIt = currRing.update_worker_map().find(addr);
-    CHECK_FAIL_RETURN_STATUS(
-        updateIt != currRing.update_worker_map().end(), K_NOT_FOUND,
-        FormatString("Cannot find the workerid of %s in this ring %s.", addr, currRing.ShortDebugString()));
-    workerId = updateIt->second.worker_uuid();
+    CHECK_FAIL_RETURN_STATUS(worker != currRing.workers().end() && !worker->second.worker_uuid().empty(), K_NOT_FOUND,
+                             FormatString("Cannot find the workerid of %s in this ring %s.", addr,
+                                          currRing.ShortDebugString()));
+    workerId = worker->second.worker_uuid();
     return Status::OK();
 }
 
@@ -194,44 +165,11 @@ std::vector<std::string> SplitRingJson(const std::string &prefix, const HashRing
     return lines;
 }
 
-bool ClearWorkerMapIfNeed(HashRingPb &ring)
-{
-    bool ret = false;
-    auto workers = ring.mutable_update_worker_map();
-    for (auto iter = workers->begin(); iter != workers->end();) {
-        if (WorkerUuidRemovable(iter->first, iter->second, ring)) {
-            VLOG(1) << "Clear update worker map due to expiration: " << iter->first;
-            iter = workers->erase(iter);
-            ret = true;
-        } else {
-            iter++;
-        }
-    }
-    return ret;
-}
-
-bool WorkerUuidRemovable(const std::string &addr, const UpdateNodePb &updateNodePb, const HashRingPb &ring)
-{
-    INJECT_POINT("HashRingTools.WorkerUuidRemovable", []() { return true; });
-    auto now = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-    static const uint64_t US_TO_SECS = 1'000'000ul;
-    auto workerIt = ring.workers().find(addr);
-    bool waitRestart = workerIt != ring.workers().end() && workerIt->second.worker_uuid().empty();
-    return now > updateNodePb.timestamp()
-           && (now - updateNodePb.timestamp()) / US_TO_SECS > FLAGS_rolling_update_timeout_s && !waitRestart;
-}
-
 std::unordered_map<std::string, std::string> GetWorkersFromHashRingPb(const HashRingPb &hashRing)
 {
     std::unordered_map<std::string, std::string> workerInfos;
     for (const auto &worker : hashRing.workers()) {
         std::string workerUuid = worker.second.worker_uuid();
-        if (workerUuid.empty()) {
-            auto iter = hashRing.update_worker_map().find(worker.first);
-            if (iter != hashRing.update_worker_map().end()) {
-                workerUuid = iter->second.worker_uuid();
-            }
-        }
         workerInfos.emplace(worker.first, std::move(workerUuid));
     }
     return workerInfos;

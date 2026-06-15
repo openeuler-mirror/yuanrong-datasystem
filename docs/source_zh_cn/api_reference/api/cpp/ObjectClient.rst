@@ -129,7 +129,7 @@ ObjectClient
 
     .. cpp:function:: Status GenerateKey(const std::string &prefix, std::string &key)
     
-        生成一个唯一的对象名称，提供给Put接口使用。
+        生成对象名称，提供给Put接口使用。prefix为空时生成随机唯一名称；prefix非空时返回prefix本身。
         
         参数：
             - **prefix** - 传入参数， 指定返回生成的对象名称的前缀。
@@ -138,17 +138,6 @@ ObjectClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示生成成功，否则返回其他错误码。
 
-    .. cpp:function:: Status GetPrefix(const std::string &key, std::string &prefix)
-
-        获取指定对象名称的前缀。
-
-        参数：
-            - **key** - 传入参数，需要获取前缀的对象名称。
-            - **prefix** - 传出参数， 该对象名称的前缀。
-        
-        返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示获取成功，否则返回其他错误码。
-    
     .. cpp:function:: Status HealthCheck()
 
         检查连接的 Worker 是否健康。

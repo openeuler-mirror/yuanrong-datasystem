@@ -128,13 +128,7 @@ Status ObjectMetaStore::InitEtcdStore()
     RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
                                              std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
 
-    // Worker table for key with worker id.
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                             std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-    RETURN_IF_NOT_OK(etcdStore_->CreateTable(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                             std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-    return etcdStore_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                   std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX);
+    return Status::OK();
 }
 
 std::string Hash2Str(uint32_t hash)
@@ -156,26 +150,9 @@ Status DecodeEtcdKey(const std::string &etcdKey, std::string &outKey, std::strin
     return Status::OK();
 }
 
-std::pair<uint32_t, bool> ObjectMetaStore::HashFunction(const std::string &key)
+uint32_t ObjectMetaStore::HashFunction(const std::string &key)
 {
-    auto res = Split(key, ";");
-    uint32_t hash;
-    bool specKey;
-
-    const size_t num = 2;
-    if (res.size() > num && Validator::IsUuid(res[res.size() - num])) {
-        // key with worker id and az name.
-        hash = MurmurHash3_32(res[res.size() - num]);
-        specKey = true;
-    } else if (res.size() > 1 && Validator::IsUuid(res.back())) {
-        // key with worker id.
-        hash = MurmurHash3_32(res.back());
-        specKey = true;
-    } else {
-        hash = MurmurHash3_32(key);
-        specKey = false;
-    }
-    return { hash, specKey };
+    return MurmurHash3_32(key);
 }
 
 void ObjectMetaStore::WarnIfNeed()
@@ -218,13 +195,8 @@ void ObjectMetaStore::InsertToEtcdKeyMap(const std::string &table, const std::st
 void ObjectMetaStore::GetHashAndTable(const std::string &objKey, const std::string &tablePrefix, uint32_t &hash,
                                       std::string &table)
 {
-    // Our rules:
-    // 1. If objKey like 'KEY', we will calculate its hash code and put it into etcd table like: ${hash}/key
-    // 2. If objKey like 'KEY:ID', we will calculate ID's hash code and put it into etcd table like: ${id_hash}/key
-    auto res = HashFunction(objKey);
-    hash = res.first;
-    bool specKey = res.second;
-    table = tablePrefix + (specKey ? ETCD_WORKER_SUFFIX : ETCD_HASH_SUFFIX);
+    hash = HashFunction(objKey);
+    table = tablePrefix + ETCD_HASH_SUFFIX;
 }
 
 void ObjectMetaStore::AsyncMetaOpToEtcdStorageHandler(int threadNum, const std::shared_ptr<MetaAsyncQueue> &queue)
@@ -376,16 +348,9 @@ Status ObjectMetaStore::RemoveEtcdKey(const std::string &objectKey, const std::s
                                       const std::string &tablePrefix, std::function<Status()> &&postHandler)
 {
     RETURN_OK_IF_TRUE(!EtcdEnable());
-    auto res = Split(objectKey, ";");
-    bool specKey = false;
-    const size_t num = 2;
-    if ((res.size() > num && Validator::IsUuid(res[res.size() - num]))
-        || (res.size() > 1 && Validator::IsUuid(res.back()))) {
-        specKey = true;
-    }
     uint32_t hash;
     bool async;
-    std::string table = tablePrefix + (specKey ? ETCD_WORKER_SUFFIX : ETCD_HASH_SUFFIX);
+    std::string table = tablePrefix + ETCD_HASH_SUFFIX;
     {
         std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
         auto tableIter = etcdKeyMap_.find(table);
@@ -466,28 +431,20 @@ Status ObjectMetaStore::PrefixRemoveEtcdKey(const std::string &prefixKey, const 
     RETURN_OK_IF_TRUE(!EtcdEnable());
 
     std::string hashTable = tablePrefix + ETCD_HASH_SUFFIX;
-    std::string workerIdTable = tablePrefix + ETCD_WORKER_SUFFIX;
-    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> hashKeys, workerIdKeys;
+    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> hashKeys;
     {
         std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
         PrefixSearchAndErase(hashTable, prefixKey, hashKeys);
-        PrefixSearchAndErase(workerIdTable, prefixKey, workerIdKeys);
     }
 
-    RETURN_OK_IF_TRUE(hashKeys.empty() && workerIdKeys.empty());
+    RETURN_OK_IF_TRUE(hashKeys.empty());
 
     std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> failedHashKeys;
-    std::vector<std::pair<std::string, std::pair<uint32_t, bool>>> failedWorkerIdKeys;
     Status rc = PrefixRemoveEtcdKeyImpl(hashTable, hashKeys, failedHashKeys);
-    Status s = PrefixRemoveEtcdKeyImpl(workerIdTable, workerIdKeys, failedWorkerIdKeys);
-    rc = s.IsError() ? s : rc;
 
     std::lock_guard<std::shared_timed_mutex> l(etcdMtx_);
     for (const auto &item : failedHashKeys) {
         (void)etcdKeyMap_[hashTable].emplace(item.first, item.second);
-    }
-    for (const auto &item : failedWorkerIdKeys) {
-        (void)etcdKeyMap_[workerIdTable].emplace(item.first, item.second);
     }
     return rc;
 }
@@ -571,7 +528,7 @@ void ObjectMetaStore::InsertWaitAsyncElements(const std::string &objectKey, cons
                                               const std::string &traceId)
 {
     AddOneAsyncTaskToEtcdStore(objectKey, table, key, value, reqType, timestamp, traceId);
-    InsertToEtcdKeyMap(table, key, HashFunction(objectKey).first, true);
+    InsertToEtcdKeyMap(table, key, HashFunction(objectKey), true);
 }
 
 Status ObjectMetaStore::CreateSerializedStringForMeta(const std::string &objectKey, ObjectMetaPb &meta,
@@ -768,12 +725,12 @@ Status ObjectMetaStore::GetRangeFromEtcd(const std::string &tablePrefix, const s
 }
 
 Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::string &rocksTable,
-                                    const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges,
+                                    const worker::HashRange &extraRanges,
                                     std::vector<std::pair<std::string, std::string>> &outMetas)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     RETURN_OK_IF_TRUE(!EtcdEnable());
-    bool isGetAll = workerUuids.empty() && extraRanges.empty();
+    bool isGetAll = extraRanges.empty();
     auto getFunc = [this, &tablePrefix, &rocksTable](const std::string &suffix,
                                                      const std::pair<uint32_t, uint32_t> &range,
                                                      std::vector<std::pair<std::string, std::string>> &metas) {
@@ -789,17 +746,7 @@ Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::s
             (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
             metas.clear();
         }
-        std::string workerId;
-        GetLocalWorkerUuidEvent::GetInstance().NotifyAll(workerId);
-        uint32_t workerHash = MurmurHash3_32(workerId);
-        RETURN_IF_NOT_OK(getFunc(ETCD_WORKER_SUFFIX, { workerHash, workerHash }, metas));
     } else {
-        for (const auto &uuid : workerUuids) {
-            uint32_t workerHash = MurmurHash3_32(uuid);
-            RETURN_IF_NOT_OK(getFunc(ETCD_WORKER_SUFFIX, { workerHash, workerHash }, metas));
-            (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
-            metas.clear();
-        }
         for (const auto &range : extraRanges) {
             RETURN_IF_NOT_OK(getFunc(ETCD_HASH_SUFFIX, range, metas));
             (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());

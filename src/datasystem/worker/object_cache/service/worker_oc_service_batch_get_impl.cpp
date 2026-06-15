@@ -609,7 +609,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             HostPort hostAddr;
             hostAddr.ParseString(address);
             // Note that rc can change upon TryGetObjectFromOtherAZ.
-            TryGetObjectFromOtherAZ(*metaIter, hostAddr, objectKV, subRc, true);
+            TryGetObjectFromOtherAZ(*metaIter, hostAddr, objectKV, subRc);
         }
         if (subRc.IsError() && tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_L2);

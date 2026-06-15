@@ -22,34 +22,9 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <variant>
 
-#include "datasystem/utils/status.h"
-
 namespace datasystem {
-/**
- * @brief Try split workerId from objecId
- * @param[in] objectKey The id of object.
- * @param[out] workerUuid The workerId.
- * @return Status of the call.
- */
-Status TrySplitWorkerIdFromObjecId(const std::string &objKey, std::string &workerUuid);
-
-/**
- * @brief Check whether the objectKey contains workerId.
- * @param[in] objKey The id of object.
- * @return T/F
- */
-bool HasWorkerId(const std::string &objKey);
-
-/**
- * @brief Split workerId from objecId
- * @param[in] objKey The id of object.
- * @return The workerId carried in objectKey. If not carried, returns ""
- */
-std::string_view SplitWorkerIdFromObjecId(const std::string &objKey);
-
 inline const std::string &ExtractObjectId(const std::string &s)
 {
     return s;
@@ -70,7 +45,7 @@ inline std::string ExtractObjectId(std::pair<std::string, T> &&p)
 using HashPosition = uint32_t;
 using Range = std::pair<uint32_t, uint32_t>;
 struct RouteInfo {
-    std::variant<std::monostate, std::string, Range> payload;  // <workerId, hashRange>
+    std::variant<std::monostate, Range> payload;  // hash range
     int64_t currHashRingVersion = -1;
 };
 }  // namespace datasystem

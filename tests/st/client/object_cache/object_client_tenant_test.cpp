@@ -26,12 +26,14 @@
 
 #include "common.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/context/context.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/protos/hash_ring.pb.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
@@ -354,61 +356,55 @@ TEST_F(ObjectClientGetMetaTest, NoAuth)
     ASSERT_EQ(status.GetCode(), K_NOT_AUTHORIZED) << status;
 }
 
-TEST_F(ObjectClientGetMetaTest, GetFailed)
-{
-    std::string tenantId = "user";
-    std::shared_ptr<ObjectClient> client0;
-    InitTestClient(0, client0, [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId); });
-    std::shared_ptr<ObjectClient> client1;
-    InitTestClient(1, client1, [&](ConnectOptions &opts) { opts.SetAkSkAuth(accessKey_, secretKey_, tenantId); });
-
-    std::string objectKey0;
-    std::string objectKey1;
-    DS_ASSERT_OK(client0->GenerateKey("", objectKey0));
-    DS_ASSERT_OK(client1->GenerateKey("", objectKey1));
-
-    const size_t size0 = 40 * 1024;
-    const size_t size1 = 10;
-    std::string data0(size0, 'A');
-    std::string data1(size1, 'B');
-    std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client0->GIncreaseRef({ objectKey0, objectKey1 }, failedObjectKeys));
-    DS_ASSERT_OK(
-        client0->Put(objectKey0, reinterpret_cast<const uint8_t *>(data0.data()), data0.size(), CreateParam{}));
-    DS_ASSERT_OK(
-        client1->Put(objectKey1, reinterpret_cast<const uint8_t *>(data1.data()), data1.size(), CreateParam{}));
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations",
-                                           "1*return(K_RPC_UNAVAILABLE)"));
-    std::vector<ObjMetaInfo> objMetas;
-    // success after retry
-    DS_ASSERT_OK(client1->GetObjMetaInfo(tenantId, { objectKey0, objectKey1 }, objMetas));
-    ASSERT_EQ(objMetas.at(0).objSize, size0);
-    ASSERT_EQ(objMetas.at(1).objSize, size1);
-    // the only one master failed.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations",
-                                           "1*return(K_RUNTIME_ERROR)"));
-    objMetas.clear();
-    auto status = (client1->GetObjMetaInfo(tenantId, { objectKey0 }, objMetas));
-    ASSERT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status;
-    ASSERT_EQ(objMetas.size(), 0);
-    // one master failed, another success
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    objMetas.clear();
-    DS_ASSERT_OK(client1->GetObjMetaInfo(tenantId, { objectKey1, objectKey0 }, objMetas));
-    ASSERT_EQ(objMetas.at(0).objSize, size1);
-    ASSERT_EQ(objMetas.at(1).objSize, 0);
-}
-
 class ObjectClientGetMetaNoTenantAuthTest : public ObjectClientGetMetaTest {
+protected:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
-        opts.numWorkers = 1;
+        opts.numWorkers = 2;
         opts.workerGflagParams = " -shared_memory_size_mb=100 -authorization_enable=false ";
         opts.systemAccessKey = "";
         opts.systemSecretKey = "";
     }
+
+    void SetUp() override
+    {
+        ObjectClientGetMetaTest::SetUp();
+        GetHashOnWorker();
+        SetWorkerHashInjection();
+    }
+
+    void GetHashOnWorker()
+    {
+        std::string value;
+        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
+        HashRingPb ring;
+        ASSERT_TRUE(ring.ParseFromString(value));
+        workerHashValues_.clear();
+        workerHashValues_.resize(2);
+        for (size_t i = 0; i < 2; ++i) {
+            HostPort workerAddress;
+            DS_ASSERT_OK(cluster_->GetWorkerAddr(i, workerAddress));
+            auto worker = ring.workers().find(workerAddress.ToString());
+            ASSERT_NE(worker, ring.workers().end());
+            ASSERT_GE(static_cast<size_t>(worker->second.hash_tokens_size()), 1);
+            workerHashValues_[i] = worker->second.hash_tokens(0) - 1;
+        }
+    }
+
+    void SetWorkerHashInjection()
+    {
+        for (size_t i = 0; i < 2; ++i) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
+        }
+    }
+
+    std::string ObjectKeyHashTo(size_t workerIndex) const
+    {
+        return "a_key_hash_to_" + std::to_string(workerHashValues_[workerIndex]);
+    }
+
+    std::vector<uint32_t> workerHashValues_;
 };
 
 TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetLocations)
@@ -424,6 +420,52 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetLocations)
     std::vector<ObjMetaInfo> objMetas;
     DS_ASSERT_OK(client->GetObjMetaInfo("tenant", { "anyId" }, objMetas));
     ASSERT_EQ(objMetas.size(), 1);
+}
+
+TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
+{
+    std::shared_ptr<ObjectClient> client0;
+    InitTestClient(0, client0);
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(1, client1);
+
+    // Deterministic hash-routing keys: objectKey0 → worker 0, objectKey1 → worker 1
+    std::string objectKey0 = ObjectKeyHashTo(0);
+    std::string objectKey1 = ObjectKeyHashTo(1);
+
+    const size_t size0 = 40 * 1024;
+    const size_t size1 = 10;
+    std::string data0(size0, 'A');
+    std::string data1(size1, 'B');
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client0->GIncreaseRef({ objectKey0, objectKey1 }, failedObjectKeys));
+    DS_ASSERT_OK(
+        client0->Put(objectKey0, reinterpret_cast<const uint8_t *>(data0.data()), data0.size(), CreateParam{}));
+    DS_ASSERT_OK(
+        client1->Put(objectKey1, reinterpret_cast<const uint8_t *>(data1.data()), data1.size(), CreateParam{}));
+
+    // client1 connects to worker 1; objectKey0's master is worker 0 (remote from worker 1)
+    // so the inject on worker 1's remote-master API affects objectKey0 queries
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations",
+                                           "1*return(K_RPC_UNAVAILABLE)"));
+    std::vector<ObjMetaInfo> objMetas;
+    // success after retry
+    DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey0, objectKey1 }, objMetas));
+    ASSERT_EQ(objMetas.at(0).objSize, size0);
+    ASSERT_EQ(objMetas.at(1).objSize, size1);
+    // the only one master (worker 0) failed via remote call from worker 1.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations",
+                                           "1*return(K_RUNTIME_ERROR)"));
+    objMetas.clear();
+    auto status = client1->GetObjMetaInfo("", { objectKey0 }, objMetas);
+    ASSERT_EQ(status.GetCode(), K_RUNTIME_ERROR) << status;
+    ASSERT_EQ(objMetas.size(), 0);
+    // one master (worker 0) down, another (worker 1 local) success
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    objMetas.clear();
+    DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey1, objectKey0 }, objMetas));
+    ASSERT_EQ(objMetas.at(0).objSize, size1);
+    ASSERT_EQ(objMetas.at(1).objSize, 0);
 }
 
 class ObjectClientTenantSpillTest : public OCClientCommon {

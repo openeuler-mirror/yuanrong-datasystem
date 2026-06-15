@@ -45,6 +45,7 @@ DS_DECLARE_bool(enable_hash_ring_self_healing);
 
 namespace datasystem {
 namespace worker {
+
 const uint32_t SEC_TO_MS = 1000;
 
 HashRingHealthCheck::HashRingHealthCheck(HashRing *hashRing) : hashRing_(hashRing)
@@ -144,7 +145,6 @@ Status HashRingHealthCheck::DoHealthCheck(bool checkRetry, bool checkFix)
         if (!CheckHashRing(autoFix, newRing)) {
             return Status::OK();
         }
-        (void)ClearWorkerMapIfNeed(newRing);
         RETURN_IF_NOT_OK(hashRing_->etcdStore_->CAS(
             ETCD_RING_PREFIX, "",
             [&newRing, &ring](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
@@ -413,7 +413,9 @@ bool HashRingHealthCheck::CheckWorkerInLeavingState(bool, HashRingPb &ring)
             const auto &changedRanges = info.second.changed_ranges();
             auto iter = std::find_if(
                 changedRanges.begin(), changedRanges.end(),
-                [&worker](const ChangeNodePb::RangePb &range) { return worker.first == range.workerid(); });
+                [&worker](const ChangeNodePb::RangePb &range) {
+                    return worker.first == range.workerid();
+                });
             if (iter != changedRanges.end()) {
                 isSrcNode = true;
             }

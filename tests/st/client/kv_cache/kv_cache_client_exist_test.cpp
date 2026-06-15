@@ -118,8 +118,9 @@ TEST_F(KVCacheClientExistTest, TestNotExistKeys)
 
 TEST_F(KVCacheClientExistTest, TestNotExistWhenMetadataHasNoLocations)
 {
-    std::string key;
-    DS_ASSERT_OK(client_->GenerateKey("exist_no_location", key));
+    auto db = InitTestEtcdInstance();
+    SetWorkerHashInjection();
+    std::string key = GetObjectKeyHashToWorker(db.get(), 0);
     DS_ASSERT_OK(client_->Set(key, "value"));
 
     HostPort workerAddr;

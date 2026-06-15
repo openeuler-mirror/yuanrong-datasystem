@@ -62,6 +62,9 @@ const std::string HOST_IP = "127.0.0.1";
 const std::string URMA_WRITE_ERROR_INJECT = "UrmaManager.UrmaWriteError";
 const std::string URMA_CQE_ERROR_INJECT = "UrmaManager.CheckCompletionRecordStatus";
 const std::string SWITCH_END_INJECT = "client.switch_worker_end";
+const std::string STANDBY_WORKER_INJECT = "client.standby_worker";
+const std::string SWITCH_WORKER_EXPECTED_PREFIX = "client.switch_worker_expected_";
+const std::string SWITCH_WORKER_MATCHED_SUFFIX = ".matched";
 const std::string HEARTBEAT_INTERVAL_INJECT = "ListenWorker.CheckHeartbeat.heartbeat_interval_ms";
 const std::string HEARTBEAT_TIMEOUT_INJECT = "ClientWorkerCommonApi.SendHeartbeat.timeoutMs";
 const std::string CLIENT_CONFIG_PATH_ENV = "DATASYSTEM_CLIENT_CONFIG_PATH";
@@ -185,9 +188,35 @@ protected:
     {
         ShutdownWorkerAndWaitDiscoveryRemote(0);
         InitClientByServiceDiscovery(GetHostIdEnvName(0), client);
-        uint32_t currentWorkerIndex = WORKER_NUM;
-        DS_ASSERT_OK(GetCurrentWorkerIndex(client, currentWorkerIndex));
-        ASSERT_NE(currentWorkerIndex, 0u);
+        RunTraffic(client, 1, "remote_fallback_ready");
+        // Readiness traffic records healthy remote UB samples. Keep those samples out of the measured failover window
+        // so each test controls the exact success/failure mix it is asserting.
+        std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
+    }
+
+    void InitRemoteFallbackClientWithSingleLiveRemote(std::shared_ptr<KVClient> &client, uint32_t initialWorkerIndex)
+    {
+        ASSERT_NE(initialWorkerIndex, 0u);
+        ShutdownWorkerAndWaitDiscoveryRemote(0);
+        for (uint32_t i = 1; i < WORKER_NUM; ++i) {
+            if (i != initialWorkerIndex) {
+                ShutdownWorkerAndWaitDiscoveryRemote(i);
+            }
+        }
+        InitClientByServiceDiscovery(GetHostIdEnvName(0), client);
+        RunTraffic(client, 1, FormatString("remote_fallback_ready_%u", initialWorkerIndex));
+        // Readiness traffic records healthy remote UB samples. Keep those samples out of the measured failover window
+        // so each test controls the exact success/failure mix it is asserting.
+        std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
+    }
+
+    void PrepareRemoteSwitchToExpectedWorker(std::shared_ptr<KVClient> &client, uint32_t initialWorkerIndex,
+                                             uint32_t expectedWorkerIndex)
+    {
+        InitRemoteFallbackClientWithSingleLiveRemote(client, initialWorkerIndex);
+        RestartWorkerAndWaitReady(expectedWorkerIndex);
+        ForceNextSwitchWorker(expectedWorkerIndex);
+        SetSwitchWorkerExpected(1, expectedWorkerIndex);
     }
 
     void EnableSwitchEndCounter()
@@ -319,6 +348,24 @@ protected:
         return false;
     }
 
+    std::string GetSwitchWorkerExpectedPoint(size_t slot)
+    {
+        return SWITCH_WORKER_EXPECTED_PREFIX + std::to_string(slot);
+    }
+
+    std::string GetSwitchWorkerMatchedPoint(size_t slot)
+    {
+        return GetSwitchWorkerExpectedPoint(slot) + SWITCH_WORKER_MATCHED_SUFFIX;
+    }
+
+    void ClearSwitchWorkerExpectedInjects()
+    {
+        for (size_t slot = 1; slot <= 2; ++slot) {
+            (void)inject::Clear(GetSwitchWorkerExpectedPoint(slot));
+            (void)inject::Clear(GetSwitchWorkerMatchedPoint(slot));
+        }
+    }
+
     void InjectWorkerGetUrmaWriteError(uint32_t workerIndex, uint32_t count)
     {
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, URMA_CQE_ERROR_INJECT,
@@ -326,10 +373,40 @@ protected:
         injectedWorkerIndexes_.emplace(workerIndex);
     }
 
-    void ClearWorkerUrmaWriteError(uint32_t workerIndex)
+    void ForceNextSwitchWorker(uint32_t workerIndex)
     {
-        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, URMA_CQE_ERROR_INJECT));
-        injectedWorkerIndexes_.erase(workerIndex);
+        HostPort workerAddr;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
+        DS_ASSERT_OK(inject::Set(STANDBY_WORKER_INJECT, "1*call(" + workerAddr.ToString() + ")"));
+    }
+
+    void SetSwitchWorkerExpected(size_t slot, uint32_t workerIndex)
+    {
+        HostPort workerAddr;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
+        DS_ASSERT_OK(inject::Set(GetSwitchWorkerExpectedPoint(slot), "call(" + workerAddr.ToString() + ")"));
+        DS_ASSERT_OK(inject::Set(GetSwitchWorkerMatchedPoint(slot), "call()"));
+    }
+
+    uint64_t GetSwitchWorkerMatchedCount(size_t slot)
+    {
+        return inject::GetExecuteCount(GetSwitchWorkerMatchedPoint(slot));
+    }
+
+    bool WaitSwitchToExpectedWorker(size_t slot, uint64_t expectedMatchedCount,
+                                    uint32_t timeoutSec = SWITCH_TIMEOUT_S)
+    {
+        Timer timer;
+        do {
+            uint64_t actualCount = GetSwitchWorkerMatchedCount(slot);
+            if (actualCount >= expectedMatchedCount) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } while (timer.ElapsedSecond() < timeoutSec);
+        LOG(INFO) << "[URMA failover test] expected switch slot " << slot << " did not reach "
+                  << expectedMatchedCount << ", actual: " << GetSwitchWorkerMatchedCount(slot);
+        return false;
     }
 
     void WriteClientConfig(double successRateRatio, uint32_t minSampleCount)
@@ -358,77 +435,10 @@ protected:
             SWITCH_TIMEOUT_S, K_OK));
     }
 
-    Status GetWorkerUuid(uint32_t workerIndex, std::string &workerUuid)
-    {
-        auto db = InitTestEtcdInstance();
-        std::unordered_map<HostPort, std::string> uuidMap;
-        GetWorkerUuids(db.get(), uuidMap);
-        HostPort workerAddr;
-        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
-        auto iter = uuidMap.find(workerAddr);
-        CHECK_FAIL_RETURN_STATUS(iter != uuidMap.end(), K_NOT_READY,
-                                 FormatString("Cannot find worker %s uuid.", workerAddr.ToString()));
-        workerUuid = iter->second;
-        return Status::OK();
-    }
-
-    Status GetCurrentWorkerIndex(const std::shared_ptr<KVClient> &client, uint32_t &workerIndex)
-    {
-        std::string currentWorkerUuid;
-        RETURN_IF_NOT_OK(GetClientWorkerUuid(client, currentWorkerUuid));
-        for (uint32_t i = 0; i < WORKER_NUM; ++i) {
-            if (stoppedWorkers_.count(i) > 0) {
-                continue;
-            }
-            std::string workerUuid;
-            RETURN_IF_NOT_OK(GetWorkerUuid(i, workerUuid));
-            if (workerUuid == currentWorkerUuid) {
-                workerIndex = i;
-                return Status::OK();
-            }
-        }
-        return Status(K_NOT_READY, FormatString("Cannot map current worker uuid %s to a live worker.",
-                                                currentWorkerUuid));
-    }
-
-    Status GetClientWorkerUuid(const std::shared_ptr<KVClient> &client, std::string &workerUuid)
-    {
-        // GenerateKey appends the current worker uuid after ';', which avoids reaching into client internals.
-        std::string key;
-        RETURN_IF_NOT_OK(client->GenerateKey("", key));
-        auto pos = key.rfind(';');
-        CHECK_FAIL_RETURN_STATUS(pos != std::string::npos && pos + 1 < key.size(), K_RUNTIME_ERROR,
-                                 FormatString("Invalid generated key: %s", key));
-        workerUuid = key.substr(pos + 1);
-        return Status::OK();
-    }
-
-    void CheckClientUsesWorker(const std::shared_ptr<KVClient> &client, uint32_t workerIndex)
-    {
-        std::string expectedWorkerUuid;
-        DS_ASSERT_OK(GetWorkerUuid(workerIndex, expectedWorkerUuid));
-        std::string currentWorkerUuid;
-        DS_ASSERT_OK(GetClientWorkerUuid(client, currentWorkerUuid));
-        ASSERT_EQ(currentWorkerUuid, expectedWorkerUuid);
-    }
-
-    Status CheckClientUsesWorkerStatus(const std::shared_ptr<KVClient> &client, uint32_t workerIndex)
-    {
-        std::string expectedWorkerUuid;
-        RETURN_IF_NOT_OK(GetWorkerUuid(workerIndex, expectedWorkerUuid));
-        std::string currentWorkerUuid;
-        RETURN_IF_NOT_OK(GetClientWorkerUuid(client, currentWorkerUuid));
-        CHECK_FAIL_RETURN_STATUS(currentWorkerUuid == expectedWorkerUuid, K_NOT_READY,
-                                 FormatString("Current worker uuid is %s, expect worker%u uuid %s.",
-                                              currentWorkerUuid, workerIndex, expectedWorkerUuid));
-        return Status::OK();
-    }
-
-    void WaitClientUsesWorker(const std::shared_ptr<KVClient> &client, uint32_t workerIndex)
+    void WaitClientTrafficReady(const std::shared_ptr<KVClient> &client, uint32_t workerIndex)
     {
         DS_ASSERT_OK(cluster_->WaitForExpectedResult(
             [this, &client, workerIndex]() {
-                RETURN_IF_NOT_OK(CheckClientUsesWorkerStatus(client, workerIndex));
                 std::string key = FormatString("wait_worker_%u_%llu", workerIndex, GetSteadyClockTimeStampMs());
                 std::string value = "service discovery failover keeps KV available";
                 RETURN_IF_NOT_OK(client->Set(key, value));
@@ -484,21 +494,12 @@ protected:
         stoppedWorkers_.erase(workerIndex);
     }
 
-    uint32_t GetOtherRemoteWorker(uint32_t workerIndex)
-    {
-        for (uint32_t i = 1; i < WORKER_NUM; ++i) {
-            if (i != workerIndex) {
-                return i;
-            }
-        }
-        ADD_FAILURE() << "Cannot find another remote worker for worker " << workerIndex;
-        return WORKER_NUM;
-    }
-
     void ClearClientInjects()
     {
         (void)inject::Clear(URMA_WRITE_ERROR_INJECT);
         (void)inject::Clear(SWITCH_END_INJECT);
+        (void)inject::Clear(STANDBY_WORKER_INJECT);
+        ClearSwitchWorkerExpectedInjects();
         (void)inject::Clear(HEARTBEAT_INTERVAL_INJECT);
         (void)inject::Clear(HEARTBEAT_TIMEOUT_INJECT);
     }
@@ -538,13 +539,12 @@ TEST_F(KVClientUrmaFailoverTest, LocalDiscoveryUsesUdsAndDoesNotTriggerUrmaSwitc
     LOG(INFO) << "[URMA failover test] verify local service discovery uses UDS and does not trigger URMA switch";
     std::shared_ptr<KVClient> client;
     InitLocalPreferredClient(client);
-    CheckClientUsesWorker(client, 0);
+    RunTraffic(client, 1, "local_uds_ready");
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     TriggerUnhealthyWindow(client, "local_uds_no_switch");
     // Same-host service discovery should use the local UDS/shared-memory path, so a UB write fault is irrelevant.
     ASSERT_EQ(inject::GetExecuteCount(SWITCH_END_INJECT), 0u);
-    CheckClientUsesWorker(client, 0);
     RunTraffic(client, 2, "local_uds_no_switch_after");
 }
 
@@ -552,16 +552,13 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteUbFallbackSwitchByDiscovery)
 {
     LOG(INFO) << "[URMA failover test] verify remote service discovery uses UB fallback and switches";
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     TriggerUnhealthyWindow(client, "remote_switch");
     // Remote fallback connections have no local UDS transport, so the UB write fault should trigger failover.
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 2, "remote_switch_after");
 }
 
@@ -569,20 +566,17 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteGetTcpFallbackSwitchByDiscovery)
 {
     LOG(INFO) << "[URMA failover test] verify remote Get TCP fallback switches worker";
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     GetTrafficData data;
     PrepareGetKeys(client, MIN_SAMPLE_COUNT + 1, "remote_get_tcp_fallback", data);
     // Keep Set samples from key preparation out of the measured worker-to-client Get failure window.
     std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
     EnableSwitchEndCounter();
-    InjectWorkerGetUrmaWriteError(initialWorkerIndex, MIN_SAMPLE_COUNT + 1);
+    InjectWorkerGetUrmaWriteError(2, MIN_SAMPLE_COUNT + 1);
     TriggerUnhealthyGetWindow(client, data);
     // Worker-to-client UB failure is hidden by TCP payload fallback, but it still marks the URMA data plane unhealthy.
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 2, "remote_get_tcp_fallback_after");
 }
 
@@ -590,21 +584,17 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteGetUrmaErrorSwitchByDiscovery)
 {
     LOG(INFO) << "[URMA failover test] verify remote Get K_URMA_ERROR switches worker";
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     const uint64_t rejectedFallbackSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
     GetTrafficData data;
     PrepareGetKeys(client, MIN_SAMPLE_COUNT + 1, "remote_get_urma_error", data, rejectedFallbackSize);
     // Keep Set samples from key preparation out of the measured worker-to-client Get failure window.
     std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
     EnableSwitchEndCounter();
-    InjectWorkerGetUrmaWriteError(initialWorkerIndex, MIN_SAMPLE_COUNT + 1);
+    InjectWorkerGetUrmaWriteError(2, MIN_SAMPLE_COUNT + 1);
     TriggerUnhealthyGetErrorWindow(client, data);
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
-    ClearWorkerUrmaWriteError(initialWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 2, "remote_get_urma_error_after");
 }
 
@@ -612,17 +602,15 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteSwitchFailureKeepsCurrentWorkerAva
 {
     LOG(INFO) << "[URMA failover test] verify remote switch failure keeps current worker available";
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t currentWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, currentWorkerIndex));
-    uint32_t otherWorkerIndex = GetOtherRemoteWorker(currentWorkerIndex);
-    ShutdownWorkerAndWaitDiscoveryRemote(otherWorkerIndex);
+    InitRemoteFallbackClientWithSingleLiveRemote(client, 1);
+    ForceNextSwitchWorker(0);
+    SetSwitchWorkerExpected(1, 0);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     TriggerUnhealthyWindow(client, "remote_switch_fail");
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
+    ASSERT_EQ(GetSwitchWorkerMatchedCount(1), 0u);
     // With no remote candidate in service discovery, URMA_DATA_PLANE_FAILURE must not make the current worker unusable.
-    CheckClientUsesWorker(client, currentWorkerIndex);
     RunTraffic(client, 2, "remote_switch_fail_after");
 }
 
@@ -630,27 +618,30 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_HealthyWindowResetsRemoteFailureBackoff)
 {
     LOG(INFO) << "[URMA failover test] verify healthy remote UB window resets failed-switch backoff";
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t currentWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, currentWorkerIndex));
-    uint32_t otherWorkerIndex = GetOtherRemoteWorker(currentWorkerIndex);
-    ShutdownWorkerAndWaitDiscoveryRemote(otherWorkerIndex);
+    InitRemoteFallbackClientWithSingleLiveRemote(client, 1);
+    ForceNextSwitchWorker(0);
+    SetSwitchWorkerExpected(1, 0);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     TriggerUnhealthyWindow(client, "healthy_reset_first");
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
+    ASSERT_EQ(GetSwitchWorkerMatchedCount(1), 0u);
     ClearClientUrmaWriteError();
     // A full healthy remote UB window is required; empty or short windows must not reset the failed-switch backoff.
     RunSetTraffic(client, MIN_SAMPLE_COUNT, "healthy_reset_success_window");
     std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
     RunSetTraffic(client, 1, "healthy_reset_success_settle");
-    RestartWorkerAndWaitReady(otherWorkerIndex);
+    RestartWorkerAndWaitReady(2);
+    ClearSwitchWorkerExpectedInjects();
+    ForceNextSwitchWorker(2);
+    SetSwitchWorkerExpected(1, 2);
     InjectClientUrmaWriteError();
     std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
     TriggerUnhealthyWindow(client, "healthy_reset_after");
     // If healthy traffic reset the backoff, the restored service-discovery candidate can be tried immediately.
     ASSERT_TRUE(WaitSwitchCountAtLeast(2));
-    CheckClientUsesWorker(client, otherWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    RunTraffic(client, 1, "healthy_reset_after_switch");
 }
 
 TEST_F(KVClientUrmaFailoverTest, LEVEL1_MinSamplesNoSwitchOnRemoteUbFailure)
@@ -658,9 +649,7 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_MinSamplesNoSwitchOnRemoteUbFailure)
     LOG(INFO) << "[URMA failover test] verify insufficient remote UB samples do not trigger switch";
     FLAGS_urma_failover_min_sample_count = HIGH_MIN_SAMPLE_COUNT;
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t currentWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, currentWorkerIndex));
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     RunSetTraffic(client, MIN_SAMPLE_COUNT, "min_samples");
@@ -668,7 +657,7 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_MinSamplesNoSwitchOnRemoteUbFailure)
     RunSetTraffic(client, 1, "min_samples_settle");
     // Even a 0% success rate is ignored until the settled window reaches the configured sample floor.
     ASSERT_EQ(inject::GetExecuteCount(SWITCH_END_INJECT), 0u);
-    CheckClientUsesWorker(client, currentWorkerIndex);
+    ASSERT_EQ(GetSwitchWorkerMatchedCount(1), 0u);
     RunTraffic(client, 1, "min_samples_after");
 }
 
@@ -677,21 +666,19 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_ThresholdZeroDisablesRemoteUbSwitch)
     LOG(INFO) << "[URMA failover test] verify threshold zero disables remote UB failover and restore enables it";
     FLAGS_urma_failover_success_rate_ratio = 0.0;
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     TriggerUnhealthyWindow(client, "threshold_zero");
     // Threshold zero disables and clears the tracker even though the remote path is seeing UB write failures.
     ASSERT_EQ(inject::GetExecuteCount(SWITCH_END_INJECT), 0u);
-    CheckClientUsesWorker(client, initialWorkerIndex);
+    ASSERT_EQ(GetSwitchWorkerMatchedCount(1), 0u);
     FLAGS_urma_failover_success_rate_ratio = 0.5;
     TriggerUnhealthyWindow(client, "threshold_restore");
     // Restoring the threshold starts fresh statistics; the next bad remote UB window may switch via discovery.
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    RunTraffic(client, 1, "threshold_restore_after_switch");
 }
 
 TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicThresholdUpdateAppliesAtWindowSettlement)
@@ -699,11 +686,8 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicThresholdUpdateAppliesAtWindowSet
     LOG(INFO) << "[URMA failover test] verify dynamic threshold update applies at window settlement";
     WriteClientConfig(0.5, MIN_SAMPLE_COUNT);
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     WaitClientConfig(0.5, MIN_SAMPLE_COUNT);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
     EnableSwitchEndCounter();
     RunSetTraffic(client, 1, "dynamic_threshold_success");
     InjectClientUrmaWriteError();
@@ -714,7 +698,8 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicThresholdUpdateAppliesAtWindowSet
     RunSetTraffic(client, 1, "dynamic_threshold_settle");
     // The settled window is 50% successful: healthy at ratio 0.5, unhealthy after the hot update to 0.6.
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    RunTraffic(client, 1, "dynamic_threshold_after_switch");
 }
 
 TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicMinSampleUpdateAppliesAtWindowSettlement)
@@ -722,18 +707,15 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicMinSampleUpdateAppliesAtWindowSet
     LOG(INFO) << "[URMA failover test] verify dynamic minimum sample update applies at window settlement";
     WriteClientConfig(0.5, 3);
     std::shared_ptr<KVClient> client;
-    InitRemoteFallbackClient(client);
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
     WaitClientConfig(0.5, 3);
-    uint32_t initialWorkerIndex = WORKER_NUM;
-    DS_ASSERT_OK(GetCurrentWorkerIndex(client, initialWorkerIndex));
-    uint32_t expectedWorkerIndex = GetOtherRemoteWorker(initialWorkerIndex);
     EnableSwitchEndCounter();
     InjectClientUrmaWriteError();
     RunSetTraffic(client, 2, "dynamic_min_first_window");
     std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
     RunSetTraffic(client, 1, "dynamic_min_first_settle");
     ASSERT_EQ(inject::GetExecuteCount(SWITCH_END_INJECT), 0u);
-    CheckClientUsesWorker(client, initialWorkerIndex);
+    ASSERT_EQ(GetSwitchWorkerMatchedCount(1), 0u);
     RunSetTraffic(client, 1, "dynamic_min_second_window");
     WriteClientConfig(0.5, MIN_SAMPLE_COUNT);
     WaitClientConfig(0.5, MIN_SAMPLE_COUNT);
@@ -741,7 +723,8 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_DynamicMinSampleUpdateAppliesAtWindowSet
     RunSetTraffic(client, 1, "dynamic_min_second_settle");
     // The second settled window has two failures and becomes eligible only after the min-sample hot update.
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
-    CheckClientUsesWorker(client, expectedWorkerIndex);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    RunTraffic(client, 1, "dynamic_min_after_switch");
 }
 
 TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
@@ -749,24 +732,31 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
     LOG(INFO) << "[URMA failover test] verify local worker failure, remote chain, and local switch back";
     std::shared_ptr<KVClient> client;
     InitLocalPreferredClient(client);
-    CheckClientUsesWorker(client, 0);
     EnableSwitchEndCounter();
     RunTraffic(client, 1, "chain_local_before");
     // Keep worker2 out of service discovery so worker0 failure has exactly one remote candidate: worker1.
     ShutdownWorkerAndWaitDiscoveryRemote(2);
+    SetSwitchWorkerExpected(1, 1);
     ShutdownWorkerAndWaitDiscoveryRemote(0);
-    WaitClientUsesWorker(client, 1);
+    WaitClientTrafficReady(client, 1);
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 1, "chain_worker1_after");
     RestartWorkerAndWaitReady(2);
+    ClearSwitchWorkerExpectedInjects();
+    SetSwitchWorkerExpected(1, 2);
     ShutdownWorkerAndWaitDiscoveryRemote(1);
     // Worker0 is still down, so worker1 failure should drive the remote client to worker2.
-    WaitClientUsesWorker(client, 2);
+    WaitClientTrafficReady(client, 2);
     ASSERT_TRUE(WaitSwitchCountAtLeast(2));
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 1, "chain_worker2_after");
     RestartWorkerAndWaitReady(0);
+    ClearSwitchWorkerExpectedInjects();
+    SetSwitchWorkerExpected(1, 0);
     // Once the same-host worker is ready again, service discovery recovery should prefer it automatically.
-    WaitClientUsesWorker(client, 0);
+    WaitClientTrafficReady(client, 0);
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 1, "chain_local_after_recover");
 }
 }  // namespace st

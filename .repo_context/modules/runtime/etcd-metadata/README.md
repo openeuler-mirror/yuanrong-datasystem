@@ -139,6 +139,9 @@ Important nuance:
 
 - Table existence is checked only in the local `tableMap_`; creating a table does not create an ETCD namespace object.
 - Other-AZ table prefixes are stored separately in `otherAzTableMap_` and used by multi-AZ watch and read paths.
+- Object-cache metadata consumers route object, async-worker-op, and global-cache-delete metadata through the
+  `ETCD_HASH_SUFFIX` tables using the full object key hash. Object keys that end with worker UUIDs are not routed to
+  `ETCD_WORKER_SUFFIX` tables.
 
 ### Transaction And CAS
 

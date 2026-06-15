@@ -120,8 +120,7 @@ public:
      * @return Status of the call.
      */
     Status ClearDataWithoutMeta(const worker::HashRange &range, const std::string &workerAddr,
-                                const std::vector<std::string> &objsMigrateFinished,
-                                const std::vector<std::string> &uuids);
+                                const std::vector<std::string> &objsMigrateFinished);
 
     /**
      * @brief Notify worker which has object data to delete.
@@ -322,13 +321,10 @@ public:
     /**
      * @brief Recover cache invalid and remove meta info to cache
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[in] workerUuids Recover the data of specified worker uuids. If the value is empty, recover the data of the
-     * current worker.
-     * @param[in] extraRanges Obtains the data of specified hash ranges if not empty.
+     * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb, const std::vector<std::string> &workerUuids = {},
-                                            const worker::HashRange &extraRanges = {});
+    Status RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
 
     /**
      * @brief Send changes to the primary copy.

@@ -8,7 +8,7 @@ Covered scenario families:
 
 - scale-up
 - scale-down, including passive, voluntary, fake-node repair, and all-node cases
-- restart, including rolling UUID restoration and reconciliation
+- restart, including scale-task restoration and reconciliation
 - ETCD crash or recovery, including degraded startup, keepalive failure, watch recovery, and CAS failure
 
 Source of truth:
@@ -46,8 +46,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 - Worker role: local worker, remote worker, selected process worker, joining destination, failed source,
   voluntary leaving worker, standby/recovery worker, other-AZ worker.
 - Ring phase: `NO_INIT`, first init, `INITIAL`, `JOINING`, `ACTIVE`, `PRE_LEAVING`, `LEAVING`, `FAIL`.
-- Persisted ring records: `workers`, `add_node_info`, `del_node_info`, `key_with_worker_id_meta_map`,
-  `update_worker_map`, `cluster_has_init`.
+- Persisted ring records: `workers`, `add_node_info`, `del_node_info`, `cluster_has_init`.
 - Cluster-node state: ETCD keepalive value `start`, `restart`, `recover`, `ready`, `exiting`, `d_rst`;
   in-memory `ClusterNode` state `ACTIVE`, `TIMEOUT`, `FAILED`.
 - Backend condition: ETCD available, ETCD unavailable at startup, ETCD unavailable after startup, ETCD recovered,
@@ -81,7 +80,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | --- | --- | --- | --- | --- | --- |
 | SD-P-01 | Normal lease expiration or worker DELETE | ETCD DELETE -> `HandleNodeRemoveEvent` | cluster node `ACTIVE -> TIMEOUT`, keepalive row deleted | Node timeout events fire with primary-copy change enabled; node is later demoted to failed. | `ShutdownWorkerAndDelKeyInEtcdTest`, common scale-down tests |
 | SD-P-02 | Timeout node demoted to failed | `DemoteTimedOutNodes` -> `HandleFailedNode` | `ClusterNode::FAILED`, failed worker set | Master notifies `NodeTimeoutEvent`, `StartClearWorkerMeta`, slot recovery, and hash-ring removal loop. | `LEVEL1_DeleteWhenMasterTimeout` |
-| SD-P-03 | Normal passive ring removal | `HashRing::RemoveWorkers` -> `RemoveWorker` | `del_node_info[failed]`, `key_with_worker_id_meta_map[uuid]` | Selected process workers write `del_node_info`; task executor recovers metadata/data and CAS-erases finished `del_node_info` and worker. | `LEVEL2_KeyWithL2Cache`, `LEVEL2_KeyWithoutL2Cache`, `ScaleDownQuerySize` |
+| SD-P-03 | Normal passive ring removal | `HashRing::RemoveWorkers` -> `RemoveWorker` | `del_node_info[failed]` | Selected process workers write `del_node_info`; task executor recovers metadata/data and CAS-erases finished `del_node_info` and worker. | `LEVEL2_KeyWithL2Cache`, `LEVEL2_KeyWithoutL2Cache`, `ScaleDownQuerySize` |
 | SD-P-04 | Multiple nodes fail in same window | `RemoveWorkers(GetFailedWorkers())` with several failed nodes | multiple `del_node_info` records, selected process workers | Failures are processed in bounded batches; recovery can serialize through the shared ring CAS and task thread pool. | `LEVEL1_ScaleDownAtSameTime`, `LEVEL2_ScaleDownInOneBatch` |
 | SD-P-05 | Process worker for scale-down task fails | `GetProcessWorkerForRemoveWorker`, `SubmitScaleDownTask` retry/restore | failed process worker, stale `del_node_info` | Another eligible process worker must restore or retry the unfinished scale-down task. | `LEVEL2_RestoreScaleDown`, `TaskRetry` |
 | SD-P-06 | Failed node is still `INITIAL` | `RemoveWorker` inserts empty `del_node_info` | failed worker has no tokens and no uuid | Ring can erase a never-active worker without data-range recovery. | `LEVEL1_ScaleDownNewWorker` |
@@ -123,8 +122,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | RS-03 | Restart from timeout/network-recovery state | `ProcessNetworkRecovery` | found node `TIMEOUT`, event type `recover` or `d_rst` | Network recovery event runs; `hashRing_->RecoverMigrationTask` restores unfinished scale-up work for that node. | `LEVEL1_ClearWorkerWhenEtcdWorkerNetCrash`, keepalive tests |
 | RS-04 | Downgrade restart after ETCD unavailable at startup | keepalive state `d_rst` | `InitKeepAlive(..., isEtcdAvailableWhenStart=false)`, event type `d_rst` | Node is treated as downgrade restart; new-node metadata check runs after ETCD recovery. | `LEVEL1_TestRestartWorkerDuringEtcdCrash`, cross-AZ restart during crash |
 | RS-05 | Restart while scale-up or scale-down tasks are pending | `RestoreScalingTaskIfNeeded(true)` and task executor restore | non-empty `add_node_info` or `del_node_info` at startup | Worker restores scale-up and scale-down tasks after becoming healthy enough; restart restoration waits for health in task executor. | `LEVEL2_RestoreScaleDown`, `LEVEL2_StartWhenScalingDown` |
-| RS-06 | Restart with rolling UUID restoration | `update_worker_map`, `AddUpgradeRange`, point-range migration | worker has empty/current uuid plus `update_worker_map[addr]` | Reused UUID metadata is migrated back through point-range entries; stale update map is later cleared. | rolling/restart metadata paths |
-| RS-07 | Rolling update timeout | `ClearWorkerMapOnInterval`, `WorkerUuidRemovable` | `update_worker_map` age > `rolling_update_timeout_s` | Stale UUID restoration record is removed unless the worker is still waiting for restoration. | `HashRingTools.WorkerUuidRemovable` |
+| RS-06 | Restart with unfinished scale task | `RestoreScalingTaskIfNeeded(true)` and task executor restore | non-empty `add_node_info` or `del_node_info` | Reused worker UUID remains an internal worker identity; object metadata recovery follows hash ranges and unfinished task records. | scale-task restart metadata paths |
 | RS-08 | Reconciliation cannot complete | `WorkerOCServiceImpl` reconciliation and health probe | worker not ready, health probe false | Worker readiness is withheld until reconciliation completes or controlled skip/give-up path is used. | `TestSetHealthProbe`, `LEVEL1_TestRestartWorkerDuringEtcdCrash2` |
 | RS-09 | Node-table completion has no progress | `CheckWaitNodeTableComplete` | expected cluster-table size, no progress timer | Restart-only no-progress early termination prevents indefinite wait; non-restart path must not use the early break incorrectly. | `NoProgressEarlyTermination`, `NoProgressEarlyTerminationOnlyForRestart` |
 | RS-10 | Restart after passive scale-down | restarted old worker no longer in ring | worker absent from ring, old uuid moved/recovered | Old worker joins as a new node and must not recover stale RocksDB data as authoritative. | `LEVEL2_KeyWithL2Cache`, `WorkerRestartRecoverTest` |
@@ -173,7 +171,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 ## Known DFX Weaknesses Exposed By The Matrix
 
 - `/datasystem/ring` is a single hot protobuf CAS key for first init, scale-up, passive scale-down, voluntary
-  scale-down, restart UUID restoration, task completion, and health-check repair.
+  scale-down, restart task restoration, task completion, and health-check repair.
 - Scale storms amplify ETCD pressure because many workers watch broad prefixes, parse the full ring, and can race on
   CAS of the same record.
 - CAS retry is bounded and generic; conflict-heavy expansion or shrink can surface user-visible failure instead of
@@ -198,7 +196,7 @@ Before claiming a DFX scenario is covered, verify:
 - Which persisted records changed in ETCD/Metastore.
 - Which in-memory states must converge after the event.
 - Whether the local worker is the actor, the victim, or only an observer.
-- Whether an unfinished `add_node_info`, `del_node_info`, or `update_worker_map` record exists.
+- Whether an unfinished `add_node_info` or `del_node_info` record exists.
 - Whether readiness/health is gated by reconciliation.
 - Whether the scenario differs in centralized-master, distributed-master, or cross-AZ mode.
 - Whether the expected behavior is covered by an enabled test, a disabled test, or only an inject point.

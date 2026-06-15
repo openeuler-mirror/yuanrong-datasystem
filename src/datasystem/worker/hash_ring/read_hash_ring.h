@@ -75,14 +75,6 @@ public:
     Status UpdateRing(const std::string &newSerializedRingInfo, int64_t version);
 
     /**
-     * @brief Check whether the worker ID belongs to the current AZ. If yes, the worker ID after rehashing is returned.
-     * @param[in] oldUuid Original worker ID.
-     * @param[out] newUuid The rehashed worker ID.
-     * @return Status of the call.
-     */
-    Status GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid, std::optional<RouteInfo> &routeInfo);
-
-    /**
      * @brief Get worker address by uuid for addressing.
      * @param[in] workerUuid The worker uuid.
      * @param[out] workerAddr The remote worker address.
