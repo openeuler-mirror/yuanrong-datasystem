@@ -21,6 +21,7 @@
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/utils/status.h"
 
@@ -49,8 +50,15 @@ public:
 
     void SetUp() override
     {
+        DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
         ExternalClusterTest::SetUp();
         DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr_));
+    }
+
+    void TearDown() override
+    {
+        (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
+        ExternalClusterTest::TearDown();
     }
     Status StrInResLog(int workerIdx, const std::string &str)
     {

@@ -438,10 +438,7 @@ public:
      * @param[out] needRollbackState If the client status is successfully changed to INTERMEDIATE,
      * the status needs to be rolled back based on the completion status when the request is completed.
      */
-    void CompleteHandler(bool failed, bool needRollbackState)
-    {
-        clientStateManager_->CompleteHandler(failed, needRollbackState);
-    }
+    void CompleteHandler(bool failed, bool needRollbackState);
 
     /**
      * @brief Invoke worker client to create a device object with p2p.
@@ -1104,6 +1101,13 @@ private:
     void MarkNoSwitchableWorkerIfNeeded(WorkerNode current, uint64_t switchGeneration);
 
     void RestoreWorkerAvailableIfNeeded(WorkerNode current, uint64_t switchGeneration);
+
+    /**
+     * @brief Best-effort warmup of the client-worker request path.
+     */
+    void WarmupClientWorkerConnection();
+
+    Status DoWarmupClientWorkerConnection();
 
     /**
      * @brief Try switch back to local worker.
