@@ -210,6 +210,18 @@ int32_t GetInt32FromEnv(const char *env, int32_t defValue);
 uint64_t GetUint64FromEnv(const char *env, uint64_t defValue);
 
 /**
+ * @brief Get the client slow log threshold in microseconds.
+ * @return Cached client slow threshold.
+ */
+uint64_t GetClientSlowUs();
+
+/**
+ * @brief Get the worker slow log threshold in microseconds.
+ * @return Cached worker slow threshold.
+ */
+uint64_t GetWorkerSlowUs();
+
+/**
  * @brief Get int64 value from environment variable.
  * @param[in] env Environment variable.
  * @param[in] defValue Default value if environment variable is null or error.

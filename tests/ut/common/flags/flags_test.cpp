@@ -37,6 +37,12 @@ DS_DEFINE_int64(int64_flag, 64, "uint32 variable test");
 DS_DEFINE_string(str_flag, "default", "uint32 variable test");
 DS_DEFINE_double(double_flag, 1.0, "double variable test");
 
+namespace {
+constexpr uint32_t kDefaultSlowUs = 500;
+constexpr char kClientSlowEnv[] = "DATASYSTEM_CLIENT_SLOW_US";
+constexpr char kWorkerSlowEnv[] = "DATASYSTEM_WORKER_SLOW_US";
+}
+
 int modifyCount = 0;
 int defaultCount = 0;
 
@@ -463,6 +469,21 @@ TEST_F(FlagsTest, TestGet64BitEnv)
     ASSERT_EQ(GetInt64FromEnv("str", 0), 0);
     ASSERT_EQ(GetInt64FromEnv("no_exist", 0), 0);
     ASSERT_EQ(GetInt64FromEnv(nullptr, 0), 0);
+}
+
+TEST_F(FlagsTest, TestSlowThresholdEnvDefaultsAndOverrides)
+{
+    unsetenv(kClientSlowEnv);
+    unsetenv(kWorkerSlowEnv);
+
+    ASSERT_EQ(GetUint64FromEnv(kClientSlowEnv, kDefaultSlowUs), kDefaultSlowUs);
+    ASSERT_EQ(GetUint64FromEnv(kWorkerSlowEnv, kDefaultSlowUs), kDefaultSlowUs);
+
+    ASSERT_EQ(setenv(kClientSlowEnv, "123", 1), 0);
+    ASSERT_EQ(setenv(kWorkerSlowEnv, "456", 1), 0);
+
+    ASSERT_EQ(GetUint64FromEnv(kClientSlowEnv, kDefaultSlowUs), 123u);
+    ASSERT_EQ(GetUint64FromEnv(kWorkerSlowEnv, kDefaultSlowUs), 456u);
 }
 
 TEST_F(FlagsTest, TestGetStringEnv)

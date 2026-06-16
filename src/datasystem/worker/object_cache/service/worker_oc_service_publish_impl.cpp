@@ -21,6 +21,7 @@
 
 #include <utility>
 
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -49,8 +50,8 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
-static constexpr uint64_t SET_LOCAL_PROCESSING_SLOW_US = 1000;
-static constexpr uint64_t SET_MASTER_RPC_SLOW_US = 1000;
+static const uint64_t SET_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
+static const uint64_t SET_MASTER_RPC_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,

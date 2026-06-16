@@ -24,6 +24,11 @@ DS_DEFINE_bool(help, false, "show help on all flags");
 DS_DEFINE_bool(version, false, "show version and build info and exit");
 
 namespace datasystem {
+namespace {
+constexpr uint64_t DEFAULT_SLOW_US = 500;
+constexpr char CLIENT_SLOW_US_ENV[] = "DATASYSTEM_CLIENT_SLOW_US";
+constexpr char WORKER_SLOW_US_ENV[] = "DATASYSTEM_WORKER_SLOW_US";
+}
 
 void ParseCommandLineFlags(int argc, char **argv)
 {
@@ -119,6 +124,18 @@ int32_t GetInt32FromEnv(const char *env, int32_t defValue)
 uint64_t GetUint64FromEnv(const char *env, uint64_t defValue)
 {
     return GetFromEnv(env, defValue, FLAG_UINT64);
+}
+
+uint64_t GetClientSlowUs()
+{
+    static const uint64_t clientSlowUs = GetUint64FromEnv(CLIENT_SLOW_US_ENV, DEFAULT_SLOW_US);
+    return clientSlowUs;
+}
+
+uint64_t GetWorkerSlowUs()
+{
+    static const uint64_t workerSlowUs = GetUint64FromEnv(WORKER_SLOW_US_ENV, DEFAULT_SLOW_US);
+    return workerSlowUs;
 }
 
 int64_t GetInt64FromEnv(const char *env, int64_t defValue)

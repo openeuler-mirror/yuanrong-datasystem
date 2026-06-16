@@ -30,6 +30,7 @@
 #include "tbb/parallel_for.h"
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/shm_guard.h"
@@ -60,7 +61,7 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
-constexpr uint64_t GET_REMOTE_WORKER_LOCAL_SLOW_US = 2000;
+const uint64_t GET_REMOTE_WORKER_LOCAL_SLOW_US = GetWorkerSlowUs();
 constexpr double US_PER_MS = 1000.0;
 
 bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
