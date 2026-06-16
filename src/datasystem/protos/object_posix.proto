@@ -173,12 +173,7 @@ message GetReqPb {
   uint64 ub_buffer_size = 12;
   int64 request_timeout = 13;
 
-   // for server pipeline RH2D op
-   message H2DReqInfo {
-     uint64 target_size = 1;
-     bytes target_device_handle = 2;
-   }
-   repeated H2DReqInfo h2d_infos = 14;
+  repeated uint32 pipeline_rh2d_reqids = 14;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -203,6 +198,7 @@ message GetRspPb {
     uint32 cache_type = 13;
     uint32 object_index = 14;
     RemoteH2DHostInfoPb host_info = 15;
+    int32 pipeline_done_step = 16;
   }
   message PayloadInfoPb {
   	string object_key = 1;

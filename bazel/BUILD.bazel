@@ -46,7 +46,12 @@ py_package(
         "//:datasystem_header_files",
         "//:libdatasystem_file",
         "//python/yr/datasystem:datasystem_client",
-    ],
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//:libos_transport_shared_file",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 datasystem_sdk_tree(

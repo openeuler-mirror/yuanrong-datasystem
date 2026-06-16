@@ -56,6 +56,7 @@
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_common_api.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_types.h"
 
 namespace datasystem {
@@ -98,10 +99,13 @@ struct GetParam {
     AccessTransportKind *actualTransportKind = nullptr;  // Actual request transport after UB/TCP resolution.
 };
 
-struct H2DParam {
+struct PiplnRh2dParam {
     int64_t subTimeoutMs;
     std::vector<std::string> objectKeys;
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
+    std::shared_ptr<H2DChunkManager> chunkManager;
+    uint32_t version;
+    std::vector<RpcMessage> payloads;
 };
 
 class IClientWorkerApi : virtual public client::IClientWorkerCommonApi {
@@ -176,7 +180,7 @@ public:
      * @param[out] rsp H2DRspPb rsp.
      * @return Status of the call.
      */
-    virtual Status PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp) = 0;
+    virtual Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) = 0;
 
     /**
      * @brief Send getting object rpc request to worker.
@@ -426,6 +430,10 @@ public:
     virtual Status PrepairForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) = 0;
     virtual Status CleanUpForDecreaseShmRefAfterWorkerLost() = 0;
+
+    virtual bool WorkerSupportPiplnRH2D() = 0;
+    virtual Status InitPipelineRH2DQueue(ShmConvertHookFunc hook) = 0;
+    virtual void CleanUpForPipelineRH2DQueueAfterWorkerLost() = 0;
 
     /**
      * @brief Decrease the object worker reference count by one and release the object if no client holds it, and

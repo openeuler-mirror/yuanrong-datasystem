@@ -26,6 +26,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/os_transport_pipeline/client_manager_api.h"
 #include "datasystem/common/util/format.h"
 
 DS_DECLARE_uint32(max_client_num);
@@ -83,7 +84,7 @@ Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool un
 
 Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
                                 bool enableCrossNode, const std::string &podName, std::string deviceId,
-                                uint32_t &lockId)
+                                uint32_t &lockId, uint32_t *pipelineQueueId)
 {
     // Ensure callers never observe a stale lockId on failure paths.
     lockId = 0;
@@ -96,11 +97,21 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, shmEnabled, tenantId,
                                                    enableCrossNode, podName, std::move(deviceId));
     clientInfo->SetLockId(lockId);
+
+    // allocate pipeline queue
+    if (shmEnabled && pipelineQueueId) {
+        uint32_t queueId = OsXprtPipln::INVALID_PIPLN_QUEUE_ID;
+        LOG_IF_ERROR(OsXprtPipln::HoleOnePiplnRH2DQueue(queueId), "failed to hold one pipeline queue");
+        clientInfo->SetPipelineQueueId(queueId);
+        *pipelineQueueId = queueId;
+    }
+
     bool insert = tbbClientTable_.emplace(clientId, std::move(clientInfo));
     if (!insert) {
         if (shmEnabled) {
             ReturnLockId(lockId);
             lockId = 0;
+            OsXprtPipln::ReleaseAvailableQueue(*pipelineQueueId);
         }
         status = Status(StatusCode::K_RUNTIME_ERROR, FormatString("Failed to insert client %s to table", clientId));
     }
@@ -128,6 +139,7 @@ void ClientManager::RemoveClient(const ClientKey &clientId)
     if (accessor->second->GetLockId(lockId).IsOk()) {
         ReturnLockId(lockId);
     }
+    OsXprtPipln::ReleaseAvailableQueue(accessor->second->GetPipelineQueueId());
     LOG(INFO) << FormatString("Remove client success, id: %s, pod: %s, shm: %d, cross node: %d", clientId,
                               accessor->second->PodName(), accessor->second->ShmEnabled(),
                               accessor->second->EnableCrossNode());

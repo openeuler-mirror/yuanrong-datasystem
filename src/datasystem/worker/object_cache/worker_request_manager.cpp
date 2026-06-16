@@ -105,6 +105,7 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
             CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(iter->second.offsetInfo == offsetInfo, K_INVALID,
                                                  FormatString("Duplicate offset read for objectKey %s", objectKey));
         }
+
         orderedObjectInfos_.emplace_back(&(iter->second));
         if (needResponseObjectKeys) {
             ObjectKey responseObjectKey;
@@ -113,14 +114,12 @@ Status GetRequest::Init(const std::string &tenantId, const GetReqPb &req,
         }
         if (isPipelineH2D) {
             std::shared_ptr<worker::ClientInfo> clientInfo;
-            clientInfo = worker::ClientManager::Instance().GetClientInfo(ClientKey::Intern(req.client_id()));
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(clientInfo, K_RUNTIME_ERROR,
-                                                 "no clientInfo for client id " + req.client_id());
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clientInfo->GetDeviceId().empty(), K_RUNTIME_ERROR,
-                                                 "device id is empty for pipeline rh2d");
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                OsXprtPipln::ParsePiplnH2DRequest(req, GetH2DChunkManager(), objectKey, i, clientInfo->GetDeviceId()),
-                "ParsePiplnH2DRequest failed");
+            clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId_);
+            CHECK_FAIL_RETURN_STATUS(clientInfo != nullptr, StatusCode::K_RUNTIME_ERROR,
+                                     FormatString("no clientInfo for client id %s", clientId_.ToString()));
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(OsXprtPipln::ParsePiplnH2DRequest(req, GetH2DChunkManager(), objectKey, i,
+                                                                               clientInfo->GetPipelineQueueId()),
+                                             "ParsePiplnH2DRequest failed");
         }
         VLOG(1) << "objectKey " << objectKey << " add to GetRequest success";
     }
@@ -334,6 +333,8 @@ Status GetRequest::ReturnToClient(const Status &rc)
         LOG(ERROR) << "ReturnFromGetRequest timeout when get object: " << VectorToString(rawObjectKeys_);
         UnRegister();
         auto rc = lastRc.IsOk() ? Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout") : lastRc;
+        if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_))
+            (void)OsXprtPipln::WaitPipelineRH2DDone(chunkManager_);
         Status sendStatusRc = serverApi_->SendStatus(rc);
         this->GetServerApi()->SetRequestComplete();
         return sendStatusRc;
@@ -362,6 +363,9 @@ Status GetRequest::ReturnToClient(const Status &rc)
             timer_.reset();
         }
     }
+    if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_)) {
+        lastRc = OsXprtPipln::WaitPipelineRH2DDone(chunkManager_);
+    }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     PerfPoint writePoint(PerfKey::WORKER_RETURN_TO_CLIENT_WRITE);
@@ -380,9 +384,6 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
     uint64_t ubWriteOffset = 0;
 
-    if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_))
-        return OsXprtPipln::ConstructPipelineRH2DResponse(resp, chunkManager_, rawObjectKeys_);
-
     if (!rawObjectKeys_.empty()) {
         // Avoid per-key protobuf repeated-field growth for large batch get responses.
         resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));
@@ -391,6 +392,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
         }
     }
     Status lastRc;
+
     for (size_t objectIndex = 0; objectIndex < rawObjectKeys_.size(); objectIndex++) {
         auto &objectKeyUri = rawObjectKeys_[objectIndex];
         Status rc;
@@ -428,6 +430,7 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
             SetDefaultObjectInfoPb(objectKeyUri, objectIndex, *resp.add_objects());
         }
     }
+
     VLOG(1) << FormatString("The total size of the currently get is %llu", totalSize);
     return lastRc;
 }
@@ -533,8 +536,11 @@ void GetRequest::SetShmObjectInfoPb(const ObjectKey &, size_t objectIndex, GetOb
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, info, objectIndex, true /* isOk */);
     } else {
-        info.set_object_key(responseObjectKeys_[objectIndex]);
+        ObjectKey& objectKey = responseObjectKeys_[objectIndex];
+        info.set_object_key(objectKey);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, info, objectKey, true /* isOk */);
     }
     // The existence should have been checked at MarkSuccessImpl.
     RemoteH2DHostInfoMap::const_accessor constAccessor;
@@ -566,8 +572,11 @@ void GetRequest::SetNoShmObjectInfoPb(const ObjectKey &, size_t objectIndex, con
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, objectIndex);
     } else {
-        info.set_object_key(responseObjectKeys_[objectIndex]);
+        ObjectKey& objectKey = responseObjectKeys_[objectIndex];
+        info.set_object_key(objectKey);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, objectKey);
     }
     const auto &safeEntry = *objectInfo.params;
     info.set_data_size(static_cast<int64_t>(objectInfo.offsetInfo.readSize));
@@ -581,8 +590,11 @@ void GetRequest::SetDefaultObjectInfoPb(const ObjectKey &, size_t objectIndex, G
 {
     if (enableReturnObjectIndex_) {
         info.set_object_index(objectIndex);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, info, objectIndex, false /* isOk */);
     } else {
-        info.set_object_key(responseObjectKeys_[objectIndex]);
+        ObjectKey& objectKey = responseObjectKeys_[objectIndex];
+        info.set_object_key(objectKey);
+        OsXprtPipln::StopPipelineRH2D(chunkManager_, info, objectKey, false /* isOk */);
     }
     info.set_store_fd(-1);
     info.set_offset(-1);

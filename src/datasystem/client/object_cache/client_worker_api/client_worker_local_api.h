@@ -83,7 +83,7 @@ public:
                         MultiPublishRspPb &rsp, const std::vector<std::vector<uint64_t>> &blobSizes = {}) override;
     Status DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys) override;
 
-    Status PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp) override;
+    Status PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp) override;
     Status Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp, std::vector<RpcMessage> &payloads) override;
     Status InvalidateBuffer(const std::string &objectKey) override;
     Status GIncreaseWorkerRef(const std::vector<std::string> &firstIncIds, std::vector<std::string> &failedObjectKeys,
@@ -124,11 +124,14 @@ public:
     Status ReconnectWorker(const std::vector<std::string> &gRefIds) override;
     Status PrepairForDecreaseShmRef(
         std::function<Status(const std::string &, const std::shared_ptr<ShmUnitInfo> &)> mmapFunc) override;
+    Status InitPipelineRH2DQueue(ShmConvertHookFunc hook) override;
+    void CleanUpForPipelineRH2DQueueAfterWorkerLost() override;
     Status CleanUpForDecreaseShmRefAfterWorkerLost() override;
     Status DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,
                           std::shared_timed_mutex &mtx) override;
     Status ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
                            std::vector<ShmKey> &maybeExpiredShmIds) override;
+    bool WorkerSupportPiplnRH2D() override;
 
 private:
     Status MemView2RpcMessage(const std::vector<MemView> &mvs, std::vector<RpcMessage> &rms);

@@ -24,9 +24,11 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <numeric>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -43,6 +45,7 @@
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DEFINE_int64(batch_get_threshold_mb, 100, "The payload threshold to batch get objects");
@@ -75,6 +78,50 @@ size_t RemoteH2DBatchGetChunkSize()
     // A larger value here means more objects per task and therefore fewer parallel tasks.
     const auto parallelMin = FLAGS_oc_worker_worker_parallel_min > 0 ? FLAGS_oc_worker_worker_parallel_min : 0;
     return std::max<size_t>(MAX_REMOTE_H2D_BATCH_GET_OBJECTS, static_cast<size_t>(parallelMin));
+}
+}  // namespace
+
+namespace {
+
+bool NeedCleanupWorkerWorkerOcRpcChannel(const Status &rc)
+{
+    if (rc.IsOk()) {
+        return false;
+    }
+    switch (rc.GetCode()) {
+        case StatusCode::K_RPC_UNAVAILABLE:
+        case StatusCode::K_RPC_DEADLINE_EXCEEDED:
+        case StatusCode::K_RPC_CANCELLED:
+        case StatusCode::K_URMA_CONNECT_FAILED:
+        case StatusCode::K_URMA_WAIT_TIMEOUT:
+        case StatusCode::K_TRY_AGAIN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void CleanupWorkerWorkerOcRpcChannel(
+    const HostPort &hostAddr, const std::string &address,
+    std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> &clientApi,
+    std::shared_ptr<WorkerRemoteWorkerOCApi> &workerStub, Status rc, const std::string &stage)
+{
+    LOG(WARNING) << "PipelineH2D remote get " << stage
+                 << " failed. Clean worker-worker OC rpc channel to avoid reusing stale ZMQ route. address=" << address
+                 << ", rc=" << rc.ToString();
+
+    // Drop current per-call stream and shared stub before removing the cached stub.
+    // Otherwise RpcStubCacheMgr::Remove may fail because the cached stub is still held by this request.
+    clientApi.reset();
+    workerStub.reset();
+
+    auto removeRc = RpcStubCacheMgr::Instance().Remove(hostAddr, StubType::WORKER_WORKER_OC_SVC);
+    if (removeRc.IsError()) {
+        LOG(WARNING) << "Remove cached WORKER_WORKER_OC_SVC rpc stub failed, address=" << address
+                     << ", removeRc=" << removeRc.ToString();
+    } else {
+        LOG(WARNING) << "Remove cached WORKER_WORKER_OC_SVC rpc stub success, address=" << address;
+    }
 }
 }  // namespace
 
@@ -548,6 +595,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             auto &subResp = rspPb.responses(i);
             subRc = HandleBatchSubResponse(subResp, rspPb.root_info(), metaIter, objectKV, payloads, payloadIndex,
                                            tryGetFromElsewhere, dataSizeChanged);
+            if (subRc.IsOk() && request && subResp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED) {
+                OsXprtPipln::MarkPipelineStep1Ok(request->GetH2DChunkManager(), objectKV.GetObjKey());
+            }
         }
         if (tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_RESP_PT_2);
@@ -603,6 +653,21 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     SubmitAsyncAddEvictTask(std::move(needEvictObjs));
     return lastRc;
 }
+
+#define CLEAN_RPC_AND_RETURN_WHEN_ERROR(func, hint)                                                   \
+    do {                                                                                              \
+        auto ret = func;                                                                              \
+        if (ret.IsError()) {                                                                          \
+            ret = WithRpcDiag(ret, "BatchGetObjectRemote", localAddress_, address);                   \
+            /* pipeline chunk-spliting may introduce more urma request                                \
+             * and make urma wait error happen more frequently */                                     \
+            if (request && OsXprtPipln::IsPiplnH2DRequest(request->GetH2DChunkManager())              \
+                && NeedCleanupWorkerWorkerOcRpcChannel(ret)) {                                        \
+                CleanupWorkerWorkerOcRpcChannel(hostAddr, address, clientApi, workerStub, ret, hint); \
+            }                                                                                         \
+            return ret;                                                                               \
+        }                                                                                             \
+    } while (0)
 
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
@@ -668,23 +733,22 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             Timer timer;
             auto rc = RetryOnErrorRepent(
                 timeoutMs,
-                [&workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, this](int32_t) {
+                [this, &workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, &hostAddr, &request](int32_t) {
                     PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
-                    RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemote(&clientApi));
-                    RETURN_IF_NOT_OK(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb));
-
-                    auto rc = clientApi->Read(rspPb);
-                    if (rc.IsError()) {
-                        rc = WithRpcDiag(rc, "BatchGetObjectRemote", localAddress_, address);
+                    if (workerStub == nullptr) {
+                        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                            CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+                            "Recreate remote worker api failed.");
                     }
-                    RETURN_IF_NOT_OK(TryReconnectRemoteWorker(address, rc));
+
+                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemote(&clientApi), "open stream");
+                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb),
+                                                    "write request");
+                    auto rc = clientApi->Read(rspPb);
+                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(TryReconnectRemoteWorker(address, rc), "read response/reconnect");
                     // Fallback to downlevel client as multiple objects can be contained in the payload.
                     // Only spill case would actually send payload via RPC, so performance-wise it would be acceptable.
-                    rc = clientApi->ReceivePayload(payloads);
-                    if (rc.IsError()) {
-                        rc = WithRpcDiag(rc, "BatchGetObjectRemote", localAddress_, address);
-                    }
-                    RETURN_IF_NOT_OK(rc);
+                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(clientApi->ReceivePayload(payloads), "receive payload");
                     return Status::OK();
                 },
                 []() { return Status::OK(); },

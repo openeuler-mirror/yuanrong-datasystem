@@ -18,54 +18,47 @@
  * Description: mock driver for file device IPC
  */
 
-#include "datasystem/common/os_transport_pipeline/mock_ipc.h"
+#include "datasystem/common/os_transport_pipeline/mock_rh2d_driver.h"
 
 #include <fstream>
 
 namespace OsXprtPipln {
 
-struct MockIPCMemHandle {
-    size_t currentOffset;
-};
+using namespace datasystem;
 
-size_t MockIPC::currentOffset = 0;
+std::string MockRH2DDriver::mockFilePathPrefix = "/tmp/mock.data";
 
-Status MockIPC::EncodeDriver()
+Status MockRH2DDriver::Init()
 {
-    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetEncodeHandle(sizeof(MockIPCMemHandle));
-    handle->currentOffset = currentOffset;
-    currentOffset += targetSize;
+    mockFilePath = mockFilePathPrefix + "." + std::to_string(reqId_);
     return Status::OK();
 }
 
-Status MockIPC::DecodeDriver()
+void MockRH2DDriver::SetReqId(uint32_t reqId)
 {
-    MockIPCMemHandle *handle = (MockIPCMemHandle *)GetDecodeHandle(sizeof(MockIPCMemHandle));
-    offset = handle->currentOffset;
-    return Status::OK();
+    reqId_ = reqId;
 }
 
-Status MockIPC::SubmitIO(void *srcData, size_t srcSize, size_t destOffset)
+Status MockRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset)
 {
     {
         std::ofstream guaranteeExists(mockFilePath, std::ios::app | std::ios::binary);
     }
     std::fstream outFile(mockFilePath, std::ios::in | std::ios::out | std::ios::binary);
-    outFile.seekp(offset + destOffset, std::ios::beg);
+    outFile.seekp(destOffset, std::ios::beg);
     outFile.write((char *)srcData, srcSize);
     if (!outFile.good()) {
-        return Status(StatusCode::K_IO_ERROR,
-                      "Submit io for offset " + std::to_string(offset + destOffset) + " failed");
+        return Status(StatusCode::K_IO_ERROR, "Submit io for offset " + std::to_string(destOffset) + " failed");
     }
     return Status::OK();
 }
 
-Status MockIPC::WaitIO()
+Status MockRH2DDriver::WaitIO()
 {
     return Status::OK();
 }
 
-Status MockIPC::Release()
+Status MockRH2DDriver::Release()
 {
     return Status::OK();
 }

@@ -149,7 +149,7 @@ UrmaManager::UrmaManager()
 UrmaManager::~UrmaManager()
 {
     Stop();
-    OsXprtPipln::UnInitOsPiplnH2DEnv();
+    OsXprtPipln::UnInitOsPiplnRH2DEnv();
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager()";
     urmaConnectionMap_.clear();
     localJettyMap_.clear();
@@ -233,6 +233,7 @@ Status UrmaManager::Init(const HostPort &hostport)
         LOG(WARNING) << "Flag urma_connection_size is deprecated and ignored. "
                      << "JFS/JFR are now created per-connection.";
     }
+    OsXprtPipln::SetIsClientMode(clientMode_);
     RETURN_IF_NOT_OK(urmaResource_->Init(urmaDevice, eidIndex, isBondingDevice));
     RETURN_IF_NOT_OK(InitLocalUrmaInfo(hostport));
     serverStop_ = false;
@@ -557,7 +558,7 @@ Status UrmaManager::GetOrCreateLocalJetty(const std::string &key, uint32_t &jett
 }
 
 Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
-                                 urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr)
+                                 urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr, urma_jetty_t **targetJetty)
 {
     UrmaLocalSegmentMap::const_accessor accessor;
     RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, segSize, accessor));
@@ -567,20 +568,27 @@ Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const st
     remoteSenderAddr.ParseString(address);
     std::string remoteConnectionId = remoteSenderAddr.ToString();
     const std::string recvJettyKey = BuildLocalJettyKey(remoteConnectionId, JettyType::RECV);
-    uint32_t jettyId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        GetOrCreateLocalJetty(remoteConnectionId, jettyId, JettyType::RECV),
-        FormatString("[GetTargetSeg] GetOrCreateLocalJetty for %s failed", remoteConnectionId));
-    TbbJettyMap::accessor jettyAccessor;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localJettyMap_.find(jettyAccessor, recvJettyKey), K_RUNTIME_ERROR,
-                                         FormatString("[GetTargetSeg] find jetty for %s failed", remoteConnectionId));
 
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jettyAccessor->second != nullptr, K_RUNTIME_ERROR,
-                                         FormatString("[GetTargetSeg] Local Jetty is null for %s", remoteConnectionId));
+    TbbUrmaConnectionMap::const_accessor connectionAccessor;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        urmaConnectionMap_.find(connectionAccessor, remoteConnectionId) && connectionAccessor->second != nullptr,
+        K_URMA_NEED_CONNECT,
+        FormatString("[GetTargetSeg] No exchanged URMA connection for %s; cannot use exchanged recv Jetty",
+                     remoteConnectionId));
+
+    TbbJettyMap::const_accessor jettyAccessor;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        localJettyMap_.find(jettyAccessor, recvJettyKey) && jettyAccessor->second != nullptr, K_URMA_NEED_CONNECT,
+        FormatString("[GetTargetSeg] Exchanged local recv Jetty %s not found; need reconnect", recvJettyKey));
+
+    *targetJetty = jettyAccessor->second->Raw();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        *targetJetty != nullptr, K_RUNTIME_ERROR,
+        FormatString("[GetTargetSeg] Exchanged local recv Jetty raw handle is null for %s", remoteConnectionId));
     *targetJfr = jettyAccessor->second->SharedJfrRaw();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         *targetJfr != nullptr, K_RUNTIME_ERROR,
-        FormatString("[GetTargetSeg] Local Jetty shared JFR is null for %s", remoteConnectionId));
+        FormatString("[GetTargetSeg] Exchanged local recv Jetty shared JFR is null for %s", remoteConnectionId));
     return Status::OK();
 }
 
@@ -1271,7 +1279,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     Timer timer;
     while (remainSize > 0) {
         const uint64_t writeSize = std::min(remainSize, urmaResource_->GetMaxWriteSize());
-        const uint64_t key = requestId_.fetch_add(1);
+        const uint64_t key = GenerateReqId();
         const uint64_t remoteAddress = args.remoteDataAddress + writtenSize;
         const uint64_t localAddress = args.localDataAddress + writtenSize;
         PerfPoint pointWrite(PerfKey::URMA_WRITE_SINGLE);
@@ -1369,11 +1377,11 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
         args.remoteAddr = segVa + urmaInfo.seg_data_offset() + readOffset;
         args.remoteSeg = remoteSegAccessor->second->Raw();
         args.len = readSize;
-        args.serverKey = GenerateReqId();
-        args.clientKey = urmaInfo.client_req_id();
+        args.serverKey = (uint32_t)(GenerateReqId() & URMA_REQID_MASK);
+        args.clientKey = urmaInfo.pipeline_rh2d_req_id();
 
         eventKeys.emplace_back(args.serverKey);
-        return OsXprtPipln::StartPipelineSender(args);
+        return OsXprtPipln::DoPiplnStep1_StartSender(args);
     }
 
     UrmaWriteArgs writeLoopArgs;
@@ -1440,7 +1448,7 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
     uint64_t remainSize = dataSize;
     while (remainSize > 0) {
         const uint64_t readSize = std::min(remainSize, urmaResource_->GetMaxReadSize());
-        const uint64_t key = requestId_.fetch_add(1);
+        const uint64_t key = GenerateReqId();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(localSegAccessor->second != nullptr, K_RUNTIME_ERROR,
                                              "Local segment is null");
         RETURN_IF_NOT_OK(CreateEvent(key, connection, jetty, remoteAddress, readSize, UrmaEvent::OperationType::READ));
@@ -1521,7 +1529,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         totalWriteSize += singleDstWriteSize;
         urma_sg_t dstSg = { .sge = &dstSgeList[dstSgeIdx], .num_sge = 1 };
         urma_rw_wr_t rw = { .src = srcSg, .dst = dstSg, .target_hint = 0, .notify_data = 0 };
-        const uint64_t key = requestId_.fetch_add(1);
+        const uint64_t key = GenerateReqId();
         auto *targetJetty = connection->GetTargetJetty();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
                                              "Gather write got empty remote jetty.");
@@ -1688,7 +1696,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
 #ifdef BUILD_PIPLN_H2D
         // pipeline h2d flag should be set for client to init pipeline env
         FLAGS_enable_pipeline_h2d = true;
-        FLAGS_pipeline_h2d_thread_num = 0;
 #endif
         // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
     }

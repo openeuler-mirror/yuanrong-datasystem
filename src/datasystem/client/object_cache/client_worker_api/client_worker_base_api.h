@@ -71,7 +71,9 @@ protected:
                              const std::unordered_set<std::string> &nestedKeys, uint32_t ttlSecond, int existence,
                              PublishReqPb &req);
 
-    Status PreparePipelineRH2DReq(H2DParam &h2DParam, H2DChunkManager &chunkManager, GetReqPb &req);
+    Status PreparePipelineRH2DReq(PiplnRh2dParam &piplnRh2dParam,
+                                  std::shared_ptr<OsXprtPipln::PipelineRH2DQueueConsumer> &pipelineConsumer,
+                                  GetReqPb &req);
 
     Status PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req);
 

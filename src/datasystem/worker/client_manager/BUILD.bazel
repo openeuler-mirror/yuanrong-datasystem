@@ -21,6 +21,8 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:wait_post",
+        "//src/datasystem/common/util/queue:common_util_queue",
+        "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "@tbb//:tbb",
     ],
     alwayslink = True,

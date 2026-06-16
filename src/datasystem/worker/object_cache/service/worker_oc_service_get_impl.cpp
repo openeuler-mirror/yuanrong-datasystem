@@ -420,12 +420,12 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
             }
             if (objectInfo.params != nullptr) {
                 needEvictKeys.emplace_back(objectKey);
-            }
-            // submit local h2d io
-            if (remoteObjectKeys.find(readKey) == remoteObjectKeys.end()) {
-                RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
-                    request->GetH2DChunkManager(), objectKey, objectInfo.params->shmUnit->GetPointer(),
-                    objectInfo.params->metaSize, objectInfo.params->dataSize));
+                // submit local pipeline rh2d step2
+                if (remoteObjectKeys.find(readKey) == remoteObjectKeys.end()) {
+                    RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
+                        request->GetH2DChunkManager(), objectKey, objectInfo.params->shmUnit,
+                        readKey.readOffset + objectInfo.params->metaSize, objectInfo.params->dataSize));
+                }
             }
         }
         return status;
@@ -1163,7 +1163,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
             continue;
         }
 
-        // start pipeline receiver and prepare pipeline h2d tag in request
+        // start pipeline receiver and prepare pipeline h2d tag
         if (request) {
             OsXprtPipln::TriggerRemotePipelineRH2D(request->GetH2DChunkManager(), objectKV.GetObjKey(),
                                                    objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(),
@@ -1381,10 +1381,6 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
             ReadObjectKV objectKV(readKey, *entry);
             RETURN_IF_NOT_OK(KeepObjectDataInMemory(objectKV));
             RETURN_IF_NOT_OK(UpdateRequestForSuccess(objectKV, request));
-            RETURN_IF_NOT_OK(OsXprtPipln::TriggerLocalPipelineRH2D(
-                request->GetH2DChunkManager(), readKey.objectKey,
-                reinterpret_cast<char *>(entry->Get()->GetShmUnit()->GetPointer()), entry->Get()->GetMetadataSize(),
-                entry->Get()->GetDataSize()));
             entry->WUnlock();
             return Status::OK();
         }

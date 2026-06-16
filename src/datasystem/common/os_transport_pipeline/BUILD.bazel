@@ -10,11 +10,28 @@ exports_files(
 ds_cc_library(
     name = "os_transport_pipeline",
     srcs = select({
-        "//:enable_pipeline_h2d": glob(["*.cpp"]),
+        "//:enable_pipeline_h2d": [
+            "chunk_manager.cpp",
+            "cuda_rh2d_driver.cpp",
+            "mock_rh2d_driver.cpp",
+            "dlopen_util.cpp",
+            "os_transport_pipeline_api_impl.cpp",
+            "pipeline_notify_queue.cpp",
+        ],
         "//conditions:default": [],
     }),
     hdrs = select({
-        "//:enable_pipeline_h2d": glob(["*.h"]),
+        "//:enable_pipeline_h2d": [
+            "chunk_manager.h",
+            "client_manager_api.h",
+            "cuda_rh2d_driver.h",
+            "mock_rh2d_driver.h",
+            "dlopen_util.h",
+            "os_transport_pipeline_types.h",
+            "os_transport_pipeline_common_api.h",
+            "os_transport_pipeline_worker_api.h",
+            "pipeline_notify_queue.h",
+        ],
         "//conditions:default": [],
     }),
     copts = select({
@@ -27,10 +44,15 @@ ds_cc_library(
         "//src/datasystem/common/util:dlutils",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
     ] + select({
         "//:enable_pipeline_h2d": [
             "//src/datasystem/common/rdma:urma_dlopen_util",
             "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+            "//src/datasystem/common/rdma:fast_transport_base_header",
+            "//src/datasystem/common/util/gflag:common_util_gflag_header",
+            "@mlcachedirect//:os_transport_prefixed_hdrs",
+            "@local_cuda//:cuda_headers",
         ],
         "//conditions:default": [],
     }),
@@ -38,17 +60,31 @@ ds_cc_library(
 
 ds_cc_library(
     name = "os_transport_pipeline_api",
-    hdrs = glob(["*.h"], exclude = ["mock_ipc.h"]),
+    hdrs = [
+        "chunk_manager.h",
+        "client_manager_api.h",
+        "cuda_rh2d_driver.h",
+        "dlopen_util.h",
+        "os_transport_pipeline_types.h",
+        "os_transport_pipeline_common_api.h",
+        "os_transport_pipeline_worker_api.h",
+        "pipeline_notify_queue.h",
+    ],
     copts = select({
         "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
         "//conditions:default": [],
     }),
     deps = [
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:share_memory_cc_proto",
     ] + select({
         "//:enable_pipeline_h2d": [
             "//include/datasystem:headers",
+            "//src/datasystem/common/rdma:fast_transport_base_header",
+            "//src/datasystem/common/util/gflag:common_util_gflag_header",
             "//src/datasystem/protos:object_posix_cc_proto",
+            "@mlcachedirect//:os_transport_prefixed_hdrs",
+            "@local_cuda//:cuda_headers",
         ],
         "//conditions:default": [],
     }),

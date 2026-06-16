@@ -239,6 +239,16 @@ void ClientInfo::SetLockId(uint32_t lockId)
     lockId_ = lockId;
 }
 
+void ClientInfo::SetPipelineQueueId(uint32_t pipelineQueueId)
+{
+    pipelineQueueId_ = pipelineQueueId;
+}
+
+uint32_t ClientInfo::GetPipelineQueueId()
+{
+    return pipelineQueueId_;
+}
+
 Status ClientInfo::GetLockId(uint32_t &lockId) const
 {
     if (lockId_ == UINT32_MAX) {

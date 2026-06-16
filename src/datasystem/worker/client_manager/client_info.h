@@ -162,6 +162,17 @@ public:
     void GetWriterSessionIds(std::unordered_set<std::string> &sessionIds) const;
 
     /**
+     * @brief Set allocated pipeline queue id for the client
+     * @param[in] pipelineQueueId Allocated pipeline queue id
+     */
+    void SetPipelineQueueId(uint32_t pipelineQueueId);
+
+    /**
+     * @brief Get the allocated pipeline queue id for the client
+     * @return Pipeline queue id.
+     */
+    uint32_t GetPipelineQueueId();
+    /**
      * @brief Set lock id for client info.
      * @param[in] Lock id
      */
@@ -256,6 +267,7 @@ private:
     ClientKey clientId_;
     bool uniqueCount_;
     uint32_t lockId_;
+    uint32_t pipelineQueueId_{ (uint32_t)-1 };
     bool shmEnabled_;
     std::function<void()> lostHandler_ = nullptr;  // Run this handler when client lost
     Timer lastHeartbeat_;                          // Time received the last heartbeat.

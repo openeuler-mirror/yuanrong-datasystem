@@ -119,6 +119,8 @@ ds_cc_library(
         "//src/datasystem/common/util/queue",
         "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/common/util/queue:common_util_queue",
+        "//src/datasystem/protos:share_memory_cc_proto",
         "//src/datasystem/protos:utils_cc_proto",
     ],
 )

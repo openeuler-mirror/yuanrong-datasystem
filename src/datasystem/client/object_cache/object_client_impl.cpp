@@ -261,6 +261,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     ShutdownMetricsThread(!isDestruct);
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
+    ShutdownPiplnMsgQueueThread();
     INJECT_POINT("ObjClient.ShutDown");
     // Step0: Check client's status to determine whether it meets the conditions for executing shutdown.
     Status rc = clientStateManager_->ProcessShutdown(needRollbackState, isDestruct);
@@ -466,6 +467,9 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
 
     RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
+    RETURN_IF_NOT_OK(workerApi->InitPipelineRH2DQueue([this](std::shared_ptr<ShmUnitInfo> &shmUnitInfo) {
+        return mmapManager_->LookupUnitsAndMmapFd("", shmUnitInfo);
+    }));
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
@@ -563,6 +567,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat)
     LOG(INFO) << "Start to init worker client at address: " << hostPortStr;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_));
     RETURN_IF_NOT_OK(InitClientWorkerConnect(enableHeartbeat, false));
+    OsXprtPipln::SwitchToAndGetGpuId(deviceId_);
     return Status::OK();
 }
 
@@ -627,6 +632,13 @@ void ObjectClientImpl::ProcessWorkerLost()
         LOG(ERROR) << "[Reconnect] Failed to prepair for DecreaseShmRef:" << rc.ToString();
         return;
     }
+    auto rc2 = workerApi->InitPipelineRH2DQueue([this](std::shared_ptr<ShmUnitInfo> &shmUnitInfo) {
+        return mmapManager_->LookupUnitsAndMmapFd("", shmUnitInfo);
+    });
+    if (rc2.IsError()) {
+        LOG(ERROR) << "[Reconnect] Failed to prepare for pipelineRh2dQueue:" << rc2.ToString();
+        return;
+    }
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
@@ -645,6 +657,7 @@ void ObjectClientImpl::ProcessWorkerTimeout()
     }
     auto &workerApi = workerApi_[LOCAL_WORKER];
     (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
+    (void)workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
     mmapManager_->CleanInvalidMmapTable();
     // Only shm object would record reference count, and they are
     // unrecoverable after timeout until worker reconnects, so clear them directly.
@@ -2268,30 +2281,169 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     return rc;
 }
 
-#define COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(func_ret)                         \
-    do {                                                                        \
-        Status ret = func_ret;                                                  \
-        if (ret.IsError()) {                                                    \
-            asyncResource->promise.set_value({ ret, asyncResource->failList }); \
-            return future;                                                      \
-        };                                                                      \
-    } while (0)
-
-#define CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(cond, err, msg)          \
-    do {                                                                        \
-        if (!(cond)) {                                                          \
-            asyncResource->promise.set_value({ Status(err, msg), objectKeys }); \
-            LOG(ERROR) << (msg);                                                \
-            return future;                                                      \
-        }                                                                       \
-    } while (0)
-
 struct PipelineAsyncResource {
     std::future<Status> rpcFuture;
     std::promise<AsyncResult> promise;
-    H2DParam h2DParam;
-    std::vector<std::string> failList;
+    PiplnRh2dParam piplnRh2dParam;
 };
+
+#ifdef BUILD_PIPLN_H2D
+
+static inline void RecordFailedPipelineKey(const std::string &key, std::shared_ptr<H2DChunkManager> chunkManager,
+                                           std::vector<std::string> &failedKeys, const std::string &msg)
+{
+    LOG(ERROR) << key << " failed:" << msg;
+    chunkManager->MarkCancelOrDone(key, false /* isDone */);
+    failedKeys.emplace_back(key);
+}
+
+#define PROCESS_FAILED_KEY(msg) RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, msg)
+
+std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPipelineKeys(
+    std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
+    std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedKeys)
+{
+    std::vector<std::pair<std::string *, uint32_t>> needWaitKeysIds;
+    std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
+    size_t i = 0;
+    size_t j = 0;
+    size_t shmCount = static_cast<size_t>(rsp.objects().size());
+    size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
+    for (size_t index = 0; index < (size_t)rsp.objects_size(); index++) {
+        std::string &objectKey = objectKeys[index];
+        uint32_t reqId;
+        chunkManager->GetReqId(objectKey, reqId);
+
+        std::shared_ptr<Buffer> buffer = buffers[index];
+        Status status;
+        bool isShm = false;
+        bool isNoShm = false;
+        if (i < shmCount) {
+            isShm = rsp.objects(i).object_key().empty() ? index == rsp.objects(i).object_index()
+                                                        : objectKey == rsp.objects(i).object_key();
+        }
+        if (j < noShmCount) {
+            isNoShm = rsp.payload_info(j).object_key().empty() ? index == rsp.payload_info(j).object_index()
+                                                               : objectKey == rsp.payload_info(j).object_key();
+        }
+        if (isShm) {
+            const GetRspPb::ObjectInfoPb &info = rsp.objects(i);
+            i++;
+            if (info.store_fd() == -1) {
+                PROCESS_FAILED_KEY("shmem fd is -1 in in pipeline rh2d response");
+            } else if (info.has_host_info()) {
+                // Special case for Remote H2D scenario.
+                PROCESS_FAILED_KEY("server tell host_info in pipeline rh2d response, which should be a bug");
+            } else {
+                status = SetShmObjectBuffer(objectKey, info, version, buffer);
+                if (status.IsError()) {
+                    PROCESS_FAILED_KEY("SetShmObjectBuffer failed");
+                } else if (info.pipeline_done_step() != PIPLN_DONE_TWO_STEP) {
+                    PROCESS_FAILED_KEY(std::string("pipeline step at ") + std::to_string(info.pipeline_done_step()));
+                } else {
+                    needWaitKeysIds.emplace_back(std::make_pair(&objectKey, reqId));
+                }
+            }
+        } else if (isNoShm) {
+            j++;
+            const GetRspPb::PayloadInfoPb &payloadInfo = rsp.payload_info(j);
+            status = SetNonShmObjectBuffer(objectKey, payloadInfo, version, piplnRh2dParam.payloads, buffer);
+            if (status.IsError()) {
+                PROCESS_FAILED_KEY("SetShmObjectBuffer failed");
+            } else {
+                OsXprtPipln::ChunkTag tag{
+                    .chunkType = OsXprtPipln::ChunkTag::lastChunkTag,
+                    .chunkId = 0,
+                    .chunkSize = buffer->GetSize() > OsXprtPipln::ChunkTag::chunkSize2MB ? 1UL : 0UL,
+                    .reqId = reqId,
+                };
+                chunkManager->DoPiplnStep2_ChunkConsume(reqId, reinterpret_cast<uint64_t>(buffer->ImmutableData()),
+                                                        tag, buffer->GetSize());
+                chunkManager->MarkCancelOrDone(reqId, false /* isDone */);
+                needWaitKeysIds.emplace_back(&objectKey, reqId);
+            }
+        } else {
+            PROCESS_FAILED_KEY("Object key does not match with GetRspPb");
+        }
+    }
+
+    return needWaitKeysIds;
+}
+
+Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam,
+                                          GetRspPb &rsp)
+{
+    std::vector<std::string> failedKeys;
+    auto &objectKeys = piplnRh2dParam.objectKeys;
+    std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
+    uint32_t version = piplnRh2dParam.version;
+
+    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+
+    if (recvRc.IsError()) {
+        LOG(WARNING) << "PipelineRH2D failed, last error: " << recvRc.GetMsg();
+    }
+
+    if (rsp.objects_size() == 0) {
+        chunkManager->CancelAll();
+        promise.set_value({ recvRc, objectKeys });
+        return recvRc;
+    }
+
+    std::vector<std::shared_ptr<Buffer>> buffers(rsp.objects_size(), nullptr);
+    auto needWaitKeysIds = PostProcessPipelineKeys(objectKeys, rsp, piplnRh2dParam, version, buffers, failedKeys);
+    chunkManager->WaitAll();
+    for (auto keyIdPair : needWaitKeysIds) {
+        if (!chunkManager->CheckIsRequestSuccess(keyIdPair.second)) {
+            failedKeys.emplace_back(*keyIdPair.first);
+        }
+    }
+    if (recvRc.IsOk() && failedKeys.size()) {
+        recvRc = Status(K_RUNTIME_ERROR, std::to_string(failedKeys.size()) + " keys failed");
+    }
+    promise.set_value({ recvRc, failedKeys });
+    return recvRc;
+}
+
+#else
+Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam,
+                                          GetRspPb &rsp)
+{
+    (void)promise;
+    (void)piplnRh2dParam;
+    (void)rsp;
+    return Status::OK();
+}
+#endif
+
+Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys,
+                                               const std::vector<std::pair<void *, size_t>> &devShmChunk,
+                                               std::shared_ptr<IClientWorkerApi> &workerApi, int64_t subTimeoutMs)
+{
+    // check args
+    CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devShmChunk.size(), K_INVALID,
+                             "objectKeys size is not equal to devShmChunk size");
+    CHECK_FAIL_RETURN_STATUS(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
+                             FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
+
+    // client should be at same site with worker by shmem
+    workerApi = workerApi_[LOCAL_WORKER];
+    CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_INVALID, "no local worker api");
+    workerApi->IncreaseInvokeCount();
+    CHECK_FAIL_RETURN_STATUS(workerApi->IsShmEnable(), K_NOT_SUPPORTED,
+                             "not support pipeline rh2d: shared memory is not enabled");
+    CHECK_FAIL_RETURN_STATUS(workerApi->WorkerSupportPiplnRH2D(), K_NOT_SUPPORTED, "worker don't enable pipeline rh2d");
+
+    CHECK_FAIL_RETURN_STATUS(
+        Validator::IsInNonNegativeInt32(subTimeoutMs), K_INVALID,
+        FormatString("subTimeoutMs %lld is out of range, which should be between[%d, %d]", subTimeoutMs, 0, INT32_MAX));
+
+    // check connection
+    RETURN_IF_NOT_OK(IsClientReady());
+    RETURN_IF_NOT_OK(CheckConnection());
+    return Status::OK();
+}
 
 std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
@@ -2303,85 +2455,54 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
 #ifdef BUILD_PIPLN_H2D
     PerfPoint perfPoint(PerfKey::CLIENT_GET_WITH_OS_XPRT_PIPLINE);
 
-    // check args
-    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(objectKeys.size() == devShmChunk.size(), K_INVALID,
-                                                   "objectKeys size is not equal to devShmChunk size");
-    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(
-        Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
-        FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
-    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckValidObjectKeyVector(objectKeys));
-
-    // client should be at same site with worker by shmem
-    std::shared_ptr<IClientWorkerApi> workerApi = workerApi_[LOCAL_WORKER];
-    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(workerApi != nullptr, K_INVALID, "no local worker api");
-    workerApi->IncreaseInvokeCount();
-    CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR(workerApi->IsShmEnable(), K_NOT_SUPPORTED,
-                                                   "not support pipeline rh2d: shared memory is not enabled");
-
-    uint32_t devId = -1;
-    try {
-        devId = static_cast<uint32_t>(std::stoi(deviceId_));
-    } catch (...) {
-        COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(
-            Status(K_NOT_SUPPORTED, "client is not initialized with pipeline device id"));
-    }
     // check status
-    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(IsClientReady());
-    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(CheckConnection());
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    Status rc = CheckPipelineRH2DArgs(objectKeys, devShmChunk, workerApi, subTimeoutMs);
+    if (rc.IsError()) {
+        if (workerApi) {
+            workerApi->DecreaseInvokeCount();
+        }
+        asyncResource->promise.set_value({ rc, objectKeys });
+        LOG(ERROR) << rc.GetMsg();
+        return future;
+    }
 
     // copy params
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
     for (size_t i = 0; i < objectKeys.size(); i++) {
-        devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, devId, devShmChunk[i].first,
-                                                       devShmChunk[i].second });
+        devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, (uint32_t)-1,
+                                                       devShmChunk[i].first, devShmChunk[i].second });
     }
-    asyncResource->h2DParam = H2DParam{
-        .subTimeoutMs = subTimeoutMs,
-        .objectKeys = objectKeys,
-        .devInfos = std::move(devInfos),
-    };
+    asyncResource->piplnRh2dParam =
+        PiplnRh2dParam{ .subTimeoutMs = subTimeoutMs,
+                        .objectKeys = objectKeys,
+                        .devInfos = std::move(devInfos),
+                        .chunkManager = std::make_shared<H2DChunkManager>(true /* isClient */),
+                        .version = 0 };
 
     auto traceContext = Trace::Instance().GetContext();
     asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceContext, workerApi]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
         std::unique_ptr<Raii> raii = std::make_unique<Raii>([workerApi]() { workerApi->DecreaseInvokeCount(); });
+        datasystem::reqTimeoutDuration.InitWithPositiveTime(asyncResource->piplnRh2dParam.subTimeoutMs);
 
-        // do H2D
+        // do RH2D
         GetRspPb getRsp;
-        Status ret = workerApi->PipelineRH2D(asyncResource->h2DParam, getRsp);
+        Status ret = workerApi->PipelineRH2D(asyncResource->piplnRh2dParam, getRsp);
         if (ret.IsError()) {
-            asyncResource->promise.set_value({ ret, asyncResource->h2DParam.objectKeys });
+            asyncResource->promise.set_value({ ret, asyncResource->piplnRh2dParam.objectKeys });
             return ret;
         }
-
-        // check result
-        for (int i = 0; i < getRsp.objects_size(); i++) {
-            asyncResource->failList.emplace_back(getRsp.objects(i).object_key());
-        }
-
-        Status recvRc(static_cast<StatusCode>(getRsp.last_rc().error_code()), getRsp.last_rc().error_msg());
-        if (recvRc.IsError()) {
-            LOG(WARNING) << "request to worker may be failed, status:" << recvRc.ToString()
-                         << " failed keys:" << VectorToString(asyncResource->failList);
-        } else if (!asyncResource->failList.empty()) {
-            LOG(WARNING) << "Not all H2D sucess, failed keys:" << VectorToString(asyncResource->failList);
-        }
-        asyncResource->promise.set_value({ recvRc, asyncResource->failList });
-        return recvRc;
+        return PostPipelineRH2D(asyncResource->promise, asyncResource->piplnRh2dParam, getRsp);
     });
-
     perfPoint.Record();
 #else
-    (void)objectKeys;
     (void)devShmChunk;
     (void)subTimeoutMs;
-    COMPLETE_FUTURE_WHEN_ERROR_AND_RETURN(Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D"));
+    asyncResource->promise.set_value({ Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D"), objectKeys });
 #endif
     return future;
 }
-
-#undef COMPLETE_FUTURE_WHEN_ERROR
-#undef CONDITIONAL_RETURN_FUTURE_AND_PRINT_WHEN_ERROR
 
 Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys, std::vector<std::string> &vals,
                                       int64_t subTimeoutMs, std::vector<Optional<Buffer>> &buffers, size_t &dataSize)
@@ -4108,6 +4229,16 @@ void ObjectClientImpl::ShutdownShmRefReconcileThread()
     shmRefReconcileExitPost_.Set();
     shmRefReconcileThread_->join();
     shmRefReconcileThread_.reset();
+}
+
+void ObjectClientImpl::ShutdownPiplnMsgQueueThread()
+{
+    for (size_t i = 0; i < workerApi_.size(); i++) {
+        if (workerApi_[i]) {
+            // close pipeline message consuming server before disconnect
+            (void)workerApi_[i]->CleanUpForPipelineRH2DQueueAfterWorkerLost();
+        }
+    }
 }
 
 void ObjectClientImpl::ShmRefReconcileThreadFunc()

@@ -257,10 +257,8 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys,
                          std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs)
 {
     PerfPoint point(PerfKey::KV_CLIENT_MGET_H2D);
-    LOG(ERROR) << "RH2D:MGetH2D start";
     std::shared_future<AsyncResult> future = AsyncMGetH2D(keys, devShmChunk, subTimeoutMs);
     auto result = future.get();
-    LOG(ERROR) << "RH2D:MGetH2D end";
     outFailedKeys = std::move(result.failedList);
     return result.status;
 }

@@ -165,42 +165,11 @@ Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &object
     RETURN_STATUS(static_cast<StatusCode>(resp.error().error_code()), resp.error().error_msg());
 }
 
-Status ClientWorkerLocalApi::PipelineRH2D(H2DParam &h2DParam, GetRspPb &rsp)
+Status ClientWorkerLocalApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp)
 {
-#ifdef BUILD_PIPLN_H2D
-    reqTimeoutDuration.Init(connectTimeoutMs_);
-    GetReqPb req;
-
-    H2DChunkManager chunkManager{ true /* isClient */ };
-    RETURN_IF_NOT_OK(PreparePipelineRH2DReq(h2DParam, chunkManager, req));
-
-    // send and wait
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_PIPELINE_H2D);
-    std::promise<std::pair<GetRspPb, Status>> promise;
-    auto future = promise.get_future();
-    std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi =
-        std::make_shared<LocalServerUnaryWriterReader<GetRspPb, GetReqPb>>(req, std::move(promise));
-    RETURN_IF_NOT_OK(api_->WorkerOCGet(workerOCService_, serverApi));
-    std::pair<GetRspPb, Status> result;
-    if (future.wait_for(std::chrono::milliseconds(connectTimeoutMs_)) == std::future_status::ready) {
-        try {
-            result = future.get();
-            rsp = std::move(result.first);
-        } catch (const std::exception &e) {
-            result.second = { K_RUNTIME_ERROR, FormatString("Exception when calling future.get(): %s ", e.what()) };
-        }
-    } else {
-        return Status(K_RUNTIME_ERROR, "Pipeline H2D failed");
-    }
-    perfPoint.Record();
-
-    RETURN_IF_NOT_OK(result.second);
-    return Status::OK();
-#else
-    (void)h2DParam;
+    (void)piplnRh2dParam;
     (void)rsp;
-    return Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D");
-#endif
+    return Status(K_NOT_SUPPORTED, "not support local pipeline rh2d now");
 }
 
 Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, GetRspPb &rsp,
@@ -660,9 +629,24 @@ Status ClientWorkerLocalApi::PrepairForDecreaseShmRef(
     return Status::OK();
 }
 
+Status ClientWorkerLocalApi::InitPipelineRH2DQueue(ShmConvertHookFunc hook)
+{
+    (void)hook;
+    return Status::OK();
+}
+
 Status ClientWorkerLocalApi::CleanUpForDecreaseShmRefAfterWorkerLost()
 {
     return Status::OK();
+}
+
+void ClientWorkerLocalApi::CleanUpForPipelineRH2DQueueAfterWorkerLost()
+{
+}
+
+bool ClientWorkerLocalApi::WorkerSupportPiplnRH2D()
+{
+    return false;
 }
 
 Status ClientWorkerLocalApi::DecreaseShmRef(const ShmKey &shmId, const std::function<Status()> &connectCheck,

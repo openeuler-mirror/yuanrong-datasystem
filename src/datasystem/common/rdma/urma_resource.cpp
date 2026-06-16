@@ -578,8 +578,8 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     }
 
     constexpr uint32_t threadCount = 1;
-    deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJetty");
-    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw()));
+    deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
+    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE));
     return Status::OK();
 }
 
@@ -657,7 +657,7 @@ uint64_t UrmaResource::GetMaxWriteSize() const
 
 void UrmaResource::Clear()
 {
-    OsXprtPipln::UnInitOsPiplnH2DEnv();
+    OsXprtPipln::UnInitOsPiplnRH2DEnv();
 
     {
         std::lock_guard<std::mutex> lock(jettyRegistryMutex_);

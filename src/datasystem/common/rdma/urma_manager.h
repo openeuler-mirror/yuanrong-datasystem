@@ -414,11 +414,12 @@ public:
      * @param[in] segSize segment size.
      * @param[in] address remote sender address.
      * @param[out] targetSeg local segment.
-     * @param[out] targetJfr local jfr for remote sender.
+     * @param[out] targetJfr local shared jfr for compatibility.
+     * @param[out] targetJetty local recv jetty for remote sender.
      * @return Status.
      */
     Status GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
-                        urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr);
+                        urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr, urma_jetty_t **targetJetty);
 
     /**
      * @return urma request id, start from 0.

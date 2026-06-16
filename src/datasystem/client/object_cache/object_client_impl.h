@@ -1388,6 +1388,7 @@ private:
     void ShutdownPerfThread();
     void StartMetricsThread();
     void ShutdownMetricsThread(bool dumpSummary);
+    void ShutdownPiplnMsgQueueThread();
     /**
      * @brief Memory copy in parallel or serial mode.
      * @param[in] isParallel Enable parallel or not.
@@ -1443,6 +1444,44 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status ParseEmbeddedConfig(const EmbeddedConfig &config);
+
+    /**
+     * @brief check args
+     *
+     * @param[in] objectKeys  The vector of the object key.
+     * @param[in] devShmChunk The vector of target cuda device share memory position.
+     * @param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer number
+     * required. 0 means no waiting time allowed.
+     * @param[out] workerApi  The worker that handles get request.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys,
+                                 const std::vector<std::pair<void *, size_t>> &devShmChunk,
+                                 std::shared_ptr<IClientWorkerApi> &workerApi, int64_t subTimeoutMs);
+
+    /**
+     * @brief construct share memory buffer and find need wait keys
+     *
+     * @param objectKeys The vector of the object key.
+     * @param rsp Get response
+     * @param piplnRh2dParam Use chunkManager and payload member
+     * @param version Key value version
+     * @param buffers Value buffers
+     * @param failedKeys Failed to fetch value keys
+     * @return std::vector<std::pair<std::string *, uint32_t>> need to wait keys
+     */
+    std::vector<std::pair<std::string *, uint32_t>> PostProcessPipelineKeys(
+        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
+        std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedKeys);
+    /**
+     * @brief post process rh2d response
+     *
+     * @param promise Pipeline rh2d promise
+     * @param piplnRh2dParam Pipeline rh2d params
+     * @param rsp Get response
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp);
 
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;

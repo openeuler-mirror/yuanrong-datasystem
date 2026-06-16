@@ -236,9 +236,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
         return Status::OK();
     }
 
-    // empty requestIds means failed fastTransport or tcp mode
+    // empty requestIds means failed fastTransport or tcp mode.
+    // Note: Pipeline RH2D sub-requests are completed by MLCacheDirect pipeline sender and must not be waited by
+    // normal fast-transport event logic.
     std::vector<uint64_t> requestIds;
-    requestIds = std::move(eventKeys);
+    if (!(subReq.has_urma_info() && OsXprtPipln::IsPiplnH2DRequest(subReq.urma_info()))) {
+        requestIds = std::move(eventKeys);
+    }
 
     parallelRes[paraIndex].kps.emplace_back(subIndex, std::make_pair(std::move(requestIds), std::move(subPayload)));
     parallelRes[paraIndex].fallbackStatuses.emplace_back(fallbackStatus);
@@ -533,6 +537,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     LOG_IF(WARNING, entry->GetCreateTime() != version) << FormatString(
         "[ObjectKey %s] Version: %ld, require version: %ld", objectKey, entry->GetCreateTime(), version);
     const bool isUrmaFastTransport = IsUrmaEnabled() && req.has_urma_info();
+    const bool isPipelineH2DRequest = isUrmaFastTransport && OsXprtPipln::IsPiplnH2DRequest(req.urma_info());
     bool isFastTransportEnabled = isUrmaFastTransport || (IsUcpEnabled() && req.has_ucp_info());
     if (isFastTransportEnabled && entry->GetDataSize() != expectedDataSize) {
         // Return error with changed size, so the request can be retried.
@@ -573,8 +578,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         GetSegmentInfoFromShmUnit(shmUnit, localObjectAddress, localSegAddress, localSegSize);
         Status fastTransportStatus = Status::OK();
         std::string fastTransportName;
-        auto markFastTransferResult = [&rsp](const Status &status) {
+        auto markFastTransferResult = [&rsp, isPipelineH2DRequest](const Status &status) {
             if (status.IsError()) {
+                if (isPipelineH2DRequest) {
+                    return status;
+                }
                 CHECK_FAIL_RETURN_STATUS(FLAGS_enable_transport_fallback, status.GetCode(), status.GetMsg());
                 return Status::OK();
             }
@@ -614,8 +622,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
             }
         }
 
-        // For compatibility, only trigger RH2D if this client request both supports and enables RH2D.
-        if (IsRemoteH2DEnabled() && !req.comm_id().empty()) {
+        // For compatibility, only trigger normal RemoteH2D if this client request both supports and enables RH2D.
+        if (!isPipelineH2DRequest && IsRemoteH2DEnabled() && !req.comm_id().empty()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 EstablishConnAndFillSeg(req.comm_id(), localSegAddress, localSegSize, shmUnit, entry->GetMetadataSize(),
                                         rsp, batchRootInfo, batchRh2dContext),
@@ -624,7 +632,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
         }
 
         // We need to extend the ShmGuard lifecycle if we perform parallel urma_write/ucp_put_nbx.
-        if ((!IsFastTransportEnabled() || !blocking) && !(IsRemoteH2DEnabled() && !req.comm_id().empty())) {
+        // Pipeline H2D is completed by MLCacheDirect send/recv and must not prepare normal TCP fallback payload.
+        const bool skipTcpPayload = isPipelineH2DRequest || (IsRemoteH2DEnabled() && !req.comm_id().empty());
+        if ((!IsFastTransportEnabled() || !blocking) && !skipTcpPayload) {
             bool canPrepareFallbackPayload = true;
             if (FLAGS_enable_transport_fallback && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr))
                 && isUrmaFastTransport) {
@@ -805,17 +815,6 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
             (void)GetObjectRemoteBatchWrite(parallelSize - 1, *subReq, rsp, parallelRes, nullptr, &batchRh2dContext);
         }
         loopPoint.Record();
-    }
-
-    // pipeline h2d don't need wait and retry, just fill in response
-    if (OsXprtPipln::IsPiplnH2DRequest(req)) {
-        for (auto &loc : parallelRes) {
-            for (auto &resp : loc.respPbs) {
-                rsp.add_responses()->Swap(&resp);
-            }
-        }
-        // no try again
-        return Status::OK();
     }
 
     return MergeParallelBatchGetResult(req, parallelRes, rsp, payload);

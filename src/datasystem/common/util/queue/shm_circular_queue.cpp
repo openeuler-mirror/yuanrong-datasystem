@@ -113,6 +113,9 @@ Status ShmCircularQueue::WaitForQueueFull(const timespec &timeoutSec)
 
 void ShmCircularQueue::Clear()
 {
+    *queueSize_ = 0;
+    *queueHead_ = 0;
+    destroyFlag_ = false;
     head_ = 0;
     len_ = 0;
 }

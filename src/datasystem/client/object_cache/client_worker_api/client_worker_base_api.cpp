@@ -111,37 +111,35 @@ Status ClientWorkerBaseApi::PreparePublishReq(const std::shared_ptr<ObjectBuffer
 
 #ifdef USE_URMA
 
-Status ClientWorkerBaseApi::PreparePipelineRH2DReq(H2DParam &h2DParam, H2DChunkManager &chunkManager, GetReqPb &req)
+Status ClientWorkerBaseApi::PreparePipelineRH2DReq(
+    PiplnRh2dParam &piplnRh2dParam, std::shared_ptr<OsXprtPipln::PipelineRH2DQueueConsumer> &pipelineConsumer,
+    GetReqPb &req)
 {
 #ifdef BUILD_PIPLN_H2D
     // adapt to get request
-    auto &objectKeys = h2DParam.objectKeys;
-    auto &devInfos = h2DParam.devInfos;
+    auto &objectKeys = piplnRh2dParam.objectKeys;
+    auto &devInfos = piplnRh2dParam.devInfos;
     int size = static_cast<int>(objectKeys.size());
     req.mutable_object_keys()->Reserve(size);
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
-    req.mutable_h2d_infos()->Reserve(size);
+    req.mutable_pipeline_rh2d_reqids()->Reserve(size);
+    std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
     for (size_t i = 0; i < objectKeys.size(); i++) {
-        uint32_t reqId = chunkManager.GenerateReqId();
-        RETURN_IF_NOT_OK(chunkManager.AddKey(objectKeys[i], reqId, devInfos[i], ""));
-        const auto reqInfo = chunkManager.GetReqInfo(reqId);
-        if (reqInfo == nullptr) {
-            return Status(K_INVALID,
-                          "should not happen: reqId " + std::to_string(reqId) + " has no reqInfo in chunkManager");
-        }
-        auto info = req.add_h2d_infos();
-        info->set_target_device_handle(reqInfo->driver->targetHandle);
-        info->set_target_size(reqInfo->driver->targetSize);
+        uint32_t reqId = chunkManager->GenerateReqId();
+        RETURN_IF_NOT_OK(chunkManager->AddKey(objectKeys[i], reqId, devInfos[i]));
+        req.add_pipeline_rh2d_reqids(reqId);
     }
+    chunkManager->RegisterPipelineConsumer(pipelineConsumer);
     req.set_no_query_l2cache(false);  // force access l2 cache
-    req.set_sub_timeout(ClientGetRequestTimeout(h2DParam.subTimeoutMs));
+    req.set_sub_timeout(ClientGetRequestTimeout(piplnRh2dParam.subTimeoutMs));
     req.set_client_id(clientId_);
-    req.set_return_object_index(false);
+    req.set_return_object_index(true);
+    req.set_request_timeout(std::max<int64_t>(piplnRh2dParam.subTimeoutMs, requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when H2D.");
     return Status::OK();
 #else
-    (void)h2DParam;
-    (void)chunkManager;
+    (void)piplnRh2dParam;
+    (void)pipelineConsumer;
     (void)req;
     return Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D");
 #endif

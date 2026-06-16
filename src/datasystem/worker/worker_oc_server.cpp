@@ -294,8 +294,7 @@ void WorkerOCServer::InitSlotWorkerNamespace()
 Status WorkerOCServer::InitSlotRecovery()
 {
     RETURN_OK_IF_TRUE(!IsWorkerScopedSlotStoreEnabled());
-    slotRecoveryOrchestrator_ =
-        std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_distributed_disk_path);
+    slotRecoveryOrchestrator_ = std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_distributed_disk_path);
     RETURN_IF_NOT_OK(slotRecoveryOrchestrator_->Init());
     return slotRecoveryOrchestrator_->RepairLocalSlots();
 }
@@ -1698,8 +1697,8 @@ Status WorkerOCServer::PreShutDown()
                 waitFlag = checkAsyncTasksDone_;
             }
             auto traceId = Trace::Instance().GetTraceID();
-            if (objCacheClientWorkerSvc_ != nullptr && scaleIn && !checkAsyncTasksDone_ &&
-                !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
+            if (objCacheClientWorkerSvc_ != nullptr && scaleIn && !checkAsyncTasksDone_
+                && !objCacheClientWorkerSvc_->AsyncTaskHealth()) {
                 auto traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid() + "-migrate-data");
                 LOG(INFO) << "[Graceful exit] Async L2 queue need to migrate data to another node";
                 auto objKeys = objCacheClientWorkerSvc_->StopAndGetAllUnfinishedObjects();
@@ -1819,10 +1818,11 @@ void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
 
 Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                                 bool supportMultiShmRefCount, std::string deviceId, uint32_t &lockId)
+                                 bool supportMultiShmRefCount, std::string deviceId, uint32_t &lockId,
+                                 uint32_t *pipelineQueueId)
 {
     RETURN_IF_NOT_OK(ClientManager::Instance().AddClient(clientId, shmEnabled, socketFd, tenantId, enableCrossNode,
-                                                         podName, std::move(deviceId), lockId));
+                                                         podName, std::move(deviceId), lockId, pipelineQueueId));
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }

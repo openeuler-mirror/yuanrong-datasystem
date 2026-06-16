@@ -1385,6 +1385,7 @@ Status WorkerOCServiceImpl::InitShmCircularQueue(std::shared_ptr<ShmCircularQueu
     decreaseRPCQ = std::make_shared<ShmCircularQueue>(defaultMeta.capacity, queueSize, shmUnit);
     circularQueueManager_.emplace_back(decreaseRPCQ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(decreaseRPCQ->Init(), "Failed to init the shared memory queue");
+    decreaseRPCQ->Clear();
     RETURN_IF_NOT_OK(decreaseRPCQ->SetGetDataHandler(
         std::bind(&WorkerOCServiceImpl::DecreaseHandlerForShmQueue, this, std::placeholders::_1)));
     return Status::OK();
