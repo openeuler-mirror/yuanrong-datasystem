@@ -331,6 +331,7 @@ ds_cc_library(
     name = "worker_main",
     srcs = [
         "worker_main.cpp",
+        "worker_sched_runtime_linux.cpp",
     ],
     deps = [
         ":add_miss_libs_fixme",
