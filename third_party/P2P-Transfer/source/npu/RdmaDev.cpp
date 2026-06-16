@@ -27,22 +27,23 @@ Status RdmaDev::GetInstance(uint32_t deviceId, std::shared_ptr<RdmaDev> &outDev)
 {
     std::lock_guard<std::mutex> lock(instanceMutex);
 
-    if (deviceId >= MAX_LOCAL_DEVICES) {
-        return Status::Error(ErrorCode::OUT_OF_RANGE, "DeviceId " + std::to_string(deviceId) + " out of range.");
+    std::shared_ptr<RdmaAgent> agent;
+    CHECK_STATUS(RdmaAgent::GetInstance(deviceId, agent));
+    const uint32_t phyId = agent->getPhyId();
+
+    if (phyId >= MAX_LOCAL_DEVICES) {
+        return Status::Error(ErrorCode::OUT_OF_RANGE, "PhyId " + std::to_string(phyId) + " out of range.");
     }
 
-    if (!instances[deviceId]) {
-        std::shared_ptr<RdmaAgent> agent;
-        CHECK_STATUS(RdmaAgent::GetInstance(deviceId, agent));
-
+    if (!instances[phyId]) {
         union hccp_ip_addr ipv4Addr;
         CHECK_STATUS(agent->getDeviceIpv4(&ipv4Addr));
 
-        instances[deviceId] = std::make_shared<RdmaDev>(deviceId, ipv4Addr);
-        CHECK_STATUS(instances[deviceId]->init());
+        instances[phyId] = std::make_shared<RdmaDev>(phyId, ipv4Addr);
+        CHECK_STATUS(instances[phyId]->init());
     }
 
-    outDev = instances[deviceId];
+    outDev = instances[phyId];
     return Status::Success();
 }
 

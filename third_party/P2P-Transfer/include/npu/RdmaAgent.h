@@ -52,6 +52,7 @@ public:
 
     Status init();
     Status getDeviceIpv4(union hccp_ip_addr *addr);
+    uint32_t getPhyId() const;
 
 private:
     RdmaAgentStatus status;

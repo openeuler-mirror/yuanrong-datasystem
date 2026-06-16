@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "tools/env.h"
+#include <cstdlib>
+#include <sstream>
+#include <string>
 
 // Extract the start and endport from a string of the format startPort-endPort
 bool ParsePortRange(const std::string &rangeStr, uint16_t &startPort, uint16_t &endPort)
@@ -88,4 +91,34 @@ Status GetRocePortRange(unsigned int &startPort, unsigned int &endPort)
     endPort = ep;
 
     return Status::Success();
+}
+
+bool TryMapVisibleToLogicDeviceId(uint32_t visibleOrPhyDevId, uint32_t &logicDeviceId)
+{
+    const char *visibleEnv = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
+    if (visibleEnv == nullptr || visibleEnv[0] == '\0') {
+        return false;
+    }
+
+    std::stringstream ss(visibleEnv);
+    std::string token;
+    uint32_t index = 0;
+    while (std::getline(ss, token, ',')) {
+        const size_t begin = token.find_first_not_of(" \t");
+        if (begin == std::string::npos) {
+            ++index;
+            continue;
+        }
+        const size_t endPos = token.find_last_not_of(" \t");
+        token = token.substr(begin, endPos - begin + 1);
+
+        char *end = nullptr;
+        const unsigned long value = std::strtoul(token.c_str(), &end, 10);
+        if (end != token.c_str() && end != nullptr && *end == '\0' && value == visibleOrPhyDevId) {
+            logicDeviceId = index;
+            return true;
+        }
+        ++index;
+    }
+    return false;
 }

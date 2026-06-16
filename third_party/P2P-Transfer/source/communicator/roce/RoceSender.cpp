@@ -17,7 +17,6 @@
 #include "tools/npu-error.h"
 #include "tools/tools.h"
 #include "securec.h"
-#include "runtime/dev.h"
 #include <acl/acl.h>
 #include "npu/P2PStream.h"
 
@@ -36,13 +35,10 @@ RoceSender::RoceSender(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, u
 
 Status RoceSender::Initialize(TCPObjectClient *client, TCPObjectServer *server)
 {
-    int32_t visibleDevId = 0;
-    uint32_t phyId = 0;
-
-    ACL_CHECK_STATUS(rtGetVisibleDeviceIdByLogicDeviceId(sendDeviceId, &visibleDevId));
-    ACL_CHECK_STATUS(rtGetDevicePhyIdByIndex(sendDeviceId, &phyId));
-
-    CHECK_STATUS(RdmaDev::GetInstance(phyId, rdmaDev));
+    std::shared_ptr<RdmaAgent> agent;
+    CHECK_STATUS(RdmaAgent::GetInstance(sendDeviceId, agent));
+    const uint32_t phyId = agent->getPhyId();
+    CHECK_STATUS(RdmaDev::GetInstance(sendDeviceId, rdmaDev));
     union hccp_ip_addr ipv4Addr;
     CHECK_STATUS(rdmaDev->getIpv4(&ipv4Addr));
 

@@ -118,7 +118,8 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     Status status = p2pComm->EstablishConnection(args, commManager.GetBufferPool(), options->heartbeatCallback);
     if (!status.IsSuccess()) {
         commManager.AddFailedIdentifier(identifier);
-        std::cerr << "[P2P] " << status.ToString() << std::endl;
+        std::cerr << "[P2P] P2PCommInitRootInfo failed: deviceId=" << deviceId << ", " << status.ToString()
+                  << std::endl;
         return HCCL_E_INTERNAL;
     }
 

@@ -17,7 +17,6 @@
 #include "tools/npu-error.h"
 #include "tools/tools.h"
 #include "securec.h"
-#include "runtime/dev.h"
 #include "tools/env.h"
 
 RoceReceiver::RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
@@ -38,8 +37,6 @@ RoceReceiver::RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeByte
 
 Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server)
 {
-    int32_t visibleDevId = 0;
-    uint32_t phyId = 0;
     uint32_t listenPortRangeStart = 0;
     uint32_t listenPortRangeEnd = 0;
     CHECK_STATUS(GetRocePortRange(listenPortRangeStart, listenPortRangeEnd));
@@ -48,10 +45,10 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
     tag = std::string(tagLength, ' ');
     FillRandom(tag);
 
-    ACL_CHECK_STATUS(rtGetVisibleDeviceIdByLogicDeviceId(recvDeviceId, &visibleDevId));
-    ACL_CHECK_STATUS(rtGetDevicePhyIdByIndex(recvDeviceId, &phyId));
-
-    CHECK_STATUS(RdmaDev::GetInstance(phyId, rdmaDev));
+    std::shared_ptr<RdmaAgent> agent;
+    CHECK_STATUS(RdmaAgent::GetInstance(recvDeviceId, agent));
+    const uint32_t phyId = agent->getPhyId();
+    CHECK_STATUS(RdmaDev::GetInstance(recvDeviceId, rdmaDev));
     union hccp_ip_addr ipv4Addr;
     CHECK_STATUS(rdmaDev->getIpv4(&ipv4Addr));
 

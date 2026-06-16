@@ -30,4 +30,7 @@ Status GetPortRange(uint16_t &startPort, uint16_t &endPort);
 
 Status GetRocePortRange(unsigned int &startPort, unsigned int &endPort);
 
+// Map a device id listed in ASCEND_RT_VISIBLE_DEVICES to its runtime logic index.
+bool TryMapVisibleToLogicDeviceId(uint32_t visibleOrPhyDevId, uint32_t &logicDeviceId);
+
 #endif  // P2P_ENV_H
