@@ -467,6 +467,7 @@ int DSAclrtUnSubscribeReport(uint64_t threadId, aclrtStream stream);
 int DSP2PRegisterHostMem(void *hostBuf, uint64_t size, P2pSegmentInfo *segmentInfo, P2pSegmentPermissions permissions);
 int DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
 int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t batchSize, P2PComm comm, aclrtStream stream);
+int DSP2PScatterBatchFromRemoteHostMemDone(P2PComm comm);
 
 #ifdef __cplusplus
 };

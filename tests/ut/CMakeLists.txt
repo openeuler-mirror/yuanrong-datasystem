@@ -153,10 +153,10 @@ target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
 target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 else()
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 endif()
 
@@ -196,7 +196,7 @@ target_link_libraries(flags_ut
         ${SECUREC_LIBRARY}
         GTest::gtest
         GTest::gmock)
-add_datasystem_test(flags_ut)
+add_datasystem_test(flags_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(util_flags_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_test.cpp"
@@ -209,7 +209,7 @@ target_link_libraries(util_flags_ut PRIVATE
         common_util_gflag
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
-add_datasystem_test(util_flags_ut)
+add_datasystem_test(util_flags_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(operation_logger_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/log/operation_logger_test.cpp")
@@ -221,7 +221,7 @@ target_link_libraries(operation_logger_ut
         ${SECUREC_LIBRARY}
         GTest::gtest
         GTest::gmock)
-add_datasystem_test(operation_logger_ut)
+add_datasystem_test(operation_logger_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(dynamic_config_updater_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/util/dynamic_config_updater_test.cpp"
@@ -236,7 +236,7 @@ target_link_libraries(dynamic_config_updater_ut
         ${SECUREC_LIBRARY}
         GTest::gtest
         GTest::gmock)
-add_datasystem_test(dynamic_config_updater_ut)
+add_datasystem_test(dynamic_config_updater_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_monitor_gate_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_monitor_gate_test.cpp"
@@ -251,7 +251,7 @@ target_link_libraries(flags_monitor_gate_ut
         ${SECUREC_LIBRARY}
         GTest::gtest
         GTest::gmock)
-add_datasystem_test(flags_monitor_gate_ut)
+add_datasystem_test(flags_monitor_gate_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(flags_config_monitor_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_config_monitor_test.cpp"
@@ -264,7 +264,7 @@ target_link_libraries(flags_config_monitor_ut PRIVATE
         common_util_gflag
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
-add_datasystem_test(flags_config_monitor_ut)
+add_datasystem_test(flags_config_monitor_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 if (BUILD_HETERO AND BUILD_HETERO_NPU)
     add_subdirectory(device/ascend)

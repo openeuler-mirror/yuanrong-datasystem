@@ -248,12 +248,12 @@ public:
     }
 
 private:
+    PingpongBufferPool bufferPool{ MAX_NUM_PINGPONG_BUFF };
     // Port -> Communicator
     std::unordered_map<std::string, std::shared_ptr<P2PCommunicator>> unboundRootComms;
     std::mutex unboundRootCommsMut;
     std::unordered_map<P2PComm, std::shared_ptr<P2PCommunicator>> comms;
     std::mutex commsMut;
-    PingpongBufferPool bufferPool{ MAX_NUM_PINGPONG_BUFF };
     std::unordered_set<std::string> failedIdentifiers;
     std::mutex failedIdentifiersMut;
 };

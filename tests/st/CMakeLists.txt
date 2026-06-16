@@ -157,7 +157,7 @@ add_custom_command(
         COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_BINARY_DIR}/tests/st/curve_keygen
         ${CMAKE_INSTALL_PREFIX}/tools/curve_keygen)
-set(CURVE_COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gflags_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
+set(CURVE_COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gflags_LIB_PATH}:${OpenSSL_LIB_PATH}:${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
         ${CMAKE_BINARY_DIR}/tests/st/curve_keygen)
 add_custom_command(
         TARGET ds_st POST_BUILD

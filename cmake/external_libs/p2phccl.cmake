@@ -1,7 +1,22 @@
 set(p2p-transfer_VERSION 0.1.0)
 # Don't need to use DS_PACKAGE environments because it's not opensource third-party library.
-set(p2p-transfer_URL "file://${CMAKE_SOURCE_DIR}/third_party/P2P-Transfer")
+set(p2p-transfer_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/P2P-Transfer")
+set(p2p-transfer_URL "file://${p2p-transfer_SOURCE_DIR}")
 set(p2p-transfer_SHA256 "8054c2972aa4313d34236e8f128e8bae8807e690f70730cc10d24c390172aeda")
+
+file(GLOB_RECURSE p2p-transfer_SOURCE_FILES CONFIGURE_DEPENDS LIST_DIRECTORIES false
+  "${p2p-transfer_SOURCE_DIR}/*")
+list(SORT p2p-transfer_SOURCE_FILES)
+set(p2p-transfer_SOURCE_HASH_INPUT "")
+foreach(_P2P_TRANSFER_SOURCE_FILE ${p2p-transfer_SOURCE_FILES})
+  file(RELATIVE_PATH _P2P_TRANSFER_SOURCE_REL_PATH
+    "${p2p-transfer_SOURCE_DIR}" "${_P2P_TRANSFER_SOURCE_FILE}")
+  file(SHA256 "${_P2P_TRANSFER_SOURCE_FILE}" _P2P_TRANSFER_SOURCE_FILE_HASH)
+  string(APPEND p2p-transfer_SOURCE_HASH_INPUT
+    "${_P2P_TRANSFER_SOURCE_REL_PATH}:${_P2P_TRANSFER_SOURCE_FILE_HASH}\n")
+endforeach()
+string(SHA256 p2p-transfer_FAKE_SHA256 "${p2p-transfer_SOURCE_HASH_INPUT}")
+message(STATUS "p2p-transfer source hash: ${p2p-transfer_FAKE_SHA256}")
 
 set(p2p-transfer_CMAKE_OPTIONS
     -DWITH_CUSTOM_PREFIX:BOOL=ON

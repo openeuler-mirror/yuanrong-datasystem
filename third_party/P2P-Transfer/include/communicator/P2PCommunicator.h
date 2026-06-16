@@ -66,6 +66,7 @@ public:
     Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream);
     Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream);
+    Status ScatterBatchFromRemoteHostMemDone();
 
 private:
     Status CreateServer();

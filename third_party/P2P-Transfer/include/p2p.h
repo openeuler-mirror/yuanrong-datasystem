@@ -231,6 +231,8 @@ typedef struct P2pScatterEntry {
 HcclResult P2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t batchSize, P2PComm comm,
                                             aclrtStream stream);
 
+HcclResult P2PScatterBatchFromRemoteHostMemDone(P2PComm comm);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

@@ -19,6 +19,10 @@
 #include "securec.h"
 #include "tools/env.h"
 
+#include <array>
+#include <memory>
+#include <string>
+
 RoceReceiver::RoceReceiver(int32_t deviceId, bool isRoot, uint32_t blockSizeBytes, uint32_t chunkSizeBytes,
                            uint32_t nRecvBuffs, uint32_t qpNum, bool enableTwoSidedBuffer,
                            PingpongBufferPool *pingpongPool)
@@ -178,15 +182,6 @@ Status RoceReceiver::Initialize(TCPObjectClient *client, TCPObjectServer *server
         CHECK_STATUS(notify->getAddrOffset(&addrOffset));
         readChunkDoneNotifyAddrOffsets.push_back(addrOffset);
         readChunkDoneNotifies.push_back(std::move(notify));
-    }
-
-    for (int i = 0; i < nRecvBuffs; i++) {
-        std::unique_ptr<P2PNotify> notify = std::make_unique<P2PNotify>();
-        CHECK_STATUS(notify->create(recvDeviceId));
-        uint64_t addr;
-        CHECK_STATUS(notify->getAddr(&addr));
-        blockAvailableNotifyAddr.push_back(addr);
-        blockAvailableNotifies.push_back(std::move(notify));
     }
 
     writeOpFinishNotify = std::make_unique<RdmaNotify>();
@@ -402,55 +397,92 @@ Status RoceReceiver::Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, ac
 Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, uint64_t *dstSizes, uint32_t count,
                                aclrtStream stream, uint32_t &lastRdmaTaskId, uint32_t &lastRdmaTaskCount,
                                uint32_t *lastSdmaTaskIds, uint32_t &lastSdmaTaskCount, uint32_t srcRkey, bool isLast,
-                               bool isFirst)
+                               bool isFirst,
+                               std::vector<std::array<uint32_t, RECEIVER_MAX_PARALLEL_TASKS>> &bufferReleaseTaskIds,
+                               std::vector<uint32_t> &bufferReleaseTaskCounts)
 {
+    (void)stream;
     // Get current one-sided buffer and chunk ids
     uint32_t curOneSidedBuffer = pingpongPool->GetCurBuffer();
     uint32_t curOneSidedChunk = pingpongPool->GetCurChunk();
-
-    // Wait for block to become available
-    uint32_t blockAvailableTaskId = 0;
-    if (curOneSidedChunk == 0 || isFirst) {
-        uint32_t notifyId;
-        CHECK_STATUS(blockAvailableNotifies[curOneSidedBuffer]->getId(&notifyId));
-        fftsDispatcher->SignalWaitCrossChip(blockAvailableNotifies[curOneSidedBuffer]->get(), &blockAvailableTaskId,
-                                            notifyId);
-        if (lastRdmaTaskCount > 0) {
-            fftsDispatcher->AddTaskDependency(lastRdmaTaskId, blockAvailableTaskId);
-        }
-    }
+    bool needBlockAvailable = (curOneSidedChunk == 0 || isFirst);
 
     // Read remote memory and ring notify to know when read finished
     void *chunkMid = static_cast<void *>(static_cast<unsigned char *>(oneSidedBuffs[curOneSidedBuffer]->get())
                                          + curOneSidedChunk * chunkSizeBytes);
 
     uint32_t rdmaReadTaskId = 0;
-    CHECK_STATUS(qps[curQp]->dispatchTypicalRdmaOpFfts(
+    Status rdmaStatus = qps[curQp]->dispatchTypicalRdmaOpFfts(
         fftsDispatcher.get(), reinterpret_cast<uint64_t>(chunkMid), reinterpret_cast<uint64_t>(srcPtr), srcSize,
-        RA_OP_READ, RA_SEND_SIGNALED, oneSidedBuffLkeys[curQp][curOneSidedBuffer], srcRkey, &rdmaReadTaskId));
-    if (curOneSidedChunk == 0 || isFirst) {
-        fftsDispatcher->AddTaskDependency(blockAvailableTaskId, rdmaReadTaskId);
+        RA_OP_READ, RA_SEND_SIGNALED, oneSidedBuffLkeys[curQp][curOneSidedBuffer], srcRkey, &rdmaReadTaskId);
+    if (!rdmaStatus.IsSuccess()) {
+        return rdmaStatus;
+    }
+    if (needBlockAvailable) {
+        for (uint32_t i = 0; i < bufferReleaseTaskCounts[curOneSidedBuffer]; i++) {
+            HcclResult depRet =
+                fftsDispatcher->AddTaskDependency(bufferReleaseTaskIds[curOneSidedBuffer][i], rdmaReadTaskId);
+            if (depRet != HCCL_SUCCESS) {
+                return Status::Error(ErrorCode::ACL_ERROR,
+                                     "AddTaskDependency bufferRelease->rdma failed, ret="
+                                         + std::to_string(depRet));
+            }
+        }
+        if (lastRdmaTaskCount > 0) {
+            HcclResult depRet = fftsDispatcher->AddTaskDependency(lastRdmaTaskId, rdmaReadTaskId);
+            if (depRet != HCCL_SUCCESS) {
+                return Status::Error(ErrorCode::ACL_ERROR,
+                                     "AddTaskDependency lastRdma->rdma failed, ret=" + std::to_string(depRet));
+            }
+        }
     } else if (lastRdmaTaskCount > 0) {
-        fftsDispatcher->AddTaskDependency(lastRdmaTaskId, rdmaReadTaskId);
+        HcclResult depRet = fftsDispatcher->AddTaskDependency(lastRdmaTaskId, rdmaReadTaskId);
+        if (depRet != HCCL_SUCCESS) {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "AddTaskDependency lastRdma->rdma failed, ret=" + std::to_string(depRet));
+        }
     }
 
     uint32_t readChunkDoneNotifyTaskId = 0;
-    CHECK_STATUS(qps[curQp]->dispatchRdmaOpFfts(
-        fftsDispatcher.get(),
-        qpNotifyBaseVas[curQp] + readChunkDoneNotifyAddrOffsets[curOneSidedBuffer * nChunksPerBuff + curOneSidedChunk],
-        remotenotifySrcValAddr, notifySize, RA_OP_READ, RA_SEND_SIGNALED | RA_SEND_FENCE, &readChunkDoneNotifyTaskId));
-    fftsDispatcher->AddTaskDependency(rdmaReadTaskId, readChunkDoneNotifyTaskId);
+    uint64_t readDoneNotifyAddr =
+        qpNotifyBaseVas[curQp] + readChunkDoneNotifyAddrOffsets[curOneSidedBuffer * nChunksPerBuff + curOneSidedChunk];
+    Status notifyStatus = qps[curQp]->dispatchRdmaOpFfts(
+        fftsDispatcher.get(), readDoneNotifyAddr, remotenotifySrcValAddr, notifySize, RA_OP_READ,
+        RA_SEND_SIGNALED | RA_SEND_FENCE, &readChunkDoneNotifyTaskId);
+    if (!notifyStatus.IsSuccess()) {
+        return notifyStatus;
+    }
+    HcclResult depReadNotifyRet = fftsDispatcher->AddTaskDependency(rdmaReadTaskId, readChunkDoneNotifyTaskId);
+    if (depReadNotifyRet != HCCL_SUCCESS) {
+        return Status::Error(ErrorCode::ACL_ERROR,
+                             "AddTaskDependency rdma->readDoneNotify failed, ret="
+                                 + std::to_string(depReadNotifyRet));
+    }
 
     uint32_t waitReadDoneTaskId = 0;
     uint32_t waitReadDoneNotifyId;
     CHECK_STATUS(
         readChunkDoneNotifies[curOneSidedBuffer * nChunksPerBuff + curOneSidedChunk]->getId(&waitReadDoneNotifyId));
-    fftsDispatcher->SignalWaitCrossChip(
+    HcclResult waitReadDoneRet = fftsDispatcher->SignalWaitCrossChip(
         readChunkDoneNotifies[curOneSidedBuffer * nChunksPerBuff + curOneSidedChunk]->get(), &waitReadDoneTaskId,
         waitReadDoneNotifyId);
-    fftsDispatcher->AddTaskDependency(readChunkDoneNotifyTaskId, waitReadDoneTaskId);
+    if (waitReadDoneRet != HCCL_SUCCESS) {
+        return Status::Error(ErrorCode::ACL_ERROR,
+                             "SignalWaitCrossChip readDone failed, ret=" + std::to_string(waitReadDoneRet));
+    }
+    HcclResult depNotifyWaitRet = fftsDispatcher->AddTaskDependency(readChunkDoneNotifyTaskId, waitReadDoneTaskId);
+    if (depNotifyWaitRet != HCCL_SUCCESS) {
+        return Status::Error(ErrorCode::ACL_ERROR,
+                             "AddTaskDependency readDoneNotify->waitReadDone failed, ret="
+                                 + std::to_string(depNotifyWaitRet));
+    }
     for (int i = 0; i < lastSdmaTaskCount; i++) {
-        fftsDispatcher->AddTaskDependency(lastSdmaTaskIds[i], waitReadDoneTaskId);
+        HcclResult depRet = fftsDispatcher->AddTaskDependency(lastSdmaTaskIds[i], waitReadDoneTaskId);
+        if (depRet != HCCL_SUCCESS) {
+            return Status::Error(ErrorCode::ACL_ERROR,
+                                 "AddTaskDependency lastSdma->waitReadDone failed, ret="
+                                     + std::to_string(depRet));
+        }
     }
 
     uint32_t numLastMemcpyTaskIds = std::min(RECEIVER_MAX_PARALLEL_TASKS, count);
@@ -476,15 +508,12 @@ Status RoceReceiver::ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, u
     }
 
     if (curOneSidedChunk == nChunksPerBuff - 1 || isLast) {
-        uint32_t blockAvailableNotifyTaskId = 0;
-        ACL_CHECK_STATUS(fftsDispatcher->SignalRecordCrossChip(blockAvailableNotifies[curOneSidedBuffer]->get(),
-                                                               &blockAvailableNotifyTaskId,
-                                                               blockAvailableNotifyAddr[curOneSidedBuffer]));
-        for (int i = 0; i < numLastMemcpyTaskIds; i++) {
-            fftsDispatcher->AddTaskDependency(lastMemcpyTaskIds[i], blockAvailableNotifyTaskId);
+        bufferReleaseTaskCounts[curOneSidedBuffer] = numLastMemcpyTaskIds;
+        for (uint32_t i = 0; i < numLastMemcpyTaskIds; i++) {
+            bufferReleaseTaskIds[curOneSidedBuffer][i] = lastMemcpyTaskIds[i];
+            lastSdmaTaskIds[i] = lastMemcpyTaskIds[i];
         }
-        lastSdmaTaskIds[0] = blockAvailableNotifyTaskId;
-        lastSdmaTaskCount = 1;
+        lastSdmaTaskCount = numLastMemcpyTaskIds;
         pingpongPool->SetCurBuffer((curOneSidedBuffer + 1) % nRecvBuffs);
     } else {
         for (int i = 0; i < numLastMemcpyTaskIds; i++) {
@@ -508,31 +537,34 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Receiver has not been initialized yet");
     }
 
-    if (!onesidedStarted) {
-        onesidedStarted = true;
-        for (auto &notify : blockAvailableNotifies) {
-            CHECK_STATUS(notify->record(stream));
-        }
-    }
-
-    // Prepare pingpong buffer from pool
     if (!pingpongPool) {
         return Status::Error(ErrorCode::NOT_INITIALIZED, "Pingpong buffer pool is not initialized");
     }
+
+    if (pendingScatterBatchPingpongBuff) {
+        return Status::Error(ErrorCode::ACL_ERROR,
+                             "Previous RoCE ScatterBatchFromRemoteHostMem buffer has not been released after stream "
+                             "synchronization");
+    }
+
+#ifdef USE_FFTS
+    ACL_CHECK_STATUS(fftsDispatcher->ReuseCtx(0));
+#endif
+
     auto pingpongBuff = pingpongPool->Acquire();
     if (!pingpongBuff) {
         return Status::Error(ErrorCode::TIMEOUT, "No available pingpong buffer in pool");
     }
-    // Clean up and reinitialize buffer state for new transfer
     oneSidedBuffs = *(pingpongBuff.value());
+
     oneSidedBuffLkeys.clear();
     oneSidedBuffLkeys.resize(qpNum);
     for (int i = 0; i < oneSidedBuffs.size(); i++) {
         for (int q = 0; q < qpNum; q++) {
-            CHECK_STATUS(qps[q]->registerMemoryRegion((*pingpongBuff.value())[i]->get(), blockSizeBytes));
+            CHECK_STATUS(qps[q]->registerMemoryRegion(oneSidedBuffs[i]->get(), blockSizeBytes));
 
             struct mr_info mrInfo{};
-            CHECK_STATUS(qps[q]->getMemoryRegionInfo((*pingpongBuff.value())[i]->get(), &mrInfo));
+            CHECK_STATUS(qps[q]->getMemoryRegionInfo(oneSidedBuffs[i]->get(), &mrInfo));
             oneSidedBuffLkeys[q].push_back(mrInfo.lkey);
         }
     }
@@ -541,6 +573,8 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
     uint32_t lastRdmaTaskCount = 0;
     uint32_t lastSdmaTaskIds[RECEIVER_MAX_PARALLEL_TASKS];
     uint32_t lastSdmaTaskCount = 0;
+    std::vector<std::array<uint32_t, RECEIVER_MAX_PARALLEL_TASKS>> bufferReleaseTaskIds(nRecvBuffs);
+    std::vector<uint32_t> bufferReleaseTaskCounts(nRecvBuffs, 0);
 
     void *chunkDstPtrs[chunkSizeBytes / PAGE_SIZE_BYTES];
     size_t chunkCopySizes[chunkSizeBytes / PAGE_SIZE_BYTES];
@@ -579,9 +613,13 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
                     ;
                     chunkCopySizes[0] = chunkCopySize;
                     bool isLast = (dstIdx == count - 1) && i == (numChunks - 1) && (b == batchSize - 1);
-                    CHECK_STATUS(ReadChunk(chunkSrcPtr, chunkCopySize, chunkDstPtrs, chunkCopySizes, 1, stream,
-                                           lastRdmaTaskId, lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount,
-                                           segmentHandle.rKey, isLast, isFirst));
+                    Status chunkStatus =
+                        ReadChunk(chunkSrcPtr, chunkCopySize, chunkDstPtrs, chunkCopySizes, 1, stream, lastRdmaTaskId,
+                                   lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount, segmentHandle.rKey, isLast,
+                                   isFirst, bufferReleaseTaskIds, bufferReleaseTaskCounts);
+                    if (!chunkStatus.IsSuccess()) {
+                        return chunkStatus;
+                    }
                     curSrcOffset += chunkCopySize;
                 }
                 dstIdx++;
@@ -608,9 +646,13 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
                 }
                 bool isLast = (dstIdx + numMerged == count) && (b == batchSize - 1);
                 void *chunkSrcPtr = static_cast<void *>(static_cast<unsigned char *>(srcDevPtr) + curSrcOffset);
-                CHECK_STATUS(ReadChunk(chunkSrcPtr, chunkSize, chunkDstPtrs, chunkCopySizes, numMerged, stream,
-                                       lastRdmaTaskId, lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount,
-                                       segmentHandle.rKey, isLast, isFirst));
+                Status chunkStatus =
+                    ReadChunk(chunkSrcPtr, chunkSize, chunkDstPtrs, chunkCopySizes, numMerged, stream, lastRdmaTaskId,
+                               lastRdmaTaskCount, lastSdmaTaskIds, lastSdmaTaskCount, segmentHandle.rKey, isLast,
+                               isFirst, bufferReleaseTaskIds, bufferReleaseTaskCounts);
+                if (!chunkStatus.IsSuccess()) {
+                    return chunkStatus;
+                }
                 curSrcOffset += chunkSize;  // NOTE: only correct if all copies are larger than PAGE_SIZE_BYTES
                 dstIdx += numMerged;
             }
@@ -623,5 +665,16 @@ Status RoceReceiver::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtSt
     ACL_CHECK_STATUS(fftsDispatcher->LaunchFftsTask(stream, 1, 0));
     ACL_CHECK_STATUS(fftsDispatcher->ReuseCtx(0));
 #endif
+    pendingScatterBatchPingpongBuff = std::move(pingpongBuff.value());
+    return Status::Success();
+}
+
+Status RoceReceiver::ScatterBatchFromRemoteHostMemDone()
+{
+    if (!pendingScatterBatchPingpongBuff) {
+        return Status::Success();
+    }
+
+    pendingScatterBatchPingpongBuff.reset();
     return Status::Success();
 }

@@ -409,6 +409,7 @@ public:
     virtual Status DSP2PImportHostSegment(P2pSegmentInfo segmentInfo);
     virtual Status DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t batchSize, P2PComm comm,
                                                       aclrtStream stream);
+    virtual Status DSP2PScatterBatchFromRemoteHostMemDone(P2PComm comm);
     virtual Status MemcpyBatch(void **dsts, size_t *destMax, void **srcs, size_t *sizes, size_t numBatches,
                                MemcpyKind kind, uint32_t deviceIdx, size_t *failIndex) override;
 
@@ -575,6 +576,7 @@ private:
     REG_METHOD(DSP2PRegisterHostMem, int, void *, uint64_t, P2pSegmentInfo *, P2pSegmentPermissions);
     REG_METHOD(DSP2PImportHostSegment, int, P2pSegmentInfo);
     REG_METHOD(DSP2PScatterBatchFromRemoteHostMem, int, P2pScatterEntry *, uint32_t, P2PComm, aclrtStream);
+    REG_METHOD(DSP2PScatterBatchFromRemoteHostMemDone, int, P2PComm);
 
     static std::once_flag init_;
     static std::once_flag hasLoadPlugin_;

@@ -1682,6 +1682,78 @@ Status ObjectClientImpl::CheckMGetH2DInput(const std::vector<std::string> &objec
     return Status::OK();
 }
 
+#ifdef BUILD_HETERO
+static Status InitRemoteH2DComm(const std::vector<Buffer *> &existBufferList,
+                                std::shared_ptr<RemoteH2DContext> &p2pComm)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RemoteH2DManager::Instance().SetDeviceIdx(),
+                                     "[RH2D][ScatterBatch][Client] SetDeviceIdx failed");
+    P2pKind kind = P2P_RECEIVER;
+    // Buffers are grouped by data source, so root info should be the same for these objects.
+    const auto &rootInfo = existBufferList[0]->GetRemoteHostInfo()->root_info();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RemoteH2DManager::Instance().P2PCommInitRootInfo(rootInfo.internal(), rootInfo, kind, p2pComm),
+        "[RH2D][ScatterBatch][Client] P2PCommInitRootInfo failed");
+    return Status::OK();
+}
+
+static Status FillScatterEntry(size_t index, DeviceBlobList *devBlobList, Buffer *buffer,
+                               const std::shared_ptr<RemoteH2DContext> &p2pComm, P2pScatterEntry &entry,
+                               std::vector<void *> &dstBufs, std::vector<uint64_t> &counts)
+{
+    auto *remoteHostInfo = buffer->GetRemoteHostInfo();
+    auto &seg = remoteHostInfo->remote_host_segment();
+    auto &hostDataInfo = remoteHostInfo->data_info();
+    auto &blobs = devBlobList->blobs;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RemoteH2DManager::Instance().ImportHostSegment(p2pComm->remoteEndpoint, seg),
+        FormatString("[RH2D][ScatterBatch][Client] ImportHostSegment failed, index=%zu, segLen=%zu, "
+                     "dataOffset=%zu",
+                     index, seg.seg_len(), seg.seg_data_offset()));
+
+    CHECK_FAIL_RETURN_STATUS(
+        seg.seg_data_offset() + hostDataInfo.offset() < seg.seg_len(), K_RUNTIME_ERROR,
+        FormatString("The offset overflow, starting point:%zu + blob offset:%zu > segment size:%zu",
+                     seg.seg_data_offset(), hostDataInfo.offset(), seg.seg_len()));
+    entry.ddrBuf = reinterpret_cast<void *>(seg.seg_va() + seg.seg_data_offset() + hostDataInfo.offset());
+    entry.numEl = hostDataInfo.sizes_size();
+    CHECK_FAIL_RETURN_STATUS(
+        entry.numEl == blobs.size() && entry.numEl > 0, K_INVALID,
+        FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
+                     "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
+                     entry.numEl, blobs.size(), index, index));
+
+    dstBufs.resize(entry.numEl);
+    counts.resize(entry.numEl);
+    for (size_t j = 0; j < entry.numEl; j++) {
+        // Double check the sizes and offsets, and prepare the dstBufs and counts for the Get Scatter.
+        auto hostDataSize = hostDataInfo.sizes(j);
+        auto deviceDataSize = blobs[j].size;
+        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
+                                 "The data size of device and host is not equal.");
+        dstBufs[j] = blobs[j].pointer;
+        counts[j] = deviceDataSize;
+    }
+    entry.dstBufs = dstBufs.data();
+    entry.counts = counts.data();
+    entry.dataType = HCCL_DATA_TYPE_UINT8;
+    return Status::OK();
+}
+
+static Status FillScatterEntries(std::vector<DeviceBlobList *> &devBlobList, std::vector<Buffer *> &existBufferList,
+                                 const std::shared_ptr<RemoteH2DContext> &p2pComm,
+                                 std::vector<P2pScatterEntry> &entries,
+                                 std::vector<std::vector<void *>> &dstBufs,
+                                 std::vector<std::vector<uint64_t>> &counts)
+{
+    for (size_t i = 0; i < existBufferList.size(); i++) {
+        RETURN_IF_NOT_OK(FillScatterEntry(i, devBlobList[i], existBufferList[i], p2pComm, entries[i], dstBufs[i],
+                                          counts[i]));
+    }
+    return Status::OK();
+}
+#endif
+
 static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobList,
                                          std::vector<Buffer *> &existBufferList)
 {
@@ -1691,12 +1763,8 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
     // 1. Initialize communicator connection.
     // Note that client uses worker side root info as the key.
     PerfPoint point(PerfKey::CLIENT_IMPORT_SEG_AND_READ);
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().SetDeviceIdx());
-    P2pKind kind = P2P_RECEIVER;
     std::shared_ptr<RemoteH2DContext> p2pComm;
-    // Buffers are grouped by data source, so root info should be the same for these objects.
-    const auto &rootInfo = existBufferList[0]->GetRemoteHostInfo()->root_info();
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(rootInfo.internal(), rootInfo, kind, p2pComm));
+    RETURN_IF_NOT_OK(InitRemoteH2DComm(existBufferList, p2pComm));
 
     // 2. Import the remote host segment.
     // 3. Read from remote host memory.
@@ -1706,46 +1774,11 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
     std::vector<std::vector<void *>> dstBufs(existBufferList.size());
     std::vector<std::vector<uint64_t>> counts(existBufferList.size());
 
-    // Construct P2pScatterEntries
-    for (size_t i = 0; i < existBufferList.size(); i++) {
-        auto buffer = existBufferList[i];
-        auto *remoteHostInfo = buffer->GetRemoteHostInfo();
-        auto &seg = remoteHostInfo->remote_host_segment();
-        auto &hostDataInfo = remoteHostInfo->data_info();
-        auto &blobs = devBlobList[i]->blobs;
-        RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ImportHostSegment(p2pComm->remoteEndpoint, seg));
+    RETURN_IF_NOT_OK(FillScatterEntries(devBlobList, existBufferList, p2pComm, entries, dstBufs, counts));
 
-        auto &entry = entries[i];
-        CHECK_FAIL_RETURN_STATUS(
-            seg.seg_data_offset() + hostDataInfo.offset() < seg.seg_len(), K_RUNTIME_ERROR,
-            FormatString("The offset overflow, starting point:%zu + blob offset:%zu > segment size:%zu",
-                         seg.seg_data_offset(), hostDataInfo.offset(), seg.seg_len()));
-        entry.ddrBuf = reinterpret_cast<void *>(seg.seg_va() + seg.seg_data_offset() + hostDataInfo.offset());
-        entry.numEl = hostDataInfo.sizes_size();
-        CHECK_FAIL_RETURN_STATUS(
-            entry.numEl == blobs.size() && entry.numEl > 0, K_INVALID,
-            FormatString("Blobs count mismatch in devBlobList between sender and receiver, sender count is: %ld, "
-                         "receiver count is: %ld, mismatch devBlobList index: %zu, mismatch key index: %zu",
-                         entry.numEl, blobs.size(), i, i));
-        dstBufs[i].resize(entry.numEl);
-        counts[i].resize(entry.numEl);
-
-        for (size_t j = 0; j < entry.numEl; j++) {
-            // Double check the sizes and offsets, and prepare the dstBufs and counts for the Get Scatter.
-            auto hostDataSize = hostDataInfo.sizes(j);
-            auto deviceDataSize = blobs[j].size;
-            CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(hostDataSize) == deviceDataSize, K_RUNTIME_ERROR,
-                                     "The data size of device and host is not equal.");
-            dstBufs[i][j] = blobs[j].pointer;
-            counts[i][j] = deviceDataSize;
-        }
-        HcclDataType dataType = HCCL_DATA_TYPE_UINT8;
-        entry.dstBufs = dstBufs[i].data();
-        entry.counts = counts[i].data();
-        entry.dataType = dataType;
-    }
-
-    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().ScatterBatch(entries.data(), entries.size(), p2pComm));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        RemoteH2DManager::Instance().ScatterBatch(entries.data(), entries.size(), p2pComm),
+        FormatString("[RH2D][ScatterBatch][Client] ScatterBatch failed, entries=%zu", entries.size()));
 #endif
     return Status::OK();
 }
