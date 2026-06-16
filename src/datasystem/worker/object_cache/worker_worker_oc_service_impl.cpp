@@ -405,10 +405,6 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
 Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKey, bool tryLock, uint64_t version,
                                                      std::shared_ptr<SafeObjType> &safeEntry)
 {
-    if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
-        LOG(INFO) << FormatString("[ObjectKey %s] Data is in rolling back, now can not be get", objectKey);
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
-    }
     bool insert = false;
     auto func = [this, &objectKey, &safeEntry, &insert]() {
         return ocClientWorkerSvc_->objectTable_->ReserveGetAndLock(objectKey, safeEntry, insert, false, false);
@@ -416,18 +412,12 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
     RETURN_IF_NOT_OK(RetryWhenDeadlock(func));
     if (insert) {
         Raii innerUnlock([&safeEntry]() { safeEntry->WUnlock(); });
-        StatusCode code;
-        if (ocClientWorkerSvc_->IsInRollbackProgress(objectKey)) {
-            LOG(INFO) << FormatString("[ObjectKey %s] Data is in rolling back, now can not be get", objectKey);
-            code = StatusCode::K_NOT_FOUND;
-        } else if (!tryLock) {
+        if (!tryLock) {
             // get data from L2 cache if worker is primary copy
             return ocClientWorkerSvc_->GetDataFromL2CacheForPrimaryCopy(objectKey, version, safeEntry);
-        } else {
-            // tryLock it is the local master call, we need to avoid deadlock.
-            code = StatusCode::K_UNKNOWN_ERROR;
         }
-        RETURN_STATUS(code, "Object not found");
+        // tryLock it is the local master call, we need to avoid deadlock.
+        RETURN_STATUS(StatusCode::K_UNKNOWN_ERROR, "Object not found");
     }
     return Status::OK();
 }

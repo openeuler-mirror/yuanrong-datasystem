@@ -1984,51 +1984,6 @@ TEST_F(KVClientShutdownTest, TestMulInvokeShutdownWithNullPtr)
     client.reset();
 }
 
-TEST_F(KVClientShutdownTest, TestAsynMSetTxAndShutdown)
-{
-    std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
-
-    std::vector<std::string> keys;
-    std::vector<StringView> values;
-    size_t maxElementSize = 2;
-    int bigValSize = 600 * 1024;
-    std::vector<std::string> vals;
-
-    std::string valueGet;
-    MSetParam param;
-    param.existence = ExistenceOpt::NX;
-    param.writeMode = WriteMode::NONE_L2_CACHE;
-    for (size_t i = 0; i < maxElementSize; ++i) {
-        vals.emplace_back(randomData_.GetRandomString(bigValSize));
-    }
-
-    for (size_t i = 0; i < maxElementSize; ++i) {
-        auto key = randomData_.GetRandomString(20);
-        keys.emplace_back(key);
-        values.emplace_back(vals[i]);
-    }
-    int threadNum = 50;
-    auto ThreadSetGet = [&] {
-        (void)client->MSetTx(keys, values, param);
-        DS_ASSERT_OK(client->ShutDown());
-    };
-
-    std::vector<std::thread> clientThreads(threadNum);
-    for (int i = 0; i < threadNum; ++i) {
-        clientThreads[i] = std::thread(ThreadSetGet);
-    }
-    for (auto &t : clientThreads) {
-        t.join();
-    }
-
-    InitTestKVClient(0, client);
-    std::vector<std::string> failedIds;
-    DS_ASSERT_OK(client->Del(keys, failedIds));
-    DS_ASSERT_OK(client->MSetTx(keys, values, param));
-    DS_ASSERT_OK(client->ShutDown());
-}
-
 class KVClientDfxTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

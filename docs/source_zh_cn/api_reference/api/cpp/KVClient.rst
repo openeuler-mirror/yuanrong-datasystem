@@ -142,9 +142,11 @@ KVClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
-    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param)
+    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+        const MSetParam &param)
 
-        事务性批量设置键值对接口。保证所有键要么全部创建成功，要么全部不创建。键的数量范围应为 1 到 8。
+        已废弃 API。该接口仅为保持 SDK API 兼容而保留，调用时固定返回
+        ``StatusCode::K_RUNTIME_ERROR``，错误信息包含 ``deprecated API`` 字样。
 
         参数：
             - **keys** - 需要设置的一组key.
@@ -152,7 +154,7 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
 
         返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            固定返回 ``StatusCode::K_RUNTIME_ERROR``。
 
     .. cpp:function:: Status MGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, std::vectorstd::string &outFailedKeys, int32_t subTimeoutMs)
 
@@ -342,7 +344,7 @@ KVClient
 
     .. cpp:function:: Status QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)
 
-        查询对象键的大小（包括其他 AZ 的objectKeys）。
+        查询对象键的大小。
 
         参数：
             - **objectKeys** - 需要查询大小的对象键列表。

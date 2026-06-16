@@ -65,11 +65,13 @@ private:
     /**
      * @brief Helper function to allocate aggregated memory for objects creation.
      * @param[in] req The multi create request.
+     * @param[in] tenantId The tenant id.
      * @param[out] shmOwners The allocated shared memory chunks.
      * @param[out] shmIndexMapping The object key to shmOwners index mapping.
      * @return Status of the call.
      */
-    Status AggregateAllocateHelper(const MultiCreateReqPb &req, std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
+    Status AggregateAllocateHelper(const MultiCreateReqPb &req, const std::string &tenantId,
+                                   std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                    std::vector<uint32_t> &shmIndexMapping);
 
     /**

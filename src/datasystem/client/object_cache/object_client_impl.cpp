@@ -90,7 +90,6 @@
 
 DS_DECLARE_bool(log_monitor);
 
-const size_t MSET_MAX_KEY_COUNT = 8;
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
 static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
 const std::string K_SEPARATOR = "$";
@@ -3564,7 +3563,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     // MSet(buffers) is the publish step after MCreate. The existence check was already done
     // during MCreate, so the publish step should always use NONE to avoid the worker-side
     // NTX+NX restriction in distributed master mode.
-    PublishParam publishParam{ .isTx = false, .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
+    PublishParam publishParam{ .isReplica = false, .existence = ExistenceOpt::NONE, .ttlSecond = ttl };
     MultiPublishRspPb rsp;
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     return HandleShmRefCountAfterMultiPublish(buffers, rsp);
@@ -3679,82 +3678,6 @@ Status ObjectClientImpl::CheckMultiSetInputParamValidationNtx(const std::vector<
             deduplicateVals.emplace_back(vals[i]);
             keySet.erase(keys[i]);
         }
-    }
-    return Status::OK();
-}
-
-Status ObjectClientImpl::CheckMultiSetInputParamValidation(const std::vector<std::string> &keys,
-                                                           const std::vector<StringView> &vals,
-                                                           const ExistenceOpt &existence,
-                                                           std::map<std::string, StringView> &kv)
-{
-    CHECK_FAIL_RETURN_STATUS(existence == ExistenceOpt::NX, K_INVALID,
-                             "The MSetTx only supports set not existence key now.");
-    CHECK_FAIL_RETURN_STATUS(keys.size() > 0, K_INVALID, "The keys should not be empty.");
-    CHECK_FAIL_RETURN_STATUS(keys.size() <= MSET_MAX_KEY_COUNT, K_INVALID,
-                             "The maximum size of keys in single operation is 8.");
-    CHECK_FAIL_RETURN_STATUS(keys.size() == vals.size(), K_INVALID, "The number of key and value is not the same.");
-    std::unordered_set<std::string> keyRecord;
-    RETURN_IF_NOT_OK(CheckValidObjectKey(*keys.begin()));
-    for (size_t i = 0; i < keys.size(); ++i) {
-        CHECK_FAIL_RETURN_STATUS(!keys[i].empty(), K_INVALID, "The key should not be empty.");
-        CHECK_FAIL_RETURN_STATUS(vals[i].data() != nullptr, K_INVALID,
-                                 FormatString("The value associated with key %s should not be empty.", keys[i]));
-        CHECK_FAIL_RETURN_STATUS(kv.find(keys[i]) == kv.end(), K_INVALID,
-                                 FormatString("The input parameter contains duplicate key %s.", keys[i]));
-        kv[keys[i]] = vals[i];
-    }
-    return Status::OK();
-}
-
-Status ObjectClientImpl::AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
-                                               const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                               std::vector<std::shared_ptr<Buffer>> &buffers,
-                                               std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
-                                               const CacheType &cacheType)
-{
-    FullParam param;
-    param.writeMode = writeMode;
-    param.consistencyType = ConsistencyType::CAUSAL;
-    param.cacheType = cacheType;
-    int i = 0;
-    for (const auto &keyValue : kv) {
-        // if is not transaction, the val  of object master less than 500KB, not ShmCreateable.
-        if (!workerApi->ShmCreateable(keyValue.second.size()) && !IsUrmaEnabled()) {
-            // Transmit data with payload.
-            bufferInfo[i] = MakeObjectBufferInfo(
-                keyValue.first, reinterpret_cast<uint8_t *>(const_cast<char *>(keyValue.second.data())),
-                keyValue.second.size(), 0, param, false, 0);
-            i++;
-            continue;
-        }
-        // Transmit data with share memory.
-        auto shmBuf = std::make_shared<ShmUnitInfo>();
-        uint32_t version = 0;
-        uint64_t metadataSize = 0;
-        std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;  // For Create+MemoryCopy+Publish path with URMA
-        RETURN_IF_NOT_OK(workerApi->Create(keyValue.first, keyValue.second.size(), version, metadataSize, shmBuf,
-                                           urmaDataInfo, param.cacheType));
-        std::shared_ptr<ObjectBufferInfo> objInfo = nullptr;
-        std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
-        if (!urmaDataInfo) {
-            RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
-            mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-            CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
-            objInfo = MakeObjectBufferInfo(keyValue.first, (uint8_t *)(shmBuf->pointer) + shmBuf->offset,
-                                           keyValue.second.size(), metadataSize, param, false, version, shmBuf->id,
-                                           nullptr, std::move(mmapEntry));
-        } else {
-            objInfo = MakeObjectBufferInfo(keyValue.first, nullptr, keyValue.second.size(), 0, param, false, version,
-                                           shmBuf->id);
-        }
-        // Store URMA info for later use in SendBufferViaUb
-        objInfo->ubUrmaDataInfo = urmaDataInfo;
-        RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffers[i]));
-        memoryRefCount_.IncreaseRef(shmBuf->id);
-        RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(keyValue.second.data(), keyValue.second.size()));
-        bufferInfo[i] = std::move(objInfo);
-        i++;
     }
     return Status::OK();
 }
@@ -3941,7 +3864,7 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
     MultiPublishRspPb rsp;
     PublishParam publishParam{
-        .isTx = false, .isReplica = false, .existence = param.existence, .ttlSecond = param.ttlSecond
+        .isReplica = false, .existence = param.existence, .ttlSecond = param.ttlSecond
     };
     RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfoList, publishParam, rsp));
     point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
@@ -3968,35 +3891,6 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return MSetCreateCopyAndPublish(keys, vals, deduplicateKeys, deduplicateVals, param, workerApi, outFailedKeys,
                                     point);
-}
-
-Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
-                              const MSetParam &setParam)
-{
-    AccessTransportTracker::Reset();
-    // Validate the effectiveness of parameters.
-    RETURN_IF_NOT_OK(IsClientReady());
-    std::map<std::string, StringView> kv;
-    RETURN_IF_NOT_OK(CheckMultiSetInputParamValidation(keys, vals, setParam.existence, kv));
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-
-    // Construct the memory of values sent to worker.
-    LOG(INFO) << "Begin to multiput object." << VectorToString(keys);
-    std::vector<std::shared_ptr<Buffer>> buffers(keys.size(), nullptr);
-    std::vector<std::shared_ptr<ObjectBufferInfo>> bufferInfo(keys.size(), nullptr);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        AllocateMemoryForMSet(kv, setParam.writeMode, workerApi, buffers, bufferInfo, setParam.cacheType),
-        "AllocateMemoryForMSet failed");
-    PublishParam publishParam{
-        .isTx = true, .isReplica = false, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
-    };
-    MultiPublishRspPb rsp;
-    RETURN_IF_NOT_OK(workerApi->MultiPublish(bufferInfo, publishParam, rsp));
-    auto status = HandleShmRefCountAfterMultiPublish(buffers, rsp);
-    LOG(INFO) << "Finish to multiset.";
-    return status;
 }
 
 Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefixKey)
@@ -4189,7 +4083,7 @@ Status ObjectClientImpl::MultiPublish(const std::vector<std::shared_ptr<Buffer>>
     RETURN_IF_NOT_OK(CheckConnection());
 
     PublishParam param{
-        .isTx = false, .isReplica = true, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
+        .isReplica = true, .existence = setParam.existence, .ttlSecond = setParam.ttlSecond
     };
     MultiPublishRspPb rsp;
     std::shared_ptr<IClientWorkerApi> workerApi;

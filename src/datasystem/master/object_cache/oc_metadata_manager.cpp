@@ -94,7 +94,6 @@ static constexpr int MIN_TTL_SECOND = 0;
 static constexpr int ASYNC_MIN_THREAD_NUM = 2;
 static constexpr int ASYNC_MAX_THREAD_NUM = 5;
 static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
-static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
 
 OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore,
                                      EtcdStore *etcdStore, std::shared_ptr<PersistenceApi> persistApi,
@@ -535,54 +534,6 @@ Status OCMetadataManager::CheckBinaryFormatParamMatch(const std::string &objectK
     return Status::OK();
 }
 
-Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const std::string &address, int64_t pendingTtl,
-                                            bool &firstOne)
-{
-    const std::string &objectKey = newMeta.object_key();
-    // Validate the input.
-    RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
-
-    INJECT_POINT("master.create_meta_failure");
-    VLOG(1) << FormatString("[ObjectKey %s] CreateMeta PreCommit: worker address: %s", objectKey, address);
-
-    if (newMeta.config().consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL)
-        && !AddHeavyOp(objectKey)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
-    }
-    Raii raii([this, &objectKey]() { RemoveHeavyOp({ objectKey }); });
-    INJECT_POINT("master.CreateMeta.delay");
-
-    // Case 1: not first time create meta.
-    Timer timer;
-    std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-    masterOperationTimeCost.Append("CreatePendingMeta get lock", timer.ElapsedMilliSecond());
-    TbbMetaTable::accessor accessor;
-    firstOne = metaTable_.insert(accessor, objectKey);
-    Status rc = CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne);
-    switch (rc.GetCode()) {
-        case K_OC_KEY_ALREADY_EXIST:
-            return rc;
-        case K_TRY_AGAIN:
-            // If the timestamp of the object does not exceed multiSetTimestamp, return K_TRY_AGAIN.
-            // Except for the same address, we can refresh meta.
-            if (address != accessor->second.meta.primary_address()
-                && GetSystemClockTimeStampUs() < accessor->second.multiSetTimestamp) {
-                return rc;
-            }
-            LOG(INFO) << FormatString("[ObjectKey %s] PreCommit changed from %s to %s", objectKey,
-                                      accessor->second.meta.primary_address(), address);
-            break;
-        default:
-            break;
-    };
-    ObjectMeta metaCache;
-    SetMetaInfo(newMeta, address, 0, metaCache);
-    metaCache.multiSetState = PENDING;
-    metaCache.multiSetTimestamp = pendingTtl;
-    accessor->second = std::move(metaCache);
-    accessor.release();
-    return Status::OK();
-}
 
 Status OCMetadataManager::CheckExistenceOpt(const ObjectMeta &meta, const std::string &objectKey,
                                             const ExistenceOptPb &existence, bool &firstOne)
@@ -590,11 +541,7 @@ Status OCMetadataManager::CheckExistenceOpt(const ObjectMeta &meta, const std::s
     bool noL2CacheAndNoCopy =
         meta.locations.empty() && WriteMode(meta.meta.config().write_mode()) == WriteMode::NONE_L2_CACHE;
     if (!firstOne && existence == ExistenceOptPb::NX && !noL2CacheAndNoCopy) {
-        if (meta.multiSetState == IDLE) {
-            RETURN_STATUS(K_OC_KEY_ALREADY_EXIST, "object[" + objectKey + "] already exist");
-        } else {
-            RETURN_STATUS(K_TRY_AGAIN, "object[" + objectKey + "] is creating");
-        }
+        RETURN_STATUS(K_OC_KEY_ALREADY_EXIST, "object[" + objectKey + "] already exist");
     }
     return Status::OK();
 }
@@ -615,9 +562,6 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
 
     if (!firstOne) {
         auto &prevMeta = accessor->second;
-        CHECK_FAIL_RETURN_STATUS(
-            prevMeta.multiSetState != PENDING, K_TRY_AGAIN,
-            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
         BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
                                                  .dataFormat = newMeta.config().data_format(),
                                                  .consistencyType = newMeta.config().consistency_type(),
@@ -665,9 +609,6 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
                               req.address());
     FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
     RETURN_OK_IF_TRUE(!rsp.info().empty());
-    if (req.istx()) {
-        return CreateMultiMetaTx(req, rsp);
-    }
     return CreateMultiMetaNtx(req, rsp);
 }
 
@@ -679,9 +620,6 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
     // it is not allowed to double Set.
     bool firstOne = false;
     RETURN_IF_NOT_OK(CheckExistenceOpt(meta, objectKey, newMeta.existence(), firstOne));
-    CHECK_FAIL_RETURN_STATUS(
-        meta.multiSetState != PENDING, K_TRY_AGAIN,
-        FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
     BinaryFormatParamsStruct newMateDate = { .writeMode = newMeta.config().write_mode(),
                                              .dataFormat = newMeta.config().data_format(),
                                              .consistencyType = newMeta.config().consistency_type(),
@@ -810,7 +748,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
         }
     });
     point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_POST_PROCESS);
-    RollBackMultiMetaWhenCreateFailed(rollBackIds, req.address());
+    RollBackMultiMetaWhenCreateFailed(rollBackIds, req.address(), version);
     rsp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
     rsp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     rsp.set_version(version);
@@ -826,9 +764,6 @@ Status OCMetadataManager::AddLocationForExistingKeyOnNx(const std::string &objec
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             metaTable_.find(accessor, objectKey), K_NOT_FOUND,
             FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            accessor->second.multiSetState != PENDING, K_TRY_AGAIN,
-            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
         auto [iter, inserted] = accessor->second.locations.emplace(address, AckState::ACK);
         if (!inserted) {
             iter->second = AckState::ACK;
@@ -847,101 +782,6 @@ Status OCMetadataManager::AddLocationForExistingKeyOnNx(const std::string &objec
     return rc;
 }
 
-Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
-{
-    std::vector<std::string> successIds;
-    int64_t pendingTtl = GetSystemClockTimeStampUs() + MSET_PENDING_TTL_US;
-    INJECT_POINT("master.CreateMultiMetaTx.pendingTtl", [&pendingTtl](int ttlUs) {
-        pendingTtl = GetSystemClockTimeStampUs() + ttlUs;
-        return Status::OK();
-    });
-    for (const auto &metaInfo : req.metas()) {
-        if (metaInfo.object_key().empty() || req.address().empty()) {
-            RollBackMultiMetaWhenCreateFailed(successIds, req.address());
-            RETURN_STATUS(K_INVALID, "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
-        }
-        ObjectMetaPb meta;
-        ConstructMetaInfo(req, metaInfo, 0, meta);
-        bool firstOne = false;
-        auto status = CreatePendingMeta(meta, req.address(), pendingTtl, firstOne);
-        if (status.IsError()) {
-            // meta maybe already insert to metatable. if not first one, no need delete old meta.
-            if (firstOne) {
-                successIds.emplace_back(metaInfo.object_key());
-            }
-            RollBackMultiMetaWhenCreateFailed(successIds, req.address());
-            return status;
-        } else {
-            successIds.emplace_back(metaInfo.object_key());
-        }
-    }
-    INJECT_POINT("OCMetadataManager.createMultiMeta.delay");
-    if (req.is_pre_commit()) {
-        return Status::OK();
-    }
-    auto type = WriteMode2MetaType(req.config().write_mode());
-    uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-    auto status = PublishMultiMeta(successIds, req.address(), type, version, rsp);
-    if (status.IsError()) {
-        RollBackMultiMetaWhenCreateFailed(successIds, req.address(), version);
-    }
-    return status;
-}
-
-Status OCMetadataManager::CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoReqPb &req, CreateMultiMetaRspPb &rsp)
-{
-    std::vector<std::string> objectKeys;
-    for (const auto &obj : req.object_keys()) {
-        objectKeys.emplace_back(obj);
-    }
-    std::sort(objectKeys.begin(), objectKeys.end());  // To prevent deadlock.
-    LOG(INFO) << FormatString("[ObjectKey %s] CreateMeta PhaseTwo: worker address: %s", VectorToString(objectKeys),
-                              req.address());
-    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
-    RETURN_OK_IF_TRUE(!rsp.info().empty());
-
-    if (req.consistency_type() == static_cast<uint32_t>(ConsistencyType::CAUSAL) && !AddHeavyOp(objectKeys)) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
-    }
-    Raii raii([this, &objectKeys]() { RemoveHeavyOp(objectKeys); });
-
-    auto type = WriteMode2MetaType(req.write_mode());
-    uint64_t version = static_cast<uint64_t>(GetSystemClockTimeStampUs());
-    auto status = PublishMultiMeta(objectKeys, req.address(), type, version, rsp);
-    if (status.IsError()) {
-        RollBackMultiMetaWhenCreateFailed(objectKeys, req.address(), version);
-    }
-    return status;
-}
-
-Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objectKeys, const std::string &address,
-                                           ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp)
-{
-    std::unordered_map<std::string, std::string> metaInfos;
-    for (const auto &objKey : objectKeys) {
-        std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-        TbbMetaTable::accessor accessor;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            metaTable_.find(accessor, objKey), K_RUNTIME_ERROR,
-            FormatString("[ObjectKey %s] The object key not exists in metaTable_", objKey));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(address == accessor->second.meta.primary_address(), K_OC_KEY_ALREADY_EXIST,
-                                             FormatString("[ObjectKey %s] The object key was seized by %s", objKey,
-                                                          accessor->second.meta.primary_address()));
-        accessor->second.meta.set_version(version);
-        accessor->second.multiSetState = IDLE;
-        ObjectMetaPb &objectMeta = accessor->second.meta;
-        if (objectMeta.config().data_format() != (uint64_t)DataFormat::HASH_MAP) {
-            UpdateSubscribeCache(objKey, accessor->second);
-        }
-        RETURN_IF_NOT_OK(expiredObjectManager_->InsertObject(objKey, version, objectMeta.ttl_second()));
-        std::string serializedStr;
-        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objKey, objectMeta, serializedStr));
-        metaInfos.emplace(objKey, serializedStr);
-    }
-    rsp.set_version(version);
-    return objectStore_->CreateOrUpdateBatchMeta(metaInfos, type);
-}
-
 void OCMetadataManager::RollBackMultiMetaWhenCreateFailed(const std::vector<std::string> &rollBackIds,
                                                           const std::string address, uint64_t version)
 {
@@ -955,7 +795,7 @@ void OCMetadataManager::RollBackMultiMetaWhenCreateFailed(const std::vector<std:
         if (!metaTable_.find(accessor, objKey)) {
             LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objKey);
         } else if (accessor->second.meta.primary_address() == address
-                   && (accessor->second.multiSetState == PENDING || accessor->second.meta.version() == version)) {
+                   && accessor->second.meta.version() == version) {
             (void)metaTable_.erase(accessor);
         } else {
             LOG(WARNING) << FormatString(
@@ -1230,12 +1070,12 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
         QueryMetaInfoPb info;
         if (!FLAGS_enable_data_replication) {
             TbbMetaTable::const_accessor accessor;
-            if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+            if (metaTable_.find(accessor, objectKey)) {
                 getMetaInfo(accessor, info);
             }
         } else {
             TbbMetaTable::accessor accessor;
-            if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+            if (metaTable_.find(accessor, objectKey)) {
                 getMetaInfo(accessor, info);
                 TryGetObjectData(objectKey, accessor, payloadSize, info, payloads);
                 // If we enable data replication, we only set the not exist location as UNACK state because of the
@@ -1922,9 +1762,6 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             VLOG(1) << "version updated, skip deletion";
             delMediator.SetOutdatedObj(objectKey);
             continue;
-        } else if (accessor->second.multiSetState == PENDING) {
-            VLOG(1) << "object is in creating state, skip deletion";
-            continue;
         }
 
         // 1. async delete global cache.
@@ -2036,8 +1873,6 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
         VLOG(1) << "meta not found in meta table";
         delMediator.AddHashObjsWithoutMeta(objectKey);
         return Status::OK();
-    } else if (accessor->second.multiSetState == PENDING) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Object does not exist, multi object is creating");
     }
 
     if (delMediator.CheckIfExpired(objectKey, accessor->second.meta.version())) {
@@ -2190,9 +2025,6 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     CHECK_FAIL_RETURN_STATUS(metaTable_.find(accessor, objectKey), StatusCode::K_NOT_FOUND,
                              FormatString("[ObjectKey %s] does not exist", objectKey));
     ObjectMeta &objectMeta = accessor->second;
-    CHECK_FAIL_RETURN_STATUS(
-        objectMeta.multiSetState != PENDING, K_TRY_AGAIN,
-        FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
     if (objectMeta.IsCausal() && !AddHeavyOp(objectKey)) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_WORKER_TIMEOUT, "retry");
     }
@@ -4386,7 +4218,7 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
     masterOperationTimeCost.Append("PureQueryMeta get lock", timer.ElapsedMilliSecond());
     for (const auto &objectKey : notRedirectObjectKeys) {
         TbbMetaTable::const_accessor accessor;
-        if (metaTable_.find(accessor, objectKey) && accessor->second.multiSetState != PENDING) {
+        if (metaTable_.find(accessor, objectKey)) {
             auto *queryMeta = rsp.add_query_metas();
             queryMeta->mutable_meta()->CopyFrom(accessor->second.meta);
             queryMeta->mutable_meta()->set_object_key(objectKey);

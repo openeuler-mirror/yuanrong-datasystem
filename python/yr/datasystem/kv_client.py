@@ -470,23 +470,19 @@ class KVClient:
         return failed_keys
 
     def msettx(self, keys, vals, write_mode=WriteMode.NONE_L2_CACHE, ttl_second=0, existence_opt=ExistenceOpt.NONE):
-        """Transactional multi-key set interface, it guarantees all the keys are either successfully created or
-           none of them is created. The number of keys should be in the range of 1 to 8.
+        """Deprecated transactional multi-key set interface.
+
+        This deprecated API is kept only for SDK compatibility and always raises RuntimeError.
 
         Args:
             keys(str): The keys of objects.
             vals(memoryview, bytes, bytearray, str): The vals to set.
             write_mode(WriteMode): controls whether data is written to the L2 cache to enhance data reliability.
-            ttl_second(uint32): controls the expire time of the data:
-                If the value is greater than 0, the data will be deleted automatically after expired.
-                If set to 0, the data need to be manually deleted.
+            ttl_second(uint32): controls the expire time of the data.
             existence_opt(ExistenceOpt): Controlling the behavior of Set keys.
-                The options are as follows:
-                ExistenceOpt.NONE(Not support): Set the key without checking whether the key exists.
-                ExistenceOpt.NX: Only set the key if it does not already exist.
 
         Raises:
-            RuntimeError: Raise a runtime error if one of the keys set fail.
+            RuntimeError: Always raised because this is a deprecated API.
             TypeError: Raise a type error if the input parameter is invalid.
         """
         args = [

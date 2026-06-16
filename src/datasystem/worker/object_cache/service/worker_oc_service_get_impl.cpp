@@ -392,9 +392,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
 {
     Status lastRc;
     auto &uniqueObjectMap = request->GetObjects();
-    PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_CHECK_ROLLBACK);
-    asyncRollbackManager_->UpdateIsRollback(uniqueObjectMap);
-    point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
+    PerfPoint point(PerfKey::WORKER_PROCESS_GET_FROM_LOCAL_BATCH);
     std::vector<std::string> needEvictKeys;
     auto func = [this, &request](const std::string &objectKey, GetObjInfo &objectInfo,
                                  std::set<ReadKey> &remoteObjectKeys, std::vector<std::string> &needEvictKeys) {

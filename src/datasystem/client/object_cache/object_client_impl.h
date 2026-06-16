@@ -383,15 +383,6 @@ public:
      * @param[in] keys The keys.
      * @param[in] vals The values for the keys.
      * @param[in] param The set parameters.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param);
-
-    /**
-     * @brief Invoke worker client to set the keys to their respective values.
-     * @param[in] keys The keys.
-     * @param[in] vals The values for the keys.
-     * @param[in] param The set parameters.
      * @param[out] outFailedKeys
      * @return K_OK on success; the error code otherwise.
      */
@@ -1208,17 +1199,6 @@ private:
                          const std::shared_ptr<IClientWorkerApi> &workerApi, int existence);
 
     /**
-     * @brief Check the validation of the input parameter of the multiple set.
-     * @param[in] keys The keys to be set.
-     * @param[in] vals The values for the keys.
-     * @param[in] existence Whether set if some key exists.
-     * @param[out] kvs key and values for set.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status CheckMultiSetInputParamValidation(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
-                                             const ExistenceOpt &existence, std::map<std::string, StringView> &kvs);
-
-    /**
      * @brief construcs object key with tenant id
      * @param[in] objKey object key
      * @return std::string object key with tenant id
@@ -1249,22 +1229,6 @@ private:
                                     const std::vector<StringView> &deduplicateVals, const MSetParam &param,
                                     const std::shared_ptr<IClientWorkerApi> &workerApi,
                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
-    /**
-     * @brief Check the validation of the input parameter of the multiple set.
-     * @param[in] keys The keys to be set.
-     * @param[in] vals The values for the keys.
-     * @param[in] writeMode Indicate write through or back mode.
-     * @param[in] workerApi Available worker api.
-     * @param[out] bufferInfo The buffers information for creating buffers.
-     * @param[out] buffer The object buffer.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status AllocateMemoryForMSet(const std::map<std::string, StringView> &kv, const WriteMode &writeMode,
-                                 const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                 std::vector<std::shared_ptr<Buffer>> &buffers,
-                                 std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
-                                 const CacheType &cacheType);
-
     /**
      * @brief Muti create buffer parallel
      * @param[in] skipCheckExistence is skip check existence

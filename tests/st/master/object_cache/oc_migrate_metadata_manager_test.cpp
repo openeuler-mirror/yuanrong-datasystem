@@ -19,11 +19,9 @@
  */
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
 
-#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <rocksdb/env.h>
@@ -406,11 +404,14 @@ public:
             configPb->set_data_format(static_cast<uint32_t>(dataFormat_));
             configPb->set_consistency_type(static_cast<uint32_t>(consistencyType_));
         }
-        request.set_istx(true);
         request.set_address(hostPort_.ToString());
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
         RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         RETURN_IF_NOT_OK(ocMetadataManager->CreateMultiMeta(request, response));
+        if (!response.failed_object_keys().empty()) {
+            const auto code = static_cast<StatusCode>(response.last_rc().error_code());
+            return Status(code, response.last_rc().error_msg());
+        }
         return Status::OK();
     }
 
@@ -430,7 +431,6 @@ public:
         configPb->set_write_mode(static_cast<uint32_t>(writeMode_));
         configPb->set_data_format(static_cast<uint32_t>(dataFormat_));
         configPb->set_consistency_type(static_cast<uint32_t>(consistencyType_));
-        request.set_istx(false);
         request.set_address(address);
 
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -498,31 +498,22 @@ TEST_F(OCMetaManagerCreateMultiMetaTest, CreateMultiMetaAndSetTest)
 {
     int metaNum = 6;
     DS_ASSERT_OK(InitInstance());
-    inject::Set("OCMetadataManager.createMultiMeta.delay", "1*sleep(10000)");
     int metaNum1 = 3;
-    std::thread thread1([&] {
-        int sleepTime = 4;
-        std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
-        ASSERT_EQ(CreateMetadata(metaNum1).GetCode(), K_TRY_AGAIN);
-    });
     DS_ASSERT_OK(CreateMultiMetadata(metaNum));
-    thread1.join();
+    DS_ASSERT_OK(CreateMetadata(metaNum1));
+    for (const auto &objectKey : objectKeys_) {
+        DS_ASSERT_OK(CheckMetadata(objectKey));
+    }
 }
 
 TEST_F(OCMetaManagerCreateMultiMetaTest, LEVEL1_CreateMultiMetaAndGetTest)
 {
     int metaNum = 6;
     DS_ASSERT_OK(InitInstance());
-    inject::Set("OCMetadataManager.createMultiMeta.delay", "1*sleep(10000)");
-    std::thread thread1([&] {
-        int sleepTime = 2;
-        std::this_thread::sleep_for(std::chrono::seconds(sleepTime));
-        for (const auto &objectKey : objectKeys_) {
-            ASSERT_EQ(CheckMetadata(objectKey).GetCode(), K_RUNTIME_ERROR);
-        }
-    });
     DS_ASSERT_OK(CreateMultiMetadata(metaNum));
-    thread1.join();
+    for (const auto &objectKey : objectKeys_) {
+        DS_ASSERT_OK(CheckMetadata(objectKey));
+    }
 }
 
 TEST_F(OCMetaManagerCreateMultiMetaTest, CreateAndMultiCreateMetaTest)
@@ -531,7 +522,16 @@ TEST_F(OCMetaManagerCreateMultiMetaTest, CreateAndMultiCreateMetaTest)
     DS_ASSERT_OK(InitInstance());
     int metaNum1 = 3;
     DS_ASSERT_OK(CreateMetadata(metaNum1));
-    ASSERT_EQ(CreateMultiMetadata(metaNum).GetCode(), K_OC_KEY_ALREADY_EXIST);
+    std::vector<std::string> objectKeys;
+    for (int i = 0; i < metaNum; ++i) {
+        objectKeys.emplace_back("MigrateMetadataTestId" + std::to_string(i));
+    }
+    CreateMultiMetaRspPb response;
+    DS_ASSERT_OK(CreateMultiMetadataNtx(objectKeys, hostPort_.ToString(), response));
+    ASSERT_EQ(response.failed_object_keys_size(), 0);
+    for (const auto &objectKey : objectKeys) {
+        DS_ASSERT_OK(CheckMetadata(objectKey));
+    }
 }
 
 TEST_F(OCMetaManagerCreateMultiMetaTest, CreateMultiMetaNtxNxExistingAddsLocation)

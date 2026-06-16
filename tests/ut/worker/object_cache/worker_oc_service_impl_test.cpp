@@ -65,7 +65,6 @@ public:
             .workerDevOcManager = nullptr,
             .asyncPersistenceDelManager = nullptr,
             .asyncSendManager = nullptr,
-            .asyncRollbackManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
             .etcdCM = nullptr,

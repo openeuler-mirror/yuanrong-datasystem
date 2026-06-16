@@ -81,7 +81,6 @@ struct MultiCreateParam {
 };
 
 struct PublishParam {
-    bool isTx;
     bool isReplica;
     ExistenceOpt existence;
     uint32_t ttlSecond;

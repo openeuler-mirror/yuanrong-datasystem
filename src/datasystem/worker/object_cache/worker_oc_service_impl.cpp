@@ -100,7 +100,6 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
-#include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
@@ -195,7 +194,6 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     memoryRefTable_ = std::make_shared<SharedMemoryRefTable>();
     globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
-    asyncRollbackManager_ = std::make_shared<AsyncRollbackManager>();
     slotRecoveryManager_ = std::make_shared<SlotRecoveryManager>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
 
@@ -265,7 +263,6 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .workerDevOcManager = workerDevOcManager_,
         .asyncPersistenceDelManager = asyncPersistenceDelManager_,
         .asyncSendManager = asyncSendManager_,
-        .asyncRollbackManager = asyncRollbackManager_,
         .metadataSize = metadataSize_,
         .persistenceApi = persistenceApi_,
         .etcdCM = etcdCM_,
@@ -335,7 +332,6 @@ Status WorkerOCServiceImpl::Init()
     metadataRecoveryManager_ =
         std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, etcdCM_, workerMasterApiManager_,
                                                   metadataSize_, evictionManager_, memCpyThreadPool_);
-    asyncRollbackManager_->Init(localAddress_, workerMasterApiManager_, etcdCM_);
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), etcdCM_, workerMasterApiManager_);
@@ -1976,11 +1972,6 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
 Status WorkerOCServiceImpl::CheckWaitNodeTableComplete()
 {
     return etcdCM_->CheckWaitNodeTableComplete();
-}
-
-bool WorkerOCServiceImpl::IsInRollbackProgress(const std::string &objectKey)
-{
-    return asyncRollbackManager_->IsObjectsInRollBack({ objectKey });
 }
 
 Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &req, PublishDeviceObjectRspPb &resp,

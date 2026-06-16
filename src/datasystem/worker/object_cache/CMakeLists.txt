@@ -11,7 +11,6 @@ set(WORKER_OC_SRCS
         obj_cache_hashmap.cpp
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
-        async_rollback_manager.cpp
         async_update_location_manager.cpp
         metadata_recovery_manager.cpp
         metadata_recovery_selector.cpp

@@ -241,7 +241,6 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl_header",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_publish_impl_header",
-        "//src/datasystem/worker/object_cache:async_rollback_manager",
         "//src/datasystem/worker/object_cache:async_rpc_request_manager",
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
@@ -293,24 +292,6 @@ ds_cc_library(
     ],
 )
 
-ds_cc_library(
-    name = "async_rollback_manager",
-    srcs = [
-        "async_rollback_manager.cpp",
-    ],
-    hdrs = [
-        "async_rollback_manager.h",
-    ],
-    deps = [
-        ":worker_request_manager_header",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:thread",
-        "//src/datasystem/common/util:thread_local",
-        "//src/datasystem/common/util:timer",
-        "//src/datasystem/worker/object_cache:worker_master_oc_api",
-    ],
-)
 
 ds_cc_library(
     name = "worker_oc_eviction_manager",

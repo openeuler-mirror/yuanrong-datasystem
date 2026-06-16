@@ -83,15 +83,6 @@ public:
                                    bool retry = true) = 0;
 
     /**
-     * @brief Phase two creating meta for multiple objects.
-     * @param[in] request The rpc request protobuf.
-     * @param[out] response The rpc response protobuf.
-     * @return Status of the call.
-     */
-    virtual Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
-                                           master::CreateMultiMetaRspPb &response) = 0;
-
-    /**
      * @brief Create object copy meta in cache and rocksdb.
      * @param[in] request The rpc request protobuf.
      * @param[out] response The rpc response protobuf.
@@ -420,8 +411,6 @@ public:
     Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
-    Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
-                                   master::CreateMultiMetaRspPb &response) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;
     Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
                                 master::CreateMultiCopyMetaRspPb &response) override;
@@ -502,8 +491,6 @@ public:
     Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
-    Status CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
-                                   master::CreateMultiMetaRspPb &response) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;
     Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &request,
                                 master::CreateMultiCopyMetaRspPb &response) override;

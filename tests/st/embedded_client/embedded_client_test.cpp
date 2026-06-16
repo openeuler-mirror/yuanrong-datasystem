@@ -350,7 +350,7 @@ TEST_F(KVClientCoprocessTest, TestInitEmbeddedWithInvalidParam)
     ASSERT_EQ(s.GetCode(), static_cast<int>(StatusCode::K_INVALID));
 }
 
-TEST_F(KVClientCoprocessTest, TestMSetTxPerfSingleInstance)
+TEST_F(KVClientCoprocessTest, TestMSetPerfSingleInstance)
 {
     auto pid0 = fork();
     if (pid0 == 0) {
@@ -387,7 +387,7 @@ TEST_F(KVClientCoprocessTest, TestMSetTxPerfSingleInstance)
             t.join();
         auto timeElapsedMilliSecond = timer.ElapsedMilliSecond();
         int64_t totalOps = kThreadNum * kRounds * kKeysPerTx;
-        LOG(INFO) << "Single-instance MSetTx perf: " << totalOps << " ops, " << timeElapsedMilliSecond / 1000.0
+        LOG(INFO) << "Single-instance MSet perf: " << totalOps << " ops, " << timeElapsedMilliSecond / 1000.0
                   << " ms, " << (totalOps * 1000000.0 / timeElapsedMilliSecond) << " ops/sec";
 
         std::vector<std::string> failedIds;

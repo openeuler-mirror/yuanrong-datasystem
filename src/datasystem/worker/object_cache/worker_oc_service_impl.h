@@ -45,7 +45,6 @@
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/protos/object_posix.pb.h"
-#include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
@@ -1068,13 +1067,6 @@ private:
     Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
 
     /**
-     * @brief Check if object is in rollback progress.
-     * @param[in] objectKey Object key.
-     * @return True if object is in rollback progress.
-     */
-    bool IsInRollbackProgress(const std::string &objectKey);
-
-    /**
      * @brief The rpc method used to delete the device objects.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
@@ -1159,8 +1151,6 @@ private:
     std::shared_ptr<ThreadPool> oldVerDelAsyncPool_{ nullptr };
 
     std::shared_ptr<AsyncSendManager> asyncSendManager_{ nullptr };
-
-    std::shared_ptr<AsyncRollbackManager> asyncRollbackManager_{ nullptr };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
 

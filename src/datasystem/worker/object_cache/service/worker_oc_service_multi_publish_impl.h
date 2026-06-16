@@ -64,7 +64,7 @@ public:
 private:
     using ObjGroupMap = std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>>;
 
-    struct CreateMeta2PCRes {
+    struct CreateMultiMetaResult {
         Status rc;
         master::CreateMultiMetaRspPb rsp;
         MetaAddrInfo metaAddrInfo;
@@ -82,21 +82,7 @@ private:
                             const ClientKey &clientId);
 
     /**
-     * @brief Handle multiply set request from the client transaction.
-     * @param[in] namespaceUri Object namespaceUri list that needs to be publish.
-     * @param[in] entries Locked entry list
-     * @param[in] ifInserts If the object insert to objectTable_.
-     * @param[in] req The rpc request protobuf.
-     * @param[out] resp The rpc response protobuf.
-     * @param[in] payloads The rpc request payload.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status MultiPublishTx(std::vector<std::string> &namespaceUri, std::vector<std::shared_ptr<SafeObjType>> &entries,
-                          std::vector<bool> &ifInserts, const MultiPublishReqPb &req,
-                          std::vector<RpcMessage> &payloads);
-
-    /**
-     * @brief Handle multiply set request from the client not transaction.
+     * @brief Handle NTX multiply set request from the client.
      * @param[in] namespaceUri Object namespaceUri list that needs to be publish.
      * @param[in] entries Locked entry list
      * @param[in] ifInserts If the object insert to objectTable_.
@@ -124,17 +110,6 @@ private:
                                  Status &lastRc, std::unordered_set<std::string> &failedKeys);
 
     /**
-     * @brief Publish newly objects. This function will publish entry and save data to cache.
-     * @param[in] req The rpc request protobuf.
-     * @param[in] objectKeys Object key list.
-     * @param[out] entries The object entries.
-     * @param[in] payloads Payloads for non-shared-memory cases.
-     * @return Status of the call.
-     */
-    Status MultiPublishObject(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
-                              std::vector<std::shared_ptr<SafeObjType>> &entries, std::vector<RpcMessage> &payloads);
-
-    /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.
@@ -145,6 +120,17 @@ private:
     Status CreateMultiMetaToCentralMaster(const std::vector<std::string> &objectKeys,
                                           const std::vector<std::shared_ptr<SafeObjType>> &entries,
                                           const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions);
+
+    /**
+     * @brief Create multimeta with Worker->Master RPC retry on transient errors,
+     *  and loop while meta is moving.
+     * @param[in] api The worker master api.
+     * @param[in] req The CreateMultiMeta request.
+     * @param[out] rsp The response info of CreateMultiMeta.
+     * @return Status of the call.
+     */
+    Status RetryCreateMultiMeta(std::shared_ptr<worker::WorkerMasterOCApi> api, master::CreateMultiMetaReqPb &req,
+                                master::CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Construct the request info for create multiple meta.
@@ -191,27 +177,12 @@ private:
                                                  std::vector<uint64_t> &versions);
 
     /**
-     * @brief Fill multimeta request.
-     * @param[in] objectKeys Object key list.
-     * @param[in] entries The object entries.
-     * @param[in] pubReq The request of multipublish.
-     * @param[out] req The multimeta request to fill.
-     */
-    void FillMultiMetaReqPhaseOne(const std::vector<std::pair<std::string, size_t>> &objectKeys,
-                                  const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                  const MultiPublishReqPb &pubReq, master::CreateMultiMetaReqPb &req);
-
-    /**
-     * @brief Create multimeta request to master.
-     * @param[in] objectKeys Object key list.
-     * @param[in] entries The object entries.
-     * @param[in] pubReq The request of multipublish.
-     * @param[out] versions The versions of objects.
+     * @brief Verify the validity of the object release.
+     * @param[in] req Publish request meta.
+     * @param[in] safeObj The object to be sealed.
      * @return Status of the call.
      */
-    Status CreateMultiMetaToDistributedMaster(const std::vector<std::string> &objectKeys,
-                                              const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                              const MultiPublishReqPb &pubReq, std::vector<uint64_t> &versions);
+    static Status VerifyObjectReleaseValidity(const MultiPublishReqPb &req, const SafeObjType &safeObj);
 
     /**
      * @brief Create multimeta request to master in parallel.
@@ -222,7 +193,7 @@ private:
      */
     void CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
                                  std::vector<master::CreateMultiMetaReqPb> &reqs,
-                                 std::vector<CreateMeta2PCRes> &respRes);
+                                 std::vector<CreateMultiMetaResult> &respRes);
 
     /**
      * @brief Create multimeta request to master in parallel.
@@ -234,84 +205,6 @@ private:
     Status CreateMultiMetaParallel(const ObjGroupMap &objGroup, const std::vector<MetaAddrInfo> &addrs,
                                    std::vector<master::CreateMultiMetaReqPb> &reqs);
 
-    /**
-     * @brief Create multimeta request to master in serial.
-     * @param[in] objGroup The group of objects.
-     * @param[in] addrs The master addrs.
-     * @param[in] reqs The CreateMultiMeta requests.
-     * @return Status of the call.
-     */
-    Status CreateMultiMetaSerial(const ObjGroupMap &objGroup, const std::vector<MetaAddrInfo> &addrs,
-                                 std::vector<master::CreateMultiMetaReqPb> &reqs);
-
-    /**
-     * @brief Create multimeta phase one request to master.
-     * @param[in] objGroup The group of objects.
-     * @param[in] entries The object entries.
-     * @param[in] pubReq The request of multipublish.
-     * @return Status of the call.
-     */
-    Status CreateMultiMetaPhaseOne(const ObjGroupMap &objGroup,
-                                   const std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                   const MultiPublishReqPb &pubReq);
-
-    /**
-     * @brief Create multimeta phase two request to master.
-     * @param[in] objGroup The group of objects.
-     * @param[in] pubReq The request of multipublish.
-     * @param[out] versions The versions of objects.
-     * @return Status of the call.
-     */
-    Status CreateMultiMetaPhaseTwo(const ObjGroupMap &objGroup, const MultiPublishReqPb &pubReq,
-                                   std::vector<uint64_t> &versions);
-
-    /**
-     * @brief Process 2PC results.
-     * @param[in] futures The 2PC request futures.
-     * @param[in] objGroup The group of objects.
-     * @param[out] versions The versions of objects.
-     * @return Status of the call.
-     */
-    Status Process2PCResults(std::vector<std::future<CreateMeta2PCRes>> &futures, const ObjGroupMap &objGroup,
-                             std::vector<uint64_t> &versions);
-
-    /**
-     * @brief Rollback metadata request to master.
-     * @param[in] addrs The master addrs.
-     * @param[in] objGroup The group of objects.
-     */
-    void RollbackMultiMetaReq(std::vector<MetaAddrInfo> &addrs, const ObjGroupMap &objGroup);
-
-    /**
-     * @brief Retry rollback metadata request when meta moving.
-     * @param[in] metaAddrInfo The master addr.
-     * @param[in] req The RollbackMultiMeta request.
-     * @param[out] rsp The responese info of RollbackMultiMeta.
-     * @return Status of the call.
-     */
-    Status RetryRollbackMultiMetaWhenMoving(const MetaAddrInfo &metaAddrInfo, master::RollbackMultiMetaReqPb &req,
-                                            master::RollbackMultiMetaRspPb &rsp);
-
-    /**
-     * @brief Create multimeta with Worker→Master RPC retry on transient errors, and loop while meta is moving.
-     * @param[in] api The worker master api.
-     * @param[in] req The CreateMultiMeta request.
-     * @param[out] rsp The responese info of CreateMultiMeta.
-     * @return Status of the call.
-     */
-    Status RetryCreateMultiMeta(std::shared_ptr<worker::WorkerMasterOCApi> api, master::CreateMultiMetaReqPb &req,
-                                master::CreateMultiMetaRspPb &rsp);
-
-    /**
-     * @brief Retry create multimeta phase two request when meta moving.
-     * @param[in] api The worker master api.
-     * @param[in] req The CreateMultiMeta request.
-     * @param[out] rsp The responese info of CreateMultiMeta.
-     * @return Status of the call.
-     */
-    Status RetryCreateMultiMetaPhaseTwoWhenMoving(std::shared_ptr<worker::WorkerMasterOCApi> api,
-                                                  master::CreateMultiMetaPhaseTwoReqPb &req,
-                                                  master::CreateMultiMetaRspPb &rsp);
     /**
      * @brief Fill the entry and save object to L2 cache if success to create meta.
      * @param[in] objectKeys Object key list.
@@ -335,24 +228,6 @@ private:
     Status SendToMasterAndUpdateObject(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
                                        std::unordered_set<std::string> &failedKeys,
                                        std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc);
-
-    /**
-     * @brief Batch lock for multiple set via object keys.
-     * @param[in] objectKeys Object key list that needs to be locked.
-     * @param[out] isInserts If the entry is newly inserted.
-     * @param[out] entries Locked entry list
-     * @param[out] successIndex success index of object list
-     */
-    Status BatchLockForSet(const std::vector<std::string> &objectKeys, std::vector<bool> &isInserts,
-                           std::vector<std::shared_ptr<SafeObjType>> &entries, std::vector<size_t> &successIndex);
-
-    /**
-     * @brief Batch unlock for multiple set via lockedEntries.
-     * @param[in] lockedEntries Locked entry list.
-     * @param[in] successIndex success index of success object for lock
-     */
-    static void BatchUnlockForSet(std::vector<std::shared_ptr<SafeObjType>> &entries,
-                                  const std::vector<size_t> &successIndex);
 
     /**
      * @brief Release memory and resource if failing to publish.
@@ -393,27 +268,9 @@ private:
     Status BatchLockForSetNtx(const std::vector<std::string> &objectKeys, const ExistenceOptPb &existence,
                               std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries,
                               std::unordered_set<std::string> &localExistKeys);
-    /**
-     * @brief Verify the validity of the object release.
-     * @param[in] req Publish request meta.
-     * @param[in] safeObj The object to be sealed.
-     * @return Status of the call.
-     */
-    static Status VerifyObjectReleaseValidity(const MultiPublishReqPb &req, const SafeObjType &safeObj);
 
     /**
-     * @brief Verify objects and roll back if necessary.
-     * @param[in] req The rpc request protobuf.
-     * @param[in] objectKeys Object key list.
-     * @param[in] ifInserts If the object insert to objectTable_.
-     * @param[out] entries The object entries.
-     * @return K_OK on success; the error code otherwise.
-     */
-    Status VerifyObjectsAndRollBackIfNeedTx(const MultiPublishReqPb &req, const std::vector<std::string> &objectKeys,
-                                            const std::vector<bool> &ifInserts,
-                                            std::vector<std::shared_ptr<SafeObjType>> &entries);
-    /**
-     * @brief Verify objects in a transaction.
+     * @brief Verify NTX objects.
      * @param[in] req The rpc request protobuf.
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.

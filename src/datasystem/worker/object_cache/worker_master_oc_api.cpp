@@ -47,7 +47,6 @@ DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem {
 namespace worker {
-
 static constexpr int64_t WORKER_ADD_MILLISECOND = 5 * 1000;
 static constexpr int64_t WORKER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
 static constexpr double WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
@@ -187,6 +186,7 @@ Status WorkerRemoteMasterOCApi::ReportResource(master::ResourceReportReqPb &requ
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+
     return WithRpcDiag(status, "ReportResource", localHostPort_, hostPort_);
 }
 
@@ -214,23 +214,6 @@ Status WorkerRemoteMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &re
     return WithRpcDiag(status, "CreateMultiMeta", localHostPort_, hostPort_);
 }
 
-Status WorkerRemoteMasterOCApi::CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
-                                                        master::CreateMultiMetaRspPb &response)
-{
-    RpcOptions opts;
-    auto status = RetryOnErrorRepent(
-        reqTimeoutDuration.CalcRealRemainingTime(),
-        [this, &opts, &request, &response](int32_t) {
-            CHECK_AND_SET_TIMEOUT(reqTimeoutDuration, request, opts);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-            return rpcSession_->CreateMultiMetaPhaseTwo(opts, request, response);
-        },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_WORKER_TIMEOUT });
-    return WithRpcDiag(status, "CreateMultiMetaPhaseTwo", localHostPort_, hostPort_);
-}
-
 Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &request,
                                                master::CreateCopyMetaRspPb &response)
 {
@@ -252,6 +235,7 @@ Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &requ
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE }, false);
+
     return WithRpcDiag(status, "CreateCopyMeta", localHostPort_, hostPort_);
 }
 
@@ -276,6 +260,7 @@ Status WorkerRemoteMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaR
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE });
+
     return WithRpcDiag(status, "CreateMultiCopyMeta", localHostPort_, hostPort_);
 }
 
@@ -877,7 +862,7 @@ Status WorkerRemoteMasterOCApi::RemoveP2PLocation(RemoveP2PLocationReqPb &req, R
     auto remainingTime = reqTimeoutDuration.CalcRemainingTime();
     opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->RemoveP2PLocation(req, resp);
+    Status rc = rpcSession_->RemoveP2PLocation(req, resp);
     return WithRpcDiag(rc, "RemoveP2PLocation", localHostPort_, hostPort_);
 }
 
@@ -919,7 +904,7 @@ Status WorkerRemoteMasterOCApi::ReleaseMetaData(ReleaseMetaDataReqPb &req, Relea
     auto remainingTime = reqTimeoutDuration.CalcRemainingTime();
     opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->ReleaseMetaData(opts, req, resp);
+    Status rc = rpcSession_->ReleaseMetaData(opts, req, resp);
     return WithRpcDiag(rc, "ReleaseMetaData", localHostPort_, hostPort_);
 }
 
@@ -928,7 +913,7 @@ Status WorkerRemoteMasterOCApi::ReplacePrimary(master::ReplacePrimaryReqPb &req,
     RpcOptions opts;
     opts.SetTimeout(RPC_TIMEOUT);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->ReplacePrimary(opts, req, rsp);
+    Status rc = rpcSession_->ReplacePrimary(opts, req, rsp);
     return WithRpcDiag(rc, "ReplacePrimary", localHostPort_, hostPort_);
 }
 
@@ -937,7 +922,7 @@ Status WorkerRemoteMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, m
     RpcOptions opts;
     opts.SetTimeout(RPC_TIMEOUT);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->PureQueryMeta(opts, req, rsp);
+    Status rc = rpcSession_->PureQueryMeta(opts, req, rsp);
     return WithRpcDiag(rc, "PureQueryMeta", localHostPort_, hostPort_);
 }
 
@@ -980,7 +965,7 @@ Status WorkerRemoteMasterOCApi::Expire(master::ExpireReqPb &req, master::ExpireR
     RpcOptions opts;
     opts.SetTimeout(RPC_TIMEOUT);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->Expire(opts, req, rsp);
+    Status rc = rpcSession_->Expire(opts, req, rsp);
     return WithRpcDiag(rc, "Expire", localHostPort_, hostPort_);
 }
 
@@ -989,7 +974,7 @@ Status WorkerRemoteMasterOCApi::GetMetaInfo(GetMetaInfoReqPb &req, GetMetaInfoRs
     RpcOptions opts;
     opts.SetTimeout(RPC_TIMEOUT);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->GetMetaInfo(opts, req, rsp);
+    Status rc = rpcSession_->GetMetaInfo(opts, req, rsp);
     return WithRpcDiag(rc, "GetMetaInfo", localHostPort_, hostPort_);
 }
 // WorkerLocalMasterOCApi methods
@@ -1047,22 +1032,6 @@ Status WorkerLocalMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &req
             return masterOC_->CreateMultiMeta(request, response);
         },
         []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
-}
-
-Status WorkerLocalMasterOCApi::CreateMultiMetaPhaseTwo(master::CreateMultiMetaPhaseTwoReqPb &request,
-                                                       master::CreateMultiMetaRspPb &response)
-{
-    int64_t timeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
-    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_RPC_DEADLINE_EXCEEDED,
-                             FormatString("Request timeout (%lld ms).", -timeoutMs));
-    request.set_timeout(timeoutMs);
-    return RetryOnErrorRepent(
-        timeoutMs,
-        [this, &request, &response](int32_t) {
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-            return masterOC_->CreateMultiMetaPhaseTwo(request, response);
-        },
-        []() { return Status::OK(); }, { StatusCode::K_TRY_AGAIN, StatusCode::K_WORKER_TIMEOUT });
 }
 
 Status WorkerLocalMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &request,

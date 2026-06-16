@@ -19,6 +19,9 @@
  */
 #include "datasystem/common/stream_cache/cursor.h"
 
+#include <chrono>
+#include <future>
+
 #include "ut/common.h"
 
 namespace datasystem {
@@ -40,19 +43,33 @@ TEST_F(SharedMemViewLockTest, WriteLockTimeoutTest)
     // 3. Read lock is obtainable after Thread A and Thread B finish.
 
     // Thread A
-    const uint TWO_SECS = 2;
+    std::promise<void> readerLocked;
+    auto readerLockedFuture = readerLocked.get_future();
+    std::promise<void> releaseReader;
+    auto releaseReaderFuture = releaseReader.get_future().share();
     ThreadPool pool(1);
-    auto func = [this]() {
+    auto func = [this, &readerLocked, releaseReaderFuture]() mutable {
         SharedMemViewLock lock(&view_.lock_);
-        return lock.LockSharedAndExec([]() { sleep(TWO_SECS); }, ONE_THOUSAND);
+        return lock.LockSharedAndExec(
+            [&readerLocked, releaseReaderFuture]() mutable {
+                readerLocked.set_value();
+                releaseReaderFuture.wait();
+            },
+            ONE_THOUSAND);
     };
     std::future<Status> fut = pool.Submit(func);
 
-    sleep(1);
+    auto ready = readerLockedFuture.wait_for(std::chrono::seconds(5));
+    if (ready != std::future_status::ready) {
+        releaseReader.set_value();
+    }
+    ASSERT_EQ(ready, std::future_status::ready);
 
     // Thread B
     SharedMemViewLock lock(&view_.lock_);
-    ASSERT_EQ(lock.LockExclusiveAndExec([]() { sleep(1); }, ONE_THOUSAND).GetCode(), K_TRY_AGAIN);
+    auto rc = lock.LockExclusiveAndExec([]() {}, ONE_THOUSAND);
+    releaseReader.set_value();
+    ASSERT_EQ(rc.GetCode(), K_TRY_AGAIN);
 
     // Wait for Thread A to finish.
     DS_ASSERT_OK(fut.get());
