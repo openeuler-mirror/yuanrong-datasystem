@@ -1079,27 +1079,27 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-even"><td><p>global.spill.evictionReserveMemThresholdMB</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
-<td><p>内存预留阈值（MB），与比例高水位取 max 后触发驱逐。有效范围 100-102400</p></td>
+<td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, evictionReserveMemThresholdMB)；与 evictionHighWatermarkRatio 共同决定驱逐触发线。有效范围 100-102400</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.evictionHighWatermarkPercent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
-<td><p>内存占用率高水位（百分比，相对可用共享内存）。有效范围 2-100，须大于 evictionLowWatermarkPercent</p></td>
+<tr class="row-odd"><td><p>global.spill.evictionHighWatermarkRatio</p></td>
+<td><p>float</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.9</span></code></p></td>
+<td><p>内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - evictionReserveMemThresholdMB) 时触发驱逐。有效范围 0.02-1.0，须大于 evictionLowWatermarkRatio</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.evictionLowWatermarkPercent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
-<td><p>内存占用率低水位（百分比），后台驱逐目标。有效范围 1-99，须小于 evictionHighWatermarkPercent</p></td>
+<tr class="row-even"><td><p>global.spill.evictionLowWatermarkRatio</p></td>
+<td><p>float</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio</p></td>
 </tr>
-<tr class="row-odd"><td><p>global.spill.spillHighWatermarkPercent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
-<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100</p></td>
+<tr class="row-odd"><td><p>global.spill.spillHighWatermarkRatio</p></td>
+<td><p>float</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio</p></td>
 </tr>
-<tr class="row-even"><td><p>global.spill.spillLowWatermarkPercent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
-<td><p>Spill 目录占用率低水位（百分比）。有效范围 1-99</p></td>
+<tr class="row-even"><td><p>global.spill.spillLowWatermarkRatio</p></td>
+<td><p>float</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.6</span></code></p></td>
+<td><p>Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio</p></td>
 </tr>
 <tr class="row-odd"><td><p>global.spill.spillToRemoteWorker</p></td>
 <td><p>bool</p></td>
