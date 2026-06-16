@@ -907,6 +907,10 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
     builder_.SetCredential(cred);
 
+    // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()),
+                                     "Failed to configure HCCS worker IP");
+
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
     uint64_t sharedDiskBytes = FLAGS_shared_disk_size_mb * 1024ul * 1024ul;      // convert mb to bytes.
@@ -917,6 +921,7 @@ Status WorkerOCServer::Init()
                                      "Init allocator failed");
     // Call base class to init common service
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CommonServer::Init(), "CommonServer init failed");
+
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(hostPort_),
                                      "Fast transport (URMA/RDMA) init failed");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_max_rpc_session_num, hostPort_));

@@ -133,6 +133,10 @@ add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp
 target_link_libraries(flags_ut ds_flags ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
 add_datasystem_test(flags_ut)
 
+if (BUILD_HETERO AND BUILD_HETERO_NPU)
+    add_subdirectory(device/ascend)
+endif()
+
 set(EMBEDDED_CLIENT_WORKER_API_UT_DEPEND_LIBS
         GTest::gtest
         GTest::gmock

@@ -48,8 +48,7 @@ BARRIER_WAIT_TIMEOUT = 60
 DEFAULT_WORKER_IP = "127.0.0.1"
 DEFAULT_WORKER_PORT = 31699
 
-DEVICE_START_INDEX = 3
-TOTAL_NPU_COUNT = 8
+DEFAULT_DEVICE_IDS = "0,1,2,3,4,5,6,7"
 
 timestamp_sec = int(time.time())
 RESULT_FILENAME = f"perf_result_{timestamp_sec}.csv"
@@ -95,6 +94,22 @@ config_map = {
     '8process_1thread_32key_144KB': {'num_processes': 8, 'key_num': 32, 'blob_nums': [61], 'blob_sizes': [144 * 1024],
                                'iterations': 5, 'thread_number': 1},
     '8process_1thread_32key_1024KB': {'num_processes': 8, 'key_num': 32, 'blob_nums': [28], 'blob_sizes': [1024 * 1024],
+                                'iterations': 1, 'thread_number': 1},
+
+    # Sixteen processes, single thread, 1 key tests (with default 8 devices: 2 processes/device)
+    '16process_1thread_1key_72KB': {'num_processes': 16, 'key_num': 1, 'blob_nums': [61], 'blob_sizes': [72 * 1024],
+                              'iterations': 100, 'thread_number': 1},
+    '16process_1thread_1key_144KB': {'num_processes': 16, 'key_num': 1, 'blob_nums': [61], 'blob_sizes': [144 * 1024],
+                              'iterations': 100, 'thread_number': 1},
+    '16process_1thread_1key_1024KB': {'num_processes': 16, 'key_num': 1, 'blob_nums': [28], 'blob_sizes': [1024 * 1024],
+                              'iterations': 40, 'thread_number': 1},
+
+    # Sixteen processes, single thread, 32 key tests
+    '16process_1thread_32key_72KB': {'num_processes': 16, 'key_num': 32, 'blob_nums': [61], 'blob_sizes': [72 * 1024],
+                              'iterations': 10, 'thread_number': 1},
+    '16process_1thread_32key_144KB': {'num_processes': 16, 'key_num': 32, 'blob_nums': [61], 'blob_sizes': [144 * 1024],
+                               'iterations': 5, 'thread_number': 1},
+    '16process_1thread_32key_1024KB': {'num_processes': 16, 'key_num': 32, 'blob_nums': [28], 'blob_sizes': [1024 * 1024],
                                 'iterations': 1, 'thread_number': 1},
 
     # Hixl benchmark cases
@@ -145,9 +160,9 @@ def random_str(slen=10):
     return "".join(sa)
 
 
-def deterministic_suffixes(test_name: str, device_id: int, thread_number: int, key_seed: str) -> List[str]:
+def deterministic_suffixes(test_name: str, process_index: int, thread_number: int, key_seed: str) -> List[str]:
     """Generate deterministic suffixes so set/get can run on different nodes without sharing keys.json."""
-    return [f"{key_seed}_{test_name}_dev{device_id}_thr{thread_id}" for thread_id in range(thread_number)]
+    return [f"{key_seed}_{test_name}_proc{process_index}_thr{thread_id}" for thread_id in range(thread_number)]
 
 
 def init_file(filename):
@@ -264,22 +279,24 @@ def blocking_wait_sync(barrier, op_name, device_id):
         logging.info("Some processes failed to reach the synchronization point on time!")
 
 
-def reset_perf_after_warmup(perf_client: Optional["PerfClient"], barrier, device_id: int):
+def reset_perf_after_warmup(perf_client: Optional["PerfClient"], barrier, device_id: int, process_index: int):
     """Reset client/worker perf logs after warmup and before measured traffic."""
     blocking_wait_sync(barrier, "perf_reset_before_run", device_id)
     if perf_client is not None:
-        if device_id == args.deviceid:
+        if process_index == 0:
             perf_client.reset_perf_log("worker")
         perf_client.reset_perf_log("client")
     blocking_wait_sync(barrier, "perf_reset_done", device_id)
 
 
-def collect_perf_before_cleanup(perf_client: Optional["PerfClient"], barrier, device_id: int, metrics_data: Dict):
+def collect_perf_before_cleanup(
+    perf_client: Optional["PerfClient"], barrier, device_id: int, process_index: int, metrics_data: Dict
+):
     """Collect perf logs before delete/cleanup traffic pollutes the measured window."""
     blocking_wait_sync(barrier, "perf_collect_before_cleanup", device_id)
     if perf_client is not None:
         metrics_data["client_perf_logs"] = perf_client.get_perf_log("client")
-        if device_id == args.deviceid:
+        if process_index == 0:
             metrics_data["worker_perf_logs"] = perf_client.get_perf_log("worker")
     blocking_wait_sync(barrier, "perf_collect_done", device_id)
 
@@ -305,6 +322,7 @@ def operate_thread(op_name, client, device_id, key_num, iterations, suffix, blob
 
 def worker_process(
         device_id: int,
+        process_index: int,
         key_num: int,
         blob_nums_per_key: List[int],
         blob_sizes: List[int],
@@ -344,13 +362,13 @@ def worker_process(
 
     # warm up
     warmup(client, device_id, key_num, all_in_data_blob_list, all_out_data_blob_list)
-    reset_perf_after_warmup(perf_client, barrier, device_id)
+    reset_perf_after_warmup(perf_client, barrier, device_id, process_index)
 
     list_random_suffix = []
     key_dict = {}
     if mode in ["set", "get"]:
         with lock:
-            read_write_keys(list_random_suffix, key_dict, thread_number, device_id)
+            read_write_keys(list_random_suffix, key_dict, thread_number, process_index)
     else:
         for _ in range(thread_number):
             random_suffix = random_str(10)
@@ -365,11 +383,11 @@ def worker_process(
 
         shared_matrix = [[] for _ in range(thread_number)]
         operate_thread("mset_thread", client, device_id, key_num, iterations, list_random_suffix,
-                       all_out_data_blob_list, shared_matrix)
+                       all_in_data_blob_list, shared_matrix)
 
         for sublist in shared_matrix:
             metrics_data["mset_times"].extend(sublist)
-    
+
         metrics_data["mset_d2h_end"] = time.perf_counter()
 
     if mode in ["get", "all"]:
@@ -392,7 +410,7 @@ def worker_process(
         if mode in ["all"]:
             batch_data_check(all_out_data_blob_list[0], test_value)
 
-    collect_perf_before_cleanup(perf_client, barrier, device_id, metrics_data)
+    collect_perf_before_cleanup(perf_client, barrier, device_id, process_index, metrics_data)
 
     if mode in ["get", "all"]:
         # clear data
@@ -428,10 +446,12 @@ def read_write_keys(
     list_random_suffix: List[str],
     key_dict: Dict[str, Dict[str, List[str]]],
     thread_number: int,
-    device_id: int):
-    """If --set-only on, write keys to keys.json file. If --get-only on, read keys from keys.json file"""
+    process_index: int):
+    """If --set-only on, write keys to keys.json file. If --get-only on, read keys from keys.json file.
+       Keys are scoped by process_index so multiple processes sharing a device don't overwrite each other's entries."""
+    proc_key = str(process_index)
     if args.key_seed:
-        list_random_suffix.extend(deterministic_suffixes(current_test, device_id, thread_number, args.key_seed))
+        list_random_suffix.extend(deterministic_suffixes(current_test, process_index, thread_number, args.key_seed))
         return
 
     # Deserialize keys.json to access previously set data
@@ -441,23 +461,23 @@ def read_write_keys(
             if content:
                 key_dict = json.loads(content)
             if content and mode in ["get"]:
-                list_random_suffix.extend(key_dict[current_test][str(device_id)])
+                list_random_suffix.extend(key_dict[current_test][proc_key])
     except FileNotFoundError as e:
         if mode in ["get"]:
             raise RuntimeError("keys.json file not found") from e
     except Exception as e:
         raise RuntimeError(f"Unknown exception: {e}") from e
-    
+
     if mode in ["set"]:
         for _ in range(thread_number):
             random_suffix = random_str(10)
             list_random_suffix.append(random_suffix)
-        
+
         # Serialize keys into json to re-use keys for "--get-only"
         if current_test not in key_dict:
             key_dict[current_test] = {}
 
-        key_dict[current_test][str(device_id)] = list_random_suffix
+        key_dict[current_test][proc_key] = list_random_suffix
         logging.info(f"Wrote {len(list_random_suffix)} keys to {current_test}")
 
         with open(args.keys, 'w') as json_file:
@@ -508,10 +528,6 @@ def run_benchmark(
         :param iterations: Number of iterations for each process
         :param thread_number: Number of threads per process
     """
-    # Parameter verification
-    if num_processes > 16:
-        raise RuntimeError(f"The number of processes must be less than the number of device.")
-
     # Prepare a multi-process environment
     result_queue = mp.Queue()
     barrier = mp.Barrier(num_processes)
@@ -520,12 +536,14 @@ def run_benchmark(
 
     logging.info(f"Start {num_processes} process...")
 
-    # Start work process
+    # Start work process. Processes cycle through the --device-ids list; if num_processes exceeds
+    # the list length, processes wrap back to the start (sharing devices).
     for i in range(num_processes):
+        device_id = args.device_ids[i % len(args.device_ids)]
         p = mp.Process(
             target=worker_process,
             args=(
-                ((i + args.deviceid) % TOTAL_NPU_COUNT), key_num, blob_nums, blob_sizes, iterations, thread_number,
+                device_id, i, key_num, blob_nums, blob_sizes, iterations, thread_number,
                 result_queue, barrier, lock)
         )
         p.start()
@@ -541,7 +559,7 @@ def run_benchmark(
     request_size = 0
     for i, blob_num in enumerate(blob_nums):
         request_size += (key_num * blob_num * blob_sizes[i] * thread_number) / (1024 * 1024)
-    
+
     # Processing data
     handle_metrics(results, iterations, key_num, num_processes, request_size)
     for index, result in enumerate(results):
@@ -593,8 +611,9 @@ def handle_metrics(results, iterations, key_num, num_processes, request_size):
     mget_start = float('inf')
     mget_end = float('-inf')
 
-    # total data size
-    total_data_bytes = 0
+    # Bytes for one iteration sweep across all workers. mset runs this once per worker;
+    # mget runs it get_multiplier times per worker.
+    single_pass_total_bytes = 0
 
     for res in results:
         all_mset_times.extend(res["mset_times"])
@@ -610,9 +629,15 @@ def handle_metrics(results, iterations, key_num, num_processes, request_size):
             mget_start = min(mget_start, res["mget_h2d_start"])
             mget_end = max(mget_end, res["mget_h2d_end"])
 
-        total_data_bytes += res["total_data_bytes"]
-        if mode in ["all"] and len(res["mset_times"]) != len(res["mget_times"]):
+        single_pass_total_bytes += res["total_data_bytes"]
+        # In "all" mode mget is repeated get_multiplier times per mset call.
+        if mode in ["all"] and len(res["mset_times"]) * args.get_multiplier != len(res["mget_times"]):
             raise RuntimeError(f"The number of set length not equal as get length")
+
+    mset_ops = len(all_mset_times)
+    mget_ops = len(all_mget_times)
+    mset_total_bytes = single_pass_total_bytes
+    mget_total_bytes = single_pass_total_bytes * args.get_multiplier
 
     # Show individual request latencies if requested
     if args.show_all_request_times:
@@ -633,16 +658,15 @@ def handle_metrics(results, iterations, key_num, num_processes, request_size):
         mget_per_req = ((sum(all_mget_times) - (all_mget_times[0] if len(all_mget_times) > 1 else 0)) \
                        / (len(all_mget_times) - (1 if len(all_mget_times) > 1 else 0))) / 1000
         mget_throughput = (request_size / mget_per_req) * num_processes
-        total_data_bytes *= args.get_multiplier
 
     # Print summary information
     logging.info(f"\n{'>' * 50}\nTest finish! ")
     if mode in ["set", "all"]:
-        stats = (total_data_bytes, mset_duration, mset_throughput, mset_per_req, request_size)
-        print_performance_result("mset_d2h", len(all_mset_times), calculate_metrics(all_mset_times, mset_duration), stats)
+        stats = (mset_total_bytes, mset_duration, mset_throughput, mset_per_req, request_size)
+        print_performance_result("mset_d2h", mset_ops, calculate_metrics(all_mset_times, mset_duration), stats)
     if mode in ["get", "all"]:
-        stats = (total_data_bytes, mget_duration, mget_throughput, mget_per_req, request_size)
-        print_performance_result("mget_h2d", len(all_mget_times), calculate_metrics(all_mget_times, mget_duration), stats)
+        stats = (mget_total_bytes, mget_duration, mget_throughput, mget_per_req, request_size)
+        print_performance_result("mget_h2d", mget_ops, calculate_metrics(all_mget_times, mget_duration), stats)
 
 
 if __name__ == "__main__":
@@ -652,7 +676,7 @@ if __name__ == "__main__":
 
     # Benchmark arguments
     parser.add_argument("--set-only", action="store_true", dest="set_only", help="Only run MSetD2H")
-    parser.add_argument("--get-only", action="store_true", dest="get_only", help="Only run MSetD2H")
+    parser.add_argument("--get-only", action="store_true", dest="get_only", help="Only run MGetH2D")
     parser.add_argument("-i", "--ip", type=str, default=DEFAULT_WORKER_IP,
                         help=f"IP address of the worker (Default {DEFAULT_WORKER_IP})")
     parser.add_argument("-p", "--port", type=int, default=DEFAULT_WORKER_PORT,
@@ -664,8 +688,10 @@ if __name__ == "__main__":
                              "keys without sharing keys.json.")
     parser.add_argument("--no-warmup", action="store_true", dest="no_warmup", help="Skip the initial warmup")
     parser.add_argument("-n", "--name", type=str, default="", help="Name of test to run")
-    parser.add_argument("-d", "--deviceid", type=int, default=3,
-                       help=f"Starting device id (Default {DEVICE_START_INDEX})")
+    parser.add_argument("-d", "--device-ids", type=lambda s: [int(x) for x in s.split(",")],
+                       default=[int(x) for x in DEFAULT_DEVICE_IDS.split(",")], dest="device_ids",
+                       help=f"Comma-separated list of NPU device IDs to use. Processes are assigned round-robin "
+                            f"from this list (Default \"{DEFAULT_DEVICE_IDS}\")")
     parser.add_argument("--get-multiplier", type=int, default=1, dest="get_multiplier",
                         help="Multiply the amount of get requests by x amount")
     parser.add_argument("--show-all-request-times", action="store_true", dest="show_all_request_times",

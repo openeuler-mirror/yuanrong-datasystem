@@ -17,6 +17,7 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 
 #include <cmath>
+#include <sstream>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/validator.h"
@@ -63,6 +64,31 @@ bool ValidateEnableRdma(const char *flagName, bool value)
     }
     return true;
 #endif
+}
+
+bool ValidateRemoteH2DLinkType(const char *flagName, const std::string &value)
+{
+    if (value == "ROCE" || value == "HCCS") {
+        return true;
+    }
+    LOG(ERROR) << FormatString("Invalid %s: '%s'. Must be 'ROCE' or 'HCCS'.", flagName, value);
+    return false;
+}
+
+bool ValidateRemoteH2DHccsBufferPool(const char *flagName, const std::string &value)
+{
+    uint64_t count = 0;
+    uint64_t size = 0;
+    char colon = 0;
+    char trailing = 0;
+    std::istringstream iss(value);
+    iss >> count >> colon >> size;
+    if (!iss.fail() && colon == ':' && !(iss >> trailing) && count > 0 && size > 0) {
+        return true;
+    }
+    LOG(ERROR) << FormatString("Invalid %s: '%s'. Expected \"<count>:<size>\" with both values positive.", flagName,
+                               value);
+    return false;
 }
 
 bool ValidateEnableRemoteH2D(const char *flagName, bool value)
@@ -163,6 +189,8 @@ DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSucce
 DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);
 DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
+DS_DEFINE_validator(remote_h2d_link_type, &ValidateRemoteH2DLinkType);
+DS_DEFINE_validator(remote_h2d_hccs_buffer_pool, &ValidateRemoteH2DHccsBufferPool);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);

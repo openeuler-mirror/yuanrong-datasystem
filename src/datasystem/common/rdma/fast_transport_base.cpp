@@ -77,7 +77,7 @@ bool IsFastTransportEnabled()
 bool IsRemoteH2DEnabled()
 {
 #ifdef BUILD_HETERO
-    return !FLAGS_remote_h2d_device_ids.empty();
+    return RemoteH2DManager::IsRemoteH2DEnabled();
 #else
     return false;
 #endif

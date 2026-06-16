@@ -46,6 +46,8 @@ DS_DECLARE_uint32(urma_failover_min_sample_count);
 DS_DECLARE_bool(enable_rdma);
 DS_DECLARE_bool(rdma_register_whole_arena);
 DS_DECLARE_bool(enable_remote_h2d);
+DS_DECLARE_string(remote_h2d_link_type);
+DS_DECLARE_string(remote_h2d_hccs_buffer_pool);
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(distributed_disk_path);
 DS_DECLARE_string(log_dir);

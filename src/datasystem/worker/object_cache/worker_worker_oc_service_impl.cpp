@@ -179,11 +179,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
-                    AppendSrcDstForLog(
-                        FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
-                                     req.object_key(), payload.size(), elapsedMs),
-                        GetRemoteAddressForLog(req), FLAGS_worker_address));
+    PLOG_IF_OR_VLOG(
+        INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
+        AppendSrcDstForLog(FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
+                                        req.object_key(), payload.size(), elapsedMs),
+                           GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -220,9 +220,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
                                                subReq.read_offset(), subReq.read_size()),
                                   callerAddress, FLAGS_worker_address);
     Status fallbackStatus;
-    auto status = GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr,
-                                         rsp.mutable_root_info(), isGatherWrite ? nullptr : &fallbackStatus,
-                                         batchRh2dContext);
+    auto status =
+        GetObjectRemoteHandler(subReq, subRsp, subPayload, false, eventKeys, batchPtr, rsp.mutable_root_info(),
+                               isGatherWrite ? nullptr : &fallbackStatus, batchRh2dContext);
     // payload means need to FallbackTcp/NormalTcp transport
     if ((status.IsError() && subPayload.empty()) || (status.IsError() && !FLAGS_enable_transport_fallback)) {
         subRsp.mutable_error()->set_error_code(status.GetCode());
@@ -372,8 +372,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
                                                          std::shared_ptr<AggregateMemory> batchPtr,
-                                                         RemoteH2DRootInfoPb *batchRootInfo,
-                                                         Status *fallbackStatus,
+                                                         RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
                                                          BatchRh2dContext *batchRh2dContext)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_HANDLER);
@@ -382,8 +381,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     INJECT_POINT("worker.worker_worker_remote_get_sleep");
     INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
-    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
-                                        fallbackStatus, batchRh2dContext);
+    Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo, fallbackStatus,
+                                        batchRh2dContext);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {
         status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, status.GetMsg());
     }
@@ -461,19 +460,17 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     }
 
     // Initialize communicator connection (accept client).
-    // Fixme: error handling
     std::shared_ptr<RemoteH2DContext> p2pComm;
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().P2PCommInitRootInfo(commId, *rootInfo, P2P_SENDER, p2pComm, devId,
                                                                       communicatorThreadPool_));
-
     // Send segment info to client
     auto *segmentPb = rsp.mutable_host_info()->mutable_remote_host_segment();
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillSegmentInfo(localSegSize, shmUnit->GetOffset() + metadataSize,
                                                                   localSegAddress, *segmentPb, devId));
 
     // Send offset info to client
-    auto *dataInfoPb = rsp.mutable_host_info()->mutable_data_info();
     uint64_t *dataPtr = reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(shmUnit->GetPointer()) + metadataSize);
+    auto *dataInfoPb = rsp.mutable_host_info()->mutable_data_info();
     RETURN_IF_NOT_OK(RemoteH2DManager::Instance().FillDataInfo(dataPtr, *dataInfoPb));
     point.Record();
 #endif
@@ -484,8 +481,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                       std::vector<RpcMessage> &outPayload, bool blocking,
                                                       std::vector<uint64_t> &eventKeys,
                                                       std::shared_ptr<AggregateMemory> batchPtr,
-                                                      RemoteH2DRootInfoPb *batchRootInfo,
-                                                      Status *fallbackStatus,
+                                                      RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
                                                       BatchRh2dContext *batchRh2dContext)
 {
     PerfPoint batchImplPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL);

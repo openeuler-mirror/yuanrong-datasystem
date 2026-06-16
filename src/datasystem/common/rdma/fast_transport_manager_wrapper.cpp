@@ -34,13 +34,24 @@ Status GetClientCommUuid(std::string &commId)
     return Status::OK();
 }
 
-void SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId)
+Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std::string &localIp)
 {
     (void)enableRemoteH2D;
     (void)devId;
+    (void)localIp;
 #ifdef BUILD_HETERO
-    RemoteH2DManager::SetClientRemoteH2DConfig(enableRemoteH2D, devId);
+    RETURN_IF_NOT_OK(RemoteH2DManager::SetClientRemoteH2DConfig(enableRemoteH2D, devId, localIp));
 #endif
+    return Status::OK();
+}
+
+Status SetRH2DLocalEndpointIp(const std::string &localIp)
+{
+    (void)localIp;
+#ifdef BUILD_HETERO
+    RETURN_IF_NOT_OK(RemoteH2DManager::SetRH2DLocalEndpointIp(localIp));
+#endif
+    return Status::OK();
 }
 
 uint64_t GenerateReqId()
