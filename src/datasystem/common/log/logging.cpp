@@ -60,6 +60,7 @@ constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
 constexpr bool DEFAULT_LOG_COMPRESS = true;
 constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
 constexpr bool DEFAULT_LOG_TO_STDERR = false;
+constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
@@ -92,6 +93,8 @@ DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of as
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
                "log files.");
+DS_DEFINE_bool(enable_perf_trace_log, DEFAULT_ENABLE_PERF_TRACE_LOG,
+               "Enable perf log output, When true always output perf related log.");
 
 DS_DEFINE_double(request_sample_rate, 1.0,
                  "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");

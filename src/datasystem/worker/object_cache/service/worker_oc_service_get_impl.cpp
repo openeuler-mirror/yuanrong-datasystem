@@ -338,7 +338,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     Timer localProcessingTimer;
     Status localRc = TryGetObjectFromLocal(request, remoteObjectKeys);
     const auto localProcessingUs = static_cast<uint64_t>(localProcessingTimer.ElapsedMicroSecond());
-    PLOG_IF_OR_VLOG(INFO, localProcessingUs >= GET_LOCAL_PROCESSING_SLOW_US, 1,
+    PLOG_IF_OR_VLOG(INFO, (localProcessingUs >= GET_LOCAL_PROCESSING_SLOW_US || FLAGS_enable_perf_trace_log), 1,
                     FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
                                  "costUs: %zu, rc: %s",
                                  request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),

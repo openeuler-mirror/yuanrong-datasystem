@@ -61,8 +61,8 @@ inline constexpr const char *TICK_SERVER_EXEC_END = "SERVER_EXEC_END";
 inline constexpr const char *TICK_SERVER_SEND = "SERVER_SEND";
 // ==================== RPC Tracing Helpers (always enabled) ====================
 inline constexpr uint64_t kNsPerUs = 1000ULL;
-inline constexpr uint64_t kRpcFrameworkSlowLogThresholdNs = 3ULL * 1000ULL * 1000ULL;
-inline constexpr uint64_t kRpcCheckLatencyThresholdNs = 2ULL * 1000ULL * 1000ULL;
+inline constexpr uint64_t kRpcFrameworkSlowLogThresholdNs = 1ULL * 1000ULL * 1000ULL;
+inline constexpr uint64_t kRpcCheckLatencyThresholdNs = 1ULL * 1000ULL * 1000ULL;
 
 // Convert nanoseconds to microseconds for metrics reporting
 inline uint64_t NsToUs(uint64_t ns)
@@ -301,7 +301,7 @@ static inline void RecordRpcLatencyMetrics(MetaPb &meta)
         RecordLatencyMetric(metrics::KvMetricId::ZMQ_RPC_NETWORK_LATENCY, networkResidualNs);
     }
     uint64_t frameworkNs = (e2eNs > serverExecNs) ? (e2eNs - serverExecNs) : 0U;
-    const int vlogLevel = frameworkNs > kRpcFrameworkSlowLogThresholdNs ? 0 : 1;
+    const int vlogLevel = (frameworkNs > kRpcFrameworkSlowLogThresholdNs || FLAGS_enable_perf_trace_log) ? 0 : 1;
     VLOG(vlogLevel) << "[ZMQ_RPC_FRAMEWORK_SLOW] trace_id=" << meta.trace_id()
                     << " framework_us=" << NsToUs(frameworkNs) << " e2e_us=" << NsToUs(e2eNs)
                     << " client_req_framework_us=" << NsToUs(clientReqFrameworkNs)

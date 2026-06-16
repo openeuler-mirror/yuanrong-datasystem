@@ -763,7 +763,7 @@ Status UrmaManager::CheckAndNotify()
         }
     }
     auto elapsedMs = timer.ElapsedMilliSecond();
-    LOG_IF(INFO, elapsedMs > URMA_LOG_LIMIT_MS)
+    LOG_IF(INFO, (elapsedMs > URMA_LOG_LIMIT_MS || FLAGS_enable_perf_trace_log))
         << "[URMA_ELAPSED_NOTIFY]: urma_poll_jfc thread notify urma_post_jetty_send_wr thread wake up cost "
         << elapsedMs << "ms, cpuid: " << sched_getcpu() << ", count: " << count
         << ", suggest: " << URMA_ELAPSED_NOTIFY_SUGGEST;
@@ -844,7 +844,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     auto totalElapsedMs = static_cast<double>(totalElapsedUs) / US_TO_MS;
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
-    PLOG_IF_OR_VLOG(INFO, totalElapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError(), 1,
+    PLOG_IF_OR_VLOG(INFO, (totalElapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError() || FLAGS_enable_perf_trace_log), 1,
                     "[URMA_ELAPSED_TOTAL]: Time from before urma_post_jetty_send_wr to write completion cost "
                         << totalElapsedMs << "ms, wait time: " << waitElapsedMs << "ms, request id:" << requestId
                         << ", src address:" << localUrmaInfo_.localAddress.ToString()
