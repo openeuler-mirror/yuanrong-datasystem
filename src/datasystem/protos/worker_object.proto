@@ -395,80 +395,6 @@ message ClearDataReqPb {
 message ClearDataRspPb {
 }
 
-message ReplicaPb {
-  string worker_id = 1;
-  int64 seq = 2;
-}
-
-message ReplicaGroupPb {
-  repeated ReplicaPb replicas = 1;
-  string primary_id = 2;
-}
-
-message TryPSyncReqPb {
-  string db_name = 1;
-  string backup_node_id = 2;
-  int64 seq = 3;
-  string replica_id = 4;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message TryPSyncRspPb {
-}
-
-message PushNewLogsReqPb {
-  enum ActionType {
-    WRITE_LOG = 0; HEARTBEAT = 1; SHUTDOWN = 2;
-  }
-  string db_name = 1;
-  ActionType action_type = 2;
-  string replica_id = 3;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message PushNewLogsRspPb {
-}
-
-message FetchMetaReqPb {
-  string db_name = 1;
-  string backup_node_id = 2;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message FetchMetaRspPb {
-  repeated string file_list = 1;
-}
-
-message FetchFileReqPb {
-  string db_name = 1;
-  string backup_node_id = 2;
-  string file = 3;
-  uint64 offset = 4;
-  uint32 crc32 = 5;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
-
-message FetchFileRspPb {
-  bool is_finish = 1;
-  uint32 crc32 = 2;
-}
-
 service MasterWorkerOCService {
   rpc PublishMeta(PublishMetaReqPb) returns (PublishMetaRspPb) {}
   rpc ClearData(ClearDataReqPb) returns (ClearDataRspPb) {}
@@ -482,15 +408,4 @@ service MasterWorkerOCService {
   rpc ChangePrimaryCopy(ChangePrimaryCopyReqPb) returns (ChangePrimaryCopyRspPb) {}
   rpc NotifyMasterIncNestedRefs(NotifyMasterIncNestedReqPb) returns (NotifyMasterIncNestedResPb) {}
   rpc NotifyMasterDecNestedRefs(NotifyMasterDecNestedReqPb) returns (NotifyMasterDecNestedResPb) {}
-}
-
-service ReplicationService {
-	rpc TryPSync(TryPSyncReqPb) returns (TryPSyncRspPb) {}
-	rpc PushNewLogs(PushNewLogsReqPb) returns (PushNewLogsRspPb) {
-	option (datasystem.send_payload_option) = true;
-}
-	rpc FetchMeta(FetchMetaReqPb) returns (FetchMetaRspPb) {}
-	rpc FetchFile(FetchFileReqPb) returns (FetchFileRspPb) {
-	option (datasystem.recv_payload_option) = true;
-}
 }

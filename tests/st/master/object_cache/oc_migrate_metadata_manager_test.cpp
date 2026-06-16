@@ -92,13 +92,13 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         FLAGS_master_address = hostPort_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
-        replicaManager_ = std::make_unique<ReplicaManager>();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, hostPort_, etcdStore_.get(), false);
+        metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
+        etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, hostPort_, etcdStore_.get(), nullptr);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
         workerUuid_ = etcdCM_->GetLocalWorkerUuid();
-        ReplicaManagerParam param;
+        MetadataManagerHolderParam param;
         param.dbRootPath = FLAGS_rocksdb_store_dir;
         param.currWorkerId = workerUuid_;
         param.akSkManager = akSkManager_;
@@ -110,8 +110,8 @@ public:
         param.workerWorkerService = nullptr;
         param.isOcEnabled = true;
         param.isScEnabled = false;
-        RETURN_IF_NOT_OK(replicaManager_->Init(param));
-        RETURN_IF_NOT_OK(replicaManager_->AddOrSwitchTo(param.currWorkerId, ReplicaType::Primary));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->Init(param));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->EnsureLocalMetadataManager(param.currWorkerId));
         etcdCM_->SetWorkerReady();
         return Status::OK();
     }
@@ -120,7 +120,7 @@ public:
     {
         InitInstanceBase();
         RETURN_IF_NOT_OK(
-            OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, etcdCM_.get(), replicaManager_.get()));
+            OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, etcdCM_.get(), metadataManagerHolder_.get()));
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, workerAddress_));
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
@@ -162,7 +162,7 @@ public:
             }
             LOG(INFO) << request.nested_keys().size();
             std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-            RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+            RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->CreateMeta(request, response), "create failed");
         }
         return Status::OK();
@@ -179,7 +179,7 @@ public:
         request.set_address(hostPort_.ToString());
         *request.mutable_object_keys() = { objectKeys_.begin(), objectKeys_.end() };
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->GIncreaseRef(request, response), "create failed");
         CHECK_FAIL_RETURN_STATUS(response.failed_object_keys().empty(), K_RUNTIME_ERROR, "increase failed");
         return Status::OK();
@@ -194,7 +194,7 @@ public:
         queryReq.set_address(GetWorkerAddr());
         std::vector<RpcMessage> payloads;
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         DS_ASSERT_OK(ocMetadataManager->QueryMeta(queryReq, queryRsp, payloads));
         if (isMigrationSuccess) {
             ASSERT_EQ(queryRsp.query_metas().size(), 0);
@@ -249,7 +249,7 @@ public:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<EtcdClusterManager> etcdCM_;
-    std::unique_ptr<ReplicaManager> replicaManager_;
+    std::unique_ptr<MetadataManagerHolder> metadataManagerHolder_;
     std::string workerUuid_;
     std::vector<std::string> nestedKeys_;
 };
@@ -261,7 +261,7 @@ TEST_F(OCMigrateMetadataManagerTest, TestMigrateMetadataSuccess)
     DS_ASSERT_OK(CreateMetadata(15));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashRing.noNeedToCheckForTest", "100*return"));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     OCMigrateMetadataManager::MigrateMetaInfo info = { .objectKeys = objectKeys_,
                                                        .destAddr = workerAddress_.ToString() };
     DS_ASSERT_OK(OCMigrateMetadataManager::Instance().StartMigrateMetadataForScaleout(ocMetadataManager, info));
@@ -280,7 +280,7 @@ TEST_F(OCMigrateMetadataManagerTest, TestMigrateMetadataRetryFailedExit)
     DS_ASSERT_OK(CreateMetadata(15));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashRing.noNeedToCheckForTest", "100*return"));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     OCMigrateMetadataManager::MigrateMetaInfo info = { .objectKeys = objectKeys_, .destAddr = "111.111.111.111:9191" };
     DS_ASSERT_NOT_OK(OCMigrateMetadataManager::Instance().MigrateMetaDataWithRetry(ocMetadataManager, info, false));
 }
@@ -292,7 +292,7 @@ TEST_F(OCMigrateMetadataManagerTest, TestMigrateMetadataOneFailed)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashRing.noNeedToCheckForTest", "100*return"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.save_minration_data_failed", "1*return"));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     OCMigrateMetadataManager::MigrateMetaInfo info = { .objectKeys = objectKeys_,
                                                        .destAddr = workerAddress_.ToString() };
     DS_ASSERT_OK(OCMigrateMetadataManager::Instance().StartMigrateMetadataForScaleout(ocMetadataManager, info));
@@ -328,7 +328,7 @@ TEST_F(OCMigrateMetadataManagerTest, TestNestRefMigrateSuccess)
     DS_ASSERT_OK(CreateMetadata(15, true));  // obj num is 15;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashRing.noNeedToCheckForTest", "100*return"));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     HashRange range;
     range.emplace_back(0, UINT32_MAX);
     OCMigrateMetadataManager::MigrateMetaInfo info = { .objectKeys = objectKeys_,
@@ -359,7 +359,7 @@ TEST_F(OCMigrateMetadataManagerTest, TestGlobalRefMigrateSuccess)
     DS_ASSERT_OK(GIncreaseRef(15));  // obj num is 15;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "hashRing.noNeedToCheckForTest", "100*return"));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     auto globalRef = ocMetadataManager->GetGlobalRefTable();
     ASSERT_EQ(globalRef->GetObjectRefCount(), 15);  // object num is 15
     HashRange range;
@@ -406,7 +406,7 @@ public:
         request.set_istx(true);
         request.set_address(hostPort_.ToString());
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         RETURN_IF_NOT_OK(ocMetadataManager->CreateMultiMeta(request, response));
         return Status::OK();
     }
@@ -431,7 +431,7 @@ public:
         request.set_address(address);
 
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         return ocMetadataManager->CreateMultiMeta(request, response);
     }
 
@@ -439,7 +439,7 @@ public:
     {
         std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> asyncMap;
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         return ocMetadataManager->FillMetadataForMigration(objectKey, meta, asyncMap);
     }
 
@@ -453,7 +453,7 @@ public:
         queryReq.set_sub_timeout(0);
         std::vector<RpcMessage> payloads;
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         RETURN_IF_NOT_OK(ocMetadataManager->QueryMeta(queryReq, queryRsp, payloads));
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(queryRsp.query_metas_size() == 1, K_RUNTIME_ERROR, "not found");
         return Status::OK();
@@ -588,7 +588,7 @@ public:
         deleteReq.set_redirect(true);
         deleteReq.set_need_forward_objs_without_meta(true);
         std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-        RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
         ocMetadataManager->DeleteAllCopyMeta(deleteReq, deleteRsp);
         CHECK_FAIL_RETURN_STATUS(deleteRsp.failed_object_keys().empty(), K_RUNTIME_ERROR, "delete failed");
         return Status::OK();
@@ -601,7 +601,7 @@ TEST_F(OCMetaManagerTest, DeleteMetaRemoveExperied)
     DS_ASSERT_OK(InitInstance());
     CreateMetadata(10);  // create meta num 10
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    DS_ASSERT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+    DS_ASSERT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
     DS_ASSERT_OK(DeleteAllCopyMeta());
     for (const auto &obj : objectKeys_) {
         datasystem::master::MetaForMigrationPb meta;

@@ -137,13 +137,12 @@ Use this file as the cross-module map. Use the detailed package for source-level
 2. Cluster-manager adds the worker to `clusterNodeTable_`.
 3. The new worker also inserts itself into `HashRingPb.workers` as `INITIAL`.
 4. Cluster-manager's utility loop calls `HashRing::InspectAndProcessPeriodically`.
-5. Hash ring writes `add_node_info`, migration events move metadata/data, and replica-manager receives scale-up finish
-   signals.
+5. Hash ring writes `add_node_info`, and migration events move metadata/data before the worker becomes active.
 
 ### Passive Scale Down
 
 1. Lease expiration, keepalive failure, or fake event creates a cluster-table DELETE.
-2. Cluster-manager marks the node `TIMEOUT`, later demotes it to `FAILED`, and notifies object/stream/replica/slot
+2. Cluster-manager marks the node `TIMEOUT`, later demotes it to `FAILED`, and notifies object/stream metadata and slot
    recovery events.
 3. Cluster-manager periodically calls `HashRing::RemoveWorkers(GetFailedWorkers())`.
 4. Hash ring writes `del_node_info`, recovery/cleanup subscribers run, and the worker is eventually removed from ring
@@ -170,14 +169,13 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 ### Strengths
 
-- ETCD/Metastore gives a single watchable metadata backend for membership, ring state, replica groups, and startup
-  recovery.
+- ETCD/Metastore gives a single watchable metadata backend for membership, ring state, and startup recovery.
 - The hash ring keeps route reads local after watch update, so normal object route lookup avoids synchronous ETCD reads.
 - Lease keepalive gives a simple worker-liveness signal that integrates with passive scale-down.
 - CAS on the ring key gives single-record version safety and makes restart recovery possible without a separate leader.
 - Watch compensation and fake-node completion repair some missed-event and full-cluster-restart cases.
-- The event-bus model lets object-cache, stream-cache, replica-manager, slot recovery, and worker APIs hook into topology
-  changes without hard direct calls in every path.
+- The event-bus model lets object-cache, stream-cache, slot recovery, and worker APIs hook into topology changes without
+  hard direct calls in every path.
 
 ### Weaknesses And Scale Limits
 
@@ -190,16 +188,16 @@ Use this file as the cross-module map. Use the detailed package for source-level
 - The design does not fit thousand-node scale well: every worker watches broad prefixes, keeps full membership/ring
   state, runs keepalive/background loops, scans node tables, and can participate in ring inspection.
 - State is duplicated across ETCD cluster-table values, `clusterNodeTable_`, `HashRingPb`, hash-ring derived maps,
-  read-ring maps, RocksDB cluster snapshots, health files, and replica-manager state. Correctness depends on eventual
-  convergence among all of them.
+  read-ring maps, RocksDB cluster snapshots, and health files. Correctness depends on eventual convergence among all of
+  them.
 - The lifecycle state machine is fragmented across ETCD keepalive values, `ClusterNode` state, hash-ring worker state,
   hash-ring local state, task records, worker health, and service reconciliation counters.
 - Watch and repair semantics are hard to reason about because real ETCD events, ETCD watch-compensation fake events,
   startup fake events, and cluster-manager fake add/delete events all feed similar handlers.
-- Module boundaries are unclear. Cluster-manager reaches into hash-ring behavior, ETCD store behavior, replica-manager
-  events, object/stream metadata events, slot recovery, worker APIs, fast-transport cleanup, and health probes.
-- Routing depends on both hash-ring state and replica-manager primary DB state. A worker can be active in one state copy
-  but not ready or not resolvable in another.
+- Module boundaries are unclear. Cluster-manager reaches into hash-ring behavior, ETCD store behavior,
+  object/stream metadata events, slot recovery, worker APIs, fast-transport cleanup, and health probes.
+- Routing depends on hash-ring state and cluster-node/read-ring readiness. A worker can be active in one state copy but
+  not ready or not resolvable in another.
 - Cross-AZ event dispatch and worker parsing use string-prefix conventions around cluster names and ETCD table names,
   which makes namespace changes risky.
 - Metastore shares ETCD-compatible APIs but the verified implementation is in-memory with limited per-key history, so

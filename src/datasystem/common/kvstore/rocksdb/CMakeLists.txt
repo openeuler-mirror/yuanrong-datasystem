@@ -1,7 +1,6 @@
 set(ROCKSDB_SRCS
         rocks_store.cpp
-        replica.cpp
-        replica_task.cpp)
+        replica.cpp)
 
 set(ROCKSDB_DEPEND_LIBS
         RocksDB::rocksdb

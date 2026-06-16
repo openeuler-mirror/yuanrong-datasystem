@@ -271,30 +271,9 @@ ds_cc_test(
     ],
 )
 
-ds_cc_test(
-    name = "kv_client_replica_scale_test",
-    srcs = ["kv_client_replica_scale_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util:thread",
-    ],
-)
 
-ds_cc_test(
-    name = "kv_client_replica_test",
-    srcs = ["kv_client_replica_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:strings_util",
-    ],
-)
+
+
 
 ds_cc_test(
     name = "kv_client_scale_test",

@@ -74,7 +74,6 @@ public:
         DS_ASSERT_OK(etcd_->Init());
         DS_ASSERT_OK(etcd_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX));
         DS_ASSERT_OK(etcd_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
-        DS_ASSERT_OK(etcd_->CreateTable(ETCD_REPLICA_GROUP_TABLE, ETCD_REPLICA_GROUP_TABLE));
     }
 
     void GetHashRingPb(HashRingPb &ring)
@@ -239,132 +238,7 @@ public:
         }
     }
 
-    Status SetWaitingElection(const std::string &dbName, const std::string &nextPrimaryId)
-    {
-        return etcd_->CAS(
-            ETCD_REPLICA_GROUP_TABLE, dbName,
-            [&nextPrimaryId](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
-                ReplicaGroupPb replicaGroup;
-                if (!replicaGroup.ParseFromString(oldValue)) {
-                    LOG(WARNING) << "Parse to ReplicaGroupPb failed.";
-                    return Status::OK();
-                }
-                if (replicaGroup.primary_id().empty()) {
-                    return Status::OK();
-                }
-                for (auto &item : *replicaGroup.mutable_replicas()) {
-                    if (item.worker_id() == nextPrimaryId) {
-                        item.set_seq(INT64_MAX);
-                    }
-                }
-                replicaGroup.set_primary_id("");
-                newValue = std::make_unique<std::string>(replicaGroup.SerializeAsString());
-                return Status::OK();
-            });
-    }
 
-    template <typename Func>
-    void WaitReplicaReady(int index, Func &&func, uint64_t timeoutMs = 30000)
-    {
-        auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-        bool flag = false;
-        ReplicaGroupPb replicaGroupPb;
-        std::string workerUuid = workersInfo_[index].uuid;
-        ASSERT_TRUE(!workerUuid.empty()) << "workerUuid is empty for worker " << index;
-        std::string nextWorkerUuid;
-        std::map<std::string, std::string> workerUuids;
-        while (std::chrono::steady_clock::now() < timeOut) {
-            std::string value;
-            DS_ASSERT_OK(etcd_->Get(ETCD_REPLICA_GROUP_TABLE, workerUuid, value));
-            ASSERT_TRUE(replicaGroupPb.ParseFromString(value));
-            // get next worker.
-            workerUuids.clear();
-            GetWorkerUuidMap(workerUuids);
-            auto iter = workerUuids.find(workerUuid);
-            if (iter != workerUuids.end()) {
-                iter = worker::LoopNext(workerUuids, iter);
-                nextWorkerUuid = iter->first;
-                if (func(workerUuid, nextWorkerUuid, replicaGroupPb)) {
-                    flag = true;
-                    break;
-                }
-            }
-            const int interval = 100;  // 100ms;
-            std::this_thread::sleep_for(std::chrono::milliseconds(interval));
-        }
-        std::string value;
-        DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
-        LOG(INFO) << "Check worker index:" << index << (flag ? " success" : " failed")
-                  << ", ReplicaGroupPb info:" << replicaGroupPb.ShortDebugString() << ", workerUuid:" << workerUuid
-                  << " nextWorkerUuid:" << nextWorkerUuid;
-        LOG(INFO) << "uuid to addr:" << MapToString(workerUuids);
-        LOG(INFO) << "hashring:" << ring.DebugString();
-        ASSERT_TRUE(flag);
-    }
-
-    void WaitReplicaNotInCurrentNode(int index, uint64_t timeoutMs = RETRY_TIMEOUT_MS)
-    {
-        WaitReplicaReady(
-            index,
-            [](const std::string &workerUuid, const std::string &, const ReplicaGroupPb &replicaGroupPb) {
-                const auto &primaryId = replicaGroupPb.primary_id();
-                return !primaryId.empty() && primaryId != workerUuid;
-            },
-            timeoutMs);
-    }
-
-    void WaitChangeReplicaInCurrentNode(int index, std::string &notExistWorker, uint64_t timeoutMs = RETRY_TIMEOUT_MS)
-    {
-        WaitReplicaReady(
-            index,
-            [&notExistWorker](const std::string &workerUuid, const std::string &,
-                              const ReplicaGroupPb &replicaGroupPb) {
-                for (const auto &replica : replicaGroupPb.replicas()) {
-                    if (replica.worker_id() == notExistWorker) {
-                        return false;
-                    }
-                }
-                const auto &primaryId = replicaGroupPb.primary_id();
-                return !primaryId.empty() && primaryId == workerUuid;
-            },
-            timeoutMs);
-    }
-
-    void WaitReplicaInCurrentNode(int index, uint64_t timeoutMs = RETRY_TIMEOUT_MS)
-    {
-        WaitReplicaReady(
-            index,
-            [](const std::string &workerUuid, const std::string &, const ReplicaGroupPb &replicaGroupPb) {
-                const auto &primaryId = replicaGroupPb.primary_id();
-                return !primaryId.empty() && primaryId == workerUuid;
-            },
-            timeoutMs);
-    }
-
-    void WaitReplicaLocationMatch(const std::vector<uint32_t> &indexes, uint64_t timeoutMs = RETRY_TIMEOUT_MS)
-    {
-        auto func = [](const std::string &workerUuid, const std::string &nextWorkerUuid,
-                       const ReplicaGroupPb &replicaGroupPb) {
-            const auto &primaryId = replicaGroupPb.primary_id();
-            const auto &replicas = replicaGroupPb.replicas();
-            const size_t replicaCount = 2;
-            if (primaryId.empty() || primaryId != workerUuid || replicas.size() != replicaCount) {
-                return false;
-            }
-            // the next worker in ReplicaGroupPb.
-            for (const auto &replica : replicas) {
-                if (replica.worker_id() == nextWorkerUuid) {
-                    return true;
-                }
-            }
-            return false;
-        };
-        for (auto index : indexes) {
-            WaitReplicaReady(index, func, timeoutMs);
-        }
-    }
 
     bool GetTwoWorkerNotBackupEachOther(int &index1, int &index2)
     {

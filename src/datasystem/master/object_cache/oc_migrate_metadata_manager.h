@@ -33,7 +33,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/master/object_cache/oc_global_cache_delete_manager.h"
-#include "datasystem/master/replica_manager.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
@@ -72,11 +72,11 @@ public:
      * @param[in] localHostPort The local worker rpc service host port.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] cm Used to get master of objects.
-     * @param[in] replicaManager The replica manager.
+     * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
     Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager, EtcdClusterManager *cm,
-                ReplicaManager *replicaManager);
+                MetadataManagerHolder *metadataManagerHolder);
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -272,7 +272,7 @@ private:
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed objectkeys>>>
     TbbFutureThreadTable futureThread_;
     std::atomic<bool> exitFlag_{ false };
-    ReplicaManager *replicaManager_;
+    MetadataManagerHolder *metadataManagerHolder_;
 };
 }  // namespace master
 }  // namespace datasystem

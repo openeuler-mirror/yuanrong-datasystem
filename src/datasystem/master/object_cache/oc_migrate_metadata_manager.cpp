@@ -45,12 +45,12 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 }
 
 Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                      EtcdClusterManager *cm, ReplicaManager *replicaManager)
+                                      EtcdClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
     cm_ = cm;
-    replicaManager_ = replicaManager;
+    metadataManagerHolder_ = metadataManagerHolder;
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
@@ -90,7 +90,7 @@ Status OCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
     std::vector<std::string> objRefToBeMigrated;
     std::vector<std::string> remoteClientIds;
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(dbName, ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "dbName not exists");
     MigrateMetaInfo info;
     info.destAddr = dest;

@@ -67,7 +67,7 @@
       "debug worker restart reconciliation or ready state",
       "change passive failed-node scale-down behavior",
       "change voluntary scale-down exiting handling",
-      "review route lookup through hash ring and replica manager",
+      "review route lookup through hash ring, cluster-node readiness, and read rings",
       "review ETCD cluster event handling and fake-node repair"
     ]
   }

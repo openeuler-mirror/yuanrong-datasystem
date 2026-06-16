@@ -115,7 +115,7 @@ public:
         eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, addr, addr);
         worker_ = std::make_unique<object_cache::WorkerOCServiceImpl>(addr, addr, nullptr, nullptr, eviction_, nullptr,
                                                                       etcdStore_.get());
-        cm_ = std::make_unique<EtcdClusterManager>(addr, addr, etcdStore_.get(), false);
+        cm_ = std::make_unique<EtcdClusterManager>(addr, addr, etcdStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
         DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));

@@ -41,8 +41,8 @@
   - modifying `src/datasystem/worker/cluster_manager/*`;
   - changing `ClusterNode` states or `KeepAliveValue` lifecycle tags;
   - changing worker startup/shutdown flow around `EtcdClusterManager`;
-  - changing object/stream/replica/slot recovery subscribers to cluster events;
-  - changing route helpers that use hash ring or replica-manager events.
+  - changing object/stream metadata or slot recovery subscribers to cluster events;
+  - changing route helpers that use hash ring, cluster-node readiness, or read-ring state.
 - Do not use when:
   - changing only ETCD RPC internals with no lifecycle behavior; use ETCD metadata playbook.
   - changing only hash-ring range calculation; use hash-ring playbook.
@@ -121,7 +121,7 @@
   - background utility loop cadence and extra ETCD/hash-ring writes;
   - route behavior for worker-id keys across AZ.
 - Must verify in source before claiming:
-  - exact subscriber behavior for object-cache, stream-cache, replica-manager, and slot-recovery;
+  - exact subscriber behavior for object-cache, stream-cache, and slot-recovery;
   - whether ETCD-down startup path is covered;
   - whether centralized-master mode bypasses the distributed path.
 

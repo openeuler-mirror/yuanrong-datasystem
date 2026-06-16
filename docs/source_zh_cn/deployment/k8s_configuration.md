@@ -395,7 +395,7 @@ global:
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.metadata.enableMetaReplica | bool | `false` | 是否开启元数据多副本功能 |
+| global.metadata.enableMetaReplica | bool | `false` | 已废弃的兼容参数，当前配置值会被忽略 |
 | global.metadata.rocksdbStoreDir | string | `"/home/sn/datasystem/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | global.metadata.rocksdbBackgroundThreads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |

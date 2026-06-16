@@ -125,18 +125,7 @@ ds_cc_test(
     ],
 )
 
-ds_cc_test(
-    name = "object_client_replica_test",
-    srcs = ["object_client_replica_test.cpp"],
-    tags = ["manual"],
-    deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:strings_util",
-        "//src/datasystem/common/util:uuid_generator",
-    ],
-)
+
 
 ds_cc_test(
     name = "object_client_scale_test",

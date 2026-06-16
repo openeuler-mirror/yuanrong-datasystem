@@ -6,11 +6,9 @@ set(MASTER_SRCS
         master_service_impl.cpp
         node_descriptor.cpp
         worker_manager.cpp
-        replica_manager.cpp
+        metadata_manager_holder.cpp
         resource_manager.cpp
-        metadata_redirect_helper.cpp
-        replica_rpc_channel_impl.cpp
-        replication_service_impl.cpp)
+        metadata_redirect_helper.cpp)
 
 set(MASTER_DEPEND_LIBS
         common_ak_sk

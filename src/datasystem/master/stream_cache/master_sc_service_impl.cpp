@@ -25,6 +25,7 @@
 #include "datasystem/common/stream_cache/util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
@@ -33,8 +34,9 @@ DS_DEFINE_int32(master_sc_thread_num, 128, "Max number of threads for (non rpc) 
 namespace datasystem {
 namespace master {
 MasterSCServiceImpl::MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
-                                         ReplicaManager *replicaManager)
-    : MasterSCService(masterAddress), akSkManager_(std::move(akSkManager)), replicaManager_(replicaManager)
+                                         MetadataManagerHolder *metadataManagerHolder)
+    : MasterSCService(masterAddress), akSkManager_(std::move(akSkManager)),
+      metadataManagerHolder_(metadataManagerHolder)
 {
 }
 
@@ -51,7 +53,8 @@ Status MasterSCServiceImpl::Init()
     size_t minThreads = std::min<size_t>(MIN_THREADS, FLAGS_master_sc_thread_num);
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ =
                                    std::make_unique<ThreadPool>(minThreads, FLAGS_master_sc_thread_num, "MScThreads"));
-    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, etcdCM_, replicaManager_));
+    RETURN_IF_NOT_OK(
+        SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, etcdCM_, metadataManagerHolder_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "MasterSCServiceImpl initialization success";
     return Status::OK();
 }
@@ -76,7 +79,7 @@ Status MasterSCServiceImpl::CreateProducerImpl(
     Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.CreateProducer");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     if (serverApi) {
         // Launch child thread to run the real logic and then return this thread. This avoids the rpc thread being
@@ -125,7 +128,7 @@ Status MasterSCServiceImpl::CloseProducerImpl(
     LOG(INFO) << "Master receive close producer request: " << infoMsg<< " with timeout: "<<req.timeout();
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.CloseProducer");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     if (serverApi) {
         // Launch child thread to run the real logic and then return this thread. This avoids the rpc thread being
@@ -164,7 +167,7 @@ Status MasterSCServiceImpl::SubscribeImpl(
                               LogHelper::IgnoreSensitive(req.consumer_meta()), req.timeout());
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.Subscribe");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     if (serverApi) {
         // Launch child thread to run the real logic and then return this thread. This avoids the rpc thread being
@@ -204,7 +207,7 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
                               LogHelper::IgnoreSensitive(req), req.timeout());
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.CloseConsumer");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     if (serverApi) {
         // Launch child thread to run the real logic and then return this thread. This avoids the rpc thread being
@@ -233,7 +236,7 @@ Status MasterSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, DeleteStr
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.DeleteStream");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     LOG(INFO) << FormatString("Master receive delete stream request: <%s> with timeout: %d",
                               LogHelper::IgnoreSensitive(req), req.timeout());
@@ -248,7 +251,7 @@ Status MasterSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumReqPb &r
                                               LogHelper::IgnoreSensitive(req));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.QueryGlobalProducersNum");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(scMetadataManager->QueryGlobalProducersNum(req, rsp),
                                      "QueryGlobalProducersNum failed");
@@ -262,7 +265,7 @@ Status MasterSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &r
                                               LogHelper::IgnoreSensitive(req));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.QueryGlobalConsumersNum");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(scMetadataManager->QueryGlobalConsumersNum(req, rsp),
                                      "QueryGlobalConsumersNum failed");
@@ -301,7 +304,7 @@ Status MasterSCServiceImpl::StartCheckMetadata()
                 }
                 return Status::OK();
             };
-            (void)replicaManager_->ApplyForAllMetaManager(func);
+            (void)metadataManagerHolder_->ApplyForAllMetaManager(func);
         });
     }
     // wait for the end of all reconciliations
@@ -326,7 +329,7 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(copyReq), "AK/SK failed.");
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.MigrateSCMetadata");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(GetDbName(), scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     RETURN_IF_NOT_OK(scMetadataManager->SaveMigrationMetadata(req, rsp));
     masterOperationTimeCost.Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
@@ -336,10 +339,7 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
 
 std::string MasterSCServiceImpl::GetDbName()
 {
-    if (replicaManager_->MultiReplicaEnabled()) {
-        return g_MetaRocksDbName;
-    }
-    return replicaManager_->GetCurrentWorkerUuid();
+    return metadataManagerHolder_->GetCurrentWorkerUuid();
 }
 }  // namespace master
 }  // namespace datasystem

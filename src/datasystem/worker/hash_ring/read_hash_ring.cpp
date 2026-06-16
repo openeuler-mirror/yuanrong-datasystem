@@ -110,13 +110,11 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
                          FormatString("Clear AZ %s async notify op failed.", azName_));
         }
 
-        if (!HashRing::isMultiReplicaEnable_) {
-            std::vector<std::string> delNodeIdsVec(std::make_move_iterator(delNodeIds.begin()),
-                                                   std::make_move_iterator(delNodeIds.end()));
-            LOG_IF_ERROR(
-                HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(worker::HashRange{}, delNodeIdsVec),
-                FormatString("Clear AZ %s data failed.", azName_));
-        }
+        std::vector<std::string> delNodeIdsVec(std::make_move_iterator(delNodeIds.begin()),
+                                               std::make_move_iterator(delNodeIds.end()));
+        LOG_IF_ERROR(
+            HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(worker::HashRange{}, delNodeIdsVec),
+            FormatString("Clear AZ %s data failed.", azName_));
     }
 
     GenerateHashRingUuidMap(newRing, workerUuid2AddrMap_, workerAddr2UuidMap_, relatedWorkerMap_);
@@ -138,10 +136,9 @@ Status ReadHashRing::GetWorkerAddrByUuidForAddressing(const std::string &workerU
     return Status::OK();
 }
 
-Status ReadHashRing::GetWorkerAddrByUuidForMultiReplica(const std::string &workerUuid, HostPort &workerAddr)
+Status ReadHashRing::GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr)
 {
-    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetWorkerAddrByUuidForMultiReplica(workerUuid, workerAddr),
-                                " in az: " + azName_);
+    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetWorkerAddrByUuidForMetadata(workerUuid, workerAddr), " in az: " + azName_);
     return Status::OK();
 }
 

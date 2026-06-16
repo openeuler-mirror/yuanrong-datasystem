@@ -91,12 +91,12 @@ public:
     Status GetWorkerAddrByUuidForAddressing(const std::string &workerUuid, HostPort &workerAddr);
 
     /**
-     * @brief Get worker address by uuid for multi replica.
+     * @brief Get metadata owner address by worker uuid.
      * @param[in] workerUuid The worker uuid.
      * @param[out] workerAddr The remote worker address.
      * @return Return the local worker uuid.
      */
-    Status GetWorkerAddrByUuidForMultiReplica(const std::string &workerUuid, HostPort &workerAddr);
+    Status GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr);
 
     /**
      * @brief Get the primary worker uuid by consistent hash algorithm.

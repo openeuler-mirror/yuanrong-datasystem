@@ -60,13 +60,13 @@ SCMigrateMetadataManager &SCMigrateMetadataManager::Instance()
 }
 
 Status SCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                      EtcdClusterManager *cm, ReplicaManager *replicaManager)
+                                      EtcdClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
     cm_ = cm;
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "ScMigrateMetadata");
-    replicaManager_ = replicaManager;
+    metadataManagerHolder_ = metadataManagerHolder;
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
         "SCMigrateMetadataManager",
@@ -94,10 +94,11 @@ Status SCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
                                                  const std::string &destDbName, const worker::HashRange &ranges,
                                                  bool isNetworkRecovery)
 {
+    (void)dbName;
     CHECK_FAIL_RETURN_STATUS(cm_ != nullptr, K_RUNTIME_ERROR, "SCMigrateMetadataManager has not inited.");
 
     std::shared_ptr<master::SCMetadataManager> scMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetScMetadataManager(dbName, scMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "dbName not exists");
     MigrateMetaInfo info;
     info.destAddr = dest;

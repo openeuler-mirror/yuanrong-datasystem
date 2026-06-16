@@ -38,8 +38,8 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/master/master_service_impl.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
-#include "datasystem/master/replica_manager.h"
-#include "datasystem/master/replication_service_impl.h"
+#include "datasystem/master/metadata_manager_holder.h"
+
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
@@ -239,12 +239,6 @@ private:
      */
     Status InitMasterSCService();
 
-    /**
-     * @brief Init rocksdb replica service for worker request.
-     * @return Status of the call.
-     */
-    Status InitReplicaService();
-
 #ifdef WITH_TESTS
     /**
      * @brief Init service for requests from ut.
@@ -414,10 +408,9 @@ private:
     /**
      * @brief Submit worker-to-master RPC warmup tasks for newly discovered ready nodes.
      */
-    size_t ScheduleWorkerMasterRpcWarmupTasks(
-        const std::vector<std::pair<std::string, std::string>> &workers,
-        const std::unordered_set<std::string> *warmedAddrs = nullptr,
-        const std::function<void(const std::string &)> &onSuccess = nullptr);
+    size_t ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers,
+                                              const std::unordered_set<std::string> *warmedAddrs = nullptr,
+                                              const std::function<void(const std::string &)> &onSuccess = nullptr);
 
     /**
      * @brief Submit one worker-to-master RPC warmup task.
@@ -441,10 +434,10 @@ private:
     void NotifyShutdownToEtcd();
 
     /**
-     * @brief Init replic manager instance.
+     * @brief Init metadata manager holder instance.
      * @return Status of this call.
      */
-    Status InitReplicaManager();
+    Status InitMetadataManagerHolder();
 
     /**
      * @brief Check sc_encrypt_secret_key.
@@ -562,7 +555,7 @@ private:
     std::unique_ptr<EtcdStore> etcdStore_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
-    std::unique_ptr<datasystem::ReplicaManager> replicaManager_{ nullptr };
+    std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
     std::unique_ptr<datasystem::EtcdClusterManager> etcdCM_{ nullptr };
@@ -588,7 +581,6 @@ private:
     std::shared_ptr<datasystem::master::MasterServiceImpl> commonSvc_{ nullptr };
     std::unique_ptr<datasystem::master::MasterOCServiceImpl> objCacheMasterSvc_{ nullptr };
     std::unique_ptr<datasystem::master::MasterSCServiceImpl> streamCacheMasterSvc_{ nullptr };
-    std::unique_ptr<datasystem::ReplicationServiceImpl> replicaSvc_{ nullptr };
     std::future<Status> objCacheMasterSvcStatus_;
     std::future<Status> objCacheMasterAdSvcStatus_;
     std::future<Status> streamCacheMasterSvcStatus_;

@@ -549,7 +549,7 @@
     },
     "enable_meta_replica": {
         "value": "false",
-        "description": "Controls whether to enable multiple meta replica"
+        "description": "Deprecated compatibility option for metadata replica. The value is ignored."
     },
     "enable_urma": {
         "value": "false",

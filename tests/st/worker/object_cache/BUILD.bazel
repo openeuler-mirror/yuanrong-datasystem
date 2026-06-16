@@ -102,7 +102,7 @@ ds_cc_test(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/master/object_cache:master_oc_service_impl",
         "//src/datasystem/master/object_cache/store:object_meta_store",
-        "//src/datasystem/master/replica_manager",
+        "//src/datasystem/master:metadata_manager_holder",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/st:st_common",
     ],

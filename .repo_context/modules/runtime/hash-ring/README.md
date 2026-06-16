@@ -6,7 +6,7 @@
   - `src/datasystem/worker/hash_ring`
   - `src/datasystem/protos/hash_ring.proto`
   - cluster-manager integration in `src/datasystem/worker/cluster_manager/etcd_cluster_manager.*`
-  - master/object-cache, stream-cache, replica-manager, and worker object-cache subscribers to `HashRingEvent`
+  - master/object-cache, stream-cache, and worker object-cache subscribers to `HashRingEvent`
 - Why this module exists:
   - maintain the distributed-master ownership map used to route object and stream metadata;
   - serialize cluster topology and in-progress scale tasks through ETCD-compatible storage;
@@ -29,13 +29,12 @@
   - stores the canonical ring as serialized `HashRingPb` at `ETCD_RING_PREFIX` (`/datasystem/ring`) and updates it mostly through `EtcdStore::CAS`;
   - assigns four virtual tokens per worker by default through `HashRingAllocator::defaultHashTokenNum`;
   - initializes the first cluster ring, adds `INITIAL` workers to an already initialized ring, removes failed workers, and marks voluntary scale-down workers;
-  - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, replica lifecycle, redirect checks, and cross-AZ cleanup;
+  - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, redirect checks, and cross-AZ cleanup;
   - keeps local read-side maps (`tokenMap_`, `workerUuid2AddrMap_`, `workerAddr2UuidMap_`, `relatedWorkerMap_`) derived from `HashRingPb`;
   - runs `HashRingHealthCheck` to detect long-stuck scale-up, scale-down, initial, joining, and leaving states, optionally self-healing when `enable_hash_ring_self_healing=true`;
   - provides `ReadHashRing` for read-only rings from other AZs when multi-cluster routing is enabled.
 - Pending verification:
-  - exact object-cache and stream-cache side effects for every `HashRingEvent` subscriber;
-  - complete interaction with `enable_meta_replica` and the replica DB placement model beyond the paths observed in `HashRingTaskExecutor`.
+  - exact object-cache and stream-cache side effects for every `HashRingEvent` subscriber.
 
 ## Companion Docs
 
@@ -64,8 +63,8 @@
 ## Key Entry Points
 
 - Public/internal C++ entrypoints:
-  - `HashRing::InitWithEtcd(bool isMultiReplicaEnable)`
-  - `HashRing::InitWithoutEtcd(bool isMultiReplicaEnable, const std::string &hashRing)`
+  - `HashRing::InitWithEtcd()`
+  - `HashRing::InitWithoutEtcd(const std::string &hashRing)`
   - `HashRing::HandleRingEvent(const mvccpb::Event &, const std::string &prefix)`
   - `HashRing::UpdateRing(const std::string &, int64_t version, bool forceUpdate = false)`
   - `HashRing::InspectAndProcessPeriodically()`
@@ -97,7 +96,6 @@
   - object-cache and stream-cache metadata managers via `HashRingEvent::MigrateRanges`, `RecoverMetaRanges`,
     `RecoverAsyncTaskRanges`, `ClearDataWithoutMeta`, and `LocalClearDataWithoutMeta`.
   - object-cache worker service via `BeforeVoluntaryExit`, `DataMigrationReady`, and local clear-data events.
-  - replica manager via `ClusterInitFinish`, `ScaleupFinish`, and `ScaleDownFinish`.
   - cluster manager via `SyncClusterNodes`, `GetFailedWorkers`, `GetDbPrimaryLocation`, and redirect callbacks.
 - External dependencies:
   - ETCD-compatible KV and watch semantics, including CAS, range get, lease-backed cluster table, and monotonic revisions.
@@ -142,7 +140,7 @@ Important nuance:
 2. `RemoveWorker` first chooses a bounded set of process workers derived from related workers and `MAX_CANDIDATE_WORKER_NUM`; only those workers attempt to write `del_node_info`.
 3. The selected worker CAS-checks that local `ringInfo_` still matches ETCD, then uses `HashRingAllocator::RemoveNode`.
 4. `RemoveNode` transfers the failed node's ranges to the next available node and records recovery work under `del_node_info[failedWorker]`.
-5. `HashRingTaskExecutor::SubmitScaleDownTask` responds to incremental `del_node_info` and either recovers from ETCD/l2cache or, when multi-replica is enabled, submits migration toward the standby primary DB.
+5. `HashRingTaskExecutor::SubmitScaleDownTask` responds to incremental `del_node_info` and recovers metadata/data from ETCD or L2 cache using local metadata ownership.
 6. After recovery, `EraseFinishedDelNodeInfo` removes completed `del_node_info` entries and erases the worker from `workers`.
 
 ### Voluntary Scale Down

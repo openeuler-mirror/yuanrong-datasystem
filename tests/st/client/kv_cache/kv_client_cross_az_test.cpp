@@ -1599,9 +1599,9 @@ public:
         ASSERT_NE(failureSign, predictableHashKey);
     }
 
-    void TestScaleUp1(bool testReplica)
+    void TestScaleUp1()
     {
-        std::string injectStr = testReplica ? " -enable_meta_replica=true" : "";
+        std::string injectStr = "";
         StartWorkerAndWaitReady({ 0, 2 }, injectStr);
         StartWorkerAndWaitReady({ 1, 3 }, injectStr);
         InitClients({ 0, 1, 2, 3 });
@@ -1631,9 +1631,9 @@ public:
         ASSERT_EQ(valToGet, val2);
     }
 
-    void TestScaleDown1(bool testReplica)
+    void TestScaleDown1()
     {
-        std::string injectStr = testReplica ? " -enable_meta_replica=true" : "";
+        std::string injectStr = "";
         StartWorkerAndWaitReady({ 0, 2, 4 }, injectStr);
         StartWorkerAndWaitReady(
             { 5 },
@@ -1680,9 +1680,9 @@ public:
         ASSERT_EQ(valToGet, val2);
     }
 
-    void TestVoluntaryScaleDown1(bool testReplica)
+    void TestVoluntaryScaleDown1()
     {
-        std::string injectStr = testReplica ? " -enable_meta_replica=true" : "";
+        std::string injectStr = "";
         StartWorkerAndWaitReady({ 0, 2, 4 }, injectStr);
         StartWorkerAndWaitReady({ 1, 3, 5 }, injectStr);
         InitClients({ 0, 1, 2, 3, 4, 5 });
@@ -1715,9 +1715,9 @@ public:
         ASSERT_EQ(valToGet, val2);
     }
 
-    void TestCluster1CrashWhenCluster2Restart(bool testReplica)
+    void TestCluster1CrashWhenCluster2Restart()
     {
-        std::string injectStr = testReplica ? " -enable_meta_replica=true -oc_io_from_l2cache_need_metadata=false" : "";
+        std::string injectStr = "";
         StartWorkerAndWaitReady({ 0, 2 }, injectStr);
         StartWorkerAndWaitReady({ 1, 3 }, injectStr);
         InitClients({ 0, 1, 2, 3 });
@@ -1748,9 +1748,9 @@ public:
         }
     }
 
-    void TestCluster2NotStartWhenCluster1Restart(bool testReplica)
+    void TestCluster2NotStartWhenCluster1Restart()
     {
-        std::string injectStr = testReplica ? " -enable_meta_replica=true" : "";
+        std::string injectStr = "";
         StartWorkerAndWaitReady({ 0, 2 }, injectStr);
         DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
         StartWorkerAndWaitReady(
@@ -1767,47 +1767,29 @@ protected:
 // Test basic scale up
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestScaleUp1)
 {
-    TestScaleUp1(false);
+    TestScaleUp1();
 }
 
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestScaleUp1WithReplica)
-{
-    TestScaleUp1(true);
-}
 
 // Test basic scale down
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, LEVEL2_TestScaleDown1)
 {
-    TestScaleDown1(false);
+    TestScaleDown1();
 }
 
-// Test basic scale down
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, DISABLED_TestScaleDown1WithReplica)
-{
-    TestScaleDown1(true);
-}
 
 // Test migration of data across clusters
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestVoluntaryScaleDown1)
 {
-    TestVoluntaryScaleDown1(false);
+    TestVoluntaryScaleDown1();
 }
 
-// Test migration of data across clusters
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, LEVEL2_TestVoluntaryScaleDown1WithReplica)
-{
-    TestVoluntaryScaleDown1(true);
-}
 
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, LEVEL2_TestCluster1CrashWhenCluster2Restart)
 {
-    TestCluster1CrashWhenCluster2Restart(false);
+    TestCluster1CrashWhenCluster2Restart();
 }
 
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, DISABLED_TestCluster1CrashWhenCluster2RestartWithReplica)
-{
-    TestCluster1CrashWhenCluster2Restart(true);
-}
 
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, DISABLED_TestAsyncNotifyRemoveMetaBase)
 {
@@ -2112,9 +2094,9 @@ TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, LEVEL2_TestAsyncDelAsyncNot
     ASSERT_EQ(clients_[client5Index]->Get(predictableHashKey, valToGet).GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestReplicaUpgrade)
+TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestScaleUpAfterUpgrade)
 {
-    StartWorkerAndWaitReady({ 0, 2, 6 }, " -enable_meta_replica=true");
+    StartWorkerAndWaitReady({ 0, 2, 6 });
     StartWorkerAndWaitReady({ 1, 3, 5 });
     InitClients({ 0 });
     SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
@@ -2126,15 +2108,9 @@ TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, TestReplicaUpgrade)
 
 TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1, DISABLED_LEVEL1_TestCluster2NotStartWhenCluster1Restart)
 {
-    TestCluster2NotStartWhenCluster1Restart(false);
+    TestCluster2NotStartWhenCluster1Restart();
 }
 
-TEST_F(TestTheImpactOnCluster2WhenScalingInCluster1,
-    DISABLED_LEVEL1_TestCluster2NotStartWhenCluster1RestartWithReplica)
-
-{
-    TestCluster2NotStartWhenCluster1Restart(true);
-}
 
 class SCDisckCacheCrossAzTest : public KVClientCrossAZTest {
 public:

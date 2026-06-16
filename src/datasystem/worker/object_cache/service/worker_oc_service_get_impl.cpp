@@ -1654,8 +1654,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     }
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_NOT_FOUND);
     // 5. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
-    bool multiReplicaEnabled = etcdCM_->MultiReplicaEnabled();
-    bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata && !multiReplicaEnabled;
+    bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata;
     // If l2cache is disabled, there is no need to query meta in etcd.
     bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
     if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {

@@ -235,7 +235,7 @@ TEST_F(KVClientSpillRemoteTcpTest, NodeSelectorTest)
         std::string key = "object1_" + std::to_string(i);
         DS_ASSERT_OK(client1_->Set(key, value));
     }
-    usleep(500 * MS_PER_SECOND);  // sleep 500ms to ensure workers report resource info
+    usleep(2000 * MS_PER_SECOND);  // sleep 2s to ensure workers report resource info
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.MigrateData.setMaxRetryCount", "call(1)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "DataMigrator.AllowLocalWorker", "call()"));

@@ -33,7 +33,7 @@
 - What problem this module solves:
   - distributed-master metadata routing and topology change coordination across worker startup, scale-up, scale-down, failure, restart, and cross-AZ routing.
 - Who or what depends on this module:
-  - `EtcdClusterManager`, object-cache and stream-cache metadata managers, replica manager, worker object-cache service, client redirect behavior, and multi-AZ route lookup.
+  - `EtcdClusterManager`, object-cache and stream-cache metadata managers, local `MetadataManagerHolder`, worker object-cache service, client redirect behavior, and multi-AZ route lookup.
 
 ## Goals
 

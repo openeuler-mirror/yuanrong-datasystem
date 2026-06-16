@@ -75,7 +75,7 @@ namespace datasystem {
 static const std::string FAKE_NODE_EVENT_VALUE = "0;start";
 static constexpr int TOTAL_WAIT_NODE_TABLE_TIME_SEC = 60;  // total time of waiting node table complete.
 static constexpr int WAIT_NODE_TABLE_INTERVAL_MS = 10;     // interval of waiting node table complete.
-static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;        // terminate wait early if no new nodes discovered.
+static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;         // terminate wait early if no new nodes discovered.
 static const std::string ETCD_CLUSTER_SUBSCRIBER = "EtcdClusterManager";
 
 EtcdClusterManager::ClusterNode::ClusterNode(const std::string &timeEpoch, const std::string &additionEventType)
@@ -95,13 +95,11 @@ bool EtcdClusterManager::ClusterNode::DemoteTimedOutNode()
 }
 
 EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB,
-                                       bool multiReplicaEnabled, std::shared_ptr<AkSkManager> akSkManager,
-                                       const int pqSize)
+                                       std::shared_ptr<AkSkManager> akSkManager, const int pqSize)
     : workerAddress_(workerAddress),
       masterAddress_(masterAddress),
       etcdDB_(etcdDB),
-      akSkManager_(std::move(akSkManager)),
-      multiReplicaEnabled_(multiReplicaEnabled)
+      akSkManager_(std::move(akSkManager))
 {
     hashRing_ = std::make_unique<worker::HashRing>(workerAddress.ToString(), etcdDB);
     eventPq_ = std::make_unique<PriorityQueue<std::unique_ptr<CmEvent>, CmEventCmp>>(pqSize);
@@ -183,8 +181,7 @@ Status EtcdClusterManager::Shutdown()
     GetHashRangeNonBlockEvent::GetInstance().RemoveSubscriber("GET_HASH_RANGE_NON_BLOCK");
     GetLocalWorkerUuidEvent::GetInstance().RemoveSubscriber("GET_LOCAL_WORKER_UUID");
     HashRingEvent::CheckNeedRedirect::GetInstance().RemoveSubscriber("NEED_REDIRECT");
-    EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().RemoveSubscriber(
-        "QUERY_MASTER_ADDR_IN_OTHER_AZ");
+    EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().RemoveSubscriber("QUERY_MASTER_ADDR_IN_OTHER_AZ");
     EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().RemoveSubscriber(
         "CHECK_IF_OTHER_AZ_NODE_CONNECTED");
 
@@ -315,13 +312,12 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     // The watch thread will enqueue the events in priority queue and the background thread will fetch the events
     // and handle them.
     RETURN_IF_NOT_OK(etcdDB_->WatchEvents({ { ETCD_RING_PREFIX, "", true, clusterInfo.revision },
-                                            { ETCD_CLUSTER_TABLE, "", true, clusterInfo.revision },
-                                            { ETCD_REPLICA_GROUP_TABLE, "", true, clusterInfo.revision } }));
+                                            { ETCD_CLUSTER_TABLE, "", true, clusterInfo.revision } }));
     // 5. Since the background and watch threads are up, it is time to initialize the hashring.
     if (clusterInfo.etcdAvailable) {
-        RETURN_IF_NOT_OK(hashRing_->InitWithEtcd(multiReplicaEnabled_));
+        RETURN_IF_NOT_OK(hashRing_->InitWithEtcd());
     } else {
-        RETURN_IF_NOT_OK(hashRing_->InitWithoutEtcd(multiReplicaEnabled_, clusterInfo.localHashRing[0].second));
+        RETURN_IF_NOT_OK(hashRing_->InitWithoutEtcd(clusterInfo.localHashRing[0].second));
     }
 
     if (masterAddress_.Empty()) {
@@ -667,8 +663,6 @@ void EtcdClusterManager::EnqueEvent(mvccpb::Event &&event)
         rc = eventPq_->EmplaceBack(new CmEvent(std::move(event), PrefixType::CLUSTER));
     } else if (key.find(ETCD_RING_PREFIX) != std::string::npos) {
         rc = eventPq_->EmplaceBack(new CmEvent(std::move(event), PrefixType::RING));
-    } else if (event.kv().key().find(ETCD_REPLICA_GROUP_TABLE) != std::string::npos) {
-        rc = ReplicaEvent::GetInstance().NotifyAll(event);
     } else {
         LOG(ERROR) << "Event of PrefixType::OTHER, no need to enqueue and handle it.";
     }
@@ -949,18 +943,7 @@ bool EtcdClusterManager::CheckIfOtherAzNodeConnected(const HostPort &nodeAddr)
 
 bool EtcdClusterManager::CheckReceiveMigrateInfo()
 {
-    if (!MultiReplicaEnabled()) {
-        return hashRing_->CheckReceiveMigrateInfo(workerAddress_.ToString());
-    }
-
-    std::map<std::string, std::string> replicaInfos;
-    ReplicaMagagerEvent::GetPrimaryReplicaInfoInWorker::GetInstance().NotifyAll(GetLocalWorkerUuid(), replicaInfos);
-    for (const auto &info : replicaInfos) {
-        if (hashRing_->CheckReceiveMigrateInfo(info.second)) {
-            return true;
-        }
-    }
-    return false;
+    return hashRing_->CheckReceiveMigrateInfo(workerAddress_.ToString());
 };
 
 void EtcdClusterManager::WaitWorkerReadyIfNeed()
@@ -1354,12 +1337,8 @@ Status EtcdClusterManager::ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWor
     RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
 
     if (rc.GetCode() != K_NOT_FOUND) {
-        std::string destWorkerUuid;
-        RETURN_IF_NOT_OK(
-            ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-        RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(destWorkerUuid, masterAddr));
-        VLOG(1) << FormatString("Object: %s, dbName: %s, primary replica location: %s, %s", objKey, dbName,
-                                masterAddr.ToString(), destWorkerUuid);
+        RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
+        VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objKey, dbName, masterAddr.ToString());
         return Status::OK();
     }
 
@@ -1367,12 +1346,9 @@ Status EtcdClusterManager::ProcessGetMetaAddressIfAllowMetaAccessAcrossAZWithWor
         if (i.second->GetUuidInCurrCluster(workerIdInObjKey, dbName, routeInfo).IsOk()) {
             VLOG(1) << FormatString("%s is in az: %s", objKey, i.first);
             isFromOtherAz = true;
-            std::string destWorkerUuid;
-            RETURN_IF_NOT_OK(
-                ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-            RETURN_IF_NOT_OK(i.second->GetWorkerAddrByUuidForAddressing(destWorkerUuid, masterAddr));
-            VLOG(1) << FormatString("Object: %s, dbName: %s, primary replica location: %s, %s", objKey, dbName,
-                                    masterAddr.ToString(), destWorkerUuid);
+            RETURN_IF_NOT_OK(i.second->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
+            VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objKey, dbName,
+                                    masterAddr.ToString());
             return Status::OK();
         }
     }
@@ -1383,9 +1359,7 @@ Status EtcdClusterManager::ProcessGetMetaAddressIfNotAllowMetaAccessAcrossAZWith
     const std::string &workerIdInObjKey, std::string &dbName, HostPort &masterAddr, std::optional<RouteInfo> &routeInfo)
 {
     RETURN_IF_NOT_OK(hashRing_->GetUuidInCurrCluster(workerIdInObjKey, dbName, routeInfo));
-    std::string destWorkerUuid;
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-    RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(destWorkerUuid, masterAddr));
+    RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForAddressing(dbName, masterAddr));
     return Status::OK();
 }
 
@@ -1393,9 +1367,7 @@ Status EtcdClusterManager::ProcessGetMetaAddressByHash(const std::string &objKey
                                                        HostPort &masterAddr, std::optional<RouteInfo> &routeInfo)
 {
     RETURN_IF_NOT_OK(hashRing_->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
-    std::string destWorkerUuid;
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-    RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForMultiReplica(destWorkerUuid, masterAddr));
+    RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForMetadata(dbName, masterAddr));
     return Status::OK();
 }
 
@@ -1430,8 +1402,8 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
     }
     if (!IsCentralized()) {
         const uint64_t us = static_cast<uint64_t>(timer.ElapsedMicroSecond());
-        metrics::GetHistogram(
-            static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY)).Observe(us);
+        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY))
+            .Observe(us);
     }
     workerOperationTimeCost.Append("GetMetaAddress", timer.ElapsedMilliSecond());
     return Status::OK();
@@ -1491,19 +1463,15 @@ Status EtcdClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::strin
         }
         return masterAddr.ParseString(FLAGS_master_address);
     }
-    std::string destWorkerUuid;
     RETURN_IF_NOT_OK(hashRing_->GetMasterUuid(objectKey, dbName));
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-    auto rc = hashRing_->GetWorkerAddrByUuidForMultiReplica(destWorkerUuid, masterAddr);
-    VLOG(1) << FormatString("Object: %s, dbName: %s, primary replica location: %s, %s", objectKey, dbName,
-                            masterAddr.ToString(), destWorkerUuid);
+    auto rc = hashRing_->GetWorkerAddrByUuidForMetadata(dbName, masterAddr);
+    VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objectKey, dbName, masterAddr.ToString());
     return rc;
 }
 
 Status EtcdClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &address, HostPort &masterAddr,
                                                            std::string &dbName)
 {
-    std::string destUuid;
     constexpr int intervalMs = 100;
     auto realRetryTimeMs = reqTimeoutDuration.CalcRemainingTime();
     Timer timer;
@@ -1517,8 +1485,7 @@ Status EtcdClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &ad
         }
     }
     RETURN_IF_NOT_OK(status);
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destUuid));
-    return hashRing_->GetWorkerAddrByUuidForMultiReplica(destUuid, masterAddr);
+    return hashRing_->GetWorkerAddrByUuidForMetadata(dbName, masterAddr);
 }
 
 Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std::vector<std::string> &dbNames)
@@ -1536,11 +1503,8 @@ Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std
         }
     }
     RETURN_IF_NOT_OK(rc);
-    if (!MultiReplicaEnabled()) {
-        dbNames.emplace_back(workerUuid);
-        return Status::OK();
-    }
-    return ReplicaMagagerEvent::GetPrimaryReplicaDbNames::GetInstance().NotifyAll(workerUuid, dbNames);
+    dbNames.emplace_back(workerUuid);
+    return Status::OK();
 }
 
 std::set<std::string> EtcdClusterManager::GetNodesInTable()
@@ -1707,12 +1671,12 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
                              - duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC + injectSec + 1)).count();
                          return Status::OK();
                      });
-        if (isRestart && GetSteadyClockTimeStampUs() - lastProgressTimeUs
-            >= duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC)).count()) {
+        if (isRestart
+            && GetSteadyClockTimeStampUs() - lastProgressTimeUs
+                   >= duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC)).count()) {
             INJECT_POINT_NO_RETURN("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak");
             LOG(INFO) << "No progress in node table for " << NO_PROGRESS_TIMEOUT_SEC
-                      << "s, terminating wait early. Current: " << tableSize
-                      << ", expected: " << hashWorkerNum;
+                      << "s, terminating wait early. Current: " << tableSize << ", expected: " << hashWorkerNum;
             break;
         }
     }
@@ -1828,11 +1792,6 @@ std::string EtcdClusterManager::GetWorkerIdByWorkerAddr(const std::string &addre
     return workerId;
 }
 
-bool EtcdClusterManager::MultiReplicaEnabled()
-{
-    return multiReplicaEnabled_;
-}
-
 Status EtcdClusterManager::QueryMasterAddrInOtherAz(const std::string &otherAZName, const std::string &objKey,
                                                     MetaAddrInfo &metaAddrInfo)
 {
@@ -1842,10 +1801,7 @@ Status EtcdClusterManager::QueryMasterAddrInOtherAz(const std::string &otherAZNa
     if (iter != otherAzHashRings_.end()) {
         auto &readRing = iter->second;
         RETURN_IF_NOT_OK(readRing->GetMasterUuid(objKey, dbName));
-        std::string destWorkerUuid;
-        RETURN_IF_NOT_OK(
-            ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-        RETURN_IF_NOT_OK(readRing->GetWorkerAddrByUuidForMultiReplica(destWorkerUuid, masterHostPort));
+        RETURN_IF_NOT_OK(readRing->GetWorkerAddrByUuidForMetadata(dbName, masterHostPort));
         CHECK_FAIL_RETURN_STATUS(
             CheckIfOtherAzNodeConnected(masterHostPort), K_RPC_UNAVAILABLE,
             FormatString("check connection failed, az: %s, addr: %s", otherAZName, masterHostPort.ToString()));
@@ -1869,10 +1825,8 @@ Status EtcdClusterManager::GetNodeInGivenOtherAzByHash(const std::string &objKey
     std::string dbName;
     std::optional<RouteInfo> routeInfo;
     RETURN_IF_NOT_OK(otherAzHashRing->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
-    std::string destWorkerUuid;
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
     HostPort masterAddr;
-    RETURN_IF_NOT_OK(otherAzHashRing->GetWorkerAddrByUuidForMultiReplica(destWorkerUuid, masterAddr));
+    RETURN_IF_NOT_OK(otherAzHashRing->GetWorkerAddrByUuidForMetadata(dbName, masterAddr));
     metaAddrInfo.SetAddress(std::move(masterAddr));
     metaAddrInfo.SetDbName(std::move(dbName));
     return Status::OK();
@@ -1904,9 +1858,7 @@ Status EtcdClusterManager::GetMasterAddrInOtherAzForHashKey(
 {
     std::optional<RouteInfo> routeInfo;
     RETURN_IF_NOT_OK(iter->second->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
-    std::string destWorkerUuid;
-    RETURN_IF_NOT_OK(ReplicaMagagerEvent::GetPrimaryReplicaLocation::GetInstance().NotifyAll(dbName, destWorkerUuid));
-    return iter->second->GetWorkerAddrByUuidForMultiReplica(destWorkerUuid, masterHostPort);
+    return iter->second->GetWorkerAddrByUuidForMetadata(dbName, masterHostPort);
 }
 
 std::string EtcdClusterManager::GetOtherAzNameByWorkerIdInefficient(const std::string &workerId)
@@ -1950,7 +1902,6 @@ Status EtcdClusterManager::CreateEtcdStoreTable(EtcdStore *etcdStore)
     RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX), K_DUPLICATED);
     RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)),
                             K_DUPLICATED);
-    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_REPLICA_GROUP_TABLE, ETCD_REPLICA_GROUP_TABLE), K_DUPLICATED);
     RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_MASTER_ADDRESS_TABLE, ETCD_MASTER_ADDRESS_TABLE), K_DUPLICATED);
     return Status::OK();
 }
@@ -1962,7 +1913,6 @@ Status EtcdClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, Clu
     RETURN_IF_NOT_OK(
         etcdStore->GetOtherAzAllValue(ETCD_CLUSTER_TABLE, clusterInfo.revision, clusterInfo.otherAzWorkers));
     RETURN_IF_NOT_OK(etcdStore->GetOtherAzAllHashRing(clusterInfo.revision, clusterInfo.otherAzHashrings));
-    RETURN_IF_NOT_OK(etcdStore->GetAll(ETCD_REPLICA_GROUP_TABLE, clusterInfo.revision, clusterInfo.replicaGroups));
     return Status::OK();
 }
 
@@ -2102,10 +2052,6 @@ std::string ClusterInfo::ToString()
     }
     msg << std::endl << "other az workers: ";
     for (const auto &pair : otherAzWorkers) {
-        msg << pair.first << ", ";
-    }
-    msg << std::endl << "replicaGroups: " << std::endl;
-    for (const auto &pair : replicaGroups) {
         msg << pair.first << ", ";
     }
     return msg.str();

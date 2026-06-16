@@ -66,7 +66,6 @@ static const uint64_t DEFAULT_TIMEOUT_MS = 1000;
 // cluster info table in rocksDb
 static const std::string CLUSTER_TABLE = "cluster_table";
 static const std::string HASHRING_TABLE = "hashring_table";
-static const std::string REPLICA_GROUP_TABLE = "replica_group_table";
 
 // bytes convert
 static const uint64_t MB_TO_BYTES = 1024 * 1024;

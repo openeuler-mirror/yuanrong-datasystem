@@ -34,13 +34,13 @@
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
 namespace datasystem {
-class ReplicaManager;
+class MetadataManagerHolder;
 
 namespace master {
 class MasterSCServiceImpl : public MasterSCService {
 public:
     MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
-                        ReplicaManager *replicaManager);
+                        MetadataManagerHolder *metadataManagerHolder);
     MasterSCServiceImpl() = default;
     ~MasterSCServiceImpl() override = default;
 
@@ -197,7 +197,7 @@ protected:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
-    ReplicaManager *replicaManager_;
+    MetadataManagerHolder *metadataManagerHolder_;
 };
 }  // namespace master
 }  // namespace datasystem

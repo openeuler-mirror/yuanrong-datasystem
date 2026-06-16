@@ -753,11 +753,6 @@ private:
                 LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
                 RETURN_IF_NOT_OK_APPEND_MSG(workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr, workerMasterApi),
                                             "hash master get failed, RedirectRetryWhenMetaMoving failed");
-                if (etcdCM_->MultiReplicaEnabled()) {
-                    req.set_redirect(false);
-                    RETURN_IF_NOT_OK(fun(req, rsp));
-                    return Status::OK();
-                }
             }
             static const int sleepTimeMs = 200;
             rsp.Clear();
@@ -790,11 +785,6 @@ private:
                 workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
                 CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                          "hash master get failed, RedirectRetryWhenMetaMoving failed");
-                if (etcdCM_->MultiReplicaEnabled()) {
-                    req.set_redirect(false);
-                    RETURN_IF_NOT_OK(fun(req, rsp));
-                    return Status::OK();
-                }
             }
             static const int sleepTimeMs = 200;
             rsp.Clear();
