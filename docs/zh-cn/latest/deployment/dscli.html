@@ -1742,27 +1742,27 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>eviction_reserve_mem_threshold_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
-<td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_percent 共同决定驱逐触发线。有效范围 100-102400</p></td>
+<td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_ratio 共同决定驱逐触发线。有效范围 100-102400</p></td>
 </tr>
-<tr class="row-odd"><td><p>eviction_high_watermark_percent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">90</span></code></p></td>
-<td><p>内存占用率高水位（百分比，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 2-100，须大于 eviction_low_watermark_percent</p></td>
+<tr class="row-odd"><td><p>eviction_high_watermark_ratio</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.9</span></code></p></td>
+<td><p>内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 0.02-1.0，须大于 eviction_low_watermark_ratio</p></td>
 </tr>
-<tr class="row-even"><td><p>eviction_low_watermark_percent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
-<td><p>内存占用率低水位（百分比），后台驱逐运行直至占用率降至该比例及以下。有效范围 1-99，须小于 eviction_high_watermark_percent</p></td>
+<tr class="row-even"><td><p>eviction_low_watermark_ratio</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 eviction_high_watermark_ratio</p></td>
 </tr>
-<tr class="row-odd"><td><p>spill_high_watermark_percent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">80</span></code></p></td>
-<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的百分比）。有效范围 2-100，须大于 spill_low_watermark_percent</p></td>
+<tr class="row-odd"><td><p>spill_high_watermark_ratio</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spill_low_watermark_ratio</p></td>
 </tr>
-<tr class="row-even"><td><p>spill_low_watermark_percent</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
-<td><p>Spill 目录占用率低水位（相对 spill_size_limit 的百分比）。有效范围 1-99，须小于 spill_high_watermark_percent</p></td>
+<tr class="row-even"><td><p>spill_low_watermark_ratio</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.6</span></code></p></td>
+<td><p>Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spill_high_watermark_ratio</p></td>
 </tr>
 </tbody>
 </table>
@@ -1830,49 +1830,39 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">400</span></code></p></td>
 <td><p>单个日志文件最大大小（以MB为单位）</p></td>
 </tr>
-<tr class="row-even"><td><p>log_rate_limit</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。</p></td>
+<tr class="row-even"><td><p>request_sample_rate</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
+<td><p>请求日志采样率（0.0–1.0）。1.0=全量保留；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/PLOG 由 diagnostic_sample_rate 控制</p></td>
 </tr>
-<tr class="row-odd"><td><p>log_only_write_info_file</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。</p></td>
+<tr class="row-odd"><td><p>access_sample_rate</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code> (未显式设置时支持派生)</p></td>
+<td><p>接口日志采样率（0.0–1.0）。1.0=全量保留</p></td>
 </tr>
-<tr class="row-even"><td><p>log_monitor</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>是否开启接口性能与资源观测日志</p></td>
-</tr>
-<tr class="row-odd"><td><p>monitor_config_file</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code></p></td>
-<td><p>配置worker监控配置文件的路径</p></td>
-</tr>
-<tr class="row-even"><td><p>log_monitor_exporter</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code></p></td>
-<td><p>指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下</p></td>
-</tr>
-<tr class="row-odd"><td><p>log_monitor_interval_ms</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
-<td><p>观测日志收集导出的间隔时间（以毫秒为单位）</p></td>
-</tr>
-<tr class="row-even"><td><p>minloglevel</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>设置记录冗余日志的最低级别，低于这个级别的日志不会被记录</p></td>
-</tr>
-<tr class="row-odd"><td><p>logfile_mode</p></td>
-<td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">416</span></code></p></td>
-<td><p>设置日志文件模式/权限，值为八进制数</p></td>
+<tr class="row-even"><td><p>diagnostic_sample_rate</p></td>
+<td><p>double</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code> (未显式设置时支持派生)</p></td>
+<td><p>诊断日志采样率（0.0–1.0）。控制请求级 ERROR/WARNING/PLOG 的补充采样（请求未 sampled-in 时）；1.0=全量保留；FATAL/CHECK 无条件保留不受此参数影响</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>派生规则说明</strong>：当仅显式设置 <code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>，且 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 和 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 未被显式指定（包括在运行过程中也未曾被显式设置过），则：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">access_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">3)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">4)</span></code>
+一旦 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 或 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 被显式设置，派生规则即失效，此后使用各自独立的值。显式设置 <code class="docutils literal notranslate"><span class="pre">1.0</span></code> 与默认 <code class="docutils literal notranslate"><span class="pre">1.0</span></code> 具有不同语义：前者阻止派生，后者允许派生。
+| log_only_write_info_file | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
+| log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是否开启接口性能与资源观测日志 |
+| monitor_config_file | string | <code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code> | 配置worker监控配置文件的路径 |
+| log_monitor_exporter | string | <code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code> | 指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下 |
+| log_monitor_interval_ms | int | <code class="docutils literal notranslate"><span class="pre">10000</span></code> | 观测日志收集导出的间隔时间（以毫秒为单位） |
+| minloglevel | int | <code class="docutils literal notranslate"><span class="pre">0</span></code> | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
+| logfile_mode | int | <code class="docutils literal notranslate"><span class="pre">416</span></code> | 设置日志文件模式/权限，值为八进制数 |</p></li>
+</ul>
+</div></blockquote>
 </section>
 <section id="id20">
 <h4>二级缓存相关配置<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h4>

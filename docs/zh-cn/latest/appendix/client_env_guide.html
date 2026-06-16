@@ -729,17 +729,12 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>数据系统SDK的最小日志级别。数值越大，输出的日志越少；默认值为0，通常表示INFO级别及以上日志都可输出。</p></td>
 </tr>
-<tr class="row-odd"><td><p>25</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_RATE_LIMIT</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
-<td><p>每秒采样请求数上限（0表示不限速）。仅对带 traceId 的请求日志生效：被采样到的请求会完整打印链路日志，未采样请求的链路日志会被整体丢弃（包含 WARNING/ERROR/FATAL）。</p></td>
-</tr>
-<tr class="row-even"><td><p>26</p></td>
+<tr class="row-odd"><td><p>26</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。</p></td>
 </tr>
-<tr class="row-odd"><td><p>28</p></td>
+<tr class="row-even"><td><p>28</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td><p>是否让客户端日志文件名不带进程号。默认<code class="docutils literal notranslate"><span class="pre">true</span></code>时输出为<code class="docutils literal notranslate"><span class="pre">ds_client.log</span></code>、<code class="docutils literal notranslate"><span class="pre">ds_client_access.log</span></code>；设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>时恢复为带<code class="docutils literal notranslate"><span class="pre">&lt;pid&gt;</span></code>后缀的命名，适合多client进程同时运行且不希望覆盖日志的场景。</p></td>
@@ -796,10 +791,41 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </section>
 <section id="id6">
-<h2>使用说明<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<h2>客户端运行参数<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<p>以下 gflag 参数可通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件设置，支持热更新。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>序号</p></th>
+<th class="head"><p>名称</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>取值范围</p></th>
+<th class="head"><p>含义/用途</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>29</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">urma_failover_success_rate_ratio</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.5</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">[0.0,</span> <span class="pre">1.0]</span></code></p></td>
+<td><p>Client 侧 URMA 数据面成功率阈值。一个完整统计窗口的成功率严格低于该 ratio 时，client 尝试切换 worker；设置为 <code class="docutils literal notranslate"><span class="pre">0.0</span></code> 表示关闭 URMA 故障切换功能，同时清空当前窗口状态。</p></td>
+</tr>
+<tr class="row-odd"><td><p>30</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">urma_failover_min_sample_count</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&gt;</span> <span class="pre">0</span></code></p></td>
+<td><p>每个 <code class="docutils literal notranslate"><span class="pre">client_dead_timeout_s</span></code> 统计窗口内进行故障切换判断前所需的最小 URMA 数据面样本数。样本不足时即使成功率很低也不会触发切换，避免少量请求误触发。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id7">
+<h2>使用说明<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
 <p>1.环境变量的优先级低于SDK内部配置。如果SDK中已经配置了某个参数,则不会读取该环境变量;只有当SDK中没有配置该参数时,才会从环境变量中读取对应的值。
 2.日志配置相关环境变量只有配置了某个参数后，才会从环境变量中读取对应的值。
-3.<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_V</span></code> 控制 VLOG 详细程度，<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_MIN_LOG_LEVEL</span></code> 控制常规日志最低输出级别，两者分别影响不同日志通道。</p>
+3.<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_LOG_V</span></code> 控制 VLOG 详细程度，<code class="docutils literal notranslate"><span class="pre">DATASYSTEM_MIN_LOG_LEVEL</span></code> 控制常规日志最低输出级别，两者分别影响不同日志通道。
+4.客户端运行参数通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件设置。</p>
 <p>设置环境变量的示例:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">DATASYSTEM_HOST</span><span class="o">=</span><span class="m">127</span>.0.0.1
 <span class="nb">export</span><span class="w"> </span><span class="nv">DATASYSTEM_PORT</span><span class="o">=</span><span class="m">8080</span>
@@ -870,7 +896,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#id3">日志配置</a></li>
 <li><a class="reference internal" href="#id4">运行时环境配置</a></li>
 <li><a class="reference internal" href="#id5">监控配置</a></li>
-<li><a class="reference internal" href="#id6">使用说明</a></li>
+<li><a class="reference internal" href="#id6">客户端运行参数</a></li>
+<li><a class="reference internal" href="#id7">使用说明</a></li>
 </ul>
 </li>
 </ul>
