@@ -70,9 +70,18 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
         access.Result(rc).Record();
         return rc;
     }
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
+    if (etcdCM_ == nullptr) {
+        Status rc(StatusCode::K_NOT_READY, __LINE__, __FILE__, "ETCD cluster manager is not provided.");
+        access.Result(rc).Record();
+        return rc;
+    }
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    Status authRc = worker::Authenticate(akSkManager_, req, tenantId);
+    if (authRc.IsError()) {
+        LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
+        access.Result(authRc).Record();
+        return authRc;
+    }
     Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
     access.Result(rc).Record();

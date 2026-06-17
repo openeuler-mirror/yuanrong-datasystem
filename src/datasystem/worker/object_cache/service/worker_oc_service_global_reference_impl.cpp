@@ -47,6 +47,16 @@ WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
 {
 }
 
+void WorkerOcServiceGlobalReferenceImpl::FillFailedObjectKeys(
+    GIncreaseRspPb &resp, const std::vector<std::string> &failIds)
+{
+    for (const auto &objectKey : failIds) {
+        std::string failedId;
+        TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKey, failedId);
+        resp.add_failed_object_keys(failedId);
+    }
+}
+
 Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
 {
     if (!req.remote_client_id().empty()) {
@@ -55,10 +65,20 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     workerOperationTimeCost.Clear();
     Timer timer;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
+    access.ObjectKeysRef(req.object_keys());
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
-                                         StatusCode::K_INVALID, "invalid object size");
+    Status authRc = worker::Authenticate(akSkManager_, req, tenantId);
+    if (authRc.IsError()) {
+        LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
+        access.Result(authRc).Record();
+        return authRc;
+    }
+    if (!Validator::IsBatchSizeUnderLimit(req.object_keys_size())) {
+        LOG(ERROR) << "invalid object size";
+        Status rc(StatusCode::K_INVALID, __LINE__, __FILE__, "invalid object size");
+        access.Result(rc).Record();
+        return rc;
+    }
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
     access.ObjectKeysRef(objectKeys);
     LOG(INFO) << "[Ref] GIncreaseRef client id: " << req.address() << ", object list: " << VectorToString(objectKeys);
@@ -80,13 +100,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
             lastErr = Status(StatusCode::K_RUNTIME_ERROR, "failIncIds is not empty.");
         }
     }
-    if (!failIncIds.empty()) {
-        for (const auto &objectKey : failIncIds) {
-            std::string failedId;
-            TenantAuthManager::Instance()->NamespaceUriToObjectKey(objectKey, failedId);
-            resp.add_failed_object_keys(failedId);
-        }
-    }
+    FillFailedObjectKeys(resp, failIncIds);
     resp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
     access.Result(lastErr).Record();
@@ -187,8 +201,11 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentObjectKeys = item.second;
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-        CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                 "hash master get failed, QueryGlobal failed");
+        if (workerMasterApi == nullptr) {
+            Status rc(K_RUNTIME_ERROR, __LINE__, __FILE__, "hash master get failed, QueryGlobal failed");
+            access.Result(rc).Record();
+            return rc;
+        }
         QueryGlobalRefNumReqPb currentReq;
         currentReq.set_redirect(true);
         *currentReq.mutable_object_keys() = { currentObjectKeys.begin(), currentObjectKeys.end() };

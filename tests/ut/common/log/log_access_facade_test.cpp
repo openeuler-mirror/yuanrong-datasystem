@@ -316,5 +316,77 @@ TEST_F(LogAccessFacadeTest, NestedKeysRefTempVectorIsDanglingRegression)
     access.NestedKeysRef(nestedKeys).Result(Status::OK()).Record();
 }
 
+TEST_F(LogAccessFacadeTest, ObjectFacadeObjectKeyOwnedSkipsCopyWhenSampledOut)
+{
+    EnableSampler(0.0, 0.0, 1.0);
+    LogSampler::Instance().SetSaltForTest(0);
+    TraceGuard guard1 = Trace::Instance().SetRequestTraceUUID();
+
+    {
+        std::string key = "owned_const_ref_key";
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+        access.ObjectKeyOwned(key).Result(Status::OK()).Record();
+        EXPECT_EQ(key, "owned_const_ref_key");
+    }
+
+    {
+        std::string key = "owned_move_key";
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+        access.ObjectKeyOwned(std::move(key)).Result(Status::OK()).Record();
+        EXPECT_EQ(key, "owned_move_key");
+    }
+
+    EnableSampler(1.0, 1.0, 1.0);
+    TraceGuard guard2 = Trace::Instance().SetRequestTraceUUID();
+
+    {
+        std::string key = "sampled_in_const_key";
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+        access.ObjectKeyOwned(key).Result(Status::OK()).DataSize(100).Record();
+    }
+
+    {
+        std::string key = "sampled_in_move_key";
+        auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
+        access.ObjectKeyOwned(std::move(key)).Result(Status::OK()).DataSize(100).Record();
+    }
+}
+
+TEST_F(LogAccessFacadeTest, ObjectFacadeObjectKeyProviderSetBeforeCallCoversEarlyExit)
+{
+    EnableSampler(1.0, 1.0, 1.0);
+    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+
+    // Simulate multi-key pattern: Provider set before potentially-failing call
+    // Even if the "call" fails (Result with error code), Provider was already set
+    std::vector<std::string> keys = { "key1", "key2", "key3" };
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+    access.ObjectKeyProvider([keys] { return objectKeysToString(keys); })
+          .TimeoutMs(5000)
+          .Result(Status(StatusCode::K_RUNTIME_ERROR, "simulated failure"))
+          .DataSize(0)
+          .Record();
+}
+
+TEST_F(LogAccessFacadeTest, ObjectFacadeObjectKeyProviderSetBeforeCallSampledOutNoCopy)
+{
+    EnableSampler(0.0, 0.0, 1.0);
+    LogSampler::Instance().SetSaltForTest(0);
+    TraceGuard guard = Trace::Instance().SetRequestTraceUUID();
+
+    int providerCalls = 0;
+    std::vector<std::string> keys = { "key1", "key2" };
+    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_GET);
+    access.ObjectKeyProvider([&providerCalls, &keys] {
+              ++providerCalls;
+              return objectKeysToString(keys);
+          })
+          .TimeoutMs(5000)
+          .Result(Status::OK())
+          .DataSize(0)
+          .Record();
+    EXPECT_EQ(providerCalls, 0);
+}
+
 }  // namespace ut
 }  // namespace datasystem

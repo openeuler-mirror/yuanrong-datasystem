@@ -108,6 +108,13 @@ private:
     Status GIncreaseRefWithRemoteClientId(const GIncreaseReqPb &req, GIncreaseRspPb &resp);
 
     /**
+     * @brief Fill failed object keys into response, converting namespace URI to object key.
+     * @param[out] resp The rpc response protobuf.
+     * @param[in] failIds The failed object key list (namespace URI format).
+     */
+    static void FillFailedObjectKeys(GIncreaseRspPb &resp, const std::vector<std::string> &failIds);
+
+    /**
      * @brief Send request to master to decrease the objects with the remote client id.
      * @param[in] objectKeys The object key list to be decreased.
      * @param[in] remoteClientId The remote client id.

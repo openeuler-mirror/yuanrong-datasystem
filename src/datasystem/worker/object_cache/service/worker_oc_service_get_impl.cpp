@@ -2799,9 +2799,18 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     auto clientId = ClientKey::Intern(req.client_id());
     VLOG(1) << "Exist start from client:" << clientId;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
-                                         StatusCode::K_INVALID, "invalid object size");
+    Status authRc = worker::Authenticate(akSkManager_, req, tenantId);
+    if (authRc.IsError()) {
+        LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
+        access.Result(authRc).Record();
+        return authRc;
+    }
+    if (!Validator::IsBatchSizeUnderLimit(req.object_keys_size())) {
+        LOG(ERROR) << "invalid object size";
+        Status rc(StatusCode::K_INVALID, __LINE__, __FILE__, "invalid object size");
+        access.Result(rc).Record();
+        return rc;
+    }
     auto keys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
 
     point.RecordAndReset(PerfKey::WORKER_EXIST_LOCAL_CHECK);

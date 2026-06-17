@@ -10,7 +10,7 @@ Date: `2026-05-11`
   - `8d53a7e3 Add PLOG slow get diagnostics`
 - Purpose:
   - when a key Get latency segment exceeds its threshold, print the diagnostic log through `PLOG` so it bypasses
-    `log_rate_limit` request sampling;
+    request log sampling (previously `log_rate_limit`, removed by PR 1064);
   - when the segment is below threshold, keep the same log body behind `VLOG(1)`, so production `v=0` stays quiet on fast
     requests.
 

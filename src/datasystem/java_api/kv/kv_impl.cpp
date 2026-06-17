@@ -28,20 +28,18 @@ namespace datasystem {
 namespace java_api {
 
 Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobject valueJO, jobject paramJO,
-                                 JavaKvAccessFields *accessFields)
+                                 ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string key = ToString(env, keyJO);
+    access.ObjectKeyOwned(key);
     auto body = env->GetDirectBufferAddress(valueJO);
     if (!body) {
         std::string msg = "cant get data address";
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, msg);
     }
     SetParam param = ToCppSetParam(env, paramJO);
-    if (accessFields != nullptr) {
-        accessFields->key = key;
-        accessFields->setParam = param;
-    }
+    access.WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond);
     if (env->ExceptionOccurred()) {
         std::string msg =
             "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_setDirectBufferNative function "
@@ -54,9 +52,7 @@ Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobje
         fullParam.cacheType = param.cacheType;
         fullParam.consistencyType = ConsistencyType::CAUSAL;
         int limit = GetByteBufferLimit(env, valueJO);
-        if (accessFields != nullptr) {
-            accessFields->dataSize = static_cast<uint64_t>(limit);
-        }
+        access.DataSize(static_cast<uint64_t>(limit));
         RETURN_IF_NOT_OK(
             (*client)->Put(key, static_cast<const uint8_t *>(body), limit, fullParam, {}, param.ttlSecond));
     }
@@ -65,16 +61,14 @@ Status SetDirectBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jobje
 }
 
 Status SetHeapBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jbyteArray byteArray, jlong size,
-                               jobject paramJO, JavaKvAccessFields *accessFields)
+                               jobject paramJO, ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string key = ToString(env, keyJO);
+    access.ObjectKeyOwned(key);
     SetParam param = ToCppSetParam(env, paramJO);
-    if (accessFields != nullptr) {
-        accessFields->key = key;
-        accessFields->setParam = param;
-        accessFields->dataSize = static_cast<uint64_t>(size);
-    }
+    access.WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
+        .DataSize(static_cast<uint64_t>(size));
     datasystem::object_cache::FullParam fullParam;
     if (env->ExceptionOccurred()) {
         std::string msg =
@@ -103,13 +97,11 @@ Status SetHeapBufferNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jbyteAr
 }
 
 Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs, jint &totalSize,
-                        jobject &heapBuffer, JavaKvAccessFields *accessFields)
+                        jobject &heapBuffer, ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string key = ToString(env, keyJO);
-    if (accessFields != nullptr) {
-        accessFields->key = key;
-    }
+    access.ObjectKeyOwned(key).TimeoutMs(timeoutMs);
     std::vector<Optional<Buffer>> buffers;
     RETURN_IF_NOT_OK((*client)->Get({ key }, timeoutMs, buffers));
     RETURN_IF_NOT_OK(buffers[0]->RLatch());
@@ -127,52 +119,62 @@ Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs
 }
 
 Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeoutMs, jint &totalSize,
-                         jobject &ListJO, JavaKvAccessFields *accessFields)
+                         jobject &ListJO, ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::vector<std::string> keys;
     GetJavaStringListVal(env, keysJO, keys);
-    if (accessFields != nullptr) {
-        accessFields->keys = keys;
-    }
+    access.ObjectKeyProvider([&keys] { return objectKeysToString(keys); });
+    access.TimeoutMs(timeoutMs);
     std::vector<Optional<Buffer>> buffers;
-    RETURN_IF_NOT_OK((*client)->Get(keys, timeoutMs, buffers));
-    jclass listJC = env->FindClass("java/util/ArrayList");
-    jmethodID initId = env->GetMethodID(listJC, "<init>", "()V");
-    ListJO = env->NewObject(listJC, initId);
-    jmethodID addId = env->GetMethodID(listJC, "add", "(Ljava/lang/Object;)Z");
-    jobject byteBuffer = NULL;
-    for (auto &buffer : buffers) {
-        if (buffer) {
-            RETURN_IF_NOT_OK(buffer->RLatch());
-            byteBuffer = ToHeapBuffer(env, reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-            RETURN_IF_NOT_OK(buffer->UnRLatch());
-            if (env->ExceptionOccurred()) {
-                std::string msg =
-                    "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_getKeysNative "
-                    "function to call ToHeapBuffer()";
-                RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, msg);
+    Status rc = (*client)->Get(keys, timeoutMs, buffers);
+    if (rc.IsOk()) {
+        jclass listJC = env->FindClass("java/util/ArrayList");
+        jmethodID initId = env->GetMethodID(listJC, "<init>", "()V");
+        ListJO = env->NewObject(listJC, initId);
+        jmethodID addId = env->GetMethodID(listJC, "add", "(Ljava/lang/Object;)Z");
+        jobject byteBuffer = NULL;
+        for (auto &buffer : buffers) {
+            if (buffer) {
+                Status latchRc = buffer->RLatch();
+                if (!latchRc.IsOk()) {
+                    rc = latchRc;
+                    break;
+                }
+                byteBuffer = ToHeapBuffer(env,
+                    reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+                Status unlatchRc = buffer->UnRLatch();
+                if (!unlatchRc.IsOk()) {
+                    rc = unlatchRc;
+                    break;
+                }
+                if (env->ExceptionOccurred()) {
+                    std::string msg =
+                        "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_getKeysNative "
+                        "function to call ToHeapBuffer()";
+                    rc = Status(StatusCode::K_RUNTIME_ERROR, msg);
+                    break;
+                }
+                totalSize += buffer->GetSize();
+            } else {
+                byteBuffer = nullptr;
             }
-            totalSize += buffer->GetSize();
-        } else {
-            byteBuffer = nullptr;
+            env->CallBooleanMethod(ListJO, addId, byteBuffer);
         }
-        env->CallBooleanMethod(ListJO, addId, byteBuffer);
+        env->DeleteLocalRef(listJC);
+        env->DeleteLocalRef(byteBuffer);
     }
-    // Clean up
-    env->DeleteLocalRef(listJC);
-    env->DeleteLocalRef(byteBuffer);
-    return Status::OK();
+    Status accessRc = (rc.GetCode() == K_NOT_FOUND) ? Status::OK() : rc;
+    access.Result(accessRc).DataSize(totalSize).Record();
+    return rc;
 }
 
 Status DelKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, std::vector<std::string> &failedKeys,
-                        JavaKvAccessFields *accessFields)
+                        ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::string key = ToString(env, keyJO);
-    if (accessFields != nullptr) {
-        accessFields->key = key;
-    }
+    access.ObjectKeyOwned(key);
     RETURN_IF_NOT_OK((*client)->Delete({ key }, failedKeys));
     if (!failedKeys.empty()) {
         std::string msg = "The failed key is not empty, delete key failed!";
@@ -182,16 +184,15 @@ Status DelKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, std::vector<st
 }
 
 Status DelKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, std::vector<std::string> &failedKeys,
-                         JavaKvAccessFields *accessFields)
+                         ObjectAccessRecorder &access)
 {
     auto client = reinterpret_cast<std::shared_ptr<ObjectClientImpl> *>(handle);
     std::vector<std::string> keys;
     GetJavaStringListVal(env, keysJO, keys);
-    if (accessFields != nullptr) {
-        accessFields->keys = keys;
-    }
-    RETURN_IF_NOT_OK((*client)->Delete(keys, failedKeys));
-    return Status::OK();
+    access.ObjectKeyProvider([&keys] { return objectKeysToString(keys); });
+    Status rc = (*client)->Delete(keys, failedKeys);
+    access.Result(rc).Record();
+    return rc;
 }
 }  // namespace java_api
 }  // namespace datasystem

@@ -99,7 +99,11 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
 
     for (auto &func : futures) {
         func.wait();
-        RETURN_IF_NOT_OK(func.get());
+        Status futureRc = func.get();
+        if (futureRc.IsError()) {
+            access.Result(futureRc).Record();
+            return futureRc;
+        }
     }
     for (const auto &kv : objKeysUndecidedMaster) {
         absentObjectKeys.insert(absentObjectKeys.end(), kv.second.begin(), kv.second.end());

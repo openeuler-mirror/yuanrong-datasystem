@@ -220,7 +220,9 @@
     - `log_async`
     - `log_async_queue_size`
     - `log_only_write_info_file`
-    - `log_rate_limit` (request-level sampling quota by SDK request trace, not per-log throttling; local decisions are stored in the active `Trace` context and the limiter hot path uses only per-window atomics, not a global trace-decision map)
+    - `request_sample_rate` (complete request-log sampling ratio per request trace; local decision cached in `Trace`)
+    - `access_sample_rate` (supplemental client/access log sampling ratio; request sampled-in forces access emission)
+    - `diagnostic_sample_rate` (request-context ERROR/WARNING/PLOG supplement sampling when request is not sampled in)
     - `log_dir`
     - `log_filename`
   - client environment overrides:
@@ -239,7 +241,7 @@
     - `DATASYSTEM_LOG_V`
     - `DATASYSTEM_MIN_LOG_LEVEL`
     - `DATASYSTEM_LOG_MONITOR_ENABLE`
-    - `DATASYSTEM_LOG_RATE_LIMIT`
+    - `DATASYSTEM_LOG_RATE_LIMIT` (removed by LogSampler migration; do not use for new development)
     - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
 - Background jobs, threads, or callbacks:
   - `LogManager` background thread started by `LogManager::Start()`;
@@ -250,11 +252,12 @@
   - `include/datasystem/context/context.h` and `src/datasystem/client/context/context.cpp` feed trace prefixes into `Trace`;
   - `src/datasystem/common/rpc/zmq/zmq_common.h` propagates one `log_sample_state` in `MetaPb` so
     client/worker keep a consistent request marker, and can propagate either unresolved request state
-    (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops; when a receiver has local
-    `log_rate_limit` enabled, an `UNDECIDED` request is decided at the RPC context import boundary before async
+    (`UNDECIDED`) or trace-level `ADMIT`/`REJECT` decisions across RPC hops; when a receiver has
+    LogSampler enabled, an `UNDECIDED` request is decided at the RPC context import boundary before async
     handoff;
-  - client register flow can sync `log_rate_limit` from the connected worker via `RegisterClientRspPb`, then apply it
-    to client-side `LogRateLimiter` at connect/register time;
+  - client register flow receives structured `LogSampleConfigPb` (ppm-based) from the connected worker
+    via `RegisterClientRspPb`, validates fields, compares changes, and applies to client-side
+    `LogSampler` at connect/register time;
   - client log file split behavior is decided before logger sink creation by `log_only_write_info_file` and the
     client-only `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` override; workers use their own gflag/config value and do not
     sync this setting through register responses;
