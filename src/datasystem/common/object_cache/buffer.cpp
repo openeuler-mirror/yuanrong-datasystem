@@ -27,6 +27,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -213,13 +214,14 @@ Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_
     VLOG(DEBUG_LOG_LEVEL) << "Begin to MemoryCopy, clientId: " << clientId_ << ", data length: " << length;
     PerfPoint point(PerfKey::BUFFER_MEMORY_COPY);
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     RETURN_IF_NOT_OK(CheckDeprecated());
     uint64_t dataSize = GetSize();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data != nullptr, K_INVALID, "Can't put null pointer.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
     if (bufferInfo_->ubUrmaDataInfo) {
-        Status ubStatus = clientImpl->SendBufferViaUb(bufferInfo_, data, length);
+        Status ubStatus = clientImpl->SendBufferViaUb(bufferInfo_, data, length, traceEnabled);
         if (ubStatus.IsOk()) {
             if (actualTransportKind != nullptr) {
                 *actualTransportKind = static_cast<uint8_t>(AccessTransportKind::UB);
@@ -255,6 +257,7 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     RETURN_IF_NOT_OK(CheckDeprecated());
     CHECK_FAIL_RETURN_STATUS(!bufferInfo_->isSeal, K_OC_ALREADY_SEALED, "Client object is already sealed");
 
@@ -262,7 +265,7 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
         uint64_t dataSize = GetSize();
         const void *dataPtr = ImmutableData();
         if (dataPtr != nullptr && dataSize > 0) {
-            Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize);
+            Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize, traceEnabled);
             if (ubStatus.IsOk()) {
                 AccessTransportTracker::Record(AccessTransportKind::UB);
             } else {

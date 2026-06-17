@@ -55,6 +55,8 @@ message GetObjectRemoteRspPb {
   DataTransferSource data_source = 5;
   ErrorInfoPb error = 6;
   RemoteH2DHostInfoPb host_info = 7;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message BatchGetObjectRemoteReqPb {
@@ -71,6 +73,8 @@ message BatchGetObjectRemoteReqPb {
 message BatchGetObjectRemoteRspPb {
   repeated GetObjectRemoteRspPb responses = 1;
   RemoteH2DRootInfoPb root_info = 2;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message CheckEtcdStateReqPb {

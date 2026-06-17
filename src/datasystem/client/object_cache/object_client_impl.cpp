@@ -52,6 +52,7 @@
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
@@ -102,7 +103,8 @@ const std::string CLIENT_MEMORY_COPY_THREAD_NUM_ENV = "CLIENT_MEMORY_COPY_THREAD
 const std::string CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY_ENV = "CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY";
 const std::string CLIENT_MEMCOPY_PARALLEL_THRESHOLD_ENV = "CLIENT_MEMCOPY_PARALLEL_THRESHOLD";
 static constexpr int SHM_REF_RECONCILE_INTERVAL_MS = 5 * 1000;
-const uint64_t CLIENT_LOCAL_OR_RPC_SLOW_US = datasystem::GetClientSlowUs();
+
+
 constexpr double US_PER_MS = 1000.0;
 
 namespace datasystem {
@@ -2030,6 +2032,11 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
     RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_START);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -2037,20 +2044,42 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     VLOG(1) << "Begin to create object, object_key: " << objectKey;
     buffer.reset();  // Decrease should precede increase to avoid worker lost (ref cnt will be clear) and then restart.
     std::shared_ptr<Buffer> newBuffer;
+    RETURN_IF_NOT_OK(CreateShmBuffer(objectKey, dataSize, param, workerApi, config, traceEnabled, newBuffer));
+    buffer = std::move(newBuffer);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_END);
+    }
+    EmitClientLatencySummary(LatencyTickKey::CLIENT_CREATE_START, LatencyTickKey::CLIENT_CREATE_END);
+    createPoint.Record();
+    VLOG(1) << "Finished creating object, object_key: " << objectKey;
+    return Status::OK();
+}
+
+Status ObjectClientImpl::CreateShmBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                                         const std::shared_ptr<IClientWorkerApi> &workerApi,
+                                         const LatencyTraceConfig &config, bool traceEnabled,
+                                         std::shared_ptr<Buffer> &newBuffer)
+{
     uint32_t version = 0;
     if (workerApi->ShmCreateable(dataSize) || IsUrmaEnabled()) {
         uint64_t metadataSize = 0;
         auto shmBuf = std::make_shared<ShmUnitInfo>();
         std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;
         Timer timer;
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
+        }
         auto rc = workerApi->Create(objectKey, dataSize, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType);
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_END);
+        }
         const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
         const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-        PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
-                        FormatString("Finished creating object to worker, object_key: %s, path: %s, cost: %.3fms, "
-                                     "rc: %s",
-                                     objectKey, IsUrmaEnabled() && urmaDataInfo != nullptr ? "UB" : "SHM", elapsedMs,
-                                     rc.ToString()));
+        SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && elapsedUs >= config.rpcSlowerThanUs, 1,
+                            FormatString("Finished creating object to worker, object_key: %s, path: %s, cost: %.3fms, "
+                                         "rc: %s", objectKey,
+                                         IsUrmaEnabled() && urmaDataInfo != nullptr ? "UB" : "SHM", elapsedMs,
+                                         rc.ToString()));
         RETURN_IF_NOT_OK(rc);
         std::shared_ptr<ObjectBufferInfo> bufferInfo = nullptr;
         std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
@@ -2072,9 +2101,6 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
         auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version);
         RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), newBuffer));
     }
-    buffer = std::move(newBuffer);
-    createPoint.Record();
-    VLOG(1) << "Finished creating object, object_key: " << objectKey;
     return Status::OK();
 }
 
@@ -2321,6 +2347,8 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PerfPoint perfPoint(PerfKey::CLIENT_PUBLISH_OBJECT);
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(nestedObjectKeys, true));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
@@ -2336,24 +2364,30 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Timer timer;
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
+    }
     auto rc = workerApi->Publish(bufferInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
+    }
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
-                    FormatString("Finished publishing object to worker, object_key: %s, path: %s, cost: %.3fms, rc: %s",
-                                 objectKey, isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP"),
-                                 elapsedMs, rc.ToString()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && elapsedUs >= config.rpcSlowerThanUs, 1,
+        FormatString("Finished publishing object to worker, object_key: %s, path: %s, cost: %.3fms, rc: %s",
+                     objectKey, isShm ? "SHM" : (bufferInfo->ubUrmaDataInfo != nullptr ? "UB" : "TCP"),
+                     elapsedMs, rc.ToString()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, FormatString("Publish object %s", objectKey));
     return Status::OK();
 }
 
 Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                                         uint64_t length)
+                                         uint64_t length, bool traceEnabled)
 {
     std::shared_ptr<IClientWorkerApi> api;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
-    return api->SendBufferViaUb(bufferInfo, data, length);
+    return api->SendBufferViaUb(bufferInfo, data, length, traceEnabled);
 }
 
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
@@ -2370,12 +2404,20 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
                                        uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
                                        int existence)
 {
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     // Create a buffer first.
     auto shmBuf = std::make_shared<ShmUnitInfo>();
     uint32_t version = 0;
     uint64_t metadataSize = 0;
     std::shared_ptr<UrmaRemoteAddrPb> urmaDataInfo = nullptr;  // For Create+MemoryCopy+Publish path with URMA
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
+    }
     RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_END);
+    }
     std::shared_ptr<ObjectBufferInfo> objInfo = nullptr;
     std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
     if (!urmaDataInfo) {
@@ -2397,13 +2439,25 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     // Copy user data into the shared memory buffer.
     // no need call WLatch, the other thread cannot change before publish.
     reqTimeoutDuration.Init(requestTimeoutMs_);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_MEMORY_COPY_START);
+    }
     RETURN_IF_NOT_OK(buffer->MemoryCopy(data, size));
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_MEMORY_COPY_END);
+    }
 
     // Start to send put request.
     // In this case buffer is local data, but rpc must be locked.:
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
-                                                        false, nestedObjectKeys, ttlSecond, existence),
+                                                         false, nestedObjectKeys, ttlSecond, existence),
                                      FormatString("Put object %s", objectKey));
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
+    }
     if (!urmaDataInfo) {
         buffer->SetVisibility(true);
     }
@@ -2479,6 +2533,11 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "The dataSize value should be bigger than zero.");
     CHECK_FAIL_RETURN_STATUS(nestedObjectKeys.find(objectKey) == nestedObjectKeys.end(), K_UNKNOWN_ERROR,
                              "Nested object references cannot be nested in a loop.");
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -2488,22 +2547,30 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
                               workerApi->clientId_, workerApi->hostPort_.ToString(),
                               workerApi->ShmCreateable(size) ? "SHM" : "UB");
     bool isShm = workerApi->ShmCreateable(size);
-    // Process UB case and shm case together since they share the same Create + MemoryCopy + Publish flow.
     Status rc;
     if (isShm || IsUrmaEnabled()) {
         rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence);
     } else {
-        // Construct info to put.
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
+        }
         auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
         rc = workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
+        }
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Put object %s failed: %s", objectKey, rc.ToString());
         }
     }
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_END);
+    }
+    EmitClientLatencySummary(LatencyTickKey::CLIENT_SET_START, LatencyTickKey::CLIENT_SET_END);
     const auto totalUs = static_cast<uint64_t>(setTimer.ElapsedMicroSecond());
-    PLOG_IF_OR_VLOG(INFO, totalUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
-                    FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
-                                 static_cast<double>(totalUs) / US_PER_MS, rc.ToString()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
+                        FormatString("[Set] Done, objectKey: %s, totalCost: %.3fms, status: %s", objectKey,
+                                     static_cast<double>(totalUs) / US_PER_MS, rc.ToString()));
     return rc;
 }
 
@@ -2757,6 +2824,11 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_START);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -2775,6 +2847,10 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
             buffers.emplace_back(std::move(*objectBuffer));
         }
     }
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_END);
+    }
+    EmitClientLatencySummary(LatencyTickKey::CLIENT_GET_START, LatencyTickKey::CLIENT_GET_END);
     perfPoint.Record();
     VLOG(1) << "Finish to Get objects " << VectorToString(objectKeys);
     return rc;
@@ -2885,6 +2961,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     bool shouldRecordTransport = false;
     AccessTransportKind actualTransportKind = AccessTransportKind::SHM;
     getParam.actualTransportKind = nullptr;
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
 
 #ifdef USE_URMA
     // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
@@ -2928,7 +3006,13 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     std::vector<RpcMessage> payloads;
     uint32_t version = 0;
 
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_RPC_START);
+    }
     Status getRc = workerApi->Get(getParam, version, rsp, payloads);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_RPC_END);
+    }
     if (shouldRecordTransport) {
         AccessTransportTracker::Record(actualTransportKind);
     }
@@ -3558,7 +3642,17 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     PerfPoint perfPoint(PerfKey::CLIENT_PUT_OBJECT);
     VLOG(1) << "Start putting buffer";
-    return buffer->Publish();
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
+    }
+    auto rc = buffer->Publish();
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_END);
+    }
+    EmitClientLatencySummary(LatencyTickKey::CLIENT_SET_START, LatencyTickKey::CLIENT_SET_END);
+    return rc;
 }
 
 Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffers)
@@ -4507,17 +4601,30 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_START);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Timer timer;
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_START);
+    }
     auto rc = workerApi->Exist(keys, exists, queryEtcd, isLocal);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_END);
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_END);
+    }
+    EmitClientLatencySummary(LatencyTickKey::CLIENT_EXIST_START, LatencyTickKey::CLIENT_EXIST_END);
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
     const auto &firstKey = keys.empty() ? "" : keys[0];
-    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_LOCAL_OR_RPC_SLOW_US || rc.IsError(), 1,
-                    FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
-                                 firstKey, elapsedMs, rc.ToString()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && elapsedUs >= config.rpcSlowerThanUs, 1,
+        FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
+                     firstKey, elapsedMs, rc.ToString()));
     return rc;
 }
 

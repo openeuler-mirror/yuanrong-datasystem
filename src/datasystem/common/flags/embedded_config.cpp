@@ -147,6 +147,18 @@ EmbeddedConfig &EmbeddedConfig::DiagnosticSampleRate(double rate)
     return *this;
 }
 
+EmbeddedConfig &EmbeddedConfig::SlowLogProcessSlowerThan(uint64_t us)
+{
+    extraArgs["slow_log_process_slower_than"] = std::to_string(us);
+    return *this;
+}
+
+EmbeddedConfig &EmbeddedConfig::SlowLogRpcSlowerThan(uint64_t us)
+{
+    extraArgs["slow_log_rpc_slower_than"] = std::to_string(us);
+    return *this;
+}
+
 EmbeddedConfig &EmbeddedConfig::RocksdbStoreDir(const std::string &path)
 {
     extraArgs["rocksdb_store_dir"] = path;

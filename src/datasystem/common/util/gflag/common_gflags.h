@@ -72,4 +72,6 @@ DS_DECLARE_int32(pipeline_h2d_thread_num);
 DS_DECLARE_double(request_sample_rate);
 DS_DECLARE_double(access_sample_rate);
 DS_DECLARE_double(diagnostic_sample_rate);
+DS_DECLARE_uint64(slow_log_process_slower_than);
+DS_DECLARE_uint64(slow_log_rpc_slower_than);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H

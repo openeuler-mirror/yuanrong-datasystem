@@ -25,6 +25,7 @@
 #include <future>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -129,6 +130,38 @@ private:
      * @return Status of the call.
      */
     Status UpdateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params, uint64_t &version);
+
+    /**
+     * @brief Finalize latency trace after a worker-to-master RPC call.
+     * @param[in] endKey The latency tick key for the RPC end.
+     * @param[in] config The server latency trace config.
+     * @param[in] traceEnabled Whether latency trace is enabled.
+     * @param[in] rsp The master RPC response (for downstream phase merge).
+     * @param[in] objectKey The object key for slow log.
+     * @param[in] rpcUs The RPC elapsed time in microseconds.
+     * @param[in] rc The RPC status code for slow log.
+     * @param[in] workerMasterApi The worker-master API for log address.
+     * @param[in] operationName The operation name for slow log (e.g. "CreateMeta" or "UpdateMeta").
+     */
+    template <typename RspPb>
+    void FinalizeMasterRpcLatency(LatencyTickKey endKey, const LatencyTraceConfig &config, bool traceEnabled,
+                                  const RspPb &rsp, const std::string &objectKey, uint64_t rpcUs, const Status &rc,
+                                  const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+                                  const std::string &operationName)
+    {
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(endKey);
+        }
+        SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && rpcUs >= config.rpcSlowerThanUs, 1,
+            AppendSrcDstForLog(
+                FormatString("[Set] %s RPC done, objectKey: %s, costUs: %zu, rc: %s", operationName,
+                             objectKey, rpcUs, rc.ToString()),
+                localAddress_.ToString(), workerMasterApi->GetHostPort()));
+        if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+            std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+            MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+        }
+    }
 
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.

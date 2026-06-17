@@ -66,6 +66,7 @@ ds_cc_library(
         "log_time.h",
         "pod_identifier.h",
         "trace.h",
+        "latency_phase_types.h",
     ],
 )
 

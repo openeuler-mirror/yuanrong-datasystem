@@ -98,7 +98,7 @@ protected:
                          uint32_t &version, std::vector<bool> &exists);
 
     Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                           uint64_t length) override;
+                           uint64_t length, bool traceEnabled) override;
 
 #ifdef USE_URMA
     Status PipelineDataTransferHelper(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,

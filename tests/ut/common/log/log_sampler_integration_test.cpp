@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Integration test for LOG/PLOG macros with LogSampler.
+ * Description: Integration test for LOG/SLOW_LOG macros with LogSampler.
  */
 #include "datasystem/common/log/log.h"
 
@@ -122,7 +122,7 @@ TEST_F(LogSamplerIntegrationTest, FATALAlwaysPassBackstop)
         ".*Direct FATAL.*");
 }
 
-TEST_F(LogSamplerIntegrationTest, RequestSampledInForcesDiagnostic)
+TEST_F(LogSamplerIntegrationTest, RequestSampledInDoesNotAffectSlowLogBypass)
 {
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(1.0, 0.0, 0.0)));
@@ -133,7 +133,7 @@ TEST_F(LogSamplerIntegrationTest, RequestSampledInForcesDiagnostic)
     LOG(INFO) << "sampled-in info " << BuildSideEffectPayload(evaluations);
     LOG(WARNING) << "sampled-in warning " << BuildSideEffectPayload(evaluations);
     LOG(ERROR) << "sampled-in error " << BuildSideEffectPayload(evaluations);
-    PLOG(INFO) << "sampled-in plog " << BuildSideEffectPayload(evaluations);
+    SLOW_LOG(INFO) << "sampled-in slow_log " << BuildSideEffectPayload(evaluations);
     EXPECT_EQ(evaluations, 4);
 }
 
@@ -155,7 +155,7 @@ TEST_F(LogSamplerIntegrationTest, DiagnosticSupplementSampling)
     EXPECT_NEAR(ratio, 0.5, 0.05);
 }
 
-TEST_F(LogSamplerIntegrationTest, PlogClassifiedAsDiagnostic)
+TEST_F(LogSamplerIntegrationTest, SlowLogBypassInRequestContext)
 {
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.0, 0.0)));
@@ -163,52 +163,60 @@ TEST_F(LogSamplerIntegrationTest, PlogClassifiedAsDiagnostic)
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
 
     int evaluations = 0;
-    PLOG(INFO) << "plog rejected " << BuildSideEffectPayload(evaluations);
-    EXPECT_EQ(evaluations, 0);
+    SLOW_LOG(INFO) << "slow_log bypass " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 1);
 }
 
-TEST_F(LogSamplerIntegrationTest, PlogDiagnosticSampling)
+TEST_F(LogSamplerIntegrationTest, SlowLogNotSlowFallsThroughToDiagnosticSampling)
 {
     LogSampler::Instance().SetSaltForTest(42);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.5, 0.0)));
 
-    int plogCount = 0;
+    int slowCount = 0;
+    int notSlowCount = 0;
     constexpr int kAttempts = 1000;
     for (int i = 0; i < kAttempts; ++i) {
         Trace::Instance().Invalidate();
         TraceGuard tg = Trace::Instance().SetRequestTraceUUID();
         int evals = 0;
-        PLOG(INFO) << "plog diag test " << BuildSideEffectPayload(evals);
-        plogCount += evals;
+        SLOW_LOG_IF(INFO, true) << "slow_log diag test " << BuildSideEffectPayload(evals);
+        slowCount += evals;
     }
-    double ratio = static_cast<double>(plogCount) / kAttempts;
-    EXPECT_NEAR(ratio, 0.5, 0.1);
+    for (int i = 0; i < kAttempts; ++i) {
+        Trace::Instance().Invalidate();
+        TraceGuard tg = Trace::Instance().SetRequestTraceUUID();
+        int evals = 0;
+        SLOW_LOG_IF(INFO, false) << "not_slow diag test " << BuildSideEffectPayload(evals);
+        notSlowCount += evals;
+    }
+    double slowRatio = static_cast<double>(slowCount) / kAttempts;
+    double notSlowRatio = static_cast<double>(notSlowCount) / kAttempts;
+    EXPECT_NEAR(slowRatio, 1.0, 0.1);
+    EXPECT_NEAR(notSlowRatio, 0.5, 0.1);
 }
 
-TEST_F(LogSamplerIntegrationTest, ForceLogSkipsRejectAsDropButSamplerStillApplies)
+TEST_F(LogSamplerIntegrationTest, SlowLogBypassSkipsAllSampling)
 {
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.0, 0.0)));
 
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
 
-    // PLOG bypasses request-reject-as-drop, but diagnostic_rate=0 still drops it
     int evaluations = 0;
-    PLOG(INFO) << "plog with diagnostic=0 " << BuildSideEffectPayload(evaluations);
-    EXPECT_EQ(evaluations, 0);
+    SLOW_LOG(INFO) << "slow_log bypass with all rates=0 " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 1);
 
-    // PLOG bypasses request-reject-as-drop, and diagnostic_rate=1 passes it
     LogSampler::Instance().ResetForTest();
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 1.0, 0.0)));
 
     Trace::Instance().Invalidate();
     TraceGuard tg2 = Trace::Instance().SetRequestTraceUUID();
-    PLOG(INFO) << "plog with diagnostic=1 " << BuildSideEffectPayload(evaluations);
-    EXPECT_EQ(evaluations, 1);
+    SLOW_LOG(INFO) << "slow_log bypass with diagnostic=1 " << BuildSideEffectPayload(evaluations);
+    EXPECT_EQ(evaluations, 2);
 }
 
-TEST_F(LogSamplerIntegrationTest, PlogIfOrVlogWorks)
+TEST_F(LogSamplerIntegrationTest, SlowLogIfOrVlogWorks)
 {
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(1.0, 1.0, 1.0)));
@@ -217,11 +225,11 @@ TEST_F(LogSamplerIntegrationTest, PlogIfOrVlogWorks)
 
     FLAGS_v = 1;
     int evaluations = 0;
-    PLOG_IF_OR_VLOG(INFO, true, 1,
-                    "plog branch " << BuildSideEffectPayload(evaluations));
+    SLOW_LOG_IF_OR_VLOG(INFO, true, 1,
+                    "slow_log branch " << BuildSideEffectPayload(evaluations));
     EXPECT_EQ(evaluations, 1);
 
-    PLOG_IF_OR_VLOG(INFO, false, 1,
+    SLOW_LOG_IF_OR_VLOG(INFO, false, 1,
                     "vlog branch " << BuildSideEffectPayload(evaluations));
     EXPECT_EQ(evaluations, 2);
 }
@@ -263,8 +271,8 @@ TEST_F(LogSamplerIntegrationTest, BackgroundLogNotSampled)
     EXPECT_EQ(evaluations, 3);
 }
 
-// #38: Background PLOG bypasses sampler — no request context PLOG always passes
-TEST_F(LogSamplerIntegrationTest, BackgroundPlogBypassesSampler)
+// #38: Background SLOW_LOG bypasses sampler — no request context SLOW_LOG always passes
+TEST_F(LogSamplerIntegrationTest, BackgroundSlowLogBypassesSampler)
 {
     LogSampler::Instance().SetSaltForTest(12345);
     ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.0, 0.0)));
@@ -273,10 +281,44 @@ TEST_F(LogSamplerIntegrationTest, BackgroundPlogBypassesSampler)
     EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
 
     int evaluations = 0;
-    PLOG(INFO) << "background plog info " << BuildSideEffectPayload(evaluations);
-    PLOG(WARNING) << "background plog warning " << BuildSideEffectPayload(evaluations);
-    PLOG(ERROR) << "background plog error " << BuildSideEffectPayload(evaluations);
+    SLOW_LOG(INFO) << "background slow_log info " << BuildSideEffectPayload(evaluations);
+    SLOW_LOG(WARNING) << "background slow_log warning " << BuildSideEffectPayload(evaluations);
+    SLOW_LOG(ERROR) << "background slow_log error " << BuildSideEffectPayload(evaluations);
     EXPECT_EQ(evaluations, 3);
+}
+
+TEST_F(LogSamplerIntegrationTest, SlowLogIfOrVlogSlowConditionBypassesSampler)
+{
+    LogSampler::Instance().SetSaltForTest(12345);
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.0, 0.0)));
+
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+
+    FLAGS_v = 1;
+    int evaluations = 0;
+    SLOW_LOG_IF_OR_VLOG(INFO, true, 1,
+                    "slow_log bypass " << BuildSideEffectPayload(evaluations));
+    EXPECT_EQ(evaluations, 1);
+
+    SLOW_LOG_IF_OR_VLOG(INFO, false, 1,
+                    "vlog not bypass " << BuildSideEffectPayload(evaluations));
+    EXPECT_EQ(evaluations, 1);
+}
+
+TEST_F(LogSamplerIntegrationTest, SlowLogZeroThresholdDisablesForceCondition)
+{
+    LogSampler::Instance().SetSaltForTest(12345);
+    ASSERT_TRUE(LogSampler::Instance().UpdateConfigFromFlags(MakeConfig(0.0, 0.0, 0.0)));
+
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+
+    FLAGS_v = 1;
+    uint64_t thresholdUs = 0;
+    uint64_t elapsedUs = 9999;
+    int evaluations = 0;
+    SLOW_LOG_IF_OR_VLOG(INFO, thresholdUs > 0 && elapsedUs >= thresholdUs, 1,
+                    "disabled slow_log " << BuildSideEffectPayload(evaluations));
+    EXPECT_EQ(evaluations, 0);
 }
 
 }  // namespace ut

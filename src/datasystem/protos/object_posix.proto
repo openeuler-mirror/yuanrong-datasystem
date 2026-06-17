@@ -65,6 +65,8 @@ message CreateRspPb {
   string shm_id = 4;
   uint64 metadata_size = 5;
   UrmaRemoteAddrPb urma_info = 6;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message MultiCreateReqPb {
@@ -118,6 +120,8 @@ message PublishReqPb {
 }
 
 message PublishRspPb {
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message MultiPublishReqPb {
@@ -214,6 +218,8 @@ message GetRspPb {
   repeated ObjectInfoPb objects = 1;
   repeated PayloadInfoPb payload_info = 2;
   ErrorInfoPb last_rc = 3;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message DecreaseReferenceRequest {
@@ -564,6 +570,8 @@ message ExistReqPb {
 
 message ExistRspPb {
   repeated bool exists = 1;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message ExpireReqPb {

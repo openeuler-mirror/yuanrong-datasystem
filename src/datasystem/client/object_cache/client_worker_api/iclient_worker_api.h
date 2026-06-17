@@ -459,7 +459,7 @@ public:
     }
 
     virtual Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                                   uint64_t length) = 0;
+                                   uint64_t length, bool traceEnabled) = 0;
 
 protected:
     /**

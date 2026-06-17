@@ -59,6 +59,8 @@ message CreateMetaRspPb {
   uint64 version = 1; // version control
   RedirectMetaInfo info = 2;
   bool meta_is_moving = 4;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message CreateMultiMetaReqPb {
@@ -178,6 +180,8 @@ message QueryMetaRspPb {
   repeated string not_exist_ids = 5;
   repeated uint64 deleting_versions = 6;
   repeated string not_exist_ids_is_deleting = 7;
+  repeated uint32 latency_phase_us = 20;
+  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message RemoveMetaReqPb {
@@ -307,6 +311,8 @@ message UpdateMetaRspPb {
     uint64 version = 1; // version control
     RedirectMetaInfo info = 2;
     bool meta_is_moving = 3;
+    repeated uint32 latency_phase_us = 20;
+    uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
 message GIncreaseReqPb  {

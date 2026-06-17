@@ -153,6 +153,16 @@ global:
     accessSampleRate:
     # Diagnostic log sample rate.0.0-1.0). Leave EMPTY to derive from requestSampleRate, or set explicitly to override.
     diagnosticSampleRate:
+    # In-process processing latency threshold (microseconds) for slow-log and latencySummary.
+    # Default 2000 (2ms). Accepts a positive integer (e.g. 1000 for 1ms). 0 means disabled.
+    # When enabled, requests whose in-process phases (total minus sub-RPC time) exceed
+    # this threshold will include a latencySummary in the access log.
+    slowLogProcessSlowerThan: 2000
+    # Cross-process RPC latency threshold (microseconds) for slow-log and latencySummary.
+    # Default 5000 (5ms). Accepts a positive integer (e.g. 2000 for 2ms). 0 means disabled.
+    # When enabled, requests whose RPC sub-phases exceed this threshold will include
+    # a latencySummary in the access log.
+    slowLogRpcSlowerThan: 5000
     # Prefix of log filename, default is program invocation short name. Use standard characters only.
     logFilename: ""
     # Interval between logging stream metrics

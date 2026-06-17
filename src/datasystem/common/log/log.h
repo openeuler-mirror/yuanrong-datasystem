@@ -116,6 +116,14 @@ inline bool ShouldCreatePlogMessage(LogSeverity logSeverity)
     return LogSampler::Instance().ShouldCreateRuntimeLog(logSeverity, true);
 }
 
+inline bool ShouldCreateSlowLogMessage(LogSeverity logSeverity, bool thresholdHit)
+{
+    if (thresholdHit) {
+        return IsLogSeverityEnabled(logSeverity);
+    }
+    return ShouldCreatePlogMessage(logSeverity);
+}
+
 // `X_##__LINE__` does not expand __LINE__; use DS_LOG_PP_CAT(X_, __LINE__) for per-line unique names.
 #define DS_LOG_PP_CAT_I(a, b) a##b
 #define DS_LOG_PP_CAT(a, b) DS_LOG_PP_CAT_I(a, b)
@@ -129,20 +137,20 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 // Basic Logging Macros Impl
 #define LOG_IMPL(severity) \
     datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, false, true).Stream()
-#define PLOG_IMPL(severity) \
-    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true, true).Stream() << "[PLOG] "
+#define SLOW_LOG_IMPL(severity) \
+    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true, true).Stream() << "[SLOW LOG] "
 
 // Conditional Logging Macros
 #define LOG_IF(severity, condition)                                                         \
     if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))        \
     LOG_IMPL(severity)
-#define PLOG_IF(severity, condition)                                                \
-    if ((condition) && datasystem::ShouldCreatePlogMessage(DS_LOGS_LEVEL_##severity)) \
-    PLOG_IMPL(severity)
+#define SLOW_LOG_IF(severity, thresholdHit)                                                \
+    if (datasystem::ShouldCreateSlowLogMessage(DS_LOGS_LEVEL_##severity, thresholdHit))    \
+    SLOW_LOG_IMPL(severity)
 
 // Basic Logging Macros
 #define LOG(severity) LOG_IF(severity, true)
-#define PLOG(severity) PLOG_IF(severity, true)
+#define SLOW_LOG(severity) SLOW_LOG_IF(severity, true)
 
 // Frequency-Controlled Logging Macros
 #define LOG_EVERY_N(severity, n)                     \
@@ -196,13 +204,13 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
     if (FLAGS_v >= verboselevel && (condition)) \
     LOG(INFO)
 
-#define PLOG_IF_OR_VLOG(severity, condition, verboselevel, message) \
-    do {                                                            \
-        if (condition) {                                            \
-            PLOG(severity) << message;                              \
-        } else {                                                    \
-            VLOG(verboselevel) << message;                          \
-        }                                                           \
+#define SLOW_LOG_IF_OR_VLOG(severity, thresholdHit, verboselevel, message) \
+    do {                                                                    \
+        if (thresholdHit) {                                                \
+            SLOW_LOG(severity) << message;                                  \
+        } else {                                                            \
+            VLOG(verboselevel) << message;                                  \
+        }                                                                   \
     } while (0)
 
 #define VLOG_EVERY_N(verboselevel, n)                     \

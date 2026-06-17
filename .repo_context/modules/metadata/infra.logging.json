@@ -10,7 +10,9 @@
     "details": [
       ".repo_context/modules/infra/logging/trace-and-context.md",
       ".repo_context/modules/infra/logging/access-recorder.md",
-      ".repo_context/modules/infra/logging/log-lifecycle-and-rotation.md"
+      ".repo_context/modules/infra/logging/log-lifecycle-and-rotation.md",
+      ".repo_context/modules/infra/logging/slow-log-request-plan.md",
+      ".repo_context/modules/infra/logging/request-stage-latency-trace-plan.md"
     ]
   },
   "playbooks": {
@@ -47,10 +49,16 @@
       "logging",
       "trace",
       "access log",
-      "rotation"
+      "rotation",
+      "SLOW_LOG",
+      "slow log",
+      "latencySummary",
+      "request-stage latency"
     ],
     "intent_examples": [
-      "understand logging architecture before adding a feature"
+      "understand logging architecture before adding a feature",
+      "design request-stage segmented latency summaries for access logs",
+      "rename PLOG request diagnostics to SLOW_LOG"
     ]
   }
 }

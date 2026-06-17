@@ -43,6 +43,7 @@
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/latency_phase_types.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
 #ifdef BUILD_HETERO
@@ -153,7 +154,8 @@ public:
      * @param[in] length The length of the data to be sent.
      * @return K_OK on success; the error code otherwise.
      */
-    Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length);
+    Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data, uint64_t length,
+                          bool traceEnabled);
 
     /**
      * @brief Invoke worker client to publish all buffers of all the given object keys.
@@ -732,6 +734,21 @@ private:
                                      const std::vector<uint64_t> &dataSizeList,
                                      std::vector<std::shared_ptr<Buffer>> &bufferList,
                                      std::vector<MultiCreateParam> &multiCreateParamList, uint64_t &dataSizeSum);
+
+    /**
+     * @brief Create buffer from SHM/UB path after worker RPC.
+     * @param[in] objectKey The ID of the object to create.
+     * @param[in] dataSize The size in bytes of the object.
+     * @param[in] param The create parameters.
+     * @param[in] workerApi The available worker API.
+     * @param[in] config The client latency trace config.
+     * @param[in] traceEnabled Whether latency trace is enabled.
+     * @param[out] newBuffer The newly created buffer.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CreateShmBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
+                           const std::shared_ptr<IClientWorkerApi> &workerApi, const LatencyTraceConfig &config,
+                           bool traceEnabled, std::shared_ptr<Buffer> &newBuffer);
 
     /**
      * @brief For device object, to async get multiple objects

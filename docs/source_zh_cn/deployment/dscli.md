@@ -784,6 +784,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | request_sample_rate | double | `1.0` | 是 | 请求日志采样率（0.0–1.0）。1.0=全量保留；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/PLOG 由 diagnostic_sample_rate 控制 |
 | access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 接口日志采样率（0.0–1.0）。1.0=全量保留 |
 | diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 诊断日志采样率（0.0–1.0）。控制请求级 ERROR/WARNING/PLOG 的补充采样（请求未 sampled-in 时）；1.0=全量保留；FATAL/CHECK 无条件保留不受此参数影响 |
+| slow_log_process_slower_than | uint64 | `2000` | 是 | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
+| slow_log_rpc_slower_than | uint64 | `5000` | 是 | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
 > **派生规则说明**：当仅显式设置 `request_sample_rate`，且 `access_sample_rate` 和 `diagnostic_sample_rate` 未被显式指定（包括在运行过程中也未曾被显式设置过），则：
 > - `access_sample_rate = min(1.0, request_sample_rate × 3)`

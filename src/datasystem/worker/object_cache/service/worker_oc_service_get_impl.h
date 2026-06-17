@@ -779,7 +779,8 @@ private:
      * @param[out] status Status of the call.
      */
     void TryGetFromL2CacheWhenNotFoundInWorker(const ObjectMetaPb &meta, const std::string &address,
-                                               bool ifWorkerConnected, ObjectKV &objectKV, Status &status);
+                                               bool ifWorkerConnected, ObjectKV &objectKV, Status &status,
+                                               bool traceEnabled);
 
     /**
      * @brief Get object data from persistence api without creating copy meta.

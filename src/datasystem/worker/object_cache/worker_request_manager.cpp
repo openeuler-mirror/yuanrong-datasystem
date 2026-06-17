@@ -29,6 +29,8 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/log/latency_phase.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/object/buffer.h"
@@ -317,6 +319,8 @@ Status GetRequest::ReturnToClient(const Status &rc)
         lastRc = rc;
     }
     uint64_t totalSize = 0;
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     Raii raii([this, &totalSize, &lastRc] {
         GetReqPb reqPb;
         Status accessRc = (lastRc.GetCode() == K_NOT_FOUND) ? Status::OK() : lastRc;
@@ -331,6 +335,20 @@ Status GetRequest::ReturnToClient(const Status &rc)
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         LOG(ERROR) << "ReturnFromGetRequest timeout when get object: " << VectorToString(rawObjectKeys_);
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_GET_END);
+        }
+        uint64_t totalElapsedUs = ComputeTotalElapsedUsFromTicks(LatencyTickKey::WORKER_GET_START,
+                                                                 LatencyTickKey::WORKER_GET_END);
+        if (ShouldPrintLatencySummary(totalElapsedUs, config)) {
+            PhaseDurationResult result = ComputePhaseDurations(
+                Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+                Trace::Instance().GetLatencyTickDroppedCount());
+            MergeDownstreamPhases(result);
+            if (CheckPhaseGate(result, config)) {
+                Trace::Instance().SetLatencySummary(FormatLatencySummary(result));
+            }
+        }
         UnRegister();
         auto rc = lastRc.IsOk() ? Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout") : lastRc;
         if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_))
@@ -363,8 +381,24 @@ Status GetRequest::ReturnToClient(const Status &rc)
             timer_.reset();
         }
     }
-    if (OsXprtPipln::IsPiplnH2DRequest(chunkManager_)) {
-        lastRc = OsXprtPipln::WaitPipelineRH2DDone(chunkManager_);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_GET_END);
+    }
+    uint64_t totalElapsedUs = ComputeTotalElapsedUsFromTicks(LatencyTickKey::WORKER_GET_START,
+                                                             LatencyTickKey::WORKER_GET_END);
+    if (ShouldPrintLatencySummary(totalElapsedUs, config)) {
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
+        MergeDownstreamPhases(result);
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit) {
+            Trace::Instance().SetLatencySummary(FormatLatencySummary(result));
+        }
+        if (gateHit || hasDownstream) {
+            EncodePhaseProto(resp, result);
+        }
     }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
@@ -383,13 +417,16 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
     bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
     bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
     uint64_t ubWriteOffset = 0;
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetServerLatencyTraceConfig());
 
     if (!rawObjectKeys_.empty()) {
-        // Avoid per-key protobuf repeated-field growth for large batch get responses.
         resp.mutable_objects()->Reserve(static_cast<int>(rawObjectKeys_.size()));
         if (!shmEnabled) {
             resp.mutable_payload_info()->Reserve(static_cast<int>(rawObjectKeys_.size()));
         }
+    }
+    if (useUbGet && traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_URMA_START);
     }
     Status lastRc;
 
@@ -429,6 +466,9 @@ Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::v
             lastRc = rc;
             SetDefaultObjectInfoPb(objectKeyUri, objectIndex, *resp.add_objects());
         }
+    }
+    if (useUbGet && traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_URMA_END);
     }
 
     VLOG(1) << FormatString("The total size of the currently get is %llu", totalSize);

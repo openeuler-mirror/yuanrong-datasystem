@@ -290,6 +290,8 @@ global:
 | global.log.minLogLevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | global.log.enableUcxLog | bool | `false` | 是否开启UCX RDMA日志，保存在`${logDir}/worker/ucx.log`当中 |
 | global.log.ucxLogLevel | string | `ERROR` | 设置UCX日志级别，可选值包括`FATAL`、`ERROR`、`WARN`、`INFO`、`DEBUG`、`TRACE`。建议生产环境使用 `ERROR` 或 `WARN`，调试时使用 `DEBUG`或`TRACE` |
+| global.log.slowLogProcessSlowerThan | uint64 | `2000` | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
+| global.log.slowLogRpcSlowerThan | uint64 | `5000` | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
 **样例**：
 ```yaml

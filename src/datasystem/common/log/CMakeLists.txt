@@ -6,6 +6,7 @@ set(LOG_SRCS
         operation_logger.cpp
         access_recorder.cpp
         trace.cpp
+        latency_phase.cpp
         failure_handler.cpp
         log_sampler.cpp
         )

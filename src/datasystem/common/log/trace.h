@@ -21,11 +21,84 @@
 #ifndef DATASYSTEM_COMMON_LOG_TRACE_H
 #define DATASYSTEM_COMMON_LOG_TRACE_H
 
+#include <array>
 #include <cstdint>
 #include <string>
 
+#include "datasystem/common/log/latency_phase_types.h"
+
 namespace datasystem {
 constexpr size_t SHORT_TRACEID_SIZE = 16;
+constexpr uint16_t LATENCY_TICK_MAX_NUM = 16;
+
+enum class LatencyTickKey : uint16_t {
+    UNKNOWN = 0,
+
+    CLIENT_GET_START,
+    CLIENT_GET_RPC_START,
+    CLIENT_GET_RPC_END,
+    CLIENT_GET_END,
+
+    CLIENT_SET_START,
+    CLIENT_CREATE_RPC_START,
+    CLIENT_CREATE_RPC_END,
+    CLIENT_MEMORY_COPY_START,
+    CLIENT_MEMORY_COPY_END,
+    CLIENT_UB_TRANSFER_START,
+    CLIENT_UB_TRANSFER_END,
+    CLIENT_PUBLISH_RPC_START,
+    CLIENT_PUBLISH_RPC_END,
+    CLIENT_SET_END,
+
+    CLIENT_CREATE_START,
+    CLIENT_CREATE_END,
+
+    CLIENT_EXIST_START,
+    CLIENT_EXIST_RPC_START,
+    CLIENT_EXIST_RPC_END,
+    CLIENT_EXIST_END,
+
+    WORKER_GET_START,
+    WORKER_QUERYMETA_START,
+    WORKER_QUERYMETA_END,
+    WORKER_REMOTEGET_START,
+    WORKER_REMOTEGET_END,
+    WORKER_URMA_START,
+    WORKER_URMA_END,
+    WORKER_L2CACHE_READ_START,
+    WORKER_L2CACHE_READ_END,
+    WORKER_GET_END,
+
+    WORKER_CREATE_START,
+    WORKER_CREATE_END,
+
+    WORKER_PUBLISH_START,
+    WORKER_CREATE_META_RPC_START,
+    WORKER_CREATE_META_RPC_END,
+    WORKER_UPDATE_META_RPC_START,
+    WORKER_UPDATE_META_RPC_END,
+    WORKER_PUBLISH_END,
+
+    WORKER_EXIST_START,
+    WORKER_EXIST_QUERYMETA_START,
+    WORKER_EXIST_QUERYMETA_END,
+    WORKER_EXIST_END,
+
+    META_QUERYMETA_START,
+    META_QUERYMETA_END,
+    META_CREATE_META_START,
+    META_CREATE_META_END,
+    META_UPDATE_META_START,
+    META_UPDATE_META_END,
+
+    DATA_REMOTEGET_START,
+    DATA_REMOTEGET_END,
+};
+
+struct LatencyTick {
+    LatencyTickKey key = LatencyTickKey::UNKNOWN;
+    uint64_t tick = 0;
+};
 
 class TraceGuard;
 
@@ -34,6 +107,10 @@ struct TraceContext {
     bool requestLogTrace = false;
     bool requestSampleDecisionValid = false;
     bool requestSampleDecisionAdmitted = false;
+    std::array<LatencyTick, LATENCY_TICK_MAX_NUM> latencyTicks{};
+    uint16_t latencyTickCount = 0;
+    uint16_t latencyTickDroppedCount = 0;
+    DownstreamPhaseResult downstreamPhases{};
 };
 
 class Trace {
@@ -52,7 +129,11 @@ public:
      * @brief Singleton mode, obtaining instance.
      * @return Instance of Trace.
      */
-    static Trace &Instance();
+    static Trace &Instance()
+    {
+        static thread_local Trace instance;
+        return instance;
+    }
 
     /**
      * @brief Set traceID to thread_local.(The traceID is the automatically generated UUID)
@@ -146,6 +227,16 @@ public:
         return true;
     }
 
+    void SetAccessShouldRecord(bool shouldRecord)
+    {
+        accessShouldRecord_ = shouldRecord;
+    }
+
+    bool GetAccessShouldRecord() const
+    {
+        return accessShouldRecord_;
+    }
+
     /**
      * @brief Whether current trace belongs to request-log sampling scope.
      * @return true if current trace should participate in request sampling.
@@ -179,6 +270,49 @@ public:
      */
     TraceGuard SetSubTraceID(const std::string &subTraceID);
 
+    /**
+     * @brief Append a latency tick with current steady_clock timestamp.
+     * @param[in] key The tick key identifying the measurement point.
+     * Overflow ticks beyond LATENCY_TICK_MAX_NUM are silently dropped
+     * and counted via GetLatencyTickDroppedCount().
+     */
+    void AddLatencyTick(LatencyTickKey key);
+
+    /**
+     * @brief Reset all latency ticks (count and dropped count to zero).
+     */
+    void ClearLatencyTicks();
+
+    /**
+     * @brief Get number of valid latency ticks currently stored.
+     * @return Count of ticks in [0, LATENCY_TICK_MAX_NUM].
+     */
+    uint16_t GetLatencyTickCount() const;
+
+    /**
+     * @brief Get pointer to the latency tick array.
+     * Only indices [0, GetLatencyTickCount()) contain valid entries.
+     * @return Pointer to internal tick array.
+     */
+    const LatencyTick *GetLatencyTicks() const;
+
+    /**
+     * @brief Get number of ticks dropped due to array overflow.
+     * @return Dropped tick count.
+     */
+    uint16_t GetLatencyTickDroppedCount() const;
+
+    void SetLatencySummary(std::string summary);
+    std::string GetLatencySummary() const;
+    void ClearLatencySummary();
+    std::string ConsumeLatencySummary();
+
+    void AddDownstreamPhase(LatencySummaryPhase phase, uint64_t durationUs);
+    void AddDownstreamTickDroppedCount(uint16_t count);
+    void AddDownstreamPhaseDroppedCount(uint16_t count);
+    const DownstreamPhaseResult &GetDownstreamPhases() const;
+    void ClearDownstreamPhases();
+
     static const int TRACEID_PREFIX_SIZE = 36;
     static const int SHORT_UUID_SIZE = 12;
     static const int TRACEID_MAX_SIZE = TRACEID_PREFIX_SIZE + SHORT_UUID_SIZE + 1;
@@ -199,6 +333,12 @@ private:
     bool requestLogTrace_ = false;
     bool requestSampleDecisionValid_ = false;
     bool requestSampleDecisionAdmitted_ = false;
+    bool accessShouldRecord_ = true;
+    LatencyTick latencyTicks_[LATENCY_TICK_MAX_NUM] = {};
+    uint16_t latencyTickCount_ = 0;
+    uint16_t latencyTickDroppedCount_ = 0;
+    std::string latencySummary_;
+    DownstreamPhaseResult downstreamPhases_{};
 };
 
 enum class TraceGuardType : int {

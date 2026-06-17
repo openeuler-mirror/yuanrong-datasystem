@@ -96,6 +96,7 @@ struct RequestParam {
     std::string cacheType;
     std::string remoteClientId;
     std::string transportType;
+    std::string latencySummary;
 };
 
 struct StreamRequestParam {
@@ -226,6 +227,7 @@ struct ObjectAccessState {
     std::string respMsg;
     DataSizeState dataSize;
     uint64_t asyncElapsedUs = 0;
+    std::string latencySummary;
 };
 
 struct StreamAccessState {
@@ -407,6 +409,8 @@ public:
     ObjectAccessRecorder &Result(int code, std::string_view msg = {});
 
     ObjectAccessRecorder &AsyncElapsedUs(uint64_t asyncElapsedUs);
+
+    ObjectAccessRecorder &LatencySummary(std::string summary);
 
     void Record();
 

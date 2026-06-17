@@ -167,3 +167,71 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 | 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
 默认值均为 `1.0`（全量保留），完全向后兼容。
+
+---
+
+## 慢日志与 latencySummary
+
+当请求的处理或 RPC 阶段时延超过配置阈值时，access log 中会额外输出 `latencySummary` 字段，包含各阶段耗时明细，便于快速定位慢请求瓶颈。
+
+### 配置参数
+
+| 参数 | 类型 | 默认值 | 格式与示例 | 描述 |
+|------|------|--------|------------|------|
+| `slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒；例如 `1000` 表示 1ms 阶段 | 处理阶段时延阈值（微秒）。默认2000μs(2ms)；设为0可禁用；启用后，当处理阶段的耗时（不含跨进程 RPC）超过此阈值时输出 latencySummary。`process` 指处理耗时，等于总耗时减去子 RPC 耗时 |
+| `slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒；例如 `2000` 表示 2ms 阶段 | 跨进程 RPC 阶段时延阈值（微秒）。默认5000μs(5ms)；设为0可禁用；启用后，当 RPC 子阶段耗时超过此阈值时输出 latencySummary |
+
+> **"process"含义说明**：`process` 阶段 = 总耗时 - 子 RPC 耗时，代表处理与等待时间，而非端到端整链路耗时。例如 `client.process.get` = 客户端从发起 Get 到收到响应的总耗时 - `client.rpc.get`（客户端→worker RPC耗时），即客户端排队、序列化、反序列化等处理耗时。
+
+### latencySummary 格式
+
+latencySummary 字段以预计算字符串形式写入 access log 的 request param 区域，格式示例：
+
+```
+latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768,worker.rpc.query_meta:512}
+```
+
+各阶段耗时以 `{phase:duration}` 形式输出，多个阶段用 `,` 分隔，`phase` 与 `duration` 之间用 `:` 分隔，整体用 `{}` 包裹，单位为微秒。如有 tick 因 buffer 溢出被丢弃，尾部附加 `tick_dropped:N`；如有 phase 因数组溢出被丢弃，尾部附加 `phase_dropped:N`。
+
+可选 phase 名称如下：
+
+> **命名规则**：`process` = 处理耗时（扣除子 RPC/跨进程调用），非 IP 地址；`rpc` = 跨进程 RPC 耗时；`urma`/`ub` = 用户态 RDMA（Urma-based）相关传输耗时。
+
+| phase 名称 | 含义 |
+|------------|------|
+| `client.process.get` | 客户端 Get 处理耗时（总耗时扣除 RPC） |
+| `client.rpc.get` | 客户端→worker Get RPC 耗时 |
+| `client.process.set` | 客户端 Set/Put 处理耗时（总耗时扣除子 RPC） |
+| `client.rpc.create` | 客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段） |
+| `client.process.memory_copy` | 客户端 Set/Put 数据拷贝到共享内存耗时 |
+| `client.rpc.publish` | 客户端→worker Publish RPC 耗时 |
+| `client.urma.ub_transfer` | 客户端 UB（Urma-based 用户态 RDMA）数据传输耗时 |
+| `client.process.create` | 客户端 Create 处理耗时（总耗时扣除 RPC） |
+| `client.process.exist` | 客户端 Exist 处理耗时（总耗时扣除 RPC） |
+| `client.rpc.exist` | 客户端→worker Exist RPC 耗时 |
+| `worker.process.get` | worker Get 处理耗时（总耗时扣除子 RPC，与 worker IP 无关） |
+| `worker.rpc.query_meta` | worker→master QueryMeta RPC 耗时 |
+| `worker.rpc.remote_get` | worker→远端 worker RemoteGet RPC 耗时 |
+| `worker.urma.urma_total` | worker URMA 协议栈总耗时（含 RDMA 数据搬运、远端响应等） |
+| `worker.process.l2cache_read` | worker L2 缓存读取耗时 |
+| `worker.process.create` | worker Create 处理耗时 |
+| `worker.process.publish` | worker Publish 处理耗时（总耗时扣除子 RPC） |
+| `worker.rpc.create_meta` | worker→master CreateMeta RPC 耗时 |
+| `worker.rpc.update_meta` | worker→master UpdateMeta RPC 耗时 |
+| `worker.process.exist` | worker Exist 处理耗时（总耗时扣除 QueryMeta RPC） |
+| `master.process.query_meta` | master QueryMeta 处理耗时 |
+| `master.process.create_meta` | master CreateMeta 处理耗时 |
+| `master.process.update_meta` | master UpdateMeta 处理耗时 |
+| `worker.process.remote_get` | 远端数据 worker RemoteGet 处理耗时 |
+
+### 配置方式
+
+| 场景 | 配置方式 | 示例 |
+|------|----------|------|
+| Worker 命令行 | `--slow_log_process_slower_than=1000 --slow_log_rpc_slower_than=2000` | 处理>1ms或RPC>2ms时输出 |
+| K8s Helm | `values.yaml` 中设置 `slowLogProcessSlowerThan: 1000` | 同上 |
+| dscli | `dscli start --slow_log_process_slower_than 1000` | 同上 |
+| Embedded Worker | `config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)` | 同上 |
+| 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
+
+默认值为 `2000`/`5000`（进程内2ms/RPC 5ms），完全向后兼容，零开销。
