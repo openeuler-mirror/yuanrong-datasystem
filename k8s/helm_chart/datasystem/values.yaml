@@ -252,7 +252,7 @@ global:
       capacity: "500Gi"
 
   metadata:
-    # Controls whether to enable multiple meta replica
+    # Deprecated compatibility option for metadata replica. The value is ignored.
     enableMetaReplica: false
     # Config MASTER back store directory and must specify in rocksdb scenario.
     # The rocksdb database is used to persistently store the metadata stored in the master

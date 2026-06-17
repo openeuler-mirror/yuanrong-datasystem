@@ -48,13 +48,13 @@ static const uint64_t SET_MASTER_LOCAL_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
-                                         std::shared_ptr<AkSkManager> akSkManager, ReplicaManager *replicaManager,
-                                         ResourceManager *resourceManager)
+                                         std::shared_ptr<AkSkManager> akSkManager,
+                                         MetadataManagerHolder *metadataManagerHolder, ResourceManager *resourceManager)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
       persistenceApi_(persistApi),
       akSkManager_(akSkManager),
-      replicaManager_(replicaManager),
+      metadataManagerHolder_(metadataManagerHolder),
       resourceManager_(resourceManager)
 {
 }
@@ -74,14 +74,15 @@ Status MasterOCServiceImpl::Init()
     RETURN_RUNTIME_ERROR_IF_NULL(etcdCM_);
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
-    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, etcdCM_, replicaManager_));
+    RETURN_IF_NOT_OK(
+        OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, etcdCM_, metadataManagerHolder_));
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::GIncNestedRef(const GIncNestedRefReqPb &req, GIncNestedRefRspPb &resp)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     masterOperationTimeCost.Clear();
     Timer timer;
@@ -101,7 +102,7 @@ Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNes
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master recv GDecNestedRef req: %s", LogHelper::IgnoreSensitive(req));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.Init(req.timeout());
@@ -124,10 +125,10 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     PerfPoint point(PerfKey::MASTER_CREATE_META);
     const std::string localAddr = GetLocalAddr().ToString();
     LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
-              << AppendSrcDstForLog(req.address(), localAddr);
+                                      << AppendSrcDstForLog(req.address(), localAddr);
 
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     // Call MetadataManager to create the object meta.
@@ -154,7 +155,7 @@ Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, Cre
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.Init(req.timeout());
@@ -178,7 +179,7 @@ Status MasterOCServiceImpl::CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTw
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.Init(req.timeout());
@@ -202,9 +203,9 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     PerfPoint point(PerfKey::MASTER_CREATE_COPY_META);
     const std::string localAddr = GetLocalAddr().ToString();
     LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateCopyMetaReq, redirect: %d", req.redirect())
-              << AppendSrcDstForLog(req.address(), localAddr);
+                                      << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     // Call MetadataManager to create the object meta.
@@ -225,8 +226,8 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     auto totalMs = timer.ElapsedMilliSecond();
     masterOperationTimeCost.Append("Total CreateCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s",
-        totalMs, masterOperationTimeCost.GetInfo());
+    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs,
+                                    masterOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -254,7 +255,7 @@ Status MasterOCServiceImpl::CreateMultiCopyMetaImpl(const CreateMultiCopyMetaReq
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     Status status = ocMetadataManager->CreateMultiCopyMeta(req, rsp);
@@ -273,7 +274,7 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     INJECT_POINT("MasterOCServiceImpl.QueryMeta.busy");
     VLOG(1) << "Processing QueryMetaReq";
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     Status status;
@@ -292,7 +293,7 @@ Status MasterOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfo
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->GetMetaInfo(req, rsp);
 }
@@ -324,7 +325,7 @@ Status MasterOCServiceImpl::RemoveMetaImpl(const RemoveMetaReqPb &req, RemoveMet
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     // Call MetadataManager to remove object meta.
@@ -338,7 +339,7 @@ void MasterOCServiceImpl::AsyncNotifyCrossAzDelete(
 {
     masterOperationTimeCost.Clear();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    auto status = replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager);
+    auto status = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
     if (status.IsError()) {
         LOG_IF_ERROR(status, "GetOcMetadataManager failed");
         return;
@@ -355,7 +356,7 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     LOG(INFO) << FormatString("Processing UpdateMetaReq, redirect: %d", req.redirect())
               << AppendSrcDstForLog(req.address(), localAddr);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.Init(req.timeout());
@@ -382,7 +383,7 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
     VLOG(1) << "Master " << GetLocalAddr().ToString()
             << " received GetObjectLocations req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->GetObjectLocations(req, resp),
@@ -397,7 +398,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     if (req.are_device_objects()) {
         return ocMetadataManager->GetDeviceOcManager()->DeleteDevObjects(req, serverApi);
@@ -409,8 +410,8 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
     ocMetadataManager->DeleteAllCopyMetaWithServerApi(req, serverApi);
     auto totalMs = timer.ElapsedMilliSecond();
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms",
-        req.object_keys_size(), totalMs);
+    VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms", req.object_keys_size(),
+                                    totalMs);
     return Status::OK();
 }
 
@@ -421,7 +422,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(1) << FormatString("DeleteAllCopyMeta, object count: %d", req.object_keys_size());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     if (req.are_device_objects()) {
         ocMetadataManager->GetDeviceOcManager()->DeleteDevObjectsImpl(req, rsp);
@@ -434,7 +435,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     masterOperationTimeCost.Append("Total DeleteAllCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
     VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms, %s",
-        req.object_keys_size(), totalMs, masterOperationTimeCost.GetInfo());
+                                    req.object_keys_size(), totalMs, masterOperationTimeCost.GetInfo());
     return Status::OK();
 }
 
@@ -483,7 +484,7 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received QueryGlobalRefNum req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.InitWithPositiveTime(req.timeout());
@@ -540,7 +541,7 @@ Status MasterOCServiceImpl::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIn
     LOG(INFO) << "[Ref] Master received GIncreaseMasterAppRef request, src:" << req.address()
               << ", remoteClientId:" << req.remote_client_id();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     Status status = ocMetadataManager->GIncreaseMasterAppRef(req, resp);
     if (!status.IsOk()) {
@@ -561,7 +562,7 @@ Status MasterOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
     LOG(INFO) << "[Ref] Master received GIncreaseRef request, address:" << req.address()
               << ", objects:" << VectorToString(req.object_keys());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     INJECT_POINT("master.GIncrease_ref_failure");
     Status status = ocMetadataManager->GIncreaseRef(req, resp);
@@ -589,7 +590,7 @@ Status MasterOCServiceImpl::GDecreaseRef(
     LOG(INFO) << "[Ref] Master received GDecreaseRef request, address:" << req.address()
               << ", objects:" << VectorToString(req.object_keys());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     INJECT_POINT("master.GDecreaseRef.before");
     timeoutDuration.Init(req.timeout());
@@ -607,7 +608,7 @@ Status MasterOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
     LOG(INFO) << "[Ref] Master received GDecreaseRef request, address:" << req.address()
               << ", objects:" << VectorToString(req.object_keys());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     INJECT_POINT("master.GDecreaseRef.before");
     timeoutDuration.Init(req.timeout());
@@ -623,7 +624,7 @@ Status MasterOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("[Ref] Master received ReleaseGRefs req: %s", LogHelper::IgnoreSensitive(req));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
@@ -636,7 +637,7 @@ Status MasterOCServiceImpl::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("[Ref] Master recv ReleaseGRefsOfRemoteClientId: %s", LogHelper::IgnoreSensitive(req));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
@@ -651,7 +652,7 @@ Status MasterOCServiceImpl::PushMetaToMaster(const PushMetaToMasterReqPb &req, P
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received PushMetaToMaster req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->ProcessWorkerPushMeta(req, rsp),
                                      "Master process PushMetaToMaster failed");
@@ -666,7 +667,7 @@ Status MasterOCServiceImpl::RollbackSeal(const RollbackSealReqPb &req, RollbackS
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->RollbackSeal(req, rsp), "Master process RollbackSeal failed");
     INJECT_POINT("MasterOCServiceImpl.RollbackSeal.idempotence");
@@ -715,13 +716,13 @@ void MasterOCServiceImpl::AssignLocalWorker(object_cache::MasterWorkerOCServiceI
 
 bool MasterOCServiceImpl::HaveAsyncMetaRequest()
 {
-    return replicaManager_->HaveAsyncMetaRequest();
+    return metadataManagerHolder_->HaveAsyncMetaRequest();
 }
 
 std::string MasterOCServiceImpl::GetETCDAsyncQueueUsage()
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    Status rc = replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager);
+    Status rc = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
     if (rc.IsError()) {
         return "";
     }
@@ -731,7 +732,7 @@ std::string MasterOCServiceImpl::GetETCDAsyncQueueUsage()
 std::string MasterOCServiceImpl::GetMasterAsyncPoolUsage(int64_t intervalMs)
 {
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    Status rc = replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager);
+    Status rc = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
     if (rc.IsError()) {
         return "";
     }
@@ -744,7 +745,7 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     LOG(INFO) << GetDbName() << " save migrate data";
     if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
@@ -779,7 +780,7 @@ Status MasterOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
 
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->PutP2PMetaImpl(req, resp);
 }
@@ -790,7 +791,7 @@ Status MasterOCServiceImpl::ReplacePrimary(const ReplacePrimaryReqPb &req, Repla
     LOG(INFO) << FormatString("Master received ReplacePrimary req: %s, size: %ld", req.new_primary_addr(),
                               req.object_infos_size());
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     return ocMetadataManager->ReplacePrimary(req, rsp);
 }
@@ -800,7 +801,7 @@ Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQue
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received PureQueryMeta request, object size: " << req.object_keys_size();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     return ocMetadataManager->PureQueryMeta(req, rsp);
 }
@@ -812,7 +813,7 @@ Status MasterOCServiceImpl::CheckObjectDataLocation(const CheckObjectDataLocatio
     LOG(INFO) << "Master received CheckObjectDataLocation request, object size: " << req.object_versions_size()
               << ", address: " << req.address();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     return ocMetadataManager->CheckObjectDataLocation(req, rsp);
 }
@@ -825,7 +826,7 @@ Status MasterOCServiceImpl::SubscribeReceiveEvent(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received SubscribeReceiveEvent Event req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterDevOcManager->ProcessSubscribeReceiveEventRequest(req, serverApi),
                                      "Process SubscribeReceiveEvent failed");
@@ -839,7 +840,7 @@ Status MasterOCServiceImpl::GetP2PMeta(
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterDevOcManager->ProcessGetP2PMetaRequest(req, serverApi),
                                      "Process GetP2PMeta failed");
@@ -851,7 +852,7 @@ Status MasterOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootI
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received Send RootInfo req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->SendRootInfoImpl(req, resp);
 }
@@ -864,7 +865,7 @@ Status MasterOCServiceImpl::RecvRootInfo(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received Recv RootInfo req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterDevOcManager->ProcessRecvRootInfoRequest(req, serverApi),
                                      "Process GetP2PMeta failed");
@@ -876,7 +877,7 @@ Status MasterOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecv
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received AckRecvFinish req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->AckRecvFinish(req, resp);
 }
@@ -885,17 +886,14 @@ Status MasterOCServiceImpl::RemoveP2PLocation(const RemoveP2PLocationReqPb &req,
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->RemoveP2PLocation(req, resp);
 }
 
 std::string MasterOCServiceImpl::GetDbName()
 {
-    if (replicaManager_->MultiReplicaEnabled()) {
-        return g_MetaRocksDbName;
-    }
-    return replicaManager_->GetCurrentWorkerUuid();
+    return metadataManagerHolder_->GetCurrentWorkerUuid();
 }
 
 Status MasterOCServiceImpl::GetDataInfo(
@@ -906,7 +904,7 @@ Status MasterOCServiceImpl::GetDataInfo(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received GetDataInfo req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterDevOcManager->ProcessGetDataInfoRequest(req, serverApi),
                                      "Process GetDataInfo failed");
@@ -917,7 +915,7 @@ Status MasterOCServiceImpl::ReleaseMetaData(const ReleaseMetaDataReqPb &req, Rel
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetDeviceOcManager(GetDbName(), masterDevOcManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
                                      "GetOcMetadataManager failed");
     return masterDevOcManager->DeviceReleaseMetaDataImpl(req, resp);
 }
@@ -927,7 +925,7 @@ Status MasterOCServiceImpl::RollbackMultiMeta(const RollbackMultiMetaReqPb &req,
     INJECT_POINT("master.RollbackMultiMeta.begin");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
     timeoutDuration.Init(req.timeout());
@@ -942,7 +940,7 @@ Status MasterOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received ExpireMeta request, object size: " << req.object_keys_size();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     return ocMetadataManager->Expire(req, rsp);
 }
@@ -951,7 +949,7 @@ Status MasterOCServiceImpl::LivenessCheck(const LivenessCheckReqPb &req, Livenes
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->GetOcMetadataManager(GetDbName(), ocMetadataManager),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     (void)rsp;
     return ocMetadataManager->LivenessCheck();

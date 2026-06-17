@@ -40,34 +40,17 @@ ds_cc_library(
     ],
 )
 
-ds_cc_library(
-    name = "replica_rpc_channel_impl",
-    srcs = [
-        "replica_rpc_channel_impl.cpp",
-    ],
-    hdrs = [
-        "replica_rpc_channel_impl.h",
-    ],
-    deps = [
-        "//src/datasystem/common/ak_sk:ak_sk_manager",
-        "//src/datasystem/common/kvstore/rocksdb:replica",
-        "//src/datasystem/protos:worker_object_cc_proto",
-        "//src/datasystem/protos:worker_object_zmq_cc_proto",
-        "//src/datasystem/worker/hash_ring",
-    ],
-)
+
 
 ds_cc_library(
-    name = "replica_manager",
+    name = "metadata_manager_holder",
     srcs = [
-        "replica_manager.cpp",
+        "metadata_manager_holder.cpp",
     ],
     hdrs = [
-        "replica_manager.h",
+        "metadata_manager_holder.h",
     ],
     deps = [
-        ":meta_addr_info",
-        ":replica_rpc_channel_impl",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/kvstore/rocksdb:replica",
@@ -94,21 +77,7 @@ ds_cc_library(
     ],
 )
 
-ds_cc_library(
-    name = "replication_service_impl",
-    srcs = [
-        "replication_service_impl.cpp",
-    ],
-    hdrs = [
-        "replication_service_impl.h",
-    ],
-    deps = [
-        ":replica_manager",
-        "//src/datasystem/common/kvstore/rocksdb:replica",
-        "//src/datasystem/protos:worker_object_cc_proto",
-        "//src/datasystem/protos:worker_object_zmq_cc_proto",
-    ],
-)
+
 
 ds_cc_library(
     name = "master_service_impl",

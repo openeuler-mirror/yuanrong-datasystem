@@ -43,10 +43,7 @@
 
 namespace datasystem {
 namespace worker {
-struct MigrateScaleUpInfo {
-    std::string srcNode = "";
-    HashRange ranges = {};
-};
+
 
 struct MigrateScaleDownInfo {
     std::string destWorker = "";
@@ -56,12 +53,10 @@ struct MigrateScaleDownInfo {
 
 // {destDbName: {destPrimaryReplicaAddress, {recoverHashRanges}}}
 using ScaleDownMigrationTaskInfo = std::unordered_map<std::string, MigrateScaleDownInfo>;
-// {srcDbName: MigrateScaleUpInfo}
-using ScaleUpMigrationTaskInfo = std::unordered_map<std::string, MigrateScaleUpInfo>;
+
 class HashRingTaskExecutor {
 public:
-    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid, EtcdStore *etcdStore,
-                         bool isMultiReplicaEnable);
+    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid, EtcdStore *etcdStore);
 
     ~HashRingTaskExecutor();
 
@@ -151,36 +146,6 @@ public:
     Status SubmitMigrateDataTask();
 
 private:
-    /**
-     * @brief Submit scale up task if multireplica enable.
-     * @param[in] targetNode target node
-     * @param[in] isNetworkRecovery Is net worker recovery.
-     */
-    void SubmitOneScaleUpTaskMultiReplicaEnabled(
-        const google::protobuf::Map<std::string, datasystem::ChangeNodePb>::value_type &targetNode,
-        bool isNetworkRecovery = false);
-
-    /**
-     * @brief SubmitScaleDownTaskMultiReplica
-     * SubmitScaleDownTaskMultiReplica function is used to submit a scale-down task
-     * when multi-replica is enabled.
-     * @param[in] currRing The current hash ring.
-     * @return Status of the call.
-     */
-    Status SubmitScaleDownTaskMultiReplica(const HashRingPb &currRing);
-
-    /**
-     * @brief GetScaleUpMigrationTaskInfo
-     * GetScaleUpMigrationTaskInfo function is used to get the information of scale-up
-     * migration tasks.
-     * @param[in] targetNode The target node.
-     * @param[out] infos The scale-up migration task information.
-     * @param[out] isVoluntaryScaleDown Whether it is a voluntary scale-down.
-     * @param[out] scaleDownNode The node for scale-down.
-     */
-    void GetScaleUpMigrationTaskInfo(
-        const google::protobuf::Map<std::string, datasystem::ChangeNodePb>::value_type &targetNode,
-        ScaleUpMigrationTaskInfo &infos, bool &isVoluntaryScaleDown, std::string &scaleDownNode);
 
     /**
      * @brief Mark specific add_node_info finished in hash ring.
@@ -373,7 +338,6 @@ private:
     EtcdStore *etcdStore_;
 
     std::atomic<bool> exitFlag_{ false };
-    bool multiReplicaEnabled_ = false;
     std::shared_timed_mutex mutex_;  // protect the following variables
     std::vector<std::string> voluntaryTaskIds_;
     std::shared_timed_mutex clearDataTaskmutex_;

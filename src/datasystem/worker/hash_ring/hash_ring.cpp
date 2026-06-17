@@ -113,9 +113,8 @@ void HashRing::RestoreScalingTaskIfNeeded(bool isRestartScenario)
     taskExecutor_->RestoreScalingTask(ringInfo_, isRestartScenario);
 }
 
-Status HashRing::InitWithoutEtcd(bool isMultiReplicaEnable, const std::string &hashRing)
+Status HashRing::InitWithoutEtcd(const std::string &hashRing)
 {
-    isMultiReplicaEnable_ = isMultiReplicaEnable;
     FLAGS_master_address = workerAddr_;
     startUpState_ = StartUpState::RESTART;
     HashRingPb hashRingPb;
@@ -127,7 +126,7 @@ Status HashRing::InitWithoutEtcd(bool isMultiReplicaEnable, const std::string &h
         workerInRing != hashRingPb.workers().end(), K_RUNTIME_ERROR,
         "The etcd is not writable and the local worker is not in the persistent ring. Please check the etcd.");
     workerUuid_ = workerInRing->second.worker_uuid();
-    taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, etcdStore_, isMultiReplicaEnable_);
+    taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, etcdStore_);
     RETURN_IF_NOT_OK(UpdateWhenNodeRestart(hashRing, hashRingPb));
     RestoreScalingTaskIfNeeded(true);
     if (state_.load() != NO_INIT) {
@@ -137,7 +136,7 @@ Status HashRing::InitWithoutEtcd(bool isMultiReplicaEnable, const std::string &h
     return Status::OK();
 }
 
-Status HashRing::InitWithEtcd(bool isMultiReplicaEnable)
+Status HashRing::InitWithEtcd()
 {
     INJECT_POINT("HashRing.Init.ChangeDefaultHashTokenNum", [](int hashTokenNum) {
         HashRingAllocator::defaultHashTokenNum = hashTokenNum;
@@ -145,7 +144,6 @@ Status HashRing::InitWithEtcd(bool isMultiReplicaEnable)
     });
     // If initWorkerNum <= 0, do not return. Nodes rely on hashring to tell isRestart.
     LOG(INFO) << "HashRing start to init for worker:" << workerAddr_;
-    isMultiReplicaEnable_ = isMultiReplicaEnable;
     // Check if both etcd_address and metastore_address are empty
     if (FLAGS_etcd_address.empty() && FLAGS_metastore_address.empty()) {
         return Status::OK();
@@ -170,7 +168,7 @@ Status HashRing::InitWithEtcd(bool isMultiReplicaEnable)
     };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "InitRing failed");
     baselineModRevisionOfRing_ = res.modRevision;
-    taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, etcdStore_, isMultiReplicaEnable_);
+    taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, etcdStore_);
     timer_ = std::make_unique<Timer>();
 
     // Use metastore_address if specified, otherwise use etcd_address
@@ -858,19 +856,7 @@ bool HashRing::CheckReceiveMigrateInfo(const std::string &workerAddr)
 {
     INJECT_POINT("hashRing.noNeedToCheckForTest", []() { return true; });
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    auto addNodeInfoExist = ringInfo_.add_node_info().find(workerAddr) != ringInfo_.add_node_info().end();
-    if (!isMultiReplicaEnable_) {
-        return addNodeInfoExist;
-    }
-    bool delNodeInfoExist = false;
-    for (const auto &infos : ringInfo_.del_node_info()) {
-        for (const auto &info : infos.second.changed_ranges()) {
-            if (info.workerid() == workerAddr) {
-                delNodeInfoExist = true;
-            }
-        }
-    }
-    return addNodeInfoExist || delNodeInfoExist;
+    return ringInfo_.add_node_info().find(workerAddr) != ringInfo_.add_node_info().end();
 }
 
 static std::string GetUnProcessedNodeInfo(const google::protobuf::Map<std::string, datasystem::ChangeNodePb> &nodeInfo)
@@ -1302,10 +1288,10 @@ Status HashRing::GetWorkerAddrByUuidForAddressing(const std::string &workerUuid,
     return ::worker::GetWorkerAddrByUuidForAddressing(ringInfo_, workerUuid2AddrMap_, workerUuid, workerAddr);
 }
 
-Status HashRing::GetWorkerAddrByUuidForMultiReplica(const std::string &workerUuid, HostPort &workerAddr)
+Status HashRing::GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    return ::worker::GetWorkerAddrByUuidForMultiReplica(ringInfo_, workerUuid2AddrMap_, workerUuid, workerAddr);
+    return ::worker::GetWorkerAddrByUuidForMetadata(ringInfo_, workerUuid2AddrMap_, workerUuid, workerAddr);
 }
 
 Status HashRing::GetUuidByWorkerAddr(const std::string &workerAddr, std::string &uuid)

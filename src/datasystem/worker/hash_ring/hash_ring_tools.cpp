@@ -74,9 +74,9 @@ Status GetWorkerAddrByUuidForAddressing(const HashRingPb &ringInfo,
     return Status(K_NOT_FOUND, FormatString("Can not find the address of workerUuid %s", workerUuid));
 }
 
-Status GetWorkerAddrByUuidForMultiReplica(const HashRingPb &ringInfo,
-                                          const std::map<std::string, HostPort> &workerUuid2AddrMap,
-                                          const std::string &workerUuid, HostPort &workerAddr)
+Status GetWorkerAddrByUuidForMetadata(const HashRingPb &ringInfo,
+                                      const std::map<std::string, HostPort> &workerUuid2AddrMap,
+                                      const std::string &workerUuid, HostPort &workerAddr)
 {
     // from workable worker in current ring
     auto it = workerUuid2AddrMap.find(workerUuid);

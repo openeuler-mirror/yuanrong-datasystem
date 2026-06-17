@@ -24,8 +24,6 @@
 #include <functional>
 #include <vector>
 
-#include <etcd/api/mvccpb/kv.pb.h>
-
 #include "datasystem/common/util/event_subscribers.h"
 #include "datasystem/common/util/net_util.h"
 namespace datasystem {
@@ -43,7 +41,6 @@ enum ClusterEventType : uint32_t {
     START_CLEAR_WORKER_META,
     CLEAR_WORKER_META,
     CHECK_AND_CLEAR_DEVICE_META,
-    REPLICA,
     RECOVER_MASTER_APP_REF,
     SLOT_RECOVERY_FAILED_WORKERS,
 };
@@ -62,29 +59,11 @@ using NodeRestartEvent = EventSubscribers<NODE_RESTART, std::function<Status(con
 using CheckNewNodeMetaEvent = EventSubscribers<CHECK_NEW_NODE_META, std::function<Status(const HostPort &)>>;
 using StartClearWorkerMeta = EventSubscribers<START_CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
 using ClearWorkerMeta = EventSubscribers<CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
-using ReplicaEvent = EventSubscribers<REPLICA, std::function<Status(mvccpb::Event &)>>;
 using RecoverMasterAppRefEvent =
     EventSubscribers<RECOVER_MASTER_APP_REF,
                      std::function<Status(std::function<bool(const std::string &)>, const std::string &)>>;
 using SlotRecoveryFailedWorkersEvent =
     EventSubscribers<SLOT_RECOVERY_FAILED_WORKERS, std::function<Status(const std::vector<HostPort> &)>>;
 
-class ReplicaMagagerEvent : public EventNotifier {
-    enum ReplicaMagagerEventType {
-        GET_PRIMARY_REPLICA_INFO_IN_WORKER,
-        GET_PRIMARY_REPLICA_LOCATION,
-        GET_PRIMARY_REPLICA_DBNAMES
-    };
-
-public:
-    using GetPrimaryReplicaInfoInWorker =
-        EventSubscribers<GET_PRIMARY_REPLICA_INFO_IN_WORKER,
-                         std::function<void(const std::string &, std::map<std::string, std::string> &)>>;
-    using GetPrimaryReplicaLocation =
-        EventSubscribers<GET_PRIMARY_REPLICA_LOCATION, std::function<Status(const std::string &, std::string &)>>;
-    using GetPrimaryReplicaDbNames =
-        EventSubscribers<GET_PRIMARY_REPLICA_DBNAMES,
-                         std::function<Status(const std::string &, std::vector<std::string> &)>>;
-};
 }  // namespace datasystem
 #endif

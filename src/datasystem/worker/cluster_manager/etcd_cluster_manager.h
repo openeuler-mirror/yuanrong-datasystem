@@ -61,7 +61,6 @@ struct ClusterInfo {
     std::vector<std::pair<std::string, std::string>> otherAzHashrings;  // <azName, hashRingPb>
     std::vector<std::pair<std::string, std::string>> workers;           // <addr, nodeMsg>
     std::vector<std::pair<std::string, std::string>> otherAzWorkers;    // <addr, nodeMsg>
-    std::vector<std::pair<std::string, std::string>> replicaGroups;     // <replicaId, replicaMsg>
     int64_t revision = -1;
     bool etcdAvailable = true;
 
@@ -78,8 +77,7 @@ public:
      * @brief Constructor
      */
     EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB,
-                       bool multiReplicaEnabled, std::shared_ptr<AkSkManager> akSkManager = nullptr,
-                       const int pqSize = 5000);
+                       std::shared_ptr<AkSkManager> akSkManager = nullptr, const int pqSize = 5000);
 
     ~EtcdClusterManager();
 
@@ -314,8 +312,8 @@ public:
         errInfos.emplace();
         ModifyObjKeysGrpByMasterByCheckConnection(objKeysGrpByMaster, errInfos);
         if (errInfos && !errInfos->empty()) {
-            LOG(INFO) << "Check connection group by master failed, first errInfo: key is "
-                      << errInfos->begin()->first << ", err is "<< errInfos->begin()->second.ToString();
+            LOG(INFO) << "Check connection group by master failed, first errInfo: key is " << errInfos->begin()->first
+                      << ", err is " << errInfos->begin()->second.ToString();
         }
         MoveFailedObjKeysFromObjKeysGrpByMaster(objKeysGrpByMaster, objKeysUndecidedMaster);
     }
@@ -622,12 +620,6 @@ public:
      * @return The workerId, empty if worker not found.
      */
     std::string GetWorkerIdByWorkerAddr(const std::string &address) const;
-
-    /**
-     * @brief Check whether the multi replica enabled.
-     * @return true if the multi replica is enabled.
-     */
-    bool MultiReplicaEnabled();
 
     /**
      * @brief Query master address in other az using consistent hash algorithm.
@@ -1121,9 +1113,8 @@ protected:
         const std::string &objKey, HostPort &masterHostPort, std::string &dbName);
 
     template <typename T>
-    void ModifyObjKeysGrpByMasterByCheckConnection(
-        std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
-        std::optional<std::unordered_map<std::string, Status>> &errInfos)
+    void ModifyObjKeysGrpByMasterByCheckConnection(std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
+                                                   std::optional<std::unordered_map<std::string, Status>> &errInfos)
     {
         static const auto checkConnectionFunc = [](EtcdClusterManager *ptr,
                                                    const MetaAddrInfo &metaAddrInfo) -> Status {
@@ -1256,7 +1247,6 @@ protected:
     std::string clusterPrefix_;
     std::atomic<bool> isLeaving_{ false };
     std::shared_ptr<AkSkManager> akSkManager_;
-    bool multiReplicaEnabled_ = false;
     std::vector<std::string> otherAZNames_;
 
     bool isEtcdAvailableWhenStart_{ true };

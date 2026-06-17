@@ -30,7 +30,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/master/replica_manager.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
 #include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
 
@@ -105,11 +105,11 @@ public:
      * @param[in] localHostPort The local worker rpc service host port.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] cm Used to get master of objects.
-     * @param[in] replicaManager The replica manager.
+     * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
     Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager, EtcdClusterManager *cm,
-                ReplicaManager *replicaManager);
+                MetadataManagerHolder *metadataManagerHolder);
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -222,7 +222,7 @@ private:
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed stream names>>>
     TbbFutureThreadTable futureThread_;
     std::atomic<bool> exitFlag_{ false };
-    ReplicaManager *replicaManager_;
+    MetadataManagerHolder *metadataManagerHolder_;
 };
 }  // namespace master
 }  // namespace datasystem

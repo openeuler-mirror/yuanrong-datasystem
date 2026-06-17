@@ -60,17 +60,15 @@ public:
 
     /**
      * @brief Init consistent hash ring.
-     * @param[in] isMultiReplicaEnable Used to mark whether multi replica is supported.
      */
-    Status InitWithEtcd(bool isMultiReplicaEnable);
+    Status InitWithEtcd();
 
     /**
      * @brief Init consistent hash ring during ETCD crash.
-     * @param[in] isMultiReplicaEnable Used to mark whether multi replica is supported.
      * @param[in] hashRing The hash ring loaded from rocksdb.
      * @return Status of the call.
      */
-    Status InitWithoutEtcd(bool isMultiReplicaEnable, const std::string &hashRing);
+    Status InitWithoutEtcd(const std::string &hashRing);
 
     /**
      * @brief When the worker num is equal to HashRingAllocator::defaultHashTokenNum, this function will generate hash
@@ -398,12 +396,12 @@ public:
     Status GetWorkerAddrByUuidForAddressing(const std::string &workerUuid, HostPort &workerAddr);
 
     /**
-     * @brief Get worker address by uuid for multi replica.
+     * @brief Get metadata owner address by worker uuid.
      * @param[in] workerUuid The worker uuid.
      * @param[out] workerAddr The remote worker address.
      * @return Return the local worker uuid.
      */
-    Status GetWorkerAddrByUuidForMultiReplica(const std::string &workerUuid, HostPort &workerAddr);
+    Status GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr);
 
     bool CheckVoluntaryTaskExpired(const std::string &taskId)
     {
@@ -808,8 +806,6 @@ protected:
 
     mutable std::mutex hashRangeMutex_;  // for hash range
     HashRange hashRange_;
-
-    bool isMultiReplicaEnable_{ false };
 
     std::unique_ptr<HashRingTaskExecutor> taskExecutor_;
     std::unique_ptr<HashRingHealthCheck> hashRingHealthCheck_;

@@ -81,7 +81,7 @@ DS_DEFINE_bool(enable_redirect, "true",
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
 DS_DECLARE_int32(rpc_thread_num);
-DS_DECLARE_bool(enable_meta_replica);
+
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(other_cluster_names);
@@ -109,11 +109,7 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
       newNode_(newNode)
 {
     bool isEnabled = FLAGS_rocksdb_write_mode != "none" || FLAGS_oc_io_from_l2cache_need_metadata;
-    if (FLAGS_enable_meta_replica && !etcdCM_->IsCentralized()) {
-        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, nullptr, isEnabled);
-    } else {
-        objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
-    }
+    objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
     if (etcdCM_ != nullptr && !etcdCM_->IsCentralized()) {
         dbName_ = dbName;
     }
@@ -4239,7 +4235,7 @@ Status OCMetadataManager::FillMetadataForMigration(
 
         // Marker is migrating
         migratingItems_.insert({ objectKey, true });
-        if (accessor->second.IsWriteBackL2Cache() && !(FLAGS_enable_meta_replica && !etcdCM_->IsCentralized())) {
+        if (accessor->second.IsWriteBackL2Cache()) {
             std::unordered_set<std::shared_ptr<AsyncElement>> elements;
             GetAsyncElementsByObjectKey(objectKey, elements);
             FillWaitAsyncElements(elements, meta);

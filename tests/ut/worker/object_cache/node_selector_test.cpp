@@ -94,7 +94,7 @@ public:
     {
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
-        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get(), false);
+        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get(), nullptr);
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
         NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_, apiManager_);
     }
@@ -617,14 +617,14 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots) {
 class EtcdCmHelper : public EtcdClusterManager {
 public:
     EtcdCmHelper(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB)
-        : EtcdClusterManager(workerAddress, masterAddress, etcdDB, false)
+        : EtcdClusterManager(workerAddress, masterAddress, etcdDB, nullptr)
     {
     }
 
     void SetHashRing(std::unique_ptr<worker::HashRing> &ring, HashRingPb &ringPb)
     {
         hashRing_ = std::move(ring);
-        DS_ASSERT_OK(hashRing_->InitWithoutEtcd(false, ringPb.SerializeAsString()));
+        DS_ASSERT_OK(hashRing_->InitWithoutEtcd(ringPb.SerializeAsString()));
     }
 };
 
@@ -717,16 +717,18 @@ public:
 
     void MockMigrateDataToRemoteRetry()
     {
+        constexpr uint32_t availableRatio = 60;
+        constexpr uint32_t limitRate = 200;
+        constexpr uint64_t remainBytes = 1024ul * 1024ul * 1024ul;
         BINEXPECT_CALL(&MigrateDataHandler::MigrateDataToRemoteRetry, (_, _, _, _))
             .WillRepeatedly(Invoke([](const std::shared_ptr<WorkerRemoteWorkerOCApi> &api, MigrateDataReqPb &req,
                                       const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
-                if (api->Address() == "127.0.0.1:1112") {
-                    rsp.set_available_ratio(60);
-                    rsp.set_limit_rate(200);
-                    rsp.set_remain_bytes(1024*1024*1024);
-                }
+                (void)api;
                 (void)req;
                 (void)payloads;
+                rsp.set_available_ratio(availableRatio);
+                rsp.set_limit_rate(limitRate);
+                rsp.set_remain_bytes(remainBytes);
                 return Status::OK();
             }));
     }

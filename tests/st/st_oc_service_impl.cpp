@@ -23,7 +23,7 @@
 #include <memory>
 
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/master/replica_manager.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/worker/authenticate.h"
 
 namespace datasystem {
@@ -32,9 +32,9 @@ Status StOCServiceImpl::GetMasterGRefTable(const GRefTableReqPb &req, GRefTableR
 {
     (void)req;
     std::unordered_map<std::string, std::vector<std::string>> refTable;
-    auto dbName = replicaManager_->GetCurrentWorkerUuid();
+    auto dbName = metadataManagerHolder_->GetCurrentWorkerUuid();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    Status rc = replicaManager_->GetOcMetadataManager(dbName, ocMetadataManager);
+    Status rc = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
     RETURN_OK_IF_TRUE(rc.IsError());
     ocMetadataManager->GetGlobalRefTable()->GetAllClientRef(refTable);
     for (const auto &singleWorker : refTable) {

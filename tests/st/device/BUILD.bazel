@@ -165,25 +165,3 @@ ds_cc_test(
         "//src/datasystem/common/util:uuid_generator",
     ],
 )
-
-ds_cc_test(
-    name = "hetero_object_replica_test",
-    srcs = [
-        "hetero_object_replica_test.cpp",
-        "mock/ascend_device_manager_mock.cpp",
-    ],
-    copts = MOCK_COPTS,
-    tags = ["manual"],
-    deps = DEVICE_COMMON_DEPS + [
-        "//src/datasystem/client/hetero_cache:hetero_cache_headers",
-        "//src/datasystem/client/kv_cache:kv_client",
-        "//src/datasystem/common/device/ascend:acl_device_manager",
-        "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:random_data",
-        "//src/datasystem/common/util:thread_pool",
-        "//src/datasystem/common/util:uuid_generator",
-        "//tests/common/binmock",
-        "@com_google_googletest//:gmock",
-    ],
-)

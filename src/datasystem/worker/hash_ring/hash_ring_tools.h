@@ -74,16 +74,16 @@ Status GetWorkerAddrByUuidForAddressing(const HashRingPb &ringInfo,
                                         const std::string &workerUuid, HostPort &workerAddr);
 
 /**
- * @brief Get the worker address of specific workerUuid for multi replica.
+ * @brief Get the metadata owner address of specific workerUuid.
  * @param[in] ringInfo The ring
  * @param[in] workerUuid2AddrMap The {workerUuid, workerAddr} map of input ringInfo
  * @param[in] workerUuid The workerUuid of the wanted worker
  * @param[out] workerAddr The worker address of the wanted worker
  * @return Status of the call.
  */
-Status GetWorkerAddrByUuidForMultiReplica(const HashRingPb &ringInfo,
-                                          const std::map<std::string, HostPort> &workerUuid2AddrMap,
-                                          const std::string &workerUuid, HostPort &workerAddr);
+Status GetWorkerAddrByUuidForMetadata(const HashRingPb &ringInfo,
+                                      const std::map<std::string, HostPort> &workerUuid2AddrMap,
+                                      const std::string &workerUuid, HostPort &workerAddr);
 
 /**
  * @brief Judge if the new ring has incremental add_node_info.

@@ -836,7 +836,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | rocksdb_background_threads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | rocksdb_max_open_file | int | `128` | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_meta_replica | bool | `false` | 控制是否启用多个元数据副本 |
+| enable_meta_replica | bool | `false` | 已废弃的兼容参数，当前配置值会被忽略 |
 | enable_metadata_recovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 
 #### 可靠性相关配置

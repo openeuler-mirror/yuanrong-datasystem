@@ -65,7 +65,7 @@
   - `EtcdHealth` wraps Maintenance `Status`.
   - `MetaStoreServer` serves KV/Lease/Watch/Maintenance using in-memory managers.
 - Key persistent or backend state:
-  - ETCD key prefixes for cluster table, ring, master address, metadata tables, replica group, and slot recovery.
+  - ETCD key prefixes for cluster table, ring, master address, metadata tables, and slot recovery.
 - Key in-memory state:
   - `EtcdStore::tableMap_`, `otherAzTableMap_`, auth token, lease id, keepalive value, timers, watch instance;
   - `EtcdWatch::keyVersion_`, prefix map, event queues;

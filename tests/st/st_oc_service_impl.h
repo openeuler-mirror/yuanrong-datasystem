@@ -21,7 +21,7 @@
 #define DATASYSTEM_ST_OBJECT_CACHE_ST_SERVICE_IMPL_H
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
-#include "datasystem/master/replica_manager.h"
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/ut_object.service.rpc.pb.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
@@ -30,8 +30,11 @@ namespace st {
 class StOCServiceImpl : public UtOCService {
 public:
     explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc, EtcdClusterManager *etcdCM,
-                             ReplicaManager *replicaManager, std::shared_ptr<AkSkManager> akSkManager)
-        : workerOc_(workerOc), etcdCM_(etcdCM), replicaManager_(replicaManager), akSkManager_(std::move(akSkManager))
+                             MetadataManagerHolder *metadataManagerHolder, std::shared_ptr<AkSkManager> akSkManager)
+        : workerOc_(workerOc),
+          etcdCM_(etcdCM),
+          metadataManagerHolder_(metadataManagerHolder),
+          akSkManager_(std::move(akSkManager))
     {
     }
 
@@ -69,7 +72,7 @@ public:
 private:
     object_cache::WorkerOCServiceImpl *workerOc_;
     EtcdClusterManager *etcdCM_;
-    ReplicaManager *replicaManager_;
+    MetadataManagerHolder *metadataManagerHolder_;
     std::shared_ptr<AkSkManager> akSkManager_;
 };
 }  // namespace st

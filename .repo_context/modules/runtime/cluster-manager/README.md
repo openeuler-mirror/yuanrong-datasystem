@@ -6,12 +6,12 @@
   - `src/datasystem/worker/cluster_manager`
   - startup integration in `src/datasystem/worker/worker_oc_server.cpp`
   - worker readiness and reconciliation integration in `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp`
-  - event subscribers in object-cache, stream-cache, replica-manager, slot-recovery, and hash-ring modules
+  - event subscribers in object-cache, stream-cache, slot-recovery, and hash-ring modules
 - Why this module exists:
   - track local and other-AZ worker membership from ETCD-compatible watch events;
   - connect ETCD lease keepalive state to worker lifecycle, restart reconciliation, timeout/failure handling, passive scale-down, and voluntary scale-down cleanup;
-  - feed hash-ring state machine progress and route metadata requests to the correct worker/replica DB;
-  - bridge low-level ETCD events to higher-level metadata, replica, slot-recovery, and worker API cleanup events.
+  - feed hash-ring state machine progress and route metadata requests to the correct local or other-AZ worker;
+  - bridge low-level ETCD events to higher-level metadata, slot-recovery, and worker API cleanup events.
 - Primary source files to verify against:
   - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
   - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.h`
@@ -26,16 +26,16 @@
 
 - Verified:
   - constructs and owns one local `HashRing` and optional `ReadHashRing` instances for other AZs;
-  - creates ETCD tables for ring, cluster, replica group, and master address;
+  - creates ETCD tables for ring, cluster, and master address;
   - reads startup `ClusterInfo` from ETCD/Metastore or from local RocksDB during ETCD-down restart;
-  - starts ETCD watches for ring, cluster, and replica-group prefixes;
+  - starts ETCD watches for ring and cluster prefixes;
   - enqueues ETCD watch events into a priority queue where ring events outrank cluster events;
   - tracks local and other-AZ workers in `ClusterNode` tables with `ACTIVE`, `TIMEOUT`, and `FAILED` states;
   - interprets `KeepAliveValue.state` as node lifecycle tags: `start`, `restart`, `recover`, `ready`, `exiting`, and `d_rst`;
   - drives passive scale-down by demoting timed-out nodes, notifying metadata/slot-recovery events, and calling `HashRing::RemoveWorkers`;
   - delegates voluntary scale-down to `HashRing::VoluntaryScaleDown` after marking local cluster-manager state as leaving;
   - triggers restart/network-recovery reconciliation through event subscribers;
-  - routes object metadata requests through hash ring, read rings, and replica-manager primary DB lookup;
+  - routes object metadata requests through hash ring and read rings.
   - exposes a worker readiness probe file through `worker_health_check`.
 - Pending verification:
   - exact semantics of every object-cache and stream-cache subscriber for node timeout/recovery;
@@ -63,7 +63,7 @@
   - `runtime.hash-ring` owns persisted ring state, token/range algorithms, and migration task records.
   - `runtime.etcd-metadata` owns ETCD/Metastore RPC, watch, lease, and CAS mechanics.
   - object-cache and stream-cache metadata managers own actual metadata recovery, reconciliation, and clearing.
-  - replica-manager owns primary replica DB selection and replica-group watch handling.
+  - local object-cache and stream-cache metadata are held by `MetadataManagerHolder`.
 - Why this stays its own module:
   - `EtcdClusterManager` is not a pure wrapper around ETCD or hash ring; it is the runtime lifecycle coordinator that joins ETCD membership, hash-ring state, health probes, route lookup, and event-bus side effects.
 
@@ -116,7 +116,7 @@
 - Downstream modules:
   - ETCD-compatible metadata backend through `EtcdStore`;
   - local and other-AZ hash rings through `HashRing` and `ReadHashRing`;
-  - object-cache metadata manager, stream-cache metadata manager, notify-worker managers, replica-manager, slot-recovery manager, worker remote APIs, fast transport cleanup, and health probe file.
+  - object-cache metadata manager, stream-cache metadata manager, notify-worker managers, slot-recovery manager, worker remote APIs, fast transport cleanup, and health probe file.
 - External dependencies:
   - ETCD lease expiration and watch delivery;
   - worker-to-worker RPC for checking ETCD state during local keepalive/network failure;
@@ -127,11 +127,11 @@
 ### Cluster Startup With ETCD Available
 
 1. `WorkerOCServer::ConstructClusterInfo` checks backend health, then calls `ConstructClusterInfoViaEtcd`.
-2. `ConstructClusterInfoViaEtcd` creates required tables and loads local workers, other-AZ workers, other-AZ hash rings, replica groups, and the ETCD revision.
+2. `ConstructClusterInfoViaEtcd` creates required tables and loads local workers, other-AZ workers, other-AZ hash rings, and the ETCD revision.
 3. `EtcdClusterManager::Init` installs the ETCD event handler, validates timeout flags, and caches ring/cluster prefixes.
 4. It starts the node utility thread and orphan-node monitor before processing startup nodes.
 5. `SetupInitialClusterNodes` enqueues fake local-AZ PUT events for already known workers, except the local worker when ETCD is available, and directly inserts other-AZ workers.
-6. It starts watches for ring, cluster, and replica-group prefixes from the startup revision.
+6. It starts watches for ring and cluster prefixes from the startup revision.
 7. It initializes the local hash ring with ETCD and initializes read rings for other AZs.
 8. It starts lease keepalive for the local cluster-table worker key.
 
@@ -143,7 +143,7 @@ Important nuance:
 ### Startup During ETCD Crash
 
 1. `WorkerOCServer::ConstructClusterInfo` falls back to `ConstructClusterInfoDuringEtcdCrash`.
-2. The worker loads hash-ring, cluster-table, and replica-group information from local RocksDB-backed cluster store.
+2. The worker loads hash-ring and cluster-table information from the local RocksDB-backed cluster store.
 3. It queries a bounded number of active local workers to reconcile cluster state.
 4. `EtcdClusterManager::Init` calls `HashRing::InitWithoutEtcd` with the local ring snapshot.
 5. Keepalive is still initialized with `isEtcdAvailableWhenStart=false`, which marks the local state as downgrade restart (`d_rst`).
@@ -157,10 +157,9 @@ Important nuance:
 1. `EtcdStore` watch callback invokes `EnqueEvent`.
 2. Cluster-table events are enqueued as `PrefixType::CLUSTER`.
 3. Ring events are enqueued as `PrefixType::RING`.
-4. Replica-group events bypass the queue and notify `ReplicaEvent` directly.
-5. `DequeEventCallHandler` flushes cached cluster events when possible, pops one priority event, and handles it.
-6. Ring events update the local hash ring or the matching other-AZ read ring.
-7. Cluster events parse `KeepAliveValue` and dispatch to local-AZ or other-AZ add/remove handlers.
+4. `DequeEventCallHandler` flushes cached cluster events when possible, pops one priority event, and handles it.
+5. Ring events update the local hash ring or the matching other-AZ read ring.
+6. Cluster events parse `KeepAliveValue` and dispatch to local-AZ or other-AZ add/remove handlers.
 
 Important nuance:
 
@@ -173,7 +172,7 @@ Important nuance:
 3. If the node is new, `AddNewNode` inserts an `ACTIVE` `ClusterNode` and removes any stale dead-worker API state.
 4. Independently, the joining worker has already inserted itself into `HashRingPb.workers` as `INITIAL` during hash-ring initialization.
 5. The node utility thread periodically calls `hashRing_->InspectAndProcessPeriodically`, which can generate first tokens or add-node migration work.
-6. Once hash-ring migration finishes, route lookups can send traffic to the new active worker/replica DB.
+6. Once hash-ring migration finishes, route lookups can send traffic to the new active worker.
 
 Important nuance:
 
@@ -268,7 +267,7 @@ Important nuance:
   - node-table state and hash-ring state are deliberately separate and must be updated through their own flows;
   - fake events exist in multiple layers and must not be treated as normal lease events without guard checks;
   - cluster events can be cached before hash-ring readiness, so event-order changes can deadlock startup;
-  - route lookup depends on replica-manager events, not only hash-ring ownership;
+  - route lookup depends on hash-ring ownership and cluster-node readiness;
   - local and other-AZ event keys are parsed with prefix/string logic, so prefix changes can break dispatch.
 - Important invariants:
   - `node_dead_timeout_s > node_timeout_s`;
@@ -285,13 +284,13 @@ Important nuance:
 ## Current Design Weaknesses
 
 - The module owns too many concerns at once: ETCD event dispatch, node state, hash-ring progression, reconciliation, routing, health probe, other-AZ tracking, and cleanup orchestration.
-- Runtime state is split across ETCD cluster-table rows, `clusterNodeTable_`, `HashRingPb`, local read-ring maps, RocksDB cluster snapshots, health-probe files, and replica-manager state.
+- Runtime state is split across ETCD cluster-table rows, `clusterNodeTable_`, `HashRingPb`, local read-ring maps, RocksDB cluster snapshots, and health-probe files.
 - The event model is hard to reason about because real ETCD events, ETCD watch-compensation fake events, startup fake PUT events, and cluster-manager fake add/delete repair events all reach similar handlers.
 - The background utility thread is overloaded: it handles events, reconciliation give-up checks, timeout demotion, hash-ring remove/add inspection, node-table/ring sync, and fake-node scheduling.
 - Passive failure handling is multi-phase and partially duplicated: DELETE marks `TIMEOUT`, later demotion marks `FAILED`, hash-ring deletion happens separately, and orphan cleanup later erases APIs/table entries.
 - Scale-up and scale-down still depend on the single hot hash-ring CAS key while cluster-manager adds extra watches, scans, fake events, and per-node checks around that key.
 - Large cluster changes scale poorly: every worker has watch/keepalive/background loops, `GetFailedWorkers` iterates node tables, orphan cleanup can query ETCD per orphan, and many workers can call hash-ring inspection periodically.
-- Module boundaries are porous. Cluster-manager directly depends on hash-ring internals, ETCD store internals, object/stream metadata events, replica-manager events, slot recovery, worker remote APIs, fast transport cleanup, and health probe state.
+- Module boundaries are porous. Cluster-manager directly depends on hash-ring internals, ETCD store internals, object/stream metadata events, slot recovery, worker remote APIs, fast transport cleanup, and health probe state.
 - String-based key/AZ parsing and lifecycle tags (`start`, `restart`, `recover`, `ready`, `exiting`, `d_rst`) make compatibility fragile.
 
 ## Open Questions

@@ -84,7 +84,7 @@
 - [ ] confirm event subscribers and their return statuses
 - [ ] confirm restart recovery through `RestoreScalingTaskIfNeeded`
 - [ ] confirm interaction with `enable_distributed_master`, `auto_del_dead_node`, and `enable_hash_ring_self_healing`
-- [ ] confirm multi-replica and non-multi-replica branches if the path reaches `HashRingTaskExecutor`
+- [ ] confirm metadata migration, data recovery, and cleanup branches if the path reaches `HashRingTaskExecutor`
 
 ## Implementation Plan
 
@@ -110,7 +110,7 @@
   - `key_with_worker_id_meta_map` semantics.
 - Must verify in source before claiming:
   - object-cache/stream-cache event behavior;
-  - multi-replica DB-primary routing behavior;
+  - local metadata-holder routing behavior;
   - cross-AZ read-ring behavior.
 
 ## Validation Plan

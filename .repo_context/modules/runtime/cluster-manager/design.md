@@ -34,14 +34,14 @@
 - What problem this module solves:
   - turn ETCD-compatible membership and ring events into safe local routing and metadata lifecycle actions.
 - Who or what depends on this module:
-  - worker startup/shutdown, object-cache service, stream-cache service, replica-manager, slot recovery, notify-worker managers, worker remote APIs, and client metadata redirection.
+  - worker startup/shutdown, object-cache service, stream-cache service, slot recovery, notify-worker managers, worker remote APIs, and client metadata redirection.
 
 ## Goals
 
 - Track active, timed-out, failed, exiting, restarted, and recovered workers.
 - Initialize worker membership and hash-ring state from ETCD or degraded local snapshots.
 - Keep cluster-node state aligned enough with hash-ring state to route requests and drive scale tasks.
-- Notify metadata and replica subsystems when workers time out, recover, restart, or leave voluntarily.
+- Notify metadata, slot-recovery, and worker cleanup subsystems when workers time out, recover, restart, or leave voluntarily.
 - Provide route helpers for local and other-AZ metadata access.
 - Gate worker readiness and ETCD state transitions through reconciliation and health probes.
 
@@ -50,7 +50,7 @@
 - It does not implement ETCD RPC, watch, lease, or CAS mechanics.
 - It does not calculate hash tokens or migration ranges.
 - It does not execute metadata migration itself.
-- It does not own replica-group placement rules.
+- It does not own metadata manager lifetime beyond routing/recovery notifications; local metadata managers are held by `MetadataManagerHolder`.
 - It does not provide a formally isolated state-machine framework; current state transitions are distributed across event handlers and background loops.
 
 ## Architecture Overview
@@ -63,7 +63,6 @@
 - Key persistent/backend state:
   - ETCD cluster-table lease keys;
   - ETCD hash-ring protobuf;
-  - ETCD replica-group table;
   - RocksDB cluster snapshots used during ETCD-down restart.
 - Key in-memory state:
   - `clusterNodeTable_`, `otherClusterNodeTable_`, `orphanNodeTable_`;
@@ -82,7 +81,7 @@
 | node utility thread | event handling, demotion, hash-ring progress, sync | `StartNodeUtilThread` | overloaded loop |
 | orphan monitor | cleanup nodes missing from hash ring/ETCD | `StartOrphanNodeMonitorThread` | per-orphan ETCD get |
 | fake node repair | synthesize add/delete for ring workers absent from node table | `CompleteNodeTableWithFakeNode` | repairs full-cluster restart gaps |
-| route helpers | map object keys or worker UUIDs to `MetaAddrInfo` | route methods in header/cpp | uses hash ring and replica-manager events |
+| route helpers | map object keys or worker UUIDs to `MetaAddrInfo` | route methods in header/cpp | uses hash ring and cluster-node/read-ring state |
 | health probe | process readiness state and optional file | `worker_health_check.*` | used by startup and fake-node scheduling |
 
 ## Data And State Model
@@ -99,9 +98,9 @@
   - `exiting`: voluntary scale-down flow has started;
   - `d_rst`: downgrade restart when worker starts with ETCD unavailable.
 - `ClusterInfo`:
-  - startup transport object containing local/other-AZ rings, local/other-AZ workers, replica groups, ETCD revision, and backend availability.
+  - startup transport object containing local/other-AZ rings, local/other-AZ workers, ETCD revision, and backend availability.
 - Route model:
-  - object key without embedded worker id routes by hash ring and replica-manager primary DB.
+  - object key without embedded worker id routes by hash ring to the owning worker.
   - object key with embedded worker id routes by UUID lookup; optional cross-AZ lookup is gated by `cross_cluster_get_meta_from_worker`.
   - route batching caches worker-id and hash-range decisions per call.
 
@@ -140,7 +139,7 @@ Failure-sensitive steps:
 ### Passive Failure
 
 1. DELETE event marks node `TIMEOUT`.
-2. Object/stream/replica subscribers receive timeout notification with change-primary intent.
+2. Object/stream subscribers receive timeout notification for metadata cleanup/recovery; metadata primary switching is removed.
 3. Utility thread demotes to `FAILED` after timeout gap.
 4. Failed node handling triggers metadata cleanup and slot recovery.
 5. Hash ring receives failed-worker evidence and may remove the worker from routing.
@@ -181,19 +180,18 @@ Failure-sensitive steps:
 
 1. Centralized mode returns configured `master_address`.
 2. Distributed mode without embedded worker id hashes object key to primary worker UUID.
-3. Replica-manager translates DB name to current primary replica worker UUID.
-4. Hash ring maps destination UUID to worker address.
-5. Connection check validates cluster-node or other-AZ node state before returning.
+3. Hash ring maps the owner UUID to worker address.
+4. Connection check validates cluster-node or other-AZ node state before returning.
 
 Failure-sensitive steps:
 
 - A worker can be in hash ring but not active/ready in cluster-node table.
-- For multi-replica mode, route lookup includes both hash-ring and replica-manager state.
+- Route lookup now depends on hash-ring and cluster-node/read-ring state.
 
 ## External Interaction And Dependency Analysis
 
 - ETCD metadata:
-  - supplies cluster-table watches, ring watches, replica events, keepalive state, and backend health.
+  - supplies cluster-table watches, ring watches, keepalive state, and backend health.
   - failure impact: fake events and local snapshots try to preserve progress but increase state ambiguity.
 - Hash ring:
   - supplies route ownership, worker UUID mapping, voluntary/passive scale-down state, and other-AZ read rings.
@@ -202,8 +200,8 @@ Failure-sensitive steps:
   - handles node timeout, restart, network recovery, metadata request, change primary, and failed-worker API cleanup.
 - Stream-cache metadata:
   - handles clear/check metadata events and hash-ring recovery events.
-- Replica manager:
-  - handles replica-group watch events and primary replica DB lookup.
+- Local metadata holder:
+  - `MetadataManagerHolder` owns the local object-cache and stream-cache metadata managers; it does not perform remote metadata ownership lookup.
 - Slot recovery:
   - receives failed workers after demotion or crashed voluntary scale-down.
 - Worker service/server:
@@ -232,7 +230,7 @@ Failure-sensitive steps:
   - degraded startup can use RocksDB snapshots only in distributed-master mode.
 - Reliability model:
   - membership changes are eventually reflected through watch events, background loop demotion, and fake repair.
-  - metadata and replica subsystems are notified through in-process event subscribers.
+  - metadata and slot-recovery subsystems are notified through in-process event subscribers.
 - Resilience limits:
   - many state copies must converge.
   - fake events repair some gaps but add ambiguity.
@@ -264,7 +262,7 @@ Failure-sensitive steps:
 ## Performance Characteristics
 
 - Hot paths:
-  - route lookup reads hash-ring maps and cluster-node table and can call replica-manager events.
+  - route lookup reads hash-ring maps and cluster-node/read-ring tables.
   - background utility thread wakes every 100 ms when idle.
 - Known expensive operations:
   - per-worker watch/keepalive/background loops;

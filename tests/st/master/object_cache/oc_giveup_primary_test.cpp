@@ -119,8 +119,8 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         FLAGS_master_address = masterAddr_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
-        replicaManager_ = std::make_unique<ReplicaManager>();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, etcdStore_.get(), false);
+        metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
+        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, etcdStore_.get(), nullptr);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
@@ -136,7 +136,7 @@ public:
             masterAddr_, masterAddr_, objectTable_, akSkManager_, evictionManager, nullptr, etcdStore_.get());
         objCacheWorkerMsSvc_ =
             std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(worker1OcServiceImpl_, akSkManager_);
-        ReplicaManagerParam param;
+        MetadataManagerHolderParam param;
         param.dbRootPath = FLAGS_rocksdb_store_dir;
         param.currWorkerId = workerUuid_;
         param.akSkManager = akSkManager_;
@@ -149,11 +149,11 @@ public:
         param.workerWorkerService = nullptr;
         param.isOcEnabled = true;
         param.isScEnabled = false;
-        RETURN_IF_NOT_OK(replicaManager_->Init(param));
-        RETURN_IF_NOT_OK(replicaManager_->AddOrSwitchTo(param.currWorkerId, ReplicaType::Primary));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->Init(param));
+        RETURN_IF_NOT_OK(metadataManagerHolder_->EnsureLocalMetadataManager(param.currWorkerId));
         etcdCM_->SetWorkerReady();
         objCacheMasterSvc_ =
-            std::make_unique<MasterOCServiceImpl>(masterAddr_, nullptr, akSkManager_, replicaManager_.get(), nullptr);
+            std::make_unique<MasterOCServiceImpl>(masterAddr_, nullptr, akSkManager_, metadataManagerHolder_.get(), nullptr);
         objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
         RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
         RETURN_IF_NOT_OK(datasystem::inject::Set("master.cache_invalid_failed", "return(K_OK)"));
@@ -172,7 +172,7 @@ public:
             req.set_address(workerAddr);
             req.set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
             std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-            RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+            RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->CreateCopyMeta(req, rsp), "create copy failed");
         }
         return Status::OK();
@@ -196,7 +196,7 @@ public:
             configPb->set_consistency_type(static_cast<uint32_t>(ConsistencyType::CAUSAL));
             request.set_address(workerAddr);
             std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-            RETURN_IF_NOT_OK(replicaManager_->GetOcMetadataManager(workerUuid_, ocMetadataManager));
+            RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->CreateMeta(request, response), "create failed");
         }
         return Status::OK();
@@ -233,7 +233,7 @@ public:
     std::shared_ptr<datasystem::object_cache::MasterWorkerOCServiceImpl> objCacheWorkerMsSvc_;
     std::unique_ptr<MasterOCServiceImpl> objCacheMasterSvc_;
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> worker1OcServiceImpl_;
-    std::unique_ptr<ReplicaManager> replicaManager_;
+    std::unique_ptr<MetadataManagerHolder> metadataManagerHolder_;
 };
 
 TEST_F(OCGiveUpPrimaryTest, TestGIveUpPrimary)

@@ -50,11 +50,8 @@ static constexpr uint32_t MAX_SCALE_TASK_THREAD = 4;
 static const std::string HASH_RING_TASK_EXECUTOR = "HashRingTaskExecutor";
 
 HashRingTaskExecutor::HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
-                                           EtcdStore *etcdStore, bool isMultiReplicaEnable)
-    : workerAddr_(workerAddr),
-      workerUuid_(workerUuid),
-      etcdStore_(etcdStore),
-      multiReplicaEnabled_(isMultiReplicaEnable)
+                                           EtcdStore *etcdStore)
+    : workerAddr_(workerAddr), workerUuid_(workerUuid), etcdStore_(etcdStore)
 {
     scaleThreadPool_ = std::make_unique<ThreadPool>(0, MAX_SCALE_TASK_THREAD, "HashRingScaleTask");
     HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().AddSubscriber(
@@ -76,11 +73,7 @@ Status HashRingTaskExecutor::SubmitScaleUpTask(const HashRingPb &currRing)
     INJECT_POINT("skip.SubmitScaleUpTask");
     LOG(INFO) << "Submit async task to migrate meta.";
     for (auto &newWorker : currRing.add_node_info()) {
-        if (!multiReplicaEnabled_) {
-            SubmitOneScaleUpTask(newWorker);
-        } else {
-            SubmitOneScaleUpTaskMultiReplicaEnabled(newWorker);
-        }
+        SubmitOneScaleUpTask(newWorker);
     }
     return Status::OK();
 }
@@ -146,78 +139,6 @@ void HashRingTaskExecutor::SubmitOneScaleUpTask(
                        << status.ToString();
         }
     });
-}
-
-void HashRingTaskExecutor::GetScaleUpMigrationTaskInfo(
-    const google::protobuf::Map<std::string, datasystem::ChangeNodePb>::value_type &targetNode,
-    ScaleUpMigrationTaskInfo &infos, bool &isVoluntaryScaleDown, std::string &scaleDownNode)
-{
-    for (auto &range : targetNode.second.changed_ranges()) {
-        HostPort migrateDbAddr;
-        std::string migrateDbName;
-
-        if (HashRingEvent::GetDbPrimaryLocation::GetInstance()
-                .NotifyAll(range.workerid(), migrateDbAddr, migrateDbName)
-                .IsError()) {
-            continue;
-        } else if (migrateDbAddr.ToString() == workerAddr_ && !range.finished()) {
-            infos[migrateDbName].ranges.emplace_back(range.from(), range.end());
-            infos[migrateDbName].srcNode = range.workerid();
-        }
-        if (range.from() == range.end() && !range.is_upgrade()) {
-            isVoluntaryScaleDown = true;
-            scaleDownNode = range.workerid();
-        }
-    }
-}
-
-void HashRingTaskExecutor::SubmitOneScaleUpTaskMultiReplicaEnabled(
-    const google::protobuf::Map<std::string, datasystem::ChangeNodePb>::value_type &targetNode, bool isNetworkRecovery)
-{
-    bool isVoluntaryScaleDown = false;
-    std::string scaleDownNode = "";
-    ScaleUpMigrationTaskInfo infos;
-    GetScaleUpMigrationTaskInfo(targetNode, infos, isVoluntaryScaleDown, scaleDownNode);
-    if (infos.empty() || (isVoluntaryScaleDown && scaleDownNode != workerAddr_)) {
-        return;
-    }
-    HostPort destDbAddr;
-    std::string destDbName;
-
-    std::string originDestAddr = targetNode.first;
-    if (HashRingEvent::GetDbPrimaryLocation::GetInstance()
-            .NotifyAll(originDestAddr, destDbAddr, destDbName)
-            .IsError()) {
-        return;
-    }
-
-    for (const auto &info : infos) {
-        auto traceId = GetStringUuid();
-        LOG(INFO) << FormatString("Start migrate task from %s srcdbName %s to %s dest dbname %s with traceId %s",
-                                  workerAddr_, info.first, destDbAddr.ToString(), destDbName, traceId);
-        scaleThreadPool_->Execute([this, info, originDestAddr, destDbAddr, destDbName, isNetworkRecovery, traceId] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-            Timer timer;
-            Raii logHelper([&] {
-                LOG(INFO) << FormatString("Finish migrate task from %s srcdbName %s to %s dest dbname %s cost %f ms.",
-                                          workerAddr_, info.first, destDbAddr.ToString(), destDbName,
-                                          timer.ElapsedMilliSecond());
-            });
-            auto status = HashRingEvent::MigrateRanges::GetInstance().NotifyAll(
-                info.first, destDbAddr.ToString(), destDbName, info.second.ranges, isNetworkRecovery);
-            if (status.IsOk()) {
-                RetryHashRingTaskUntil([this, &originDestAddr, &info]() {
-                    auto status = MarkAddNodeInfoFinished(originDestAddr, info.second.srcNode);
-                    HASH_RING_LOG_IF_ERROR(status, "Mark failed.");
-                    return status;
-                });
-            } else {
-                LOG(ERROR) << "Migrate to " << destDbAddr.ToString()
-                           << " failed after retry. Wait for connection restoration or hash ring health check. Status: "
-                           << status.ToString();
-            }
-        });
-    }
 }
 
 Status HashRingTaskExecutor::SubmitMigrateDataTask()
@@ -399,11 +320,7 @@ Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &newNode,
 
 Status HashRingTaskExecutor::SubmitScaleDownTask(const HashRingPb &currRing)
 {
-    if (!multiReplicaEnabled_) {
-        return SubmitScaleDownTaskRecoverFromEtcd(currRing);
-    } else {
-        return SubmitScaleDownTaskMultiReplica(currRing);
-    }
+    return SubmitScaleDownTaskRecoverFromEtcd(currRing);
 }
 
 Status HashRingTaskExecutor::SubmitScaleDownTaskRecoverFromEtcd(const HashRingPb &currRing)
@@ -461,58 +378,6 @@ Status HashRingTaskExecutor::SubmitScaleDownTaskRecoverFromEtcd(const HashRingPb
         RemoveClearDataTask(ranges);
     });
     LOG(INFO) << scaleThreadPool_->GetStatistics();
-    return Status::OK();
-}
-
-Status HashRingTaskExecutor::SubmitScaleDownTaskMultiReplica(const HashRingPb &currRing)
-{
-    auto traceId = GetStringUuid();
-    LOG(INFO) << "Submit scale down task of " << VectorToString(GetKeysFromPairsContainer(currRing.del_node_info()))
-              << " with traceid " << traceId;
-
-    std::unordered_map<std::string, std::string> migrateWorkerAddrForRemoveNodes;
-    for (auto &removeNode : currRing.del_node_info()) {
-        LOG(INFO) << "Process del_node_info: " << removeNode.first;
-        HostPort removeNodePrimaryDbAddr;
-        std::string removeNodeDbName;
-        Status status = HashRingEvent::GetDbPrimaryLocation::GetInstance().NotifyAll(
-            removeNode.first, removeNodePrimaryDbAddr, removeNodeDbName);
-        if (status.IsError()) {
-            LOG(ERROR) << "get primary db addr failed:" << status.ToString();
-            continue;
-        }
-        if (currRing.del_node_info().find(removeNodePrimaryDbAddr.ToString()) != currRing.del_node_info().end()) {
-            LOG(WARNING)
-                << "no worker to handle scale down task, no need excute scale down task, erase del_node_info for :"
-                << removeNode.first;
-            auto func = [removeNode](const std::string &oldValue, std::unique_ptr<std::string> &newValue,
-                                     bool & /* retry */) {
-                HashRingPb oldRing;
-                if (!oldRing.ParseFromString(oldValue)) {
-                    return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
-                }
-                HashRingPb ringAfterClear = oldRing;
-                ringAfterClear.mutable_del_node_info()->erase(removeNode.first);
-                ringAfterClear.mutable_workers()->erase(removeNode.first);
-                newValue = std::make_unique<std::string>(ringAfterClear.SerializeAsString());
-                VLOG(1) << "After mark del_node_info finished: " << MapToString(ringAfterClear.del_node_info());
-                return Status::OK();
-            };
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->CAS(ETCD_RING_PREFIX, "", func),
-
-                                             "[dfx]Scale down failed.");
-        }
-        if (removeNodePrimaryDbAddr.ToString() != workerAddr_) {
-            LOG(INFO) << "removeNode: " << removeNode.first
-                      << " primary db location is : " << removeNodePrimaryDbAddr.ToString() << ", skip";
-            continue;
-        }
-        migrateWorkerAddrForRemoveNodes[removeNode.first] = removeNodePrimaryDbAddr.ToString();
-        LOG(INFO) << "removeNode: " << removeNode.first
-                  << " primary db location is : " << removeNodePrimaryDbAddr.ToString()
-                  << ", need excute scale down migration task";
-        RecoverMetaAndDataOfFaultWorkerByStandbyMaster(removeNodeDbName, currRing, removeNode);
-    };
     return Status::OK();
 }
 

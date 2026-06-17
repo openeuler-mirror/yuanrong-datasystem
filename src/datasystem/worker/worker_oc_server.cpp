@@ -256,8 +256,8 @@ WorkerOCServer::~WorkerOCServer()
 {
     StopConnectionWarmup();
     StopWorkerMasterRpcWarmup();
-    if (replicaManager_ != nullptr) {
-        replicaManager_->Shutdown();
+    if (metadataManagerHolder_ != nullptr) {
+        metadataManagerHolder_->Shutdown();
     }
     HashRingEvent::DataMigrationReady::GetInstance().RemoveSubscriber(WORKER_OC_SERVER);
     checkThreadRunning_ = false;
@@ -279,7 +279,6 @@ WorkerOCServer::~WorkerOCServer()
     streamCacheClientWorkerSvc_.reset();
     streamCacheMasterSvc_.reset();
     etcdCM_.reset();
-    replicaSvc_.reset();
     datasystem::memory::Allocator::Instance()->Shutdown();
 }
 
@@ -453,16 +452,6 @@ Status WorkerOCServer::InitMasterOCService()
     return Status::OK();
 }
 
-Status WorkerOCServer::InitReplicaService()
-{
-    RETURN_IF_NOT_OK(replicaSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
-    cfg.numStreamSockets_ = 0;
-    builder_.AddService(replicaSvc_.get(), cfg);
-    return Status::OK();
-}
-
 Status WorkerOCServer::InitMasterSCService()
 {
     RETURN_OK_IF_TRUE(!EnableSCService());
@@ -539,18 +528,16 @@ void WorkerOCServer::CreateMasterServices()
     commonSvc_->SetClusterManager(etcdCM_.get());
     if (EnableOCService()) {
         // create MasterOCServiceImpl
-        objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
-                                                                   replicaManager_.get(), resourceManager_.get());
+        objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(
+            hostPort_, persistenceApi_, akSkManager_, metadataManagerHolder_.get(), resourceManager_.get());
         objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
     }
     if (EnableSCService()) {
         // create MasterSCServiceImpl
         rpcSessionManager_ = std::make_shared<RpcSessionManager>();
-        streamCacheMasterSvc_ = std::make_unique<MasterSCServiceImpl>(hostPort_, akSkManager_, replicaManager_.get());
+        streamCacheMasterSvc_ =
+            std::make_unique<MasterSCServiceImpl>(hostPort_, akSkManager_, metadataManagerHolder_.get());
         streamCacheMasterSvc_->SetClusterManager(etcdCM_.get());
-    }
-    if (replicaManager_->MultiReplicaEnabled()) {
-        replicaSvc_ = std::make_unique<ReplicationServiceImpl>(hostPort_, replicaManager_.get(), akSkManager_);
     }
 }
 
@@ -619,8 +606,8 @@ void WorkerOCServer::CreateAllServices()
     }
 #ifdef WITH_TESTS
     // create StOCServiceImpl
-    utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), etcdCM_.get(), replicaManager_.get(),
-                                                   akSkManager_);
+    utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), etcdCM_.get(),
+                                                   metadataManagerHolder_.get(), akSkManager_);
 #endif
 }
 
@@ -629,13 +616,11 @@ Status WorkerOCServer::InitializeMasterServices(const ClusterInfo &clusterInfo)
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterService(), "InitMasterService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterOCService(), "InitMasterOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterSCService(), "InitMasterSCService failed");
-    if (replicaManager_->MultiReplicaEnabled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitReplicaService(), "InitReplicaService failed");
-    }
+
     bool isRestart = false;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->IsRestart(isRestart), "Check IsRestart failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(replicaManager_->InitReplicaForStart(isRestart, clusterInfo),
-                                     "InitReplicaForStart failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->InitLocalMetadataForStart(isRestart, clusterInfo),
+                                     "InitLocalMetadataForStart failed");
     return Status::OK();
 }
 
@@ -698,8 +683,6 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
         tableName = CLUSTER_TABLE;
     } else if (key.find(ETCD_RING_PREFIX) != std::string::npos) {
         tableName = HASHRING_TABLE;
-    } else if (event.kv().key().find(ETCD_REPLICA_GROUP_TABLE) != std::string::npos) {
-        tableName = REPLICA_GROUP_TABLE;
     } else {
         LOG(ERROR) << "Event of PrefixType::OTHER, no need to enqueue and handle it.";
         return;
@@ -721,7 +704,6 @@ Status WorkerOCServer::ConstructClusterStore()
     CHECK_FAIL_RETURN_STATUS(clusterStore_ != nullptr, StatusCode::K_RUNTIME_ERROR,
                              "Init rocksdb instance failed, dir: " + clusterInfoRocksDir);
     RETURN_IF_NOT_OK(clusterStore_->CreateTable(HASHRING_TABLE));
-    RETURN_IF_NOT_OK(clusterStore_->CreateTable(REPLICA_GROUP_TABLE));
     RETURN_IF_NOT_OK(clusterStore_->CreateTable(CLUSTER_TABLE));
     return Status::OK();
 }
@@ -812,8 +794,6 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
     // Load all workers from rocksdb and find active nodes in local cluster.
     std::vector<std::string> activeNodesInLocalCluster;
     RETURN_IF_NOT_OK(LoadWorkersFromRocksDb(clusterInfo, activeNodesInLocalCluster));
-    // Load replica group from rocksdb.
-    RETURN_IF_NOT_OK(clusterStore_->GetAll(REPLICA_GROUP_TABLE, clusterInfo.replicaGroups));
     // Reconcile hash ring with other nodes in local cluster based on loaded information.
     std::unordered_map<std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi>, int64_t> api2Tag;
     std::stringstream askNodeInfo;
@@ -930,7 +910,7 @@ Status WorkerOCServer::Init()
         RETURN_IF_NOT_OK(persistenceApi_->Init());
     }
 
-    replicaManager_ = std::make_unique<ReplicaManager>();
+    metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
     resourceManager_ = std::make_unique<master::ResourceManager>();
 
     // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
@@ -961,8 +941,7 @@ Status WorkerOCServer::Init()
         std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, etcdStore_.get(),
-                                                   replicaManager_->MultiReplicaEnabled(), akSkManager_);
+    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, etcdStore_.get(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 
@@ -983,7 +962,7 @@ Status WorkerOCServer::Init()
 
     CreateAllServices();
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitReplicaManager(), "replica manager init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMetadataManagerHolder(), "metadata manager holder init failed");
 
     // after setting ETCD cluster manager, it time to initialize all services
     RETURN_IF_NOT_OK(InitializeAllServices(clusterInfo));
@@ -1010,9 +989,9 @@ Status WorkerOCServer::InitLivenessCheck()
     return Status::OK();
 }
 
-Status WorkerOCServer::InitReplicaManager()
+Status WorkerOCServer::InitMetadataManagerHolder()
 {
-    ReplicaManagerParam param;
+    MetadataManagerHolderParam param;
     param.dbRootPath = FLAGS_rocksdb_store_dir;
     param.currWorkerId = etcdCM_->GetLocalWorkerUuid();
     param.akSkManager = akSkManager_;
@@ -1025,7 +1004,7 @@ Status WorkerOCServer::InitReplicaManager()
     param.rpcSessionManager = rpcSessionManager_;
     param.isOcEnabled = EnableOCService();
     param.isScEnabled = EnableSCService();
-    return replicaManager_->Init(param);
+    return metadataManagerHolder_->Init(param);
 }
 
 void WorkerOCServer::RegisteringAllResourceCollectionCallbackFunc()
@@ -1048,11 +1027,13 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
     instance.RegisterCollectHandler(ResMetricName::SHARED_DISK,
                                     []() { return memory::Allocator::Instance()->GetSharedDiskStatistics(); });
     // The usage of WorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("WorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
+    instance.RegisterCollectHandler(ResMetricName::WORKER_OC_SERVICE_THREAD_POOL, [this]() {
+        return GetRpcServicesUsage("WorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
+    });
     // The usage of WorkerWorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("WorkerWorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
+    instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_OC_SERVICE_THREAD_POOL, [this]() {
+        return GetRpcServicesUsage("WorkerWorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
+    });
     // The total number of clients
     instance.RegisterCollectHandler(ResMetricName::ACTIVE_CLIENT_COUNT,
                                     [] { return std::to_string(ClientManager::Instance().GetClientCount()); });
@@ -1075,12 +1056,14 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
                                         [this]() { return streamCacheClientWorkerSvc_->GetTotalStreamCount(); });
 
         // The usage of WorkerSCService
-        instance.RegisterCollectHandler(ResMetricName::WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("ClientWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
+        instance.RegisterCollectHandler(ResMetricName::WORKER_SC_SERVICE_THREAD_POOL, [this]() {
+            return GetRpcServicesUsage("ClientWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
+        });
 
         // The usage of WorkerSCService
-        instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("WorkerWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
+        instance.RegisterCollectHandler(ResMetricName::WORKER_WORKER_SC_SERVICE_THREAD_POOL, [this]() {
+            return GetRpcServicesUsage("WorkerWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
+        });
 
         instance.RegisterCollectHandler(ResMetricName::STREAM_REMOTE_SEND_SUCCESS_RATE,
                                         [this]() { return streamCacheClientWorkerSvc_->GetSCRemoteSendSuccessRate(); });
@@ -1095,11 +1078,13 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
 {
     auto &instance = ResMetricCollector::Instance();
     // The usage of MasterWorkerOCService
-    instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("MasterWorkerOCService").ToString(FLAGS_log_monitor_interval_ms); });
+    instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_OC_SERVICE_THREAD_POOL, [this]() {
+        return GetRpcServicesUsage("MasterWorkerOCService").ToString(FLAGS_log_monitor_interval_ms);
+    });
     // The usage of MasterOcService
-    instance.RegisterCollectHandler(ResMetricName::MASTER_OC_SERVICE_THREAD_POOL,
-                                    [this]() { return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms); });
+    instance.RegisterCollectHandler(ResMetricName::MASTER_OC_SERVICE_THREAD_POOL, [this]() {
+        return GetRpcServicesUsage("MasterOCService").ToString(FLAGS_log_monitor_interval_ms);
+    });
 
     if (EnableOCService()) {
         if (etcdCM_->IsCurrentNodeMaster()) {
@@ -1122,11 +1107,13 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
 
     if (EnableSCService()) {
         // The usage of MasterWorkerOCService
-        instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("MasterWorkerSCService").ToString(FLAGS_log_monitor_interval_ms); });
+        instance.RegisterCollectHandler(ResMetricName::MASTER_WORKER_SC_SERVICE_THREAD_POOL, [this]() {
+            return GetRpcServicesUsage("MasterWorkerSCService").ToString(FLAGS_log_monitor_interval_ms);
+        });
         // The usage of MasterOcService
-        instance.RegisterCollectHandler(ResMetricName::MASTER_SC_SERVICE_THREAD_POOL,
-                                        [this]() { return GetRpcServicesUsage("MasterSCService").ToString(FLAGS_log_monitor_interval_ms); });
+        instance.RegisterCollectHandler(ResMetricName::MASTER_SC_SERVICE_THREAD_POOL, [this]() {
+            return GetRpcServicesUsage("MasterSCService").ToString(FLAGS_log_monitor_interval_ms);
+        });
     }
 }
 
@@ -1190,9 +1177,8 @@ Status WorkerOCServer::MaybeStartConnectionWarmup()
     RETURN_IF_EXCEPTION_OCCURS(warmupThreadPool_ =
                                    std::make_shared<ThreadPool>(WARMUP_THREAD_NUM, WARMUP_THREAD_NUM, "UrmaWarmup"));
     RaiiPlus cleanupWarmupThreadPool([this]() { ReleaseWarmupThreadPool(); });
-    RETURN_IF_EXCEPTION_OCCURS(warmupControllerThread_ = std::make_unique<Thread>([this]() {
-        RunUrmaWarmupController();
-    }));
+    RETURN_IF_EXCEPTION_OCCURS(warmupControllerThread_ =
+                                   std::make_unique<Thread>([this]() { RunUrmaWarmupController(); }));
     cleanupWarmupThreadPool.ClearAllTask();
     warmupControllerThread_->set_name("UrmaWarmup");
     return Status::OK();
@@ -1270,8 +1256,7 @@ size_t WorkerOCServer::GetUrmaWarmupSuccessCount(std::vector<std::future<bool>> 
 
 bool WorkerOCServer::ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRounds) const
 {
-    return elapsedMs >= WARMUP_MAX_SCAN_MS ||
-           (elapsedMs >= WARMUP_MIN_SCAN_MS && stableRounds >= WARMUP_STABLE_ROUNDS);
+    return elapsedMs >= WARMUP_MAX_SCAN_MS || (elapsedMs >= WARMUP_MIN_SCAN_MS && stableRounds >= WARMUP_STABLE_ROUNDS);
 }
 
 void WorkerOCServer::RunUrmaWarmupController()
@@ -1294,8 +1279,8 @@ void WorkerOCServer::RunUrmaWarmupController()
         auto oldPeerCount = scheduledPeers.size();
         ScheduleUrmaWarmupTasks(workers, scheduledPeers, futures);
 
-        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start).count();
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         stableRounds = scheduledPeers.size() == oldPeerCount ? stableRounds + 1 : 0;
         if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
             break;
@@ -1304,11 +1289,12 @@ void WorkerOCServer::RunUrmaWarmupController()
     }
 
     auto successCount = GetUrmaWarmupSuccessCount(futures);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start).count();
-    LOG(INFO) << FormatString("[URMA_WARMUP] finished actual_success_count=%zu/total_count=%zu, elapsed_ms=%lld, "
-                              "discovered_peer_count=%zu",
-                              successCount, futures.size(), elapsedMs, scheduledPeers.size());
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    LOG(INFO) << FormatString(
+        "[URMA_WARMUP] finished actual_success_count=%zu/total_count=%zu, elapsed_ms=%lld, "
+        "discovered_peer_count=%zu",
+        successCount, futures.size(), elapsedMs, scheduledPeers.size());
 }
 
 Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
@@ -1362,8 +1348,8 @@ void WorkerOCServer::StopWorkerMasterRpcWarmup()
     warmupThreadPool.reset();
 }
 
-bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(
-    const std::string &masterAddr, const std::function<void(const std::string &)> &onSuccess)
+bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(const std::string &masterAddr,
+                                                     const std::function<void(const std::string &)> &onSuccess)
 {
     if (masterAddr.empty() || masterAddr == hostPort_.ToString()) {
         return false;
@@ -1420,8 +1406,8 @@ bool WorkerOCServer::SubmitWorkerMasterRpcWarmupTask(
 }
 
 size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(
-    const std::vector<std::pair<std::string, std::string>> &workers,
-    const std::unordered_set<std::string> *warmedAddrs, const std::function<void(const std::string &)> &onSuccess)
+    const std::vector<std::pair<std::string, std::string>> &workers, const std::unordered_set<std::string> *warmedAddrs,
+    const std::function<void(const std::string &)> &onSuccess)
 {
     size_t scheduledCount = 0;
     for (const auto &worker : workers) {
@@ -1473,8 +1459,7 @@ void WorkerOCServer::WarmupReadyWorkerMasterRpcOnStartup()
                 oldWarmedCount = warmedAddrs->size();
                 warmedSnapshot = *warmedAddrs;
             }
-            auto scheduledCount =
-                ScheduleWorkerMasterRpcWarmupTasks(workers, &warmedSnapshot, markWarmupSucceeded);
+            auto scheduledCount = ScheduleWorkerMasterRpcWarmupTasks(workers, &warmedSnapshot, markWarmupSucceeded);
             totalScheduledCount += scheduledCount;
             {
                 std::lock_guard<std::mutex> lock(*warmedAddrsMutex);
@@ -1485,24 +1470,24 @@ void WorkerOCServer::WarmupReadyWorkerMasterRpcOnStartup()
                 std::lock_guard<std::mutex> lock(masterRpcWarmupMutex_);
                 pendingCount = warmingMasterRpcAddrs_.size();
             }
-            stableRounds = (scheduledCount == 0 && pendingCount == 0 && lastWarmedCount == oldWarmedCount)
-                               ? stableRounds + 1
-                               : 0;
+            stableRounds =
+                (scheduledCount == 0 && pendingCount == 0 && lastWarmedCount == oldWarmedCount) ? stableRounds + 1 : 0;
             lastDiscoveredCount = workers.size();
         }
 
-        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start).count();
+        const auto elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         if (ShouldStopUrmaWarmup(elapsedMs, stableRounds)) {
             break;
         }
         SleepForWarmupScanInterval(masterRpcWarmupExit_, masterRpcWarmupScanCv_, masterRpcWarmupScanMutex_);
     }
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - start).count();
-    LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] startup finished, scheduled_count=%zu, warmup_target_count=%zu, "
-                              "discovered_worker_count=%zu, elapsed_ms=%lld",
-                              totalScheduledCount, lastWarmedCount, lastDiscoveredCount, elapsedMs);
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    LOG(INFO) << FormatString(
+        "[MASTER_RPC_WARMUP] startup finished, scheduled_count=%zu, warmup_target_count=%zu, "
+        "discovered_worker_count=%zu, elapsed_ms=%lld",
+        totalScheduledCount, lastWarmedCount, lastDiscoveredCount, elapsedMs);
 }
 
 void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event &event)
