@@ -164,6 +164,9 @@ Rules for updating baselines:
   - changing third-party flags can invalidate `DS_OPENSOURCE_DIR` cache keys and may change package ABI;
   - changing install paths can break wheel pruning, C++ examples, `find_package(Datasystem)`, Java JNI packaging, or Go
     package validation.
+  - `ASCEND_HIXL_FOUND` means basic HIXL headers and libraries were found. HCCS RH2D is gated separately by
+    `ASCEND_HIXL_HCCS_SUPPORTED`, which requires detected HIXL version `8.5.2+`; lower versions skip
+    `hccs_transport.cpp` while retaining hetero and default ROCE builds.
 - Good first files when a build regression appears:
   - `scripts/build_cmake.sh`
   - `cmake/dependency.cmake`

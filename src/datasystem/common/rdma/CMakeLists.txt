@@ -37,13 +37,13 @@ if (BUILD_HETERO)
         npu/remote_h2d_manager.cpp
         npu/roce_transport.cpp
     )
-    # HCCS transport requires cann_hixl
-    if (ASCEND_HIXL_FOUND)
+    # HCCS transport requires cann_hixl with GlobalResourceConfig support.
+    if (ASCEND_HIXL_HCCS_SUPPORTED)
         list(APPEND URMA_SRCS npu/hccs_transport.cpp)
         # HIXL symbols are used by HCCSTransport; common_rdma's users need to link hixl as well
         set(HCCS_EXTRA_LIBS ${ASCEND_HIXL_LIBRARIES})
     else()
-        message(WARNING "cann_hixl not found, HCCS transport will be disabled")
+        message(WARNING "cann_hixl not found or HIXL version is lower than 8.5.2, HCCS transport will be disabled")
         set(HCCS_EXTRA_LIBS "")
     endif()
 endif()
@@ -59,7 +59,7 @@ target_link_libraries(common_rdma
     PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS} meta_transport_protos_client share_memory_protos_client
     PUBLIC ${HCCS_EXTRA_LIBS})
 
-# Propagate HIXL availability to source files via compile definition
-if (ASCEND_HIXL_FOUND)
+# Propagate HCCS transport availability to source files via compile definition
+if (ASCEND_HIXL_HCCS_SUPPORTED)
     target_compile_definitions(common_rdma PRIVATE ASCEND_HIXL_AVAILABLE)
 endif()

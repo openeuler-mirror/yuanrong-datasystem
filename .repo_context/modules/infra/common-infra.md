@@ -111,6 +111,9 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
+  - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
+    CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
+    because `hccs_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined.
   - `os_transport_pipeline` is optional and only exists when pipeline H2D support is enabled.
 
 ## Observability Notes
