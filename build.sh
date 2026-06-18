@@ -308,6 +308,8 @@ function main() {
   local sumTime
   start_time_s=$(date +%s)
 
+  normalize_build_options
+
   # Auto-detect Ascend environment for BUILD_HETERO
   if is_on "${BUILD_HETERO}" && ! check_ascend_env; then
     echo -e "-- [Warning] Ascend toolkit not found in the environment (checked: \$ASCEND_HOME_PATH, \$ASCEND_CUSTOM_PATH, /usr/local/Ascend/ascend-toolkit/latest). Setting -X to off. The build will not include Ascend capabilities."

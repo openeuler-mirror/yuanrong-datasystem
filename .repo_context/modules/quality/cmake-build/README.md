@@ -117,7 +117,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | `-X on/off` | `BUILD_HETERO` | `on` | Adds hetero compile definitions and device/plugin dependencies. |
 | internal CMake default | `BUILD_HETERO_NPU` | `on` | Enables Ascend/NPU backend when hetero is on. |
 | extra CMake option only | `BUILD_HETERO_GPU` | `off` | Enables CUDA/GPU backend when hetero is on. |
-| `-T on` | `BUILD_PIPLN_H2D` | `off` | Requires `BUILD_WITH_URMA`; adds OS transport pipeline. |
+| `-T on` | `BUILD_PIPLN_H2D` | `off` | Temporarily ignored and forced back to `off`; Pipeline H2D currently remains disabled even when requested. |
 | `-M on` | `BUILD_WITH_URMA` | `off` | Adds URMA dependency and RDMA-related source. |
 | `-A on` | `BUILD_WITH_RDMA` | `off` | Adds UCX and rdma-core checks/source. |
 | `-s on/off` | `ENABLE_STRIP` | `on` | Controls install/package stripping and symbol sidecars. |
