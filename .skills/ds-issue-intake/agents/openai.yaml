@@ -1,0 +1,4 @@
+interface:
+  display_name: "DS Issue Intake"
+  short_description: "Fetch GitCode issues and produce sanitized task specs"
+  default_prompt: "Use $ds-issue-intake to prepare a development task from this issue."
