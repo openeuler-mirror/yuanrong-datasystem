@@ -492,6 +492,14 @@ Status KVClient::QuerySize(const std::vector<std::string> &objectKeys, std::vect
     return impl_->QuerySize(objectKeys, outSizes);
 }
 
+Status KVClient::UpdateConfig(const std::string &configJson)
+{
+    if (!impl_) {
+        return Status(StatusCode::K_INVALID, "UpdateConfig: client not initialized");
+    }
+    return impl_->UpdateConfig(configJson);
+}
+
 Status KVClient::HealthCheck()
 {
     ServerState state;

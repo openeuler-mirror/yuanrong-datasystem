@@ -135,8 +135,9 @@ public:
     /**
      * @brief Dynamically update the value of the flag parameter.
      * @param[in] flagMap The flag parameter and value parsed from the configuration file
+     * @return K_OK on success; the error code otherwise.
      */
-    void UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap);
+    Status UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap);
 
     /**
      * @brief Cut off all spaces before and after a string.
@@ -164,6 +165,18 @@ public:
      */
     bool ValidateSpecial(const std::string &flagName, const std::string &newVal);
 
+    /**
+     * @brief Dry-run special validation for one pending dynamic update.
+     * @param[in] flagMap Pending flag updates.
+     * @param[in] flagName Flag name to validate.
+     * @param[in] newVal Proposed new value.
+     * @param[out] errMsg Error message when validation fails.
+     * @return True when special constraints pass; false otherwise.
+     */
+    bool ValidateSpecialConstraint(const std::unordered_map<std::string, std::string> &flagMap,
+                                   const std::string &flagName, const std::string &newVal,
+                                   std::string &errMsg);
+
 private:
     using clock = std::chrono::steady_clock;
 
@@ -171,36 +184,6 @@ private:
                                                           "system_data_key",   "sc_encrypt_secret_key",
                                                           "tenant_access_key", "tenant_secret_key",
                                                           "obs_access_key",    "obs_secret_key" };
-
-    // Only the flag parameter in the flagNameTrustList can be dynamically modified.
-    const std::unordered_set<std::string> flagNameTrustList_{ "v",
-                                                              "minloglevel",
-                                                              "log_monitor",
-                                                              "log_async_queue_size",
-                                                              "log_compress",
-                                                              "max_log_file_num",
-                                                              "arena_per_tenant",
-                                                              "node_dead_timeout_s",
-                                                              "client_reconnect_wait_s",
-                                                              "spill_file_max_size_mb",
-                                                              "spill_file_open_limit",
-                                                              "spill_size_limit",
-                                                              "heartbeat_interval_ms",
-                                                              "add_node_wait_time_s",
-                                                              "async_delete",
-                                                              "auto_del_dead_node",
-                                                              "enable_hash_ring_self_healing",
-                                                              "shared_disk_arena_per_tenant",
-                                                              "enable_lossless_data_exit_mode",
-                                                              "urma_failover_success_rate_ratio",
-                                                              "urma_failover_min_sample_count",
-                                                              "request_sample_rate",
-                                                              "access_sample_rate",
-                                                              "diagnostic_sample_rate",
-#ifdef WITH_TESTS
-                                                              "inject_actions"
-#endif
-    };
 
     // Setting the interval for checking the configuration file. (Default: 10s)
     const uint64_t TRIGGER_CONFIG_CHECK_NANO_INTERVAL = 10UL * 1000UL * 1000UL * 1000UL;
@@ -218,8 +201,10 @@ private:
     std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> isToHandle_;
     std::function<bool(const std::string &, const std::string &)> validateSpecial_;
 
-    void UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
-                          const std::string &flagName, const std::string &newVal);
+    Status UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
+                            const std::string &flagName, const std::string &newVal);
+
+    void RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals);
 
     bool ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap);
 

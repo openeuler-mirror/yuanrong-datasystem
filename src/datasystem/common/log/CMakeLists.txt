@@ -3,6 +3,7 @@ add_subdirectory(spdlog)
 set(LOG_SRCS
         log_manager.cpp
         logging.cpp
+        operation_logger.cpp
         access_recorder.cpp
         trace.cpp
         failure_handler.cpp

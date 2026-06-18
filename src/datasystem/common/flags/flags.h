@@ -32,17 +32,20 @@ class KVClientConfig;
 }
 
 // clang-format off
-#define DS_DEFINE_TYPE(name, defvalue, meaning, type, shorttype, enumtype)                                 \
+#define DS_DEFINE_TYPE_EX(name, defvalue, meaning, type, shorttype, enumtype, modifiable)                  \
     namespace datasystem {                                                                                 \
     namespace fl##shorttype {                                                                              \
         static const type FLAGS_def##name = defvalue;                                                      \
         static type FLAGS_no##name = FLAGS_def##name;                                                      \
         type FLAGS_##name = FLAGS_def##name;                                                               \
         static FlagRegisterHelper helper_##name(#name, enumtype, meaning, __FILE__, (void *)&FLAGS_##name, \
-                                                (void *)&FLAGS_no##name);                                  \
+                                                (void *)&FLAGS_no##name, modifiable);                      \
     }                                                                                                      \
     }                                                                                                      \
     using ::datasystem::fl##shorttype::FLAGS_##name
+
+#define DS_DEFINE_TYPE(name, defvalue, meaning, type, shorttype, enumtype) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, type, shorttype, enumtype, false)
 
 #define DS_DECLARE_TYPE(name, type, shorttype) \
     namespace datasystem {                     \
@@ -53,43 +56,64 @@ class KVClientConfig;
     using ::datasystem::fl##shorttype::FLAGS_##name
 
 #define DS_DEFINE_bool(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, bool, B, FLAG_BOOL)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, bool, B, FLAG_BOOL, false)
+
+#define DS_DEFINE_bool_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, bool, B, FLAG_BOOL, true)
 
 #define DS_DECLARE_bool(name) \
     DS_DECLARE_TYPE(name, bool, B)
 
 #define DS_DEFINE_int32(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, int32_t, I32, FLAG_INT32)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, int32_t, I32, FLAG_INT32, false)
+
+#define DS_DEFINE_int32_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, int32_t, I32, FLAG_INT32, true)
 
 #define DS_DECLARE_int32(name) \
     DS_DECLARE_TYPE(name, int32_t, I32)
 
 #define DS_DEFINE_uint32(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, uint32_t, U32, FLAG_UINT32)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, uint32_t, U32, FLAG_UINT32, false)
+
+#define DS_DEFINE_uint32_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, uint32_t, U32, FLAG_UINT32, true)
 
 #define DS_DECLARE_uint32(name) \
     DS_DECLARE_TYPE(name, uint32_t, U32)
 
 #define DS_DEFINE_int64(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, int64_t, I64, FLAG_INT64)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, int64_t, I64, FLAG_INT64, false)
+
+#define DS_DEFINE_int64_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, int64_t, I64, FLAG_INT64, true)
 
 #define DS_DECLARE_int64(name) \
     DS_DECLARE_TYPE(name, int64_t, I64)
 
 #define DS_DEFINE_uint64(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, uint64_t, U64, FLAG_UINT64)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, uint64_t, U64, FLAG_UINT64, false)
+
+#define DS_DEFINE_uint64_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, uint64_t, U64, FLAG_UINT64, true)
 
 #define DS_DECLARE_uint64(name) \
     DS_DECLARE_TYPE(name, uint64_t, U64)
 
 #define DS_DEFINE_string(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, std::string, S, FLAG_STRING)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, std::string, S, FLAG_STRING, false)
+
+#define DS_DEFINE_string_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, std::string, S, FLAG_STRING, true)
 
 #define DS_DECLARE_string(name) \
     DS_DECLARE_TYPE(name, std::string, S)
 
 #define DS_DEFINE_double(name, defvalue, meaning) \
-    DS_DEFINE_TYPE(name, defvalue, meaning, double, D, FLAG_DOUBLE)
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, double, D, FLAG_DOUBLE, false)
+
+#define DS_DEFINE_double_dynamic(name, defvalue, meaning) \
+    DS_DEFINE_TYPE_EX(name, defvalue, meaning, double, D, FLAG_DOUBLE, true)
 
 #define DS_DECLARE_double(name) \
     DS_DECLARE_TYPE(name, double, D)
@@ -363,7 +387,7 @@ enum FlagType {
 class FlagRegisterHelper {
 public:
     FlagRegisterHelper(const std::string &name, FlagType type, const std::string &meaning, const std::string &filename,
-                       void *currentVal, void *defaultVal);
+                       void *currentVal, void *defaultVal, bool modifiable = false);
 };
 }  // namespace datasystem
 

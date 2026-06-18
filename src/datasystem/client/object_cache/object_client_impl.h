@@ -369,6 +369,13 @@ public:
     Status UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey);
 
     /**
+     * @brief Apply runtime flag updates from a JSON object.
+     * @param[in] configJson JSON object mapping flag names to string values.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status UpdateConfig(const std::string &configJson);
+
+    /**
      * @brief Invoke worker client to set the value of a key.
      * @param[in] val The value for the key.
      * @param[in] setParam The param for set operation.

@@ -134,3 +134,15 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+# Operation audit logger test
+ds_cc_test(
+    name = "operation_logger_test",
+    srcs = ["operation_logger_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/util:file_util",
+        "@com_google_googletest//:gtest",
+    ],
+)

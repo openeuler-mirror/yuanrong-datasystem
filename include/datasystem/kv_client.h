@@ -404,6 +404,14 @@ public:
      */
     Status QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes);
 
+    /**
+     * @brief Apply runtime flag updates from a JSON object.
+     * @param[in] configJson JSON object mapping flag names to string values.
+     * @return K_OK on success; the error code otherwise.
+     *         K_INVALID: JSON invalid, flag not modifiable, value invalid, or file monitor is active.
+     */
+    Status UpdateConfig(const std::string &configJson);
+
     /// \brief Worker health check.
     ///
     /// \return K_OK on any object success; the error code otherwise.

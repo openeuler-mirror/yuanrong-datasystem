@@ -1,3 +1,10 @@
+set(WORKER_UPDATE_FLAG_CHECK_DEPEND_LIBS
+        common_util
+        common_log
+        )
+
+add_library(worker_update_flag_check STATIC worker_update_flag_check.cpp)
+target_link_libraries(worker_update_flag_check PRIVATE ${WORKER_UPDATE_FLAG_CHECK_DEPEND_LIBS})
 
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
@@ -12,7 +19,6 @@ set(WORKER_SRCS
         worker_service_impl.cpp
         worker_oc_server.cpp
         worker_liveness_check.cpp
-        worker_update_flag_check.cpp
         worker_cli.cpp
         worker_flags.cpp
         worker.cpp
@@ -48,6 +54,7 @@ set(WORKER_DEPEND_LIBS
         rpc_stub_cache_mgr
         worker_hash_ring
         worker_client_manager
+        worker_update_flag_check
         cluster_manager
         )
 

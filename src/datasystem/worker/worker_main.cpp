@@ -85,11 +85,8 @@ void LogSetWorkerSchedRuntimeResult(const SetSchedRuntimeResult &result)
     LOG(INFO) << "Set worker sched runtime to " << GetWorkerSchedRuntimeNs() << " ns.";
 }
 
-int main(int argc, char **argv)
+int InitWorkerOrExit(Flags &flags, int argc, char **argv, const SetSchedRuntimeResult &setSchedRuntimeResult)
 {
-    auto setSchedRuntimeResult = SetWorkerSchedRuntime();
-
-    Flags flags;
     auto rc = Worker::GetInstance()->Init(flags, argc, argv);
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
@@ -100,45 +97,62 @@ int main(int argc, char **argv)
     if (!IsTermSignalReceived()) {
         LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
     }
-    PerfManager *perfManager = PerfManager::Instance();
+    return 0;
+}
 
+void RunWorkerUntilSignal(Flags &flags, PerfManager *perfManager)
+{
     Timer timer;
-    {
-        std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
-        while (!IsTermSignalReceived()) {
-            bool signalReceived = g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
-                                                          [] { return IsTermSignalReceived(); });
-            if (signalReceived) {
-                break;
-            }
-            auto elapsedMs = timer.ElapsedMilliSecondAndReset();
-            if (elapsedMs > REPORTING_THRESHOLD_MS) {
-                LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
-            }
-            if (perfManager != nullptr) {
-                perfManager->Tick();
-            }
-            metrics::Tick();
-            // Check whether the configuration file is updated every 10 seconds.
+    std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
+    while (!IsTermSignalReceived()) {
+        bool signalReceived = g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
+                                                      [] { return IsTermSignalReceived(); });
+        if (signalReceived) {
+            break;
+        }
+        auto elapsedMs = timer.ElapsedMilliSecondAndReset();
+        if (elapsedMs > REPORTING_THRESHOLD_MS) {
+            LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
+        }
+        if (perfManager != nullptr) {
+            perfManager->Tick();
+        }
+        metrics::Tick();
+        if (!FLAGS_monitor_config_file.empty()) {
             flags.MonitorConfigFile(FLAGS_monitor_config_file);
         }
     }
-    if (perfManager != nullptr) {
-        perfManager->PrintPerfLog();
-    }
-    metrics::PrintSummary();
+}
 
-    rc = Worker::GetInstance()->PreShutDown();
+int ShutdownWorkerOrExit()
+{
+    auto rc = Worker::GetInstance()->PreShutDown();
     if (rc.IsError()) {
         LOG(ERROR) << "Worker preShutDown error:" << rc.ToString();
         LOG_IF_ERROR(Worker::GetInstance()->ShutDown(), "worker preshutdown failed");
         return -1;
     }
-
     rc = Worker::GetInstance()->ShutDown();
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
         return -1;
     }
     return 0;
+}
+
+int main(int argc, char **argv)
+{
+    auto setSchedRuntimeResult = SetWorkerSchedRuntime();
+    Flags flags;
+    int initRc = InitWorkerOrExit(flags, argc, argv, setSchedRuntimeResult);
+    if (initRc != 0) {
+        return initRc;
+    }
+    PerfManager *perfManager = PerfManager::Instance();
+    RunWorkerUntilSignal(flags, perfManager);
+    if (perfManager != nullptr) {
+        perfManager->PrintPerfLog();
+    }
+    metrics::PrintSummary();
+    return ShutdownWorkerOrExit();
 }

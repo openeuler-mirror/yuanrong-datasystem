@@ -55,6 +55,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/parallel/parallel_for.h"
@@ -66,6 +67,8 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/gflag/dynamic_config_updater.h"
+#include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -138,6 +141,12 @@ void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
     }
     std::mt19937 generator(static_cast<uint32_t>(RandomData::GetRandomSeed()));
     std::shuffle(candidates.begin(), candidates.end(), generator);
+}
+
+void LogClientConfigInitSnapshot()
+{
+    Flags flags;
+    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
 }
 
 std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &clientConfig)
@@ -442,6 +451,7 @@ Status ObjectClientImpl::InitEmbedded(const EmbeddedConfig &config, bool &needRo
     FlagsMonitor::GetInstance()->Start();
     LOG(INFO) << "Start to init embedded client";
     RETURN_IF_NOT_OK(InitClientWorkerConnect(false, true));
+    LogClientConfigInitSnapshot();
     return Status::OK();
 }
 
@@ -706,7 +716,8 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
     }
     RETURN_IF_NOT_OK(rc);
     OsXprtPipln::SwitchToAndGetGpuId(deviceId_);
-    return rc;
+    LogClientConfigInitSnapshot();
+    return Status::OK();
 }
 
 Status ObjectClientImpl::InitWithServiceDiscovery(bool enableHeartbeat)
@@ -2261,6 +2272,24 @@ Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return workerApi->UpdateAkSk(accessKey, secretKey);
+}
+
+Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_kvClientConfigMutex);
+        if (g_hasKvClientProcessConfig) {
+            auto it = g_kvClientProcessConfig.find("monitor_config_file");
+            if (it != g_kvClientProcessConfig.end() && !it->second.empty()) {
+                const std::string reason =
+                    "UpdateConfig: MonitorConfigPath must be empty when using UpdateConfig API";
+                OperationLogger::Instance().LogConfigFailed("UpdateConfig", reason);
+                return Status(StatusCode::K_INVALID, reason);
+            }
+        }
+    }
+    DynamicConfigUpdater updater(FlagsMonitor::GetInstance()->GetFlags());
+    return updater.ApplyJson(configJson, "UpdateConfig");
 }
 
 Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,

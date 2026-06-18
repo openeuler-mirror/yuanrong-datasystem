@@ -1,11 +1,14 @@
 set(GFLAG_SRCS
         common_gflags_validate.cpp
+        config_monitor_state.cpp
+        dynamic_config_updater.cpp
         flags.cpp)
  	 
 set(GFLAG_LIBS
         ${ZLIB_LIBRARIES}
         ${SECUREC_LIBRARY}
-        common_log)
+        common_log
+        nlohmann_json::nlohmann_json)
   
  	 
 add_library(common_util_gflag STATIC ${GFLAG_SRCS})

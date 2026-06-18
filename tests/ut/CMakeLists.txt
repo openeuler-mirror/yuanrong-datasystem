@@ -35,6 +35,13 @@ set(DS_UT_DEPEND_LIBS
         datasystem_worker_static
         )
 
+# common_util/thread_local.cpp defines thread_local ZmqMessage; minimal UT targets need
+# common_rpc_zmq to resolve ZmqMessage ctor/dtor at link time.
+set(DS_UT_COMMON_UTIL_EXTRA_LIBS common_rpc_zmq)
+# Wrap heavy UT link lines: GNU ld scans each static archive once unless grouped.
+set(DS_UT_HEAVY_LINK_START -Wl,--start-group)
+set(DS_UT_HEAVY_LINK_END -Wl,--end-group)
+
 #include dirs
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${PROJECT_DIR}/src)
@@ -61,6 +68,10 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/log/log_performance_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/operation_logger_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/dynamic_config_updater_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_monitor_gate_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
 
 if (NOT BUILD_WITH_RDMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
@@ -97,9 +108,23 @@ add_executable(ds_ut_slot_store
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
 
-target_link_libraries(ds_ut PRIVATE ${DS_UT_DEPEND_LIBS})
-target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache datasystem_worker_static)
-target_link_libraries(ds_ut_object PRIVATE ${DS_UT_DEPEND_LIBS})
+target_link_libraries(ds_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
+target_link_libraries(ds_ut_stream PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        worker_stream_cache
+        datasystem_worker_static
+        ${DS_UT_HEAVY_LINK_END})
+target_link_libraries(ds_ut_object PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(ds_ut_slot_store PRIVATE
         GTest::gtest
         GTest::gmock
@@ -140,11 +165,94 @@ add_ds_ut_executable(log_perf_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/log/log_performance_test.cpp"
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
-target_link_libraries(log_perf_ut PRIVATE ${DS_UT_DEPEND_LIBS})
+target_link_libraries(log_perf_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 
-add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
-target_link_libraries(flags_ut ds_flags common_util ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
+add_executable(flags_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
+target_link_libraries(flags_ut
+        ds_flags
+        common_util
+        nlohmann_json::nlohmann_json
+        ${SECUREC_LIBRARY}
+        GTest::gtest
+        GTest::gmock
+        -Wl,--whole-archive
+        common_etcd
+        common_shared_memory
+        worker_object_cache
+        datasystem_worker_static
+        -Wl,--no-whole-archive)
 add_datasystem_test(flags_ut)
+
+add_executable(util_flags_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_test.cpp"
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+target_link_libraries(util_flags_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        common_util_gflag
+        ${DS_UT_HEAVY_LINK_END})
+add_datasystem_test(util_flags_ut)
+
+add_executable(operation_logger_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/log/operation_logger_test.cpp")
+target_link_libraries(operation_logger_ut
+        common_log
+        ds_flags
+        common_util
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${SECUREC_LIBRARY}
+        GTest::gtest
+        GTest::gmock)
+add_datasystem_test(operation_logger_ut)
+
+add_executable(dynamic_config_updater_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/dynamic_config_updater_test.cpp"
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+target_link_libraries(dynamic_config_updater_ut
+        common_util_gflag
+        common_log
+        ds_flags
+        common_util
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        nlohmann_json::nlohmann_json
+        ${SECUREC_LIBRARY}
+        GTest::gtest
+        GTest::gmock)
+add_datasystem_test(dynamic_config_updater_ut)
+
+add_executable(flags_monitor_gate_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_monitor_gate_test.cpp"
+        "${CMAKE_SOURCE_DIR}/src/datasystem/client/client_flags_monitor.cpp"
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+target_link_libraries(flags_monitor_gate_ut
+        common_util_gflag
+        common_log
+        ds_flags
+        common_util
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${SECUREC_LIBRARY}
+        GTest::gtest
+        GTest::gmock)
+add_datasystem_test(flags_monitor_gate_ut)
+
+add_executable(flags_config_monitor_ut
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_config_monitor_test.cpp"
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
+target_link_libraries(flags_config_monitor_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
+        ${DS_UT_DEPEND_LIBS}
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        common_util_gflag
+        ${DS_UT_HEAVY_LINK_END})
+add_datasystem_test(flags_config_monitor_ut)
 
 if (BUILD_HETERO AND BUILD_HETERO_NPU)
     add_subdirectory(device/ascend)

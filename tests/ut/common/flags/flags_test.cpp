@@ -18,6 +18,7 @@
  * Description: flags test.
  */
 
+#include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -45,6 +46,7 @@ DS_DEFINE_int64(int64_flag, 64, "uint32 variable test");
 DS_DEFINE_string(str_flag, "default", "uint32 variable test");
 DS_DEFINE_double(double_flag, 1.0, "double variable test");
 DS_DEFINE_double(invalid_double_flag, 1.0, "invalid double variable test");
+DS_DEFINE_int32_dynamic(test_modifiable_flag, 7, "ut dynamic flag");
 
 DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_bool(log_async);
@@ -1097,6 +1099,39 @@ TEST_F(FlagsTest, GetExplicitDeclaredFlagsIncludesRuntimeModified)
         }
     }
     EXPECT_TRUE(args.str().find("--uint32_flag=") != args.str().npos);
+}
+
+TEST_F(FlagsTest, ModifiableFlagRegistration)
+{
+    EXPECT_TRUE(FlagManager::GetInstance()->IsModifiableFlag("test_modifiable_flag"));
+    EXPECT_FALSE(FlagManager::GetInstance()->IsModifiableFlag("int32_flag"));
+    std::vector<std::string> names;
+    FlagManager::GetInstance()->GetModifiableFlagNames(names);
+    EXPECT_THAT(names, testing::Contains("test_modifiable_flag"));
+}
+
+TEST_F(FlagsTest, ValidateChangeRejectsInvalidValue)
+{
+    std::string errMsg;
+    EXPECT_FALSE(FlagManager::GetInstance()->ValidateChange("test_modifiable_flag", "not_a_number", errMsg));
+    EXPECT_FALSE(errMsg.empty());
+    EXPECT_EQ(FLAGS_test_modifiable_flag, 7);
+}
+
+TEST_F(FlagsTest, ValidateChangeAcceptsValidValueWithoutMutatingFlag)
+{
+    std::string errMsg;
+    EXPECT_TRUE(FlagManager::GetInstance()->ValidateChange("test_modifiable_flag", "42", errMsg));
+    EXPECT_TRUE(errMsg.empty());
+    EXPECT_EQ(FLAGS_test_modifiable_flag, 7);
+}
+
+TEST_F(FlagsTest, ValidateChangeRejectsNonModifiableFlag)
+{
+    std::string errMsg;
+    EXPECT_FALSE(FlagManager::GetInstance()->ValidateChange("int32_flag", "64", errMsg));
+    EXPECT_TRUE(errMsg.find("not modifiable") != errMsg.npos);
+    EXPECT_EQ(FLAGS_int32_flag, 32);
 }
 }  // namespace ut
 }  // namespace datasystem

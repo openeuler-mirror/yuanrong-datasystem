@@ -73,10 +73,10 @@ DS_DEFINE_string(remote_h2d_hccs_buffer_pool, "4:8",
 DS_DEFINE_string(urma_mode, "UB", "[DEPRECATED] This flag is no longer used and will be removed in a future version.");
 DS_DEFINE_bool(enable_urma, false, "Option to turn on urma for OC worker to worker data transfer, default false.");
 DS_DEFINE_bool(enable_transport_fallback, true, "Enable the fast transport fallback to tcp transport.");
-DS_DEFINE_double(urma_failover_success_rate_ratio, 0.5,
+DS_DEFINE_double_dynamic(urma_failover_success_rate_ratio, 0.5,
                  "Client-side URMA data-plane success-rate ratio threshold for worker failover. If the window success "
                  "rate is below this ratio, the client tries to switch worker. 0.0 disables URMA failover.");
-DS_DEFINE_uint32(urma_failover_min_sample_count, 5,
+DS_DEFINE_uint32_dynamic(urma_failover_min_sample_count, 5,
                  "Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.");
 DS_DEFINE_uint32(
     eviction_reserve_mem_threshold_mb, 10240,
@@ -95,13 +95,13 @@ DS_DEFINE_double(spill_high_watermark_ratio, 0.8,
 DS_DEFINE_double(spill_low_watermark_ratio, 0.6,
                  "Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99. "
                  "Must be less than spill_high_watermark_ratio.");
-DS_DEFINE_uint32(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
+DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
 DS_DEFINE_uint64(stream_idle_time_s, 5 * 60, "stream idle time. default 300s (5 minutes)");
 DS_DEFINE_int64(payload_nocopy_threshold, 1048576L * 100L, "minimum payload size to trigger no memory copy");
 DS_DEFINE_bool(enable_multi_stubs, false, "deprecated");
 DS_DEFINE_bool(enable_tcp_direct_for_multi_stubs, false, "deprecated");
-DS_DEFINE_bool(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
-DS_DEFINE_bool(auto_del_dead_node, true, "Decide whether to remove the node from hash ring or not when node is dead");
+DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
+DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash ring when enabled.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"
                "default is disable.");

@@ -43,7 +43,6 @@ set(COMMON_RPC_ZMQ_SRCS
         zmq/zmq_context.cpp
         zmq/zmq_epoll.cpp
         zmq/zmq_msg_decoder.cpp
-        zmq/zmq_message.cpp
         zmq/zmq_monitor.cpp
         zmq/zmq_payload.cpp
         zmq/zmq_server_impl.cpp

@@ -20,6 +20,8 @@
 #include <cstring>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/gflag/config_monitor_state.h"
+#include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_string(monitor_config_file);
@@ -49,27 +51,42 @@ FlagsMonitor::~FlagsMonitor()
     }
 }
 
+bool FlagsMonitor::IsMonitorThreadRunning() const
+{
+    return monitorThread_.joinable();
+}
+
+Flags &FlagsMonitor::GetFlags()
+{
+    return flags_;
+}
+
 void FlagsMonitor::Start()
 {
-    LOG(INFO) << "Start the thread for listening to the log configuration file.";
     bool expected = false;
-    if (isStarted_.compare_exchange_strong(expected, true)) {
-        monitorThread_ = std::thread(&FlagsMonitor::ListenConfigFile, this);
+    if (!isStarted_.compare_exchange_strong(expected, true)) {
+        return;
     }
+    std::string configFilePath = GetStringFromEnv("DATASYSTEM_CLIENT_CONFIG_PATH", FLAGS_monitor_config_file);
+    Status rc = Uri::NormalizePathWithUserHomeDir(configFilePath, "", "");
+    if (rc.IsError() || configFilePath.empty()) {
+        LOG(INFO) << "Skip config file monitor: empty monitor path";
+        ConfigMonitorState::Instance().SetFileMonitorEnabled(false);
+        isStarted_ = false;
+        return;
+    }
+    configFilePath_ = configFilePath;
+    ConfigMonitorState::Instance().SetFileMonitorEnabled(true);
+    LOG(INFO) << "Start the thread for listening to the log configuration file.";
+    monitorThread_ = std::thread(&FlagsMonitor::ListenConfigFile, this);
 }
 
 void FlagsMonitor::ListenConfigFile()
 {
     std::unique_lock<std::mutex> lock(mutex_);
-    std::string configFilePath = GetStringFromEnv("DATASYSTEM_CLIENT_CONFIG_PATH", FLAGS_monitor_config_file);
-    Status rc = Uri::NormalizePathWithUserHomeDir(configFilePath, "", "");
-    LOG_IF_ERROR(rc, FormatString("Failed to normalize the path (%s) with user home directory", configFilePath));
-    if (rc.IsError()) {
-        return;
-    }
-    LOG(INFO) << "The path of the configuration file is:" << configFilePath;
+    LOG(INFO) << "The path of the configuration file is:" << configFilePath_;
     while (!stop_) {
-        flags_.StartConfigFileHandle(configFilePath, std::chrono::steady_clock::now());
+        flags_.StartConfigFileHandle(configFilePath_, std::chrono::steady_clock::now());
         condition_.wait_for(lock, std::chrono::seconds(LISTENGING_FILE_TIME_INTERVAL));
     }
 }

@@ -28,9 +28,9 @@
 #include "datasystem/worker/worker_update_flag_check.h"
 #include "datasystem/common/util/gflag/flags.h"
 
-DS_DEFINE_string(worker_address, "", "");
-
 DS_DECLARE_int32(heartbeat_interval_ms);
+DS_DECLARE_uint32(node_dead_timeout_s);
+DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_bool(log_compress);
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(log_async_queue_size);
@@ -85,7 +85,7 @@ TEST_F(FlagsTest, TestUpdateFlagParameter)
     std::unordered_map<std::string, std::string> flagMap{ { "v", "3" },
                                                           { "max_log_file_num", "20" },
                                                           { "logbufsecs", "15" } };
-    flag.UpdateFlagParameter(flagMap);
+    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_v, 3);
     EXPECT_EQ(FLAGS_max_log_file_num, 20ul);
     EXPECT_EQ(FLAGS_logbufsecs, 15);  // 15s
@@ -126,15 +126,17 @@ TEST_F(FlagsTest, TestFindFirstSeparator)
 
 TEST_F(FlagsTest, TestProcessOptions)
 {
+    auto oldLogAsyncQueueSize = FLAGS_log_async_queue_size;
     Flags flag;
     std::string fileContext =
         "-heartbeat_interval_ms=10\n--v=3\r\n-log_async_queue_size=4096\r-log_compress=false\t-max_log_file_num=22 "
         "-arena_per_tenant=30";
     auto flagMap = flag.ProcessOptions(fileContext);
-    flag.UpdateFlagParameter(flagMap);
+    EXPECT_EQ(flagMap.count("log_async_queue_size"), 0ul);
+    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_heartbeat_interval_ms, 10);
     EXPECT_EQ(FLAGS_v, 3);
-    EXPECT_EQ(FLAGS_log_async_queue_size, static_cast<uint32_t>(4096));
+    EXPECT_EQ(FLAGS_log_async_queue_size, oldLogAsyncQueueSize);
     EXPECT_FALSE(FLAGS_log_compress);
     EXPECT_EQ(FLAGS_max_log_file_num, static_cast<uint32_t>(22));
     EXPECT_EQ(FLAGS_arena_per_tenant, static_cast<uint32_t>(30));
@@ -151,7 +153,7 @@ TEST_F(FlagsTest, TestProcessOptionsUpdatesRuntimeLogControlFlags)
     auto flagMap = flag.ProcessOptions("-minloglevel=2\n-log_monitor=false");
     EXPECT_EQ(flagMap.count("minloglevel"), 1ul);
     EXPECT_EQ(flagMap.count("log_monitor"), 1ul);
-    flag.UpdateFlagParameter(flagMap);
+    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_minloglevel, 2);
     EXPECT_FALSE(FLAGS_log_monitor);
 
@@ -167,6 +169,36 @@ TEST_F(FlagsTest, TestWorkerFlagValidateSpecial)
     flagName = "heartbeat_interval_ms";
     newVal = "70000";
     EXPECT_TRUE(WorkerFlagValidateSpecial(flagName, newVal));
+}
+
+TEST_F(FlagsTest, TestAdjustNodeTimeoutFlagsClampsHeartbeatIntervalMs)
+{
+    auto oldNodeTimeoutS = FLAGS_node_timeout_s;
+    auto oldNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
+    auto oldHeartbeatIntervalMs = FLAGS_heartbeat_interval_ms;
+    FLAGS_node_timeout_s = 3;
+    FLAGS_node_dead_timeout_s = 8;
+    FLAGS_heartbeat_interval_ms = 1000;
+    AdjustNodeTimeoutFlags();
+    EXPECT_EQ(FLAGS_heartbeat_interval_ms, 750);
+    FLAGS_node_timeout_s = oldNodeTimeoutS;
+    FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS;
+    FLAGS_heartbeat_interval_ms = oldHeartbeatIntervalMs;
+}
+
+TEST_F(FlagsTest, TestAdjustNodeTimeoutFlagsKeepsValidHeartbeatIntervalMs)
+{
+    auto oldNodeTimeoutS = FLAGS_node_timeout_s;
+    auto oldNodeDeadTimeoutS = FLAGS_node_dead_timeout_s;
+    auto oldHeartbeatIntervalMs = FLAGS_heartbeat_interval_ms;
+    FLAGS_node_timeout_s = 60;
+    FLAGS_node_dead_timeout_s = 120;
+    FLAGS_heartbeat_interval_ms = 1000;
+    AdjustNodeTimeoutFlags();
+    EXPECT_EQ(FLAGS_heartbeat_interval_ms, 1000);
+    FLAGS_node_timeout_s = oldNodeTimeoutS;
+    FLAGS_node_dead_timeout_s = oldNodeDeadTimeoutS;
+    FLAGS_heartbeat_interval_ms = oldHeartbeatIntervalMs;
 }
 
 }  // namespace ut

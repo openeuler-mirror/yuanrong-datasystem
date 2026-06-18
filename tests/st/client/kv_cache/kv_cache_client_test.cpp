@@ -91,6 +91,33 @@ constexpr char ENV_RECOVERY_HOST_ID_ENV0[] = "host_id_env0";
 constexpr char ENV_RECOVERY_HOST_ID_VALUE0[] = "host_id0";
 constexpr char ENV_RECOVERY_CLIENT_LOG_MESSAGE[] = "env_recovery_client_pod_ip_log";
 constexpr char ENV_RECOVERY_LOCK_FILE_SUFFIX[] = ".lock";
+constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
+constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
+
+void AssertFileContainsEventually(const std::string &filePath, const std::vector<std::string> &expected)
+{
+    Timer timer;
+    Status rc;
+    std::string content;
+    while (timer.ElapsedMilliSecond() < ENV_RECOVERY_LOG_WAIT_MS) {
+        Provider::Instance().FlushLogs();
+        rc = ReadWholeFile(filePath, content);
+        if (rc.IsOk() && std::all_of(expected.begin(), expected.end(), [&content](const std::string &item) {
+                return content.find(item) != std::string::npos;
+            })) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(ENV_RECOVERY_LOG_POLL_MS));
+    }
+
+    Provider::Instance().FlushLogs();
+    rc = ReadWholeFile(filePath, content);
+    DS_ASSERT_OK(rc);
+    for (const auto &item : expected) {
+        ASSERT_NE(content.find(item), std::string::npos) << "Missing log content: " << item;
+    }
+}
+
 class KVCacheClientTest : public OCClientCommon {
 public:
     std::vector<std::string> workerAddress_;
@@ -2745,11 +2772,9 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
     ASSERT_FALSE(FileExist(clientEnvFile + ENV_RECOVERY_LOCK_FILE_SUFFIX));
 
     LOG(INFO) << ENV_RECOVERY_CLIENT_LOG_MESSAGE;
-    Provider::Instance().FlushLogs();
     auto clientInfoLog = JoinPath(FLAGS_log_dir, FLAGS_log_filename + ".INFO.log");
-    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, content));
-    ASSERT_NE(content.find(std::string(" | ") + ENV_RECOVERY_POD_IP_VALUE + " | "), std::string::npos);
-    ASSERT_NE(content.find(ENV_RECOVERY_CLIENT_LOG_MESSAGE), std::string::npos);
+    AssertFileContainsEventually(
+        clientInfoLog, { std::string(" | ") + ENV_RECOVERY_POD_IP_VALUE + " | ", ENV_RECOVERY_CLIENT_LOG_MESSAGE });
 
     std::string key = "env_recovery_e2e_key";
     std::string value = "env_recovery_e2e_value";
@@ -2761,11 +2786,8 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
     ASSERT_EQ(unsetenv(ENV_RECOVERY_HOST_ID_ENV0), 0);
     std::shared_ptr<KVClient> recoveredClient;
     InitTestKVClient(recoveredClient, ServiceAffinityPolicy::REQUIRED_SAME_NODE, ENV_RECOVERY_HOST_ID_ENV0);
-    Provider::Instance().FlushLogs();
-    DS_ASSERT_OK(ReadWholeFile(clientInfoLog, content));
-    ASSERT_NE(content.find(std::string("Host ID is ") + ENV_RECOVERY_HOST_ID_VALUE0
-                           + " from persisted SDK env file " + clientEnvFile),
-              std::string::npos);
+    AssertFileContainsEventually(clientInfoLog, { std::string("Host ID is ") + ENV_RECOVERY_HOST_ID_VALUE0
+                                                  + " from persisted SDK env file " + clientEnvFile });
     std::string recoveredKey = "env_recovery_sdk_host_id_key";
     std::string recoveredValue = "env_recovery_sdk_host_id_value";
     DS_ASSERT_OK(recoveredClient->Set(recoveredKey, recoveredValue));

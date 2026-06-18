@@ -48,13 +48,13 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
-DS_DEFINE_uint32(
+DS_DEFINE_uint32_dynamic(
     arena_per_tenant, 16,
     "The arena count for each tenant. Multiple arenas can improve the performance of share memory allocation for "
     "the first time, but each arena will use one more fd. The valid range is 1 to 32.");
 DS_DEFINE_validator(arena_per_tenant, &Validator::ValidateArenaPerTenant);
 DS_DECLARE_bool(enable_huge_tlb);
-DS_DEFINE_uint32(
+DS_DEFINE_uint32_dynamic(
     shared_disk_arena_per_tenant, 8,
     "The number of disk cache Arena for each tenant. Multiple arenas can improve the performance of shared "
     "disk allocation for "

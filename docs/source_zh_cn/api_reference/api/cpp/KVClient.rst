@@ -57,6 +57,22 @@ KVClient
         返回:
             返回值状态码为 ``StatusCode::K_OK`` 时表示断链成功，否则返回其他错误码。
 
+    .. cpp:function:: Status UpdateConfig(const std::string &configJson)
+
+        运行时动态更新客户端可修改的配置项（gflag）。
+
+        参数 ``configJson`` 为 JSON 对象，键为 flag 名称，值必须为字符串，例如
+        ``{"v":"1","minloglevel":"0"}``。全部校验通过后一次性生效；任一项失败则整批拒绝。
+
+        与配置文件监控互斥：进程首次 ``Init`` 时若 ``MonitorConfigPath`` 非空，或文件监控
+        线程已启用，则返回 ``StatusCode::K_INVALID``。
+
+        参数：
+            - **configJson** - JSON 格式的 flag 名称与字符串值映射。
+
+        返回：
+            - ``StatusCode::K_OK`` 表示更新成功（空 JSON 对象亦视为成功）。
+            - ``StatusCode::K_INVALID`` 表示 JSON 非法、flag 不可修改、值非法，或与文件监控冲突。
 
     .. cpp:function:: Status Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 
