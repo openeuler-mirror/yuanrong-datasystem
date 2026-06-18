@@ -119,7 +119,7 @@
   - `FAKE_NODE_EVENT_VALUE` behavior;
   - `HandleExitingNodeRemoveEvent`;
   - background utility loop cadence and extra ETCD/hash-ring writes;
-  - route behavior for worker-id keys across AZ.
+  - route behavior for hash-based key routing across AZ.
 - Must verify in source before claiming:
   - exact subscriber behavior for object-cache, stream-cache, and slot-recovery;
   - whether ETCD-down startup path is covered;

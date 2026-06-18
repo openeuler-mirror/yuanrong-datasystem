@@ -53,7 +53,7 @@ yr.datasystem.kv_client.KVClient
        * - :doc:`delete <yr.datasystem.kv_client.KVClient.delete>`
          - 删除指定的键值对。
        * - :doc:`generate_key <yr.datasystem.kv_client.KVClient.generate_key>`
-         - 生成一个带数据系统 Worker UUID 的 key。
+         - 生成唯一的键。
        * - :doc:`exist <yr.datasystem.kv_client.KVClient.exist>`
          - 查看 key 在数据系统中是否存在。
        * - :doc:`expire <yr.datasystem.kv_client.KVClient.expire>`

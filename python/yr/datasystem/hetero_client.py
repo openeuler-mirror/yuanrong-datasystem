@@ -574,7 +574,11 @@ class HeteroClient:
 
     def generate_key(self, prefix: str = '') -> str:
         """
-        Generate a key with the Worker UUID of the data system.
+        Generate a unique key.
+
+        Args:
+            prefix(str): The key prefix. If prefix is empty, a random UUID key is returned;
+                if prefix is non-empty, prefix is returned as-is.
 
         Returns:
             key(string): The unique key, if the key fails to be generated, an empty string is returned.
@@ -584,7 +588,9 @@ class HeteroClient:
             >>> client = HeteroClient('127.0.0.1', 18482)
             >>> client.init()
             >>> client.generate_key()
-            '0a595240-5506-4c7c-b1f7-7abfb1eb4add;b053480f-75bf-41dd-8ce5-6f9ef58e9de4'
+            '0a595240-5506-4c7c-b1f7-7abfb1eb4add'
+            >>> client.generate_key('my_key')
+            'my_key'
         """
         args = [["prefix", prefix, str]]
         validator.check_args_types(args)

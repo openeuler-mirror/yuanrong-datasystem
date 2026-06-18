@@ -3843,6 +3843,12 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
     return Status::OK();
 }
 
+Status ObjectClientImpl::GetPrefix(const std::string &key, std::string &prefix)
+{
+    prefix = key;
+    return Status::OK();
+}
+
 uint32_t ObjectClientImpl::GetWorkerVersion()
 {
     if (CheckConnection().IsError()) {

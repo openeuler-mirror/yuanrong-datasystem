@@ -39,7 +39,7 @@ yr.datasystem.object_client.ObjectClient
        * - :doc:`query_global_ref_num <yr.datasystem.object_client.ObjectClient.query_global_ref_num>`
          - 查询对象全局引用计数。
        * - :doc:`generate_object_id <yr.datasystem.object_client.ObjectClient.generate_object_id>`
-         - 生成一个带数据系统Worker UUID的对象 key。
+         - 生成唯一的对象键。
        
 .. toctree::
     :maxdepth: 1
