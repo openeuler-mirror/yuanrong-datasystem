@@ -362,16 +362,16 @@ public:
     Status Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys);
 
     /**
-     * @brief Generate a key with workerId.
+     * @brief Generate a key.
      * @param[in] prefixKey The user specified key prefix.
-     * @return The key with workerId, if the key fails to be generated, an empty string is returned.
+     * @return If prefixKey is empty, returns a random unique key; otherwise returns prefixKey.
      */
     std::string GenerateKey(const std::string &prefixKey = "");
 
-    /// \brief Generate a key with workerId.
+    /// \brief Generate a key.
     ///
     /// \param[in] prefixKey The user specified key prefix.
-    /// \param[out] key The key with workerId, if the key fails to be generated, an empty string is returned.
+    /// \param[out] key If prefixKey is empty, returns a random unique key; otherwise returns prefixKey.
     ///
     /// \return K_OK on any object success; the error code otherwise.
     Status GenerateKey(const std::string &prefixKey, std::string &key);

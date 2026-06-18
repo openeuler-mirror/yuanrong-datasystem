@@ -22,7 +22,6 @@ set(UTIL_SRCS
         thread_local.cpp
         sensitive_value.cpp
         ssl_authorization.cpp
-        meta_route_tool.cpp
         safe_shm_lock.cpp
         locks.cpp
         rpc_diagnostic.cpp

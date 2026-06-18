@@ -35,7 +35,7 @@ constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 
 bool MetadataRecoverySelector::SelectionRequest::Empty() const
 {
-    return ranges.empty() && workerUuids.empty();
+    return ranges.empty();
 }
 
 std::string MetadataRecoverySelector::SelectionRequest::ToString() const
@@ -45,7 +45,6 @@ std::string MetadataRecoverySelector::SelectionRequest::ToString() const
     for (const auto &range : ranges) {
         ss << "[" << range.first << ", " << range.second << "],";
     }
-    ss << " uuids: " << VectorToString(workerUuids);
     ss << " includeL2CacheIds: " << includeL2CacheIds;
     return ss.str();
 }
@@ -64,22 +63,14 @@ MetadataRecoverySelector::SelectionRequest MetadataRecoverySelector::BuildSelect
     for (const auto &range : req.ranges()) {
         request.ranges.emplace_back(range.from(), range.end());
     }
-    request.workerUuids.assign(req.worker_ids().begin(), req.worker_ids().end());
     return request;
 }
 
 Status MetadataRecoverySelector::BuildMatchFunc(const SelectionRequest &request, MatchFunc &matchFunc) const
 {
     CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
-    if (request.workerUuids.empty()) {
-        matchFunc = [this, ranges = request.ranges](const std::string &objKey) {
-            return etcdCM_->IsInRange(ranges, objKey, "");
-        };
-        return Status::OK();
-    }
-
-    matchFunc = [this, ranges = request.ranges, workerUuids = request.workerUuids](const std::string &objKey) {
-        return etcdCM_->NeedToClear(objKey, ranges, workerUuids);
+    matchFunc = [this, ranges = request.ranges](const std::string &objKey) {
+        return etcdCM_->IsInRange(ranges, objKey);
     };
     return Status::OK();
 }

@@ -97,8 +97,7 @@ Status OCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
     info.destDbName = destDbName;
     info.ranges = ranges;
     ocMetadataManager->GetMetasMatch(
-        [this, &ranges, &dbName](const std::string &objKey) { return cm_->IsInRange(ranges, objKey, dbName); },
-        info.objectKeys);
+        [this, &ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.objectKeys);
 
     return MigrateMetaDataWithRetry(ocMetadataManager, info, isNetworkRecovery);
 }
@@ -377,7 +376,7 @@ void OCMigrateMetadataManager::FillRemoteClientIds(const std::shared_ptr<master:
     std::vector<std::string> migrationClientIds;
     ocMetadataManager->GetRemoteClientIdsMatch(
         [this, &ranges, &ocMetadataManager](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey, ocMetadataManager->GetDbName());
+            return cm_->IsInRange(ranges, objKey);
         },
         migrationClientIds);
     for (auto &remoteClientId : migrationClientIds) {
@@ -392,7 +391,7 @@ void OCMigrateMetadataManager::FillSubscribeInfos(const std::shared_ptr<master::
     std::vector<SubscribeInfoPb> subInfos;
     ocMetadataManager->GetSubscibeInfoMatch(
         [this, &ranges, &ocMetadataManager](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey, ocMetadataManager->GetDbName());
+            return cm_->IsInRange(ranges, objKey);
         },
         subObjs);
     ocMetadataManager->FillSubMetas(subObjs, subInfos);
@@ -460,7 +459,7 @@ void OCMigrateMetadataManager::GetAndFillMigrateDeviceMetaInfo(
     std::vector<std::string> migrationKeys;
     ocMetadataManager->GetDeviceOcManager()->GetDeviceMetasMatch(
         [this, &ranges, &ocMetadataManager](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey, ocMetadataManager->GetDbName());
+            return cm_->IsInRange(ranges, objKey);
         },
         migrationKeys);
     if (migrationKeys.size() > 0) {
@@ -490,7 +489,7 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
     }
 
     auto matchFunc = [this, &info, &ocMetadataManager](const std::string &objKey) {
-        return cm_->IsInRange(info.ranges, objKey, ocMetadataManager->GetDbName());
+        return cm_->IsInRange(info.ranges, objKey);
     };
 
     std::unordered_set<std::string> allKeys;

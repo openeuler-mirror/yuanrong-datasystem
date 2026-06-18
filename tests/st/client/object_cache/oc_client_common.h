@@ -24,8 +24,12 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
@@ -299,6 +303,15 @@ public:
     void GetWorkerUuids(EtcdStore *db, std::unordered_map<HostPort, std::string> &uuidMap);
 
     std::unique_ptr<EtcdStore> InitTestEtcdInstance(std::string azName = "");
+
+    void SetWorkerHashInjection(const std::vector<uint32_t> &workerIndexes = {});
+
+    void SetWorkerHashInjection(std::initializer_list<uint32_t> workerIndexes);
+
+    void GetObjectKeysHashToWorker(EtcdStore *db, uint32_t workerIndex, size_t objectCount,
+                                   std::vector<std::string> &objectKeys);
+
+    std::string GetObjectKeyHashToWorker(EtcdStore *db, uint32_t workerIndex);
 };
 
 #define ASSERT_BUF_EQ(buffer_, expected_)                                                                       \

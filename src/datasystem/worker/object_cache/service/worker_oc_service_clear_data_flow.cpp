@@ -149,15 +149,13 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
     clearDataThreadPool_ = std::make_shared<ThreadPool>(0, CLEAR_DATA_THREAD_NUM, "scaledown_handle_thread");
     HashRingEvent::LocalClearDataWithoutMeta::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
-        [this](const worker::HashRange &ranges, const std::vector<std::string> &uuids) {
+        WORKER_OC_SERVICE_CLEAR_DATA_FLOW, [this](const worker::HashRange &ranges) {
             ClearDataReqPb req;
             for (const auto &range : ranges) {
                 auto *reqRange = req.add_ranges();
                 reqRange->set_from(range.first);
                 reqRange->set_end(range.second);
             }
-            *req.mutable_worker_ids() = { uuids.begin(), uuids.end() };
             SubmitClearDataAsync(req, ranges);
             return Status::OK();
         });

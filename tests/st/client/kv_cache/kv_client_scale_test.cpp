@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <chrono>
 #include <csignal>
+#include <map>
 #include <thread>
 
 #include <google/protobuf/util/json_util.h>
@@ -702,6 +703,42 @@ TEST_F(STCDefaultScaleUpTest, LEVEL1_InitCluster)
 }
 
 class STCScaleDownTest : public STCScaleTest {
+protected:
+    void SetWorkerHashInjection(std::initializer_list<uint32_t> indexes)
+    {
+        for (auto i : indexes) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
+        }
+    }
+
+    void GetObjectKeysHashToWorker(uint32_t workerIndex, size_t objectCount, std::vector<std::string> &objectKeys)
+    {
+        std::string value;
+        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
+        HashRingPb ring;
+        ASSERT_TRUE(ring.ParseFromString(value));
+        HostPort workerAddress;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+        std::map<uint32_t, std::string> tokenWorkers;
+        for (const auto &worker : ring.workers()) {
+            for (auto token : worker.second.hash_tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        objectKeys.clear();
+        for (auto iter = tokenWorkers.begin(); iter != tokenWorkers.end() && objectKeys.size() < objectCount; ++iter) {
+            if (iter->second != workerAddress.ToString()) {
+                continue;
+            }
+            auto prev = iter == tokenWorkers.begin() ? std::prev(tokenWorkers.end()) : std::prev(iter);
+            uint32_t distance = iter->first - prev->first;
+            for (uint32_t offset = 1; offset <= distance && objectKeys.size() < objectCount; ++offset) {
+                objectKeys.emplace_back("a_key_hash_to_" + std::to_string(iter->first - offset));
+            }
+        }
+        ASSERT_EQ(objectKeys.size(), objectCount);
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -715,8 +752,6 @@ class STCScaleDownTest : public STCScaleTest {
         opts.waitWorkerReady = false;
         opts.disableRocksDB = false;
     }
-
-protected:
     const int nodeTimeout_ = 6;
     const int nodeDeadTimeout_ = 8;
 };
@@ -918,28 +953,6 @@ TEST_F(STCScaleDownTest, ScaleDownQuerySize)
     DS_ASSERT_OK(client1_->QuerySize({ key_name }, outSizes));
     ASSERT_EQ(outSizes.size(), 1);
     ASSERT_EQ(outSizes[0], value.length());
-}
-
-TEST_F(STCScaleDownTest, ClearDataWithUuid)
-{
-    StartWorkerAndWaitReady({ 0, 1, 2 });
-    InitTestKVClient(0, client_);
-    InitTestKVClient(1, client1_);
-    std::vector<std::string> keys;
-    for (int i = 0; i < 20; i++) {
-        auto key_with_worker0 = client_->Set("data_on_worker0");
-        keys.emplace_back(key_with_worker0);
-    }
-    std::string valGet;
-    for (const auto &key : keys) {
-        DS_ASSERT_OK(client1_->Get(key, valGet));
-    }
-    externalCluster_->ShutdownNode(WORKER, 0);
-    WaitAllNodesJoinIntoHashRing(2, nodeDeadTimeout_ + 1);
-
-    for (const auto &key : keys) {
-        DS_ASSERT_NOT_OK(client1_->Get(key, valGet));
-    }
 }
 
 TEST_F(STCScaleDownTest, LEVEL2_CleanKeyWithWorkerIdMetaMap)
@@ -1863,34 +1876,28 @@ TEST_F(STCScaleDownTest, LEVEL1_ForceRemove)
 {
     // 1. init 3 nodes
     StartWorkerAndWaitReady({ 0, 1, 2 });
+    SetWorkerHashInjection({ 0, 1, 2 });
     const int w2Index = 2;
     // 2. create object that meta not on w2 but data on w2
     InitClients();
-    std::vector<std::string> keys1;
+    std::vector<std::string> hashToW0Keys;
+    GetObjectKeysHashToWorker(0, 30, hashToW0Keys);
+    std::vector<std::string> keys1(hashToW0Keys.begin(), hashToW0Keys.begin() + 10);
     std::string outVal;
     // meta on w0, primary is w2, location is w1
-    for (auto i = 0; i < 10; i++) {
-        std::string key;
-        (void)client_->GenerateKey("", key);
-        keys1.emplace_back(key);
-        DS_ASSERT_OK(client2_->Set(keys1.back(), "val"));
-        DS_ASSERT_OK(client1_->Get(keys1.back(), outVal));
+    for (const auto &key : keys1) {
+        DS_ASSERT_OK(client2_->Set(key, "val"));
+        DS_ASSERT_OK(client1_->Get(key, outVal));
     }
     // meta on w0, primary is w1, location is w2
-    std::vector<std::string> keys2;
-    for (auto i = 0; i < 10; i++) {
-        std::string key;
-        (void)client_->GenerateKey("", key);
-        keys2.emplace_back(key);
-        DS_ASSERT_OK(client1_->Set(keys2.back(), "val"));
-        DS_ASSERT_OK(client2_->Get(keys2.back(), outVal));
+    std::vector<std::string> keys2(hashToW0Keys.begin() + 10, hashToW0Keys.end());
+    for (size_t i = 0; i < 10; i++) {
+        DS_ASSERT_OK(client1_->Set(keys2[i], "val"));
+        DS_ASSERT_OK(client2_->Get(keys2[i], outVal));
     }
     // meta on w0, primary is w1, no locations
-    for (auto i = 0; i < 10; i++) {
-        std::string key;
-        (void)client_->GenerateKey("", key);
-        keys2.emplace_back(key);
-        DS_ASSERT_OK(client1_->Set(keys2.back(), "val"));
+    for (size_t i = 10; i < keys2.size(); i++) {
+        DS_ASSERT_OK(client1_->Set(keys2[i], "val"));
     }
 
     // 3. del node without scale-down process
@@ -2379,6 +2386,7 @@ TEST_F(STCStandByTest, TestFunctionAfterSwitchWorker)
 
 constexpr int SCALE_RESTART_ADD_TIME = 3;
 class STCRestartTest : public STCScaleTest {
+public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -2390,6 +2398,34 @@ class STCRestartTest : public STCScaleTest {
             " -v=2 -node_timeout_s=2 -node_dead_timeout_s=300"
             " -auto_del_dead_node=true";
         opts.waitWorkerReady = false;
+    }
+
+    void SetWorkerHashInjection(std::initializer_list<uint32_t> indexes)
+    {
+        for (auto i : indexes) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
+        }
+    }
+
+    void GetHashToWorker(uint32_t workerIndex, uint32_t &hash)
+    {
+        std::string value;
+        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
+        HashRingPb ring;
+        ASSERT_TRUE(ring.ParseFromString(value));
+        HostPort workerAddress;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+        auto worker = ring.workers().find(workerAddress.ToString());
+        ASSERT_NE(worker, ring.workers().end());
+        ASSERT_GT(worker->second.hash_tokens_size(), 0);
+        hash = worker->second.hash_tokens(0) - 1;
+    }
+
+    void GetObjectKeyHashToWorker(uint32_t workerIndex, std::string &objectKey)
+    {
+        uint32_t hash = 0;
+        GetHashToWorker(workerIndex, hash);
+        objectKey = "a_key_hash_to_" + std::to_string(hash);
     }
 };
 
@@ -2445,6 +2481,7 @@ TEST_F(STCRestartTest, LEVEL1_DeleteWhenMasterTimeout)
 {
     DS_ASSERT_OK(cluster_->StartOBS());
     StartWorkerAndWaitReady({ 0, 1 });
+    SetWorkerHashInjection({ 0, 1 });
     int timeoutMs = 5000;
     InitTestKVClient(0, client_, timeoutMs);
     InitTestKVClient(1, client1_, timeoutMs);
@@ -2452,9 +2489,9 @@ TEST_F(STCRestartTest, LEVEL1_DeleteWhenMasterTimeout)
     // key1: data in worker0, meta in worker0
     // key2: data in worker0, meta in worker1
     std::string key1;
-    (void)client_->GenerateKey("", key1);
+    GetObjectKeyHashToWorker(0, key1);
     std::string key2;
-    (void)client1_->GenerateKey("", key2);
+    GetObjectKeyHashToWorker(1, key2);
     DS_ASSERT_OK(client_->Set(key1, "hello1", param));
     DS_ASSERT_OK(client_->Set(key2, "hello2", param));
 
@@ -2821,6 +2858,8 @@ TEST_F(STCScaleUpTest, MSetNtx_RequestTimeoutMs_WorkerToMasterUnavailable)
 
     const std::string injectAction = "3000*return(K_RPC_UNAVAILABLE)";
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", injectAction));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", injectAction));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 2, "master.CreateMultiMeta.begin", injectAction));
 
     MSetParam msetParam{ .writeMode = WriteMode::NONE_L2_CACHE };
     std::vector<std::string> outFailedKeys;

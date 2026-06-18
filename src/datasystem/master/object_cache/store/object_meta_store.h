@@ -49,12 +49,9 @@
 namespace datasystem {
 enum ObjectMetaStoreEventType : uint32_t {
     GET_HASH_RANGE_NON_BLOCK,
-    GET_LOCAL_WORKER_UUID,
 };
 
 using GetHashRangeNonBlockEvent = EventSubscribers<GET_HASH_RANGE_NON_BLOCK, std::function<void(worker::HashRange &)>>;
-
-using GetLocalWorkerUuidEvent = EventSubscribers<GET_LOCAL_WORKER_UUID, std::function<void(std::string &)>>;
 
 namespace master {
 static const std::string HEALTH_STATUS = "ready";
@@ -201,14 +198,12 @@ public:
      * @brief Get pairs from ETCD table and write to rocksdb table.
      * @param[in] tablePrefix ETCD table prefix.
      * @param[in] rocksTable Need write rocksdb table.
-     * @param[in] workerUuids Obtains the data of specified worker uuids. If the value is empty, obtains the data of the
-     * current worker.
-     * @param[in] extraRanges Obtains the data of specified hash ranges if not empty.
+     * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @param[out] outMetas KV paris.
      * @return Status of the call
      */
     Status GetFromEtcd(const std::string &tablePrefix, const std::string &rocksTable,
-                       const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges,
+                       const worker::HashRange &extraRanges,
                        std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**
@@ -482,9 +477,9 @@ private:
     /**
      * @brief Hash function.
      * @param[in] key Object key.
-     * @return hash code and is special key or not.
+     * @return hash code of the full object key.
      */
-    std::pair<uint32_t, bool> HashFunction(const std::string &key);
+    uint32_t HashFunction(const std::string &key);
 
     /**
      * @brief Add KV to etcd store.

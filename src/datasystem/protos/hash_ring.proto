@@ -43,14 +43,8 @@ message ChangeNodePb {
     uint32 end = 3;
     bool finished = 4;
     bool lost_all_range = 5;
-    bool is_upgrade = 6;
   }
   repeated RangePb changed_ranges = 1;
-}
-
-message UpdateNodePb {
-  bytes worker_uuid = 1;
-  uint64 timestamp = 2;
 }
 
 message HashRingPb {
@@ -59,6 +53,4 @@ message HashRingPb {
   bool cluster_has_init = 3;
   map<string, ChangeNodePb> add_node_info = 4;
   map<string, ChangeNodePb> del_node_info = 5;
-  map<string, string> key_with_worker_id_meta_map = 6; // The pair is {workerUuid, workerAddr}
-  map<string, UpdateNodePb> update_worker_map = 7; // The pair is {workerAddr, workerUuid}
 }

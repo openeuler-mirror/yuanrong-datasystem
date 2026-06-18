@@ -210,17 +210,17 @@ void OCMetadataManager::InitSubscribeEvent()
             return RecoverMasterAppRef(func, standbyWorker);
         });
     HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges) {
-            return RecoverDataOfFaultyWorker(workerUuids, extraRanges);
+        eventName_, [this](const worker::HashRange &extraRanges) {
+            return RecoverDataOfFaultyWorker(extraRanges);
         });
     HashRingEvent::RecoverAsyncTaskRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges) {
-            return RecoverAsyncTask(workerUuids, extraRanges);
+        eventName_, [this](const worker::HashRange &extraRanges) {
+            return RecoverAsyncTask(extraRanges);
         });
     HashRingEvent::ClearDataWithoutMeta::GetInstance().AddSubscriber(
         eventName_, [this](const worker::HashRange &ranges, const std::string &workerAddr,
-                           const worker::HashRange &halfCompletedRanges, const std::vector<std::string> &uuids) {
-            return ClearDataWithoutMeta(ranges, workerAddr, halfCompletedRanges, uuids);
+                           const worker::HashRange &halfCompletedRanges) {
+            return ClearDataWithoutMeta(ranges, workerAddr, halfCompletedRanges);
         });
     HashRingEvent::ClearDevClientMetaForScaledInWorker::GetInstance().AddSubscriber(
         eventName_, [this](const std::vector<std::string> removeNodes) {
@@ -489,9 +489,7 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
         return status;
     }
     accessor.release();
-    if (!HasWorkerId(objectKey)) {
-        RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
-    }
+    RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
 
     // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
     UpdateSubscribeCache(objectKey, metaCache);
@@ -658,7 +656,7 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
     version = static_cast<int64_t>(GetSystemClockTimeStampUs());
 
     RaiiPlus raiiP;
-    if (!firstOne && !HasWorkerId(objectKey)) {
+    if (!firstOne) {
         MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
     }
 
@@ -729,9 +727,7 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
     bool firstOne = false;
     RETURN_IF_NOT_OK(CheckExistenceOpt(meta, objectKey, newMeta.existence(), firstOne));
     RaiiPlus raiiP;
-    if (!HasWorkerId(objectKey)) {
-        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
-    }
+    MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
     CHECK_FAIL_RETURN_STATUS(
         meta.multiSetState != PENDING, K_TRY_AGAIN,
         FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
@@ -781,7 +777,7 @@ Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &n
     }
     accessor->second = std::move(newMeta);
     accessor.release();
-    if (!FLAGS_other_cluster_names.empty() && !HasWorkerId(objectKey)) {
+    if (!FLAGS_other_cluster_names.empty()) {
         RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
     }
     return expiredObjectManager_->InsertObject(objectKey, version, ttl);
@@ -1302,7 +1298,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
                 // 2. If location exist and it's state is UNACK, we no need to modify it.
                 // 3. If the key type is hash and the req is from another worker, no need to keep worker address to
                 // location.
-                auto isHashKeyCrossAz = req.is_from_other_az() && !HasWorkerId(objectKey);
+                auto isHashKeyCrossAz = req.is_from_other_az();
                 if (accessor->second.locations.find(address) == accessor->second.locations.end()
                     && !isHashKeyCrossAz) {
                     accessor->second.locations[address] = AckState::UNACK;
@@ -2276,9 +2272,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
     TbbMetaTable::const_accessor accessor;
     if (!metaTable_.find(accessor, objectKey)) {
         VLOG(1) << "meta not found in meta table";
-        if (!HasWorkerId(objectKey)) {
-            delMediator.AddHashObjsWithoutMeta(objectKey);
-        }
+        delMediator.AddHashObjsWithoutMeta(objectKey);
         return Status::OK();
     } else if (accessor->second.multiSetState == PENDING) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Object does not exist, multi object is creating");
@@ -2394,9 +2388,7 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
     int64_t version = GetSystemClockTimeStampUs();
 
     RaiiPlus raiiP;
-    if (!HasWorkerId(objectKey)) {
-        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
-    }
+    MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
 
     response.set_version(version);
     Status s = DoBinaryCacheInvalidationUnlocked(
@@ -2550,7 +2542,7 @@ Status OCMetadataManager::HandleLoadMeta(
     std::vector<std::pair<std::string, std::string>> &metas,
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
     const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
-    bool &isFromRocksdb, const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges)
+    bool &isFromRocksdb, const worker::HashRange &extraRanges)
 {
     for (const auto &meta : metas) {
         ObjectMetaPb metaPb;
@@ -2561,8 +2553,8 @@ Status OCMetadataManager::HandleLoadMeta(
         const std::string &objectKey = metaPb.object_key();
         ObjectMeta metaCache;
         metaCache.meta = metaPb;
-        if (!workerUuids.empty() || !extraRanges.empty()) {
-            // Specifies the worker UUID used in scale-in scenarios. The primary address needs to be changed.
+        if (!extraRanges.empty()) {
+            // During scale-in recovery, the primary address needs to be changed.
             metaCache.meta.set_primary_address(
                 SelectPrimaryCopyWhenScaleIn(objectKey, metaCache.meta.primary_address(), objLocMap));
             std::string serializedStr;
@@ -2596,17 +2588,16 @@ Status OCMetadataManager::HandleLoadMeta(
     return Status::OK();
 }
 
-Status OCMetadataManager::LoadMeta(bool isFromRocksdb, const std::vector<std::string> &workerUuids,
-                                   const worker::HashRange &extraRanges)
+Status OCMetadataManager::LoadMeta(bool isFromRocksdb, const worker::HashRange &extraRanges)
 {
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> expireObjects;
     std::vector<std::pair<std::string, std::string>> metas;
 
-    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, workerUuids,
-                                                      extraRanges, metas));
+    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, extraRanges,
+                                                      metas));
     std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> objLocMap;
     RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
-    RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, objLocMap, isFromRocksdb, workerUuids, extraRanges));
+    RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, objLocMap, isFromRocksdb, extraRanges));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(RecoverObjectLocations(objLocMap), "Recovery object locations into memory failed");
     if (isFromRocksdb && objectStore_->IsRocksdbEnableWriteMeta()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(nestedRefManager_->RecoverRelationshipData(NESTED_TABLE, NESTED_COUNT_TABLE),
@@ -4150,8 +4141,7 @@ void OCMetadataManager::InsertToEtcdTableInMemory(const std::string &objectKey, 
 }
 
 Status OCMetadataManager::ClearDataWithoutMeta(const worker::HashRange &ranges, const std::string &workerAddr,
-                                               const worker::HashRange &halfCompletedRanges,
-                                               const std::vector<std::string> &uuids)
+                                               const worker::HashRange &halfCompletedRanges)
 {
     HostPort hostPort;
     RETURN_IF_NOT_OK(hostPort.ParseString(workerAddr));
@@ -4161,10 +4151,10 @@ Status OCMetadataManager::ClearDataWithoutMeta(const worker::HashRange &ranges, 
     std::vector<std::string> objsMigrateFinished;
     if (!halfCompletedRanges.empty()) {
         GetMetasMatch([this, &halfCompletedRanges](
-                          const std::string &objKey) { return etcdCM_->IsInRange(halfCompletedRanges, objKey, ""); },
+                          const std::string &objKey) { return etcdCM_->IsInRange(halfCompletedRanges, objKey); },
                       objsMigrateFinished);
     }
-    return notifyWorkerManager_->ClearDataWithoutMeta(ranges, workerAddr, objsMigrateFinished, uuids);
+    return notifyWorkerManager_->ClearDataWithoutMeta(ranges, workerAddr, objsMigrateFinished);
 }
 
 Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes)
@@ -4355,24 +4345,22 @@ bool OCMetadataManager::MetaIsFound(const std::string &objectKey)
     return false;
 }
 
-Status OCMetadataManager::RecoverAsyncTask(const std::vector<std::string> &workerUuids,
-                                           const worker::HashRange &extraRanges)
+Status OCMetadataManager::RecoverAsyncTask(const worker::HashRange &extraRanges)
 {
-    RETURN_IF_NOT_OK_APPEND_MSG(globalCacheDeleteManager_->RecoverDeletedIds(false, workerUuids, extraRanges),
+    RETURN_IF_NOT_OK_APPEND_MSG(globalCacheDeleteManager_->RecoverDeletedIds(false, extraRanges),
                                 "Failed to recover deleting objects from etcd.");
-    RETURN_IF_NOT_OK_APPEND_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(false, workerUuids, extraRanges),
+    RETURN_IF_NOT_OK_APPEND_MSG(notifyWorkerManager_->RecoverCacheInvalidAndRemoveMeta(false, extraRanges),
                                 "Failed to recover async worker option from etcd.");
     return Status::OK();
 }
 
-Status OCMetadataManager::RecoverDataOfFaultyWorker(const std::vector<std::string> &workerUuids,
-                                                    const worker::HashRange &extraRanges)
+Status OCMetadataManager::RecoverDataOfFaultyWorker(const worker::HashRange &extraRanges)
 {
-    if (workerUuids.empty() && extraRanges.empty()) {
+    if (extraRanges.empty()) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK_APPEND_MSG(LoadMeta(false, workerUuids, extraRanges), "Failed to recover metas from etcd.");
-    return RecoverAsyncTask(workerUuids, extraRanges);
+    RETURN_IF_NOT_OK_APPEND_MSG(LoadMeta(false, extraRanges), "Failed to recover metas from etcd.");
+    return RecoverAsyncTask(extraRanges);
 }
 
 void OCMetadataManager::WaitInitializaiton()
@@ -4536,13 +4524,12 @@ Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const st
 
 Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &tablePrefix,
                                                            const std::string &rocksTable, bool isFromRocksdb,
-                                                           const std::vector<std::string> &workerUuids,
                                                            const worker::HashRange &extraRanges,
                                                            std::vector<std::pair<std::string, std::string>> &outMetas)
 {
     if (!objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->GetFromEtcd(tablePrefix, rocksTable, workerUuids, extraRanges, outMetas),
+            objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
             "Load meta from etcd into memory failed.");
         LOG(INFO) << "Load meta from etcd and try put to rocksdb, count:" << outMetas.size();
         for (const auto &iter : outMetas) {
@@ -4555,7 +4542,7 @@ Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &ta
             LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
         } else {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(tablePrefix, rocksTable, workerUuids, extraRanges, outMetas),
+                objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
                 "Load meta from etcd into memory failed.");
             LOG(INFO) << "Load meta from etcd, count:" << outMetas.size();
         }

@@ -40,7 +40,6 @@ ds_cc_library(
             "format.cpp",
             "string_util.cpp",
             "status.cpp",
-            "meta_route_tool.cpp",
             "deadlock_util.cpp",
             "numa_util.cpp",
         ],
@@ -95,24 +94,8 @@ ds_cc_library(
     alwayslink = True,
 )
 
-# alwayslink target for meta route registration
 ds_cc_library(
     name = "meta_route_tool",
-    srcs = ["meta_route_tool.cpp"],
-    hdrs = ["meta_route_tool.h"],
-    deps = [
-        ":common_util_impl",
-        ":status_helper",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/iam:common_iam",
-        "//src/datasystem/common/perf:common_perf",
-    ],
-    alwayslink = True,
-)
-
-# Header-only target for downstream targets that only need meta_route_tool.h
-ds_cc_library(
-    name = "meta_route_tool_header_impl",
     hdrs = ["meta_route_tool.h"],
     deps = [
         "//include/datasystem/utils:utils_headers",
@@ -149,7 +132,7 @@ alias(name = "rpc_util", actual = ":common_util_impl")
 alias(name = "file_util", actual = ":common_util_impl")
 alias(name = "thread_pool", actual = ":common_util_impl")
 alias(name = "hash_algorithm", actual = ":common_util_impl")
-alias(name = "meta_route_tool_header", actual = ":meta_route_tool_header_impl")
+alias(name = "meta_route_tool_header", actual = ":meta_route_tool")
 alias(name = "validator", actual = ":common_util_impl")
 alias(name = "common_util_base", actual = ":common_util_impl")
 alias(name = "timer", actual = ":common_util_impl")

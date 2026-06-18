@@ -347,12 +347,10 @@ private:
 
     /**
      * @brief Recover metadata of faulty worker from the other workers.
-     * @param[in] workerUuids The uuids to be recovered.
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverMetadataOfFaultyWorker(const std::vector<std::string> &workerUuids,
-                                         const worker::HashRange &extraRanges);
+    Status RecoverMetadataOfFaultyWorker(const worker::HashRange &extraRanges);
 
     /**
      * @brief Send Delete Stream Context to a worker

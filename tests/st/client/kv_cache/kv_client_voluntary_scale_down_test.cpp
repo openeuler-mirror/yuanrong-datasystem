@@ -157,7 +157,8 @@ public:
     void SetWorkerHashInjection(std::vector<uint32_t> injectNode = std::vector<uint32_t>{})
     {
         if (injectNode.size() == 0) {
-            for (size_t i = 0; i < DEFAULT_WORKER_NUM; ++i) {
+            size_t workerNum = cluster_ == nullptr ? DEFAULT_WORKER_NUM : cluster_->GetWorkerNum();
+            for (size_t i = 0; i < workerNum; ++i) {
                 DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
             }
             return;
@@ -171,7 +172,8 @@ public:
     void UnsetWorkerHashInjection(std::vector<uint32_t> injectNode = std::vector<uint32_t>{})
     {
         if (injectNode.size() == 0) {
-            for (size_t i = 0; i < DEFAULT_WORKER_NUM; ++i) {
+            size_t workerNum = cluster_ == nullptr ? DEFAULT_WORKER_NUM : cluster_->GetWorkerNum();
+            for (size_t i = 0; i < workerNum; ++i) {
                 DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, i, "MurmurHash3"));
             }
             return;
@@ -194,17 +196,11 @@ public:
         }
     }
 
-    void SetUuidObject(std::shared_ptr<KVClient> client, int workerIdx, std::vector<std::string> &objectKey,
+    void SetHashObject(std::shared_ptr<KVClient> client, int workerIdx, std::vector<std::string> &objectKey,
                        std::vector<std::string> &data, WriteMode mode = WriteMode::NONE_L2_CACHE)
     {
-        HostPort workerHost;
-        workerHost.ParseString(workerAddress_[workerIdx]);
-        for (uint32_t i = 0; i < objectKey.size(); ++i) {
-            objectKey[i] = NewObjectKey() + std::to_string(i) + ";" + uuidMap_[workerHost];
-            data[i] = randomData_.GetRandomString(10);  // Generate the data of length 10
-            SetParam param{ .writeMode = mode };
-            DS_ASSERT_OK(client->Set(objectKey[i], data[i], param));
-        }
+        SetWorkerHashInjection();
+        SetNormalObject(client, workerIdx, objectKey, data, mode);
     }
 
     void AssertWorkerNum(int num)
@@ -328,28 +324,6 @@ TEST_F(KVClientVoluntaryScaleDownTest, TestGiveUpLocation)
     DS_ASSERT_NOT_OK(db_->RangeSearch(table.str(), std::to_string(0), std::to_string(UINT32_MAX), outMetas));
 }
 
-TEST_F(KVClientVoluntaryScaleDownTest, UuidObjectVoluntaryScaleDown)
-{
-    int objectCnt = 10;
-    std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> data(objectCnt);
-    SetUuidObject(client3_, 0, objectKey, data);
-
-    VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
-
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
-        ASSERT_EQ(data[i], getValue);
-        DS_ASSERT_OK(client1_->Del(objectKey[i]));
-        DS_ASSERT_NOT_OK(client3_->Get(objectKey[i], getValue));
-    }
-
-    AssertWorkerNum(3);  // The number of worker is 3
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-}
-
 TEST_F(KVClientVoluntaryScaleDownTest, NormalObjectConsecutiveVoluntaryScaleDown)
 {
     SetWorkerHashInjection();
@@ -373,66 +347,6 @@ TEST_F(KVClientVoluntaryScaleDownTest, NormalObjectConsecutiveVoluntaryScaleDown
     AssertWorkerNum(2);  // The number of worker is 2
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-}
-
-TEST_F(KVClientVoluntaryScaleDownTest, StartKeyWithWorkerUuid)
-{
-    auto key = client0_->GenerateKey();
-    std::string data = "aaaaaaaaaa";
-    DS_ASSERT_OK(client2_->Set(key, data));
-    for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "MigrateByRanges.Delay", "sleep(3000)"));
-    }
-    VoluntaryScaleDownInject(0);
-    InitTestKVClient(1, client1_, 3000);  // Init client1 to worker 1 with 3000ms timeout
-    bool stop = false;
-    std::thread t1([&stop, &key, &data, this] {
-        while (!stop) {
-            ReadParam readParam{ .key = key, .offset = 0, .size = data.size() - 1 };
-            std::vector<ReadParam> params = { readParam };
-            std::vector<Optional<ReadOnlyBuffer>> buffers;
-            DS_ASSERT_OK(client1_->Read(params, buffers));
-            Optional<ReadOnlyBuffer> buffer = buffers.back();
-            std::string getValue(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-            ASSERT_EQ(data.substr(0, data.size() - 1), getValue);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // wait for 100 ms
-        }
-    });
-    WaitAllNodesJoinIntoHashRing(3);  // The number of worker is 3
-    AssertWorkerNum(3);  // The number of worker is 3
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM);
-    stop = true;
-    t1.join();
-}
-
-TEST_F(KVClientVoluntaryScaleDownTest, SetKeyWithWorkerUuid)
-{
-    InitTestKVClient(0, client0_, 3000);  // Init client1 to worker 1 with 3000ms timeout
-    auto key = client0_->GenerateKey();
-    std::string data = "aaaaaaaaaa";
-    DS_ASSERT_OK(client2_->Set(key, data));
-    for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
-        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "MigrateByRanges.Delay", "sleep(5000)"));
-    }
-    VoluntaryScaleDownInject(0);
-    InitTestKVClient(1, client1_, 3000);  // Init client1 to worker 1 with 3000ms timeout
-    WaitAllNodesJoinIntoHashRing(3);  // The number of worker is 3
-    AssertWorkerNum(3);  // The number of worker is 3
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
-    InitTestKVClient(0, client0_, 3000);  // Init client1 to worker 1 with 3000ms timeout
-    bool stop = false;
-    std::thread t2([&stop, &key, &data, this] {
-        while (!stop) {
-            auto key = client0_->GenerateKey();
-            std::string data = "aaaaaaaaaa";
-            DS_ASSERT_OK(client2_->Set(key, data));
-        }
-    });
-    WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM);
-    stop = true;
-    t2.join();
 }
 
 TEST_F(KVClientVoluntaryScaleDownTest, LEVEL2_TestNotRemoveFailedWorkerWhenRestart)
@@ -545,30 +459,6 @@ TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_TestWorkerGetWhenRedirect)
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "OCMetadataManager.QueryMeta,wait"));
 }
 
-TEST_F(KVClientVoluntaryScaleDownTest, UuidObjectConsecutiveVoluntaryScaleDown)
-{
-    int objectCnt = 10;
-    std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> data(objectCnt);
-    SetUuidObject(client3_, 0, objectKey, data);
-
-    VoluntaryScaleDownInject(0);
-    VoluntaryScaleDownInject(1);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
-
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
-        ASSERT_EQ(data[i], getValue);
-        DS_ASSERT_OK(client2_->Del(objectKey[i]));
-        DS_ASSERT_NOT_OK(client3_->Get(objectKey[i], getValue));
-    }
-
-    AssertWorkerNum(2);  // The number of worker is 2
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-}
-
 TEST_F(KVClientVoluntaryScaleDownTest, NormalObjectReverseConsecutiveVoluntaryScaleDown)
 {
     SetWorkerHashInjection();
@@ -576,30 +466,6 @@ TEST_F(KVClientVoluntaryScaleDownTest, NormalObjectReverseConsecutiveVoluntarySc
     std::vector<std::string> objectKey(objectCnt);
     std::vector<std::string> data(objectCnt);
     SetNormalObject(client3_, 0, objectKey, data);
-
-    VoluntaryScaleDownInject(0);
-    VoluntaryScaleDownInject(1);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
-
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
-        ASSERT_EQ(data[i], getValue);
-        DS_ASSERT_OK(client2_->Del(objectKey[i]));
-        DS_ASSERT_NOT_OK(client3_->Get(objectKey[i], getValue));
-    }
-
-    AssertWorkerNum(2);  // The number of worker is 2
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-}
-
-TEST_F(KVClientVoluntaryScaleDownTest, UuidObjectReverseConsecutiveVoluntaryScaleDown)
-{
-    int objectCnt = 10;
-    std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> data(objectCnt);
-    SetUuidObject(client3_, 0, objectKey, data);
 
     VoluntaryScaleDownInject(0);
     VoluntaryScaleDownInject(1);
@@ -667,65 +533,9 @@ TEST_F(KVClientVoluntaryScaleDownTest, LEVEL1_NormalObjectSetGetDelAndVoluntaryS
     AssertWorkerNum(1);
 }
 
-TEST_F(KVClientVoluntaryScaleDownTest, LEVEL1_UuidObjectSetGetDelAndVoluntaryScaleDownConcurrently)
-{
-    int objectCnt = 1000;
-    std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> data(objectCnt);
-
-    std::thread t1([&]() {
-        HostPort workerHost;
-        workerHost.ParseString(workerAddress_[0]);
-        for (uint32_t i = 0; i < objectKey.size(); ++i) {
-            objectKey[i] = NewObjectKey() + std::to_string(i) + ";" + uuidMap_[workerHost];
-            data[i] = randomData_.GetRandomString(10);  // Generate the data of length 10
-            SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE };
-            DS_ASSERT_OK(client3_->Set(objectKey[i], data[i], param));
-        }
-    });
-    VoluntaryScaleDownInject(0);
-    t1.join();
-
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client1_->Get(objectKey[i], getValue));
-        ASSERT_EQ(data[i], getValue);
-    }
-
-    std::thread t2([&]() {
-        for (int i = 0; i < objectCnt; ++i) {
-            std::string getValue;
-            DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
-            ASSERT_EQ(data[i], getValue);
-        }
-    });
-    VoluntaryScaleDownInject(1);
-    t2.join();
-
-    std::thread t3([&]() {
-        for (int i = 0; i < objectCnt; ++i) {
-            DS_ASSERT_OK(client3_->Del(objectKey[i]));
-        }
-    });
-    VoluntaryScaleDownInject(2);  // Voluntary scale down the worker 2
-    t3.join();
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
-
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_NOT_OK(client3_->Get(objectKey[i], getValue));
-    }
-
-    AssertWorkerNum(1);
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
-}
-
 TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
 {
     int objectCnt = 50;
-    int objectCnt1 = 10;
     for (size_t i = 1; i < DEFAULT_WORKER_NUM; i++) {
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "InspectAndProcessPeriodically.skip", "return()"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "OCMetadataManager.ReplacePrimary", "1*sleep(5000)"));
@@ -733,16 +543,12 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
     }
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "VoluntaryScaledown.MigrateData.Delay", "sleep(3000)"));
     std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> objectKey1(objectCnt1);
     std::vector<std::string> data(objectCnt);
-    std::vector<std::string> data1(objectCnt1);
     SetNormalObject(client0_, 0, objectKey, data, WriteMode::NONE_L2_CACHE);
-    SetUuidObject(client0_, 0, objectKey1, data1, WriteMode::NONE_L2_CACHE);
     VoluntaryScaleDownInject(0);
     sleep(2); // wait 2s for voluntary worker 1
     VoluntaryScaleDownInject(1);
-    sleep(10);            // Wait 10 seconds for voluntary scale down finished
-    AssertWorkerNum(2);  // The number of worker is 2
+    WaitAllNodesJoinIntoHashRing(2, 20);  // Wait for worker0 and worker1 to exit the hash ring within 20s.
     for (int i = 0; i < objectCnt; ++i) {
         std::string getValue;
         DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
@@ -754,33 +560,20 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryWorkersOneByOne)
 TEST_F(KVClientVoluntaryScaleDownTest, RemoteGetSuccessWhenScaleDown)
 {
     int objectCnt = 50;
-    int objectCnt1 = 10;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 3, "CreateMultiCopyMeta.skip", "60*return()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 3, "CreateCopyMeta.skip", "60*return()"));
     std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> objectKey1(objectCnt1);
     std::vector<std::string> data(objectCnt);
-    std::vector<std::string> data1(objectCnt1);
     SetNormalObject(client0_, 0, objectKey, data, WriteMode::NONE_L2_CACHE);
-    SetUuidObject(client0_, 0, objectKey1, data1, WriteMode::NONE_L2_CACHE);
     for (int i = 0; i < objectCnt; ++i) {
         std::string getValue;
         DS_ASSERT_OK(client3_->Get(objectKey[i], getValue));
-    }
-    for (int i = 0; i < objectCnt1; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client3_->Get(objectKey1[i], getValue));
     }
     VoluntaryScaleDownInject(0);
     sleep(2); // wait 2s for voluntary worker 1
     for (int i = 0; i < objectCnt; ++i) {
         std::string getValue;
         auto rc = client2_->Get(objectKey[i], getValue);
-        DS_ASSERT_OK(rc);
-    }
-    for (int i = 0; i < objectCnt1; ++i) {
-        std::string getValue;
-        auto rc = client2_->Get(objectKey1[i], getValue);
         DS_ASSERT_OK(rc);
     }
 }
@@ -794,7 +587,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, DISABLED_MasterAsyncTaskRecover)
     std::vector<std::string> data(objectCnt);
     std::vector<std::string> data1(objectCnt1);
     SetNormalObject(client3_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client3_, 0, objectKey1, data1, WriteMode::WRITE_THROUGH_L2_CACHE);
+    SetHashObject(client3_, 0, objectKey1, data1, WriteMode::WRITE_THROUGH_L2_CACHE);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "redis.Luadel.failed", "return(K_RPC_DEADLINE_EXCEEDED)"));
     for (int i = 0; i < objectCnt; ++i) {
@@ -1144,7 +937,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryDownWorker1WriteThroughL2CacheNo
     int objectCnt = 5;
     std::vector<std::string> objectKey(objectCnt);
     std::vector<std::string> data(objectCnt);
-    SetUuidObject(client0_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
+    SetHashObject(client0_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
     VoluntaryScaleDownInject(0);  // worker index is 0
     sleep(10);  // Wait 10 seconds for voluntary scale down finished
 
@@ -1160,7 +953,7 @@ TEST_F(KVClientVoluntaryScaleDownTest, VoluntaryDownWorker1WriteBackL2CacheNoCop
     int objectCnt = 5;
     std::vector<std::string> objectKey(objectCnt);
     std::vector<std::string> data(objectCnt);
-    SetUuidObject(client0_, 0, objectKey, data, WriteMode::WRITE_BACK_L2_CACHE);
+    SetHashObject(client0_, 0, objectKey, data, WriteMode::WRITE_BACK_L2_CACHE);
     VoluntaryScaleDownInject(0);  // worker index is 0
     sleep(10);  // Wait 10 seconds for voluntary scale down finished
 
@@ -1401,7 +1194,7 @@ TEST_F(KVClientVoluntaryScaleDownDfxTest, LEVEL2_VoluntaryWorkerScaleDown)
     std::vector<std::string> objectKey1(objectCnt);
     std::vector<std::string> data(objectCnt);
     SetNormalObject(client3_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client3_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
+    SetHashObject(client3_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "BatchMigrateMetadata.delay", "call(10)"));
     VoluntaryScaleDownInject(0);
     sleep(2); // wait 2 s for voluntary sacle down.
@@ -1745,9 +1538,9 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL2_VoluntaryWorkerScaleDown)
     std::vector<std::string> objectKey3(objectCnt);
     std::vector<std::string> data(objectCnt);
     SetNormalObject(client3_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client3_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
+    SetHashObject(client3_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
     SetNormalObject(client3_, 0, objectKey2, data, WriteMode::NONE_L2_CACHE, diffNum);
-    SetUuidObject(client3_, 0, objectKey3, data);
+    SetHashObject(client3_, 0, objectKey3, data);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "BatchMigrateMetadata.delay", "call(5)"));
     client0_.reset();
     client2_.reset();
@@ -1815,38 +1608,6 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_TestVolunDownWorkersMaste
     AssertWorkerNum(2);  // The number of worker is 2
 }
 
-TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL2_TestScaleDownWorkersUuidMetaData)
-{
-    StartWorkerAndWaitReady({ 0, 1 });
-    StartWorkerAndWaitReady({ 2, 3 });
-    sleep(10);                          // Wait 10 seconds for worker ready.
-    AssertAllNodesJoinIntoHashRing(4);  // The number of worker is 4
-    InitTestKVClient(0, client0_);      // Init client0 to worker 0 with 2000ms timeout
-    InitTestKVClient(1, client1_);      // Init client1 to worker 1 with 2000ms timeout
-    InitTestKVClient(2, client2_);      // Init client2 to worker 2 with 2000ms timeout
-    InitTestKVClient(3, client3_);      // Init client2 to worker 3 with 2000ms timeout
-    GetHashOnWorker();
-    GetWorkerUuids();
-    int objectCnt = 5;
-    std::vector<std::string> objectKey1(objectCnt);
-    std::vector<std::string> objectKey2(objectCnt);
-    std::vector<std::string> data(objectCnt);
-    SetUuidObject(client0_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client1_, 0, objectKey2, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    VoluntaryScaleDownInject(0);
-    sleep(2);  // Wait 2 seconds for voluntary scale down finished
-    client2_.reset();
-    client3_.reset();
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 2));  // Shutdown the worker 2
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 3));  // Shutdown the worker 3
-    sleep(10);                                        // Wait 10 seconds for voluntary scale down finished
-    for (int i = 0; i < objectCnt; ++i) {
-        std::string getValue;
-        DS_ASSERT_OK(client1_->Get(objectKey1[i], getValue));
-    }
-    AssertAllNodesJoinIntoHashRing(1);  // The number of worker is 1
-}
-
 TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_VoluntaryWorkerScaleDownTest)
 {
     StartWorkerAndWaitReady({ 0, 1, 2, 3 });
@@ -1884,14 +1645,10 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_VoluntaryWorkerScaleDownT
     int objectCnt = 20;
     int diffNum = 30;
     std::vector<std::string> objectKey(objectCnt);
-    std::vector<std::string> objectKey1(objectCnt);
     std::vector<std::string> objectKey2(objectCnt);
-    std::vector<std::string> objectKey3(objectCnt);
     std::vector<std::string> data(objectCnt);
     SetNormalObject(client3_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client3_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
     SetNormalObject(client3_, 0, objectKey2, data, WriteMode::NONE_L2_CACHE, diffNum);
-    SetUuidObject(client3_, 0, objectKey3, data);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "BatchMigrateMetadata.delay", "call(5)"));
     client0_.reset();
     VoluntaryScaleDownInject(0);
@@ -1916,8 +1673,6 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_VoluntaryWorkerScaleDownT
         std::string getValue;
         DS_ASSERT_OK(client2_->Get(objectKey[i], getValue));
         DS_ASSERT_OK(client2_->Get(objectKey2[i], getValue));
-        DS_ASSERT_OK(client2_->Get(objectKey1[i], getValue));
-        DS_ASSERT_OK(client2_->Get(objectKey3[i], getValue));
     }
     AssertAllNodesJoinIntoHashRing(2);  // The number of worker is 2
 }
@@ -1929,7 +1684,7 @@ public:
         KVClientVoluntaryScaleDownWorkerDfxTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams =
             "-shared_memory_size_mb=100 -v=2 -node_timeout_s=60 "
-            "-auto_del_dead_node=true -node_dead_timeout_s=600 -rolling_update_timeout_s=1 "
+            "-auto_del_dead_node=true -node_dead_timeout_s=600 "
             "-inject_actions=worker.HashRingHealthCheck:call(100)";
         for (size_t i = 0; i < DEFAULT_WORKER_NUM; i++) {
             opts.workerConfigs.emplace_back(HOST_IP_PREFIX + std::to_string(i), GetFreePort());
@@ -2000,7 +1755,6 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFaile
     ASSERT_EQ(valToGet, "val");
 }
 
-// Test the scenario where records in update_worker_map are deleted by scheduled tasks during metadata migration.
 TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFailedAndRestart2)
 {
     StartWorkerAndWaitReady({ 0, 1 });
@@ -2019,8 +1773,6 @@ TEST_F(STCVoluntaryScaleDownWorkerFaileDfxTest2, TestRedirctDuringScaleDownFaile
     DS_ASSERT_OK(externalCluster_->StartWorker(0, HostPort(), ""));
     // Wait for worker0 to write add_node_info so that worker1 can trigger the sacling up migration task.
     WaitAddNodeInfoInHashRing();
-    // The background task in worker1 will delete the workerId of worker0 in update_worker_map in advance.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "HashRingTools.WorkerUuidRemovable", "return()"));
     // After receiving the migration from worker1, refuse to update the hash ring to ensure that a redirection will be
     // triggered.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "HashRing.UpdateRing.sleep", "return()"));
@@ -2080,7 +1832,7 @@ TEST_F(STCVoluntaryScaleDownWorkerDfxTest, DISABLED_LEVEL1_TestWorkerRestartTime
     std::vector<std::string> objectKey1(objectCnt);
     std::vector<std::string> data(objectCnt);
     SetNormalObject(client0_, 0, objectKey, data, WriteMode::WRITE_THROUGH_L2_CACHE);
-    SetUuidObject(client0_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
+    SetHashObject(client0_, 0, objectKey1, data, WriteMode::WRITE_THROUGH_L2_CACHE);
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
     sleep(4);  // Wait 4 seconds for worker shutdown
     VoluntaryScaleDownInject(0);
@@ -2597,9 +2349,6 @@ TEST_F(ConcurrentVoluntaryScaleDown, ContinuousScaleDown)
         SetNormalObject(clients[i], i, keys, values);
         allKeys.insert(allKeys.end(), keys.begin(), keys.end());
         allValues.insert(allValues.end(), values.begin(), values.end());
-        SetUuidObject(clients[i], i, keys, values);
-        allKeys.insert(allKeys.end(), keys.begin(), keys.end());
-        allValues.insert(allValues.end(), values.begin(), values.end());
     }
     clients.clear();
 
@@ -2639,9 +2388,6 @@ TEST_F(ConcurrentVoluntaryScaleDown, SetGetDelDuringScaleDown)
         SetNormalObject(clients[i], i, keys, values);
         allObjectKeys.insert(allObjectKeys.end(), keys.begin(), keys.end());
         allValues.insert(allValues.end(), values.begin(), values.end());
-        SetUuidObject(clients[i], i, keys, values);
-        allObjectKeys.insert(allObjectKeys.end(), keys.begin(), keys.end());
-        allValues.insert(allValues.end(), values.begin(), values.end());
     }
     clients.clear();
 
@@ -2654,7 +2400,6 @@ TEST_F(ConcurrentVoluntaryScaleDown, SetGetDelDuringScaleDown)
         std::vector<std::string> values(cnt);
         const int w2Idx = 2;
         SetNormalObject(client2_, w2Idx, keys, values, WriteMode::NONE_L2_CACHE, cnt);
-        SetUuidObject(client2_, w2Idx, keys, values);
     });
     std::thread t2([&] {
         for (size_t i = 0; i < allObjectKeys.size(); i++) {
@@ -2711,14 +2456,14 @@ TEST_F(ConcurrentVoluntaryScaleDownDfx, SrcFaultDuringScaleDown)
     SetWorkerHashInjection();
     int cnt = 100;
     std::vector<std::string> keys0(cnt);
-    std::vector<std::string> keys0WithUuid(cnt);
+    std::vector<std::string> keys0ByHash(cnt);
     std::vector<std::string> keys1(cnt);
-    std::vector<std::string> keys1WithUuid(cnt);
+    std::vector<std::string> keys1ByHash(cnt);
     std::vector<std::string> values(cnt);
     SetNormalObject(client2_, 0, keys0, values);
-    SetUuidObject(client2_, 0, keys0WithUuid, values);
+    SetHashObject(client2_, 0, keys0ByHash, values);
     SetNormalObject(client2_, 1, keys1, values);
-    SetUuidObject(client2_, 1, keys1WithUuid, values);
+    SetHashObject(client2_, 1, keys1ByHash, values);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ScaleUpTask.NotRunVoluntaryDownTask", "1*sleep(5000)"));
     VoluntaryScaleDownInject(0);
     VoluntaryScaleDownInject(1);
@@ -2728,9 +2473,9 @@ TEST_F(ConcurrentVoluntaryScaleDownDfx, SrcFaultDuringScaleDown)
     for (int i = 0; i < cnt; i++) {
         std::string getValue;
         DS_ASSERT_OK(client3_->Get(keys0[i], getValue));
-        DS_ASSERT_OK(client3_->Get(keys0WithUuid[i], getValue));
+        DS_ASSERT_OK(client3_->Get(keys0ByHash[i], getValue));
         DS_ASSERT_OK(client3_->Get(keys1[i], getValue));
-        DS_ASSERT_OK(client3_->Get(keys1WithUuid[i], getValue));
+        DS_ASSERT_OK(client3_->Get(keys1ByHash[i], getValue));
     }
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1 }));
     WaitAllNodesJoinIntoHashRing(DEFAULT_WORKER_NUM, 20);  // Wait for all workers to join the hash ring within 20s.
@@ -2765,15 +2510,15 @@ TEST_F(ConcurrentVoluntaryScaleDownDfx, LEVEL1_DestFaultDuringScaleDown)
     SetWorkerHashInjection();
     int cnt = 100;
     std::vector<std::string> keys0(cnt);
-    std::vector<std::string> keys0WithUuid(cnt);
+    std::vector<std::string> keys0ByHash(cnt);
     std::vector<std::string> keys1(cnt);
-    std::vector<std::string> keys1WithUuid(cnt);
+    std::vector<std::string> keys1ByHash(cnt);
     std::vector<std::string> values(cnt);
     SetNormalObject(client0_, 0, keys0, values);
-    SetUuidObject(client0_, 0, keys0WithUuid, values);
+    SetHashObject(client0_, 0, keys0ByHash, values);
     const int w2Idx = 2;
     SetNormalObject(client2_, w2Idx, keys1, values);
-    SetUuidObject(client2_, w2Idx, keys1WithUuid, values);
+    SetHashObject(client2_, w2Idx, keys1ByHash, values);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ScaleUpTask.NotRunVoluntaryDownTask", "1*sleep(5000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, w2Idx, "VoluntaryScaledown.MigrateData.Delay", "1*sleep(5000)"));
     DS_ASSERT_OK(externalCluster_->KillWorker(1));
@@ -2783,9 +2528,9 @@ TEST_F(ConcurrentVoluntaryScaleDownDfx, LEVEL1_DestFaultDuringScaleDown)
     for (int i = 0; i < cnt; i++) {
         std::string getValue;
         DS_ASSERT_OK(client3_->Get(keys0[i], getValue));
-        DS_ASSERT_OK(client3_->Get(keys0WithUuid[i], getValue));
+        DS_ASSERT_OK(client3_->Get(keys0ByHash[i], getValue));
         DS_ASSERT_OK(client3_->Get(keys1[i], getValue));
-        DS_ASSERT_OK(client3_->Get(keys1WithUuid[i], getValue));
+        DS_ASSERT_OK(client3_->Get(keys1ByHash[i], getValue));
     }
 }
 
@@ -2834,16 +2579,6 @@ public:
     {
         uuid2DestAddr_.clear();
         addr2Uuid_.clear();
-        std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ring.ParseFromString(value);
-        for (auto &it : ring.key_with_worker_id_meta_map()) {
-            uuid2DestAddr_[it.first] = it.second;
-        }
-        for (auto &it : ring.update_worker_map()) {
-            addr2Uuid_[it.first] = it.second.worker_uuid();
-        }
     }
 
 protected:
@@ -2851,75 +2586,6 @@ protected:
     std::unordered_map<std::string, std::string> uuid2DestAddr_;
     std::unordered_map<std::string, std::string> addr2Uuid_;
 };
-
-TEST_F(VoluntaryScaleDownUpgrade, ReuseUuid)
-{
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1 }));
-    SetWorkerHashInjection({ 0, 1 });
-    auto worker0Uuid = GetWorkerUuid(0);
-    InitTestKVClient(1, client1_, 2000);  // Init client1 to worker 1 with 2000ms timeout
-    int cnt = 10;
-    std::vector<std::string> keys(cnt);
-    std::vector<std::string> values(cnt);
-    SetUuidObject(client1_, 0, keys, values);
-    VoluntaryScaleDownInject(0);
-    sleep(10);                            // wait 10s for w0 scale down finish
-    WaitAllNodesJoinIntoHashRing(1, 20);  // Wait for w0 to exit the hash ring within 20s.
-    for (const auto &key : keys) {
-        std::string val;
-        DS_ASSERT_OK(client1_->Get(key, val));
-    }
-    GetUuidAddrMap();
-    ASSERT_TRUE(uuid2DestAddr_.find(worker0Uuid) != uuid2DestAddr_.end());
-    ASSERT_TRUE(addr2Uuid_.find(workerAddress_[0]) != addr2Uuid_.end());
-
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0 }));
-    WaitAllNodesJoinIntoHashRing(2, 20);       // Wait for w0 to join the hash ring within 20s.
-    ASSERT_EQ(worker0Uuid, GetWorkerUuid(0));  // reuse worker0 uuid
-    GetUuidAddrMap();
-    ASSERT_TRUE(uuid2DestAddr_.empty());
-    ASSERT_TRUE(addr2Uuid_.empty());
-
-    InitTestKVClient(0, client0_, 2000);  // Init client0 to worker 0 with 2000ms timeout
-    for (const auto &key : keys) {
-        std::string val;
-        DS_ASSERT_OK(client0_->Get(key, val));
-    }
-}
-
-TEST_F(VoluntaryScaleDownUpgrade, UuidCleanUp)
-{
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1 }, " -rolling_update_timeout_s=5"));
-    SetWorkerHashInjection({ 0, 1 });
-    auto worker0Uuid = GetWorkerUuid(0);
-    InitTestKVClient(1, client1_, 2000);  // Init client1 to worker 1 with 2000ms timeout
-    int cnt = 10;
-    std::vector<std::string> keys(cnt);
-    std::vector<std::string> values(cnt);
-    SetUuidObject(client1_, 0, keys, values);
-    VoluntaryScaleDownInject(0);
-    sleep(10);                            // sleep 10 to wait w0 scale down finish
-    WaitAllNodesJoinIntoHashRing(1, 20);  // Wait for w0 to exit the hash ring within 20s.
-    for (const auto &key : keys) {
-        std::string val;
-        DS_ASSERT_OK(client1_->Get(key, val));
-    }
-    GetUuidAddrMap();
-    ASSERT_TRUE(uuid2DestAddr_.find(worker0Uuid) != uuid2DestAddr_.end());
-    ASSERT_TRUE(addr2Uuid_.empty());  // worker0Uuid clean up by w1
-
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0 }));
-    WaitAllNodesJoinIntoHashRing(2, 20);       // Wait for w0 to join the hash ring within 20s.
-    ASSERT_NE(worker0Uuid, GetWorkerUuid(0));  // worker0 generate new uuid
-    GetUuidAddrMap();
-    ASSERT_TRUE(uuid2DestAddr_.find(worker0Uuid) != uuid2DestAddr_.end());
-
-    InitTestKVClient(0, client0_, 2000);  // Init client0 to worker 0 with 2000ms timeout
-    for (const auto &key : keys) {
-        std::string val;
-        DS_ASSERT_OK(client0_->Get(key, val));
-    }
-}
 
 TEST_F(VoluntaryScaleDownUpgrade, LEVEL1_RestartRestoreScaleDown)
 {
@@ -2932,11 +2598,9 @@ TEST_F(VoluntaryScaleDownUpgrade, LEVEL1_RestartRestoreScaleDown)
     GetHashOnWorker(workerNum_);
     int cnt = 10;
     std::vector<std::string> keys0(cnt);
-    std::vector<std::string> keys0WithUuid(cnt);
     std::vector<std::string> values(cnt);
     InitTestKVClient(1, client1_, 2000);  // Init client1 to worker 1 with 2000ms timeout
     SetNormalObject(client1_, 0, keys0, values);
-    SetUuidObject(client1_, 0, keys0WithUuid, values);
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ScaleUpTask.NotRunVoluntaryDownTask", "1*sleep(5000)"));
     VoluntaryScaleDownInject(0);
     sleep(5);  // wait 5s for w0 migrate meta
@@ -2948,7 +2612,6 @@ TEST_F(VoluntaryScaleDownUpgrade, LEVEL1_RestartRestoreScaleDown)
     for (int i = 0; i < cnt; i++) {
         std::string getValue;
         DS_ASSERT_OK(client1_->Get(keys0[i], getValue));
-        DS_ASSERT_OK(client1_->Get(keys0WithUuid[i], getValue));
     }
 }
 
@@ -3134,17 +2797,6 @@ TEST_F(VoluntaryScaleDownAsyncL2MetaQueueTest, TestMigrateAsyncToEtcdMetadata)
     DS_ASSERT_OK(store.CreateTable(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
                                    std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
     std::vector<std::pair<std::string, std::string>> outKeyValues;
-    DS_ASSERT_OK(store.RangeSearch(std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, HashToStr(0),
-                                   HashToStr(UINT32_MAX), outKeyValues));
-    ASSERT_EQ(outKeyValues.size(), objCount);
-    for (const auto &pair : outKeyValues) {
-        auto pos = pair.first.find_last_of("/");
-        ASSERT_TRUE(pos != std::string::npos);
-        auto key = pair.first.substr(pos + 1);
-        ASSERT_TRUE(keys.find(key) != keys.end());
-    }
-
-    outKeyValues.clear();
     ASSERT_EQ(store
                   .RangeSearch(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, HashToStr(0),
                                HashToStr(UINT32_MAX), outKeyValues)
@@ -3192,17 +2844,6 @@ TEST_F(VoluntaryScaleDownAsyncL2MetaQueueTest, TestMigrateAsyncToEtcdMetadataWit
     DS_ASSERT_OK(store.CreateTable(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
                                    std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
     std::vector<std::pair<std::string, std::string>> outKeyValues;
-    DS_ASSERT_OK(store.RangeSearch(std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, HashToStr(0),
-                                   HashToStr(UINT32_MAX), outKeyValues));
-    ASSERT_EQ(outKeyValues.size(), objCount);
-    for (const auto &pair : outKeyValues) {
-        auto pos = pair.first.find_last_of("/");
-        ASSERT_TRUE(pos != std::string::npos);
-        auto key = pair.first.substr(pos + 1);
-        ASSERT_TRUE(keys.find(key) != keys.end());
-    }
-
-    outKeyValues.clear();
     ASSERT_EQ(store
                   .RangeSearch(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, HashToStr(0),
                                HashToStr(UINT32_MAX), outKeyValues)
@@ -3331,11 +2972,10 @@ TEST_F(VoluntaryScaleDownRedirectTest, DISABLED_ScaleUpDelayRedirect)
     auto trueRingTable = ETCD_RING_PREFIX;
     DS_ASSERT_OK(db_->Get(trueRingTable, "", hashRingStr));
     ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-    auto standbyWorker = ring.key_with_worker_id_meta_map().begin()->second;
     std::vector<size_t> aliveWorkerIndexs;
     size_t voluntaryDownIndex = 0;
     for (size_t i = 1; i < workerAddress_.size(); i++) {
-        if (workerAddress_[i] == standbyWorker) {
+        if (workerAddress_[i] == workerAddress_[1]) {
             voluntaryDownIndex = i;
         } else {
             aliveWorkerIndexs.emplace_back(i);

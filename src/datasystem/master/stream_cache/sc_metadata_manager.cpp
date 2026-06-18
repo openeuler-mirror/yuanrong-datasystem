@@ -130,8 +130,8 @@ Status SCMetadataManager::Init()
     ClearWorkerMeta::GetInstance().AddSubscriber(
         eventName_, [this](const HostPort &eventNodeKey) { return ClearWorkerMetadata(eventNodeKey); });
     HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges) {
-            return RecoverMetadataOfFaultyWorker(workerUuids, extraRanges);
+        eventName_, [this](const worker::HashRange &extraRanges) {
+            return RecoverMetadataOfFaultyWorker(extraRanges);
         });
     LOG(INFO) << FormatString("[%s] Initialize success", LogPrefix());
     return Status::OK();
@@ -918,7 +918,7 @@ Status SCMetadataManager::UpdateMetadata(std::vector<GetStreamMetadataRspPb> &me
     WriteLockHelper wlocker(LOCK_ARGS(metaDictMutex_));
     for (const auto &streamMetadata : streamMetaManagerDict_) {
         const auto &streamName = streamMetadata.first;
-        if ((hashRanges.empty() || etcdCM_->IsInRange(hashRanges, streamName, ""))
+        if ((hashRanges.empty() || etcdCM_->IsInRange(hashRanges, streamName))
             && std::find(receivedStreams.begin(), receivedStreams.end(), streamName) == receivedStreams.end()) {
             auto rc = streamMetadata.second->ClearWorkerMetadata(workerAddr, false, false);
             LOG_IF_ERROR_EXCEPT(rc,
@@ -1006,11 +1006,9 @@ void SCMetadataManager::StartClearWorkerMetadata(const HostPort &workerAddr)
     });
 }
 
-Status SCMetadataManager::RecoverMetadataOfFaultyWorker(const std::vector<std::string> &workerUuids,
-                                                        const worker::HashRange &extraRanges)
+Status SCMetadataManager::RecoverMetadataOfFaultyWorker(const worker::HashRange &extraRanges)
 {
     if (extraRanges.empty()) {
-        LOG_IF(INFO, !workerUuids.empty()) << "Only supports RecoverMetadataOfFaultyWorker by hash ranges for SC";
         return Status::OK();
     }
     LOG(INFO) << "Start RecoverMetadataOfFaultyWorker by ranges";

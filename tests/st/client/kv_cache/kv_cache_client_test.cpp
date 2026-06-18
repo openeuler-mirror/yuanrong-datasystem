@@ -964,7 +964,6 @@ TEST_F(KVCacheClientTest, TestGenerateKey)
     InitTestKVClient(0, client);
     (void)client->GenerateKey("", key);
     ASSERT_TRUE(key.size() != 0);
-    ASSERT_TRUE(key.find(";") != std::string::npos);
 }
 
 TEST_F(KVCacheClientTest, LEVEL1_TestRemoteGetFromSelfAddressScenarios)
@@ -2249,6 +2248,7 @@ public:
         ASSERT_TRUE(cluster_ != nullptr);
         DS_ASSERT_OK(cluster_->StartEtcdCluster());
         DS_ASSERT_OK(cluster_->StartOBS());
+        CommonDistributedExt::InitTestEtcdInstance();
         externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
     }
 
@@ -2317,12 +2317,12 @@ protected:
 TEST_F(KVClientWriteRocksdbTest, TestNoneModeNoneL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=none");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
@@ -2335,18 +2335,19 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeNoneL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestNoneModeL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=none");
+    SetWorkerHashInjection();
+    std::vector<std::string> keysHashToW0;
+    GetObjectKeysHashToWorker(etcd_.get(), 0, 2, keysHashToW0);
+    std::string key1 = keysHashToW0[0];
+    std::string key2 = keysHashToW0[1];
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     SetParam param1;
     param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key1, data, param1));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
-    std::string key2;
-    (void)client1->GenerateKey("", key2);
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
@@ -2365,12 +2366,12 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
     StartWorkerAndWaitReady({ 0, 1 },
                             "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
                             "-rocksdb_write_mode=none");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
@@ -2384,12 +2385,12 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
 TEST_F(KVClientWriteRocksdbTest, TestNoneModeScaleUp)
 {
     StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=none");
+    SetWorkerHashInjection({ 0 });
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     StartWorkerAndWaitReady({ 1 });
     std::string val;
@@ -2400,12 +2401,12 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeScaleUp)
 TEST_F(KVClientWriteRocksdbTest, TestSyncModeNoneL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=sync");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
@@ -2418,19 +2419,20 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeNoneL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestSyncModeL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=sync");
+    SetWorkerHashInjection();
+    std::vector<std::string> keysHashToW0;
+    GetObjectKeysHashToWorker(etcd_.get(), 0, 2, keysHashToW0);
+    std::string key1 = keysHashToW0[0];
+    std::string key2 = keysHashToW0[1];
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     SetParam param1;
     param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key1, data, param1));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "persistence.service.save", "return(K_OK)"));
-    std::string key2;
-    (void)client1->GenerateKey("", key2);
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
@@ -2450,12 +2452,12 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
     StartWorkerAndWaitReady({ 0, 1 },
                             "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
                             "-rocksdb_write_mode=sync");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
@@ -2469,12 +2471,12 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
 TEST_F(KVClientWriteRocksdbTest, TestSyncModeScaleUp)
 {
     StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=sync");
+    SetWorkerHashInjection({ 0 });
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     StartWorkerAndWaitReady({ 1 });
     std::string val;
@@ -2485,12 +2487,12 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeScaleUp)
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeNoneL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=async");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
@@ -2503,19 +2505,20 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeNoneL2Cache)
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeL2Cache)
 {
     StartWorkerAndWaitReady({ 0, 1 }, "-rocksdb_write_mode=async");
+    SetWorkerHashInjection();
+    std::vector<std::string> keysHashToW0;
+    GetObjectKeysHashToWorker(etcd_.get(), 0, 2, keysHashToW0);
+    std::string key1 = keysHashToW0[0];
+    std::string key2 = keysHashToW0[1];
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     SetParam param1;
     param1.writeMode = WriteMode::WRITE_THROUGH_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key1, data, param1));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.before_sub_async_send_etcd_req", "1*return(K_OK)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "persistence.service.save", "return(K_OK)"));
-    std::string key2;
-    (void)client1->GenerateKey("", key2);
     SetParam param2;
     param2.writeMode = WriteMode::WRITE_BACK_L2_CACHE;
     DS_ASSERT_OK(client1->Set(key2, data, param2));
@@ -2534,12 +2537,12 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
     StartWorkerAndWaitReady({ 0, 1 },
                             "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
                             "-rocksdb_write_mode=async");
+    SetWorkerHashInjection();
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
@@ -2553,12 +2556,12 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeScaleUp)
 {
     StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=async");
+    SetWorkerHashInjection({ 0 });
+    std::string key1 = GetObjectKeyHashToWorker(etcd_.get(), 0);
     std::shared_ptr<KVClient> client1;
     InitTestKVClient(0, client1);
     uint64_t size = 128;
     std::string data = GenRandomString(size);
-    std::string key1;
-    (void)client1->GenerateKey("", key1);
     DS_ASSERT_OK(client1->Set(key1, data));
     StartWorkerAndWaitReady({ 1 });
     std::string val;
@@ -2898,6 +2901,7 @@ public:
 
     void TearDown() override
     {
+        ClearSwitchWorkerExpectedInjects();
         clients_.clear();
         client_.reset();
         ExternalClusterTest::TearDown();
@@ -2915,7 +2919,7 @@ public:
 
         ConnectOptions connectOptions;
         connectOptions.connectTimeoutMs = 60000;
-        connectOptions.requestTimeoutMs = 0;
+        connectOptions.requestTimeoutMs = 3000;
         connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
         connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
         // Enable standby/switch logic so the test verifies the best available recovery path.
@@ -2957,95 +2961,64 @@ public:
         return Status::OK();
     }
 
-    Status GetWorkerUuid(uint32_t workerIndex, std::string &workerUuid)
+    void ClearSwitchWorkerExpectedInjects()
     {
-        auto db = InitTestEtcdInstance();
-        std::unordered_map<HostPort, std::string> uuidMap;
-        GetWorkerUuids(db.get(), uuidMap);
-        auto iter = uuidMap.find(workerAddress_[workerIndex]);
-        CHECK_FAIL_RETURN_STATUS(iter != uuidMap.end(), K_NOT_READY,
-                                 FormatString("Cannot find worker %s in hash ring.",
-                                              workerAddress_[workerIndex].ToString()));
-        workerUuid = iter->second;
-        return Status::OK();
+        datasystem::inject::Clear("client.switch_worker_expected_1");
+        datasystem::inject::Clear("client.switch_worker_expected_1.matched");
+        datasystem::inject::Clear("client.switch_worker_expected_2");
+        datasystem::inject::Clear("client.switch_worker_expected_2.matched");
     }
 
-    Status CurrentClientWorkerUuid(std::string &workerUuid)
+    Status SetSwitchWorkerExpected(size_t slot, const HostPort &workerAddress)
     {
-        return CurrentClientWorkerUuid(client_, workerUuid);
+        std::string expectedPoint = FormatString("client.switch_worker_expected_%zu", slot);
+        std::string matchedPoint = FormatString("client.switch_worker_expected_%zu.matched", slot);
+        RETURN_IF_NOT_OK(datasystem::inject::Set(expectedPoint, "call(" + workerAddress.ToString() + ")"));
+        return datasystem::inject::Set(matchedPoint, "call()");
     }
 
-    Status CurrentClientWorkerUuid(const std::shared_ptr<KVClient> &client, std::string &workerUuid)
+    uint64_t GetSwitchWorkerMatchedCount(size_t slot)
     {
-        std::string key;
-        RETURN_IF_NOT_OK(client->GenerateKey("", key));
-        // GenerateKey appends ";worker_uuid", so the suffix tells which worker the client is currently using.
-        auto pos = key.rfind(';');
-        CHECK_FAIL_RETURN_STATUS(pos != std::string::npos && pos + 1 < key.size(), K_RUNTIME_ERROR,
-                                 FormatString("Invalid generated key: %s", key));
-        workerUuid = key.substr(pos + 1);
-        return Status::OK();
+        return datasystem::inject::GetExecuteCount(FormatString("client.switch_worker_expected_%zu.matched", slot));
     }
 
-    Status CheckClientUsesWorker(const std::string &expectedWorkerUuid)
+    Status CheckClientSetGet(const std::shared_ptr<KVClient> &client, const std::string &prefix, size_t index)
     {
-        // Keep normal KV traffic flowing while waiting for the client to switch back.
-        std::string key = "switch_back_" + GetStringUuid();
-        std::string value = "local worker should be preferred after it becomes ready";
-        RETURN_IF_NOT_OK(client_->Set(key, value));
-
+        std::string key = FormatString("%s_%zu_%s", prefix, index, GetStringUuid());
+        std::string value = "client traffic should keep succeeding across worker switches";
+        RETURN_IF_NOT_OK(client->Set(key, value));
         std::string result;
-        RETURN_IF_NOT_OK(client_->Get(key, result));
+        RETURN_IF_NOT_OK(client->Get(key, result));
         CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
-
-        std::string currentWorkerUuid;
-        RETURN_IF_NOT_OK(CurrentClientWorkerUuid(currentWorkerUuid));
-        CHECK_FAIL_RETURN_STATUS(currentWorkerUuid == expectedWorkerUuid, K_NOT_READY,
-                                 FormatString("Current worker uuid is %s, expect local worker uuid %s.",
-                                              currentWorkerUuid, expectedWorkerUuid));
         return Status::OK();
     }
 
-    Status CheckClientsRedistributedToRemoteWorkers(const std::vector<std::shared_ptr<KVClient>> &clients,
-                                                    const std::unordered_set<std::string> &remoteWorkerUuids)
+    Status CheckClientSwitchToExpectedWorker(const std::shared_ptr<KVClient> &client, size_t slot,
+                                             uint64_t expectedMatchedCount)
     {
-        std::unordered_set<std::string> usedWorkerUuids;
-        for (size_t i = 0; i < clients.size(); ++i) {
-            std::string currentWorkerUuid;
-            RETURN_IF_NOT_OK(CurrentClientWorkerUuid(clients[i], currentWorkerUuid));
-            CHECK_FAIL_RETURN_STATUS(remoteWorkerUuids.count(currentWorkerUuid) == 1, K_NOT_READY,
-                                     FormatString("Client %zu is still on unexpected worker uuid %s.", i,
-                                                  currentWorkerUuid));
-            usedWorkerUuids.emplace(std::move(currentWorkerUuid));
-        }
-        CHECK_FAIL_RETURN_STATUS(usedWorkerUuids.size() == remoteWorkerUuids.size(), K_NOT_READY,
-                                 FormatString("Clients only spread to %zu remote workers, expected %zu.",
-                                              usedWorkerUuids.size(), remoteWorkerUuids.size()));
-        for (size_t i = 0; i < clients.size(); ++i) {
-            std::string key = FormatString("switch_spread_%zu_%s", i, GetStringUuid());
-            std::string value = "clients should be redistributed across remaining workers";
-            RETURN_IF_NOT_OK(clients[i]->Set(key, value));
-
-            std::string result;
-            RETURN_IF_NOT_OK(clients[i]->Get(key, result));
-            CHECK_FAIL_RETURN_STATUS(result == value, K_RUNTIME_ERROR, "Unexpected value read from KVClient.");
-        }
+        RETURN_IF_NOT_OK(CheckClientSetGet(client, "switch_back", 0));
+        CHECK_FAIL_RETURN_STATUS(GetSwitchWorkerMatchedCount(slot) >= expectedMatchedCount, K_NOT_READY,
+                                 FormatString("Expected switch slot %zu count >= %zu, actual %zu.", slot,
+                                              expectedMatchedCount, GetSwitchWorkerMatchedCount(slot)));
         return Status::OK();
     }
 
-    Status LogClientDistribution(const std::string &stage, const std::vector<std::shared_ptr<KVClient>> &clients)
+    Status CheckClientsSwitchedToBothRemoteWorkers(size_t expectedClientNum)
     {
-        std::unordered_map<std::string, size_t> workerClientCounts;
-        for (const auto &client : clients) {
-            std::string currentWorkerUuid;
-            RETURN_IF_NOT_OK(CurrentClientWorkerUuid(client, currentWorkerUuid));
-            ++workerClientCounts[currentWorkerUuid];
-        }
-        LOG(INFO) << FormatString("[ClientDistribution] stage=%s total_clients=%zu worker_count=%zu", stage,
-                                  clients.size(), workerClientCounts.size());
-        for (const auto &entry : workerClientCounts) {
-            LOG(INFO) << FormatString("[ClientDistribution] stage=%s worker_uuid=%s client_count=%zu", stage,
-                                      entry.first, entry.second);
+        uint64_t worker1MatchedCount = GetSwitchWorkerMatchedCount(1);
+        uint64_t worker2MatchedCount = GetSwitchWorkerMatchedCount(2);
+        bool allClientsSwitched = worker1MatchedCount + worker2MatchedCount >= expectedClientNum;
+        CHECK_FAIL_RETURN_STATUS(worker1MatchedCount > 0 && worker2MatchedCount > 0 && allClientsSwitched,
+                                 K_NOT_READY,
+                                 FormatString("Switch counts are worker1=%zu, worker2=%zu, expected clients=%zu.",
+                                              worker1MatchedCount, worker2MatchedCount, expectedClientNum));
+        return Status::OK();
+    }
+
+    Status CheckClientsSetGet(const std::vector<std::shared_ptr<KVClient>> &clients)
+    {
+        for (size_t i = 0; i < clients.size(); ++i) {
+            RETURN_IF_NOT_OK(CheckClientSetGet(clients[i], "switch_spread", i));
         }
         return Status::OK();
     }
@@ -3065,52 +3038,29 @@ TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
 
     // The client is forced to start on a remote worker because no same-node worker is ready.
     InitClientByServiceDiscovery("switch_back_host_id_env0", client_);
-    std::string initialWorkerUuid;
-    DS_ASSERT_OK(CurrentClientWorkerUuid(initialWorkerUuid));
 
     // When worker 0 comes online later, the client is expected to switch back quickly without request failures.
+    ClearSwitchWorkerExpectedInjects();
+    DS_ASSERT_OK(SetSwitchWorkerExpected(1, workerAddress_[0]));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
 
-    std::string localWorkerUuid;
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this, &localWorkerUuid]() { return GetWorkerUuid(0, localWorkerUuid); },
-                                                 10, K_OK));
-    ASSERT_NE(initialWorkerUuid, localWorkerUuid);
-
     // The client should actively recover to the local worker while normal KV traffic keeps succeeding.
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this, &localWorkerUuid]() { return CheckClientUsesWorker(localWorkerUuid); }, 8, K_OK));
+        [this]() { return CheckClientSwitchToExpectedWorker(client_, 1, 1); }, 8, K_OK));
 }
 
 TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcrossRemainingWorkers)
 {
     constexpr size_t clientNum = 20;
     InitClientsByServiceDiscovery("switch_back_host_id_env0", clientNum, clients_);
-
-    std::string initialWorkerUuid;
-    DS_ASSERT_OK(CurrentClientWorkerUuid(clients_.front(), initialWorkerUuid));
-    for (const auto &client : clients_) {
-        std::string currentWorkerUuid;
-        DS_ASSERT_OK(CurrentClientWorkerUuid(client, currentWorkerUuid));
-        ASSERT_EQ(currentWorkerUuid, initialWorkerUuid);
-    }
-    DS_ASSERT_OK(LogClientDistribution("before_failover", clients_));
-
+    ClearSwitchWorkerExpectedInjects();
+    DS_ASSERT_OK(SetSwitchWorkerExpected(1, workerAddress_[1]));
+    DS_ASSERT_OK(SetSwitchWorkerExpected(2, workerAddress_[2]));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-
-    std::string remoteWorkerUuid1;
-    std::string remoteWorkerUuid2;
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this, &remoteWorkerUuid1]() { return GetWorkerUuid(1, remoteWorkerUuid1); }, 10, K_OK));
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this, &remoteWorkerUuid2]() { return GetWorkerUuid(2, remoteWorkerUuid2); }, 10, K_OK));
-    ASSERT_NE(remoteWorkerUuid1, remoteWorkerUuid2);
-
-    std::unordered_set<std::string> remoteWorkerUuids = { remoteWorkerUuid1, remoteWorkerUuid2 };
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this, &remoteWorkerUuids]() { return CheckClientsRedistributedToRemoteWorkers(clients_, remoteWorkerUuids); },
-        10, K_OK));
-    DS_ASSERT_OK(LogClientDistribution("after_failover", clients_));
+        [this, clientNum]() { return CheckClientsSwitchedToBothRemoteWorkers(clientNum); }, 10, K_OK));
+    DS_ASSERT_OK(CheckClientsSetGet(clients_));
 }
 
 class KVCacheClientL2FallBackTest : public OCClientCommon {

@@ -87,6 +87,34 @@ uint32_t GetNodeRedirectForInject(const uint8_t *data, size_t len)
     }
 }
 
+#ifdef WITH_TESTS
+uint32_t MurmurHash3InjectOverride(const uint8_t *data, size_t len, uint32_t result)
+{
+    INJECT_POINT("MurmurHash3", [data, len, result]() {
+        std::string key(reinterpret_cast<const char *>(data), len);
+        const char *prefix = "a_key_hash_to_";
+        auto preSize = strlen(prefix);
+        auto pos = key.find(prefix);
+        if (pos != std::string::npos) {
+            key.erase(0, pos + preSize);
+            return static_cast<uint32_t>(StrToUnsignedLong(key));
+        } else {
+            return Fmix(result);
+        }
+    });
+
+    INJECT_POINT("MurmurHash3SpecifyKey", [data, len, result](const std::string &specifyKey, uint32_t resultHash) {
+        std::string key(reinterpret_cast<const char *>(data), len);
+        if (specifyKey == key) {
+            return resultHash;
+        } else {
+            return Fmix(result);
+        }
+    });
+    return Fmix(result);
+}
+#endif
+
 uint32_t MurmurHash3_32(const uint8_t *data, size_t len, uint32_t seed)
 {
     if (data == nullptr) {
@@ -124,26 +152,7 @@ uint32_t MurmurHash3_32(const uint8_t *data, size_t len, uint32_t seed)
     // avalanche
     result ^= len;
 #ifdef WITH_TESTS
-    INJECT_POINT("MurmurHash3", [data, len, result]() {
-        std::string key(reinterpret_cast<const char *>(data), len);
-        const char *prefix = "a_key_hash_to_";
-        auto preSize = strlen(prefix);
-        if (key.substr(0, preSize) == prefix) {
-            key.erase(0, preSize);
-            return static_cast<uint32_t>(StrToUnsignedLong(key));
-        } else {
-            return Fmix(result);
-        }
-    });
-
-    INJECT_POINT("MurmurHash3SpecifyKey", [data, len, result](const std::string &specifyKey, uint32_t resultHash) {
-        std::string key(reinterpret_cast<const char *>(data), len);
-        if (specifyKey == key) {
-            return resultHash;
-        } else {
-            return Fmix(result);
-        }
-    });
+    return MurmurHash3InjectOverride(data, len, result);
 #endif
     return Fmix(result);
 }

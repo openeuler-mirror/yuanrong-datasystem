@@ -345,13 +345,12 @@ void OCGlobalCacheDeleteManager::GetDeletedObjects(std::map<std::string, DeleteM
     deleteIds = deleteIds_;
 }
 
-Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const std::vector<std::string> &workerUuids,
-                                                     const worker::HashRange &extraRanges)
+Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const worker::HashRange &extraRanges)
 {
     std::vector<std::pair<std::string, std::string>> deleteObjects;
     if (!objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE,
-                                                                   workerUuids, extraRanges, deleteObjects),
+                                                                   extraRanges, deleteObjects),
                                          "Load global cache delete objects from etcd failed.");
         for (const auto &iter : deleteObjects) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(GLOBAL_CACHE_TABLE, iter.first, iter.second));
@@ -362,7 +361,7 @@ Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const s
                                              "Load global cache delete objects from rocksdb failed.");
         } else {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, workerUuids, extraRanges,
+                objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, extraRanges,
                                           deleteObjects),
                 "Load global cache delete objects from etcd failed.");
         }

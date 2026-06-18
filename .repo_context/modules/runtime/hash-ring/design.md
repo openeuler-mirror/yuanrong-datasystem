@@ -59,7 +59,7 @@
   - `HashRingTaskExecutor` turns `add_node_info` and `del_node_info` into asynchronous migration/recovery/cleanup work.
   - `HashRingHealthCheck` periodically retries stuck tasks and can repair selected abnormal protobuf states.
   - `ReadHashRing` is a protected `HashRing` subclass for read-only other-AZ rings.
-  - `hash_ring_tools` maintains mapping helpers, JSON log formatting, and rolling-update map cleanup.
+  - `hash_ring_tools` maintains worker UUID/address mapping helpers and JSON log formatting.
 - Key persistent state:
   - serialized `HashRingPb` under `ETCD_RING_PREFIX` (`/datasystem/ring`) and, for multi-AZ, prefixed AZ ring paths.
 - Key in-memory state:
@@ -75,7 +75,7 @@
 | `HashRingTaskExecutor` | async scale-up/scale-down/voluntary migration work | `hash_ring_task_executor.*` | uses `HashRingEvent` subscribers and retries CAS marks |
 | `HashRingHealthCheck` | stuck-state detection and optional self-healing | `hash_ring_health_check.*` | timing based on `node_dead_timeout_s` and `add_node_wait_time_s` |
 | `ReadHashRing` | other-AZ read-side ring snapshot and route helper | `read_hash_ring.*` | updates from watch events without writing ring state |
-| `hash_ring_tools` | ring map derivation, JSON logging, update-map cleanup | `hash_ring_tools.*` | `rolling_update_timeout_s` defined here |
+| `hash_ring_tools` | ring map derivation and JSON logging | `hash_ring_tools.*` | derives worker UUID/address maps from `HashRingPb.workers` |
 | `HashRingPb` | persisted topology and task schema | `src/datasystem/protos/hash_ring.proto` | compatibility-sensitive |
 
 ## Data And State Model
@@ -94,16 +94,13 @@
   - `FAIL`: terminal local failure state.
 - `add_node_info`:
   - keyed by destination worker; ranges tell source worker IDs to migrate metadata to the destination.
-  - used for normal scale-up, voluntary scale-down metadata migration, and UUID restoration after rolling restart.
+  - used for normal scale-up and voluntary scale-down metadata migration.
 - `del_node_info`:
   - keyed by removed/failed worker; ranges tell recovery workers which ownership ranges to recover or clear.
-- `key_with_worker_id_meta_map`:
-  - maps removed or migrating worker UUIDs to substitute worker addresses for route compatibility.
-- `update_worker_map`:
-  - maps worker address to reusable UUID and timestamp during rolling update or voluntary scale-down UUID migration.
 - Range convention:
   - normal range ownership is `(from, end]` with wraparound handling.
-  - `from == end` is a point marker for UUID metadata migration, not an empty range.
+  - `from == end` is no longer used for UUID metadata migration after worker-UUID routing removal; range handling should
+    not reintroduce object-key worker UUID semantics.
 
 ## Main Flows
 
@@ -137,7 +134,7 @@ Failure-sensitive steps:
 1. `EtcdClusterManager` classifies workers as failed based on cluster-table keepalive state.
 2. `HashRing::RemoveWorkers` runs only if `EnableAutoDelDeadNode()` is true.
 3. Process workers are chosen from related workers so not every worker writes the same deletion.
-4. The selected process worker CAS-adds `del_node_info` and `key_with_worker_id_meta_map`.
+4. The selected process worker CAS-adds `del_node_info`.
 5. `HashRingTaskExecutor` recovers metadata, clears data without metadata, and CAS-erases completed `del_node_info`.
 
 Failure-sensitive steps:
@@ -150,7 +147,7 @@ Failure-sensitive steps:
 1. Worker marks `need_scale_down=true`.
 2. Periodic inspection waits until the worker is primary for its DB when needed.
 3. The worker transitions to `LEAVING` and writes `add_node_info` toward standby workers.
-4. Metadata migration clears hash tokens and, after UUID migration, records substitution maps and `update_worker_map`.
+4. Metadata migration clears hash tokens and finalizes range ownership transfer.
 5. Data migration starts after `DataMigrationReady`; `BeforeVoluntaryExit` runs before the worker is erased from the ring.
 
 Failure-sensitive steps:
@@ -194,7 +191,6 @@ Failure-sensitive steps:
 | `add_node_wait_time_s` | uint32 | `worker_oc_server.cpp`, default 60 | delays first init/add-node attempts | low value increases CAS contention during startup |
 | `node_dead_timeout_s` | uint32 | worker flags | health-check timing and failed-node policy input | small values can trigger aggressive deletion |
 | `enable_hash_ring_self_healing` | bool | `worker_oc_server.cpp`, default false | permits auto repair of stuck ring states | can erase pending migration state |
-| `rolling_update_timeout_s` | uint32 | `hash_ring_tools.cpp`, default 1800 | retention for `update_worker_map` | too small can break UUID reuse restoration |
 | `etcd_address` | string | worker config | external ETCD backend | empty allowed only when metastore is used |
 | `metastore_address` | string | worker config | built-in ETCD-compatible backend | takes precedence in hash-ring backend cleanup path |
 
@@ -244,9 +240,8 @@ Failure-sensitive steps:
 ## Compatibility And Invariants
 
 - `HashRingPb` field meanings are persistent compatibility surface.
-- Worker address strings are keys in `HashRingPb.workers`; UUIDs are separate route identities.
-- `update_worker_map` entries should not be removed while a worker exists with an empty UUID waiting for restoration.
-- `key_with_worker_id_meta_map` must point substitute UUIDs at worker addresses that can be resolved by local maps or explicitly handled as removed workers.
+- Worker address strings are keys in `HashRingPb.workers`; UUIDs remain internal worker/replica identities but no longer
+  route object keys.
 - `HashRing::FAIL` is terminal for local state transitions.
 
 ## Build, Test, And Verification
@@ -281,7 +276,7 @@ Failure-sensitive steps:
 
 - Inspect `/datasystem/ring` as `HashRingPb`/JSON.
 - Check whether the local node is `INIT`, `PRE_RUNNING`, `RUNNING`, `PRE_LEAVING`, or `FAIL`.
-- Inspect `add_node_info`, `del_node_info`, worker states, `need_scale_down`, `key_with_worker_id_meta_map`, and `update_worker_map`.
+- Inspect `add_node_info`, `del_node_info`, worker states, and `need_scale_down`.
 - Look for `HashRingHealthCheck` logs and migration task logs with trace IDs.
 
 ## Pending Verification

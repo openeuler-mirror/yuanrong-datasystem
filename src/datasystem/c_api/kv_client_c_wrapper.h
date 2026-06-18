@@ -174,9 +174,9 @@ struct StatusC SCDelArray(KVClient_p clientPtr, const char **cKeys, uint64_t num
                           uint64_t *failedCount);
 
 /**
- * @brief Generate a key with worker_uuid.
+ * @brief Generate a random key.
  * @param[in] clientPtr The pointer of KVClient.
- * @param[out] key The key with worker_uuid, i.
+ * @param[out] key The generated key.
  * @return size_t The length of the key, if the key fails to be generated, 0 is returned.
  */
 size_t SCGenerateKey(KVClient_p clientPtr, char **key);

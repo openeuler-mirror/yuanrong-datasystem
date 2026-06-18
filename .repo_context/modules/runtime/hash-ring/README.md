@@ -70,20 +70,18 @@
   - `HashRing::InspectAndProcessPeriodically()`
   - `HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)`
   - `HashRing::VoluntaryScaleDown()`
-  - `HashRing::GetMasterAddr`, `GetMasterUuid`, `GetPrimaryWorkerUuid`, `GetUuidInCurrCluster`
+  - `HashRing::GetMasterAddr`, `GetMasterUuid`, `GetPrimaryWorkerUuid`
   - `ReadHashRing::UpdateRing` for other-AZ ring snapshots
 - Persistent schema:
   - `WorkerPb`: worker `hash_tokens`, `worker_uuid`, `state`, `need_scale_down`
   - `ChangeNodePb`: changed hash ranges for scale-up or scale-down work
-  - `HashRingPb`: `workers`, `cluster_has_init`, `add_node_info`, `del_node_info`,
-    `key_with_worker_id_meta_map`, `update_worker_map`
+  - `HashRingPb`: `workers`, `cluster_has_init`, `add_node_info`, `del_node_info`
 - Config flags or environment variables:
   - `enable_distributed_master`: false maps the local state to centralized-master `NO_INIT`;
   - `auto_del_dead_node`: enables automatic failed-worker deletion when distributed master is enabled;
   - `add_node_wait_time_s`: delay before initial token generation or adding workers to an existing ring;
   - `node_dead_timeout_s`: participates in hash-ring health-check timing;
   - `enable_hash_ring_self_healing`: enables automatic repair of some stuck ring states;
-  - `rolling_update_timeout_s`: retention window for `update_worker_map`;
   - `etcd_address` / `metastore_address`: backend address selection, with Metastore preferred if set.
 
 ## Main Dependencies
@@ -107,7 +105,7 @@
 1. `EtcdClusterManager::Init` starts ETCD watches for ring and cluster tables, then calls `HashRing::InitWithEtcd` or `InitWithoutEtcd`.
 2. `InitWithEtcd` initializes master address through `ETCD_MASTER_ADDRESS_TABLE` if `master_address` is empty.
 3. It reads an old ring snapshot from the selected backend address key and writes/updates `ETCD_RING_PREFIX` by CAS through `HashRing::InitRing`.
-4. `InitRing` detects restart vs first start by `workers[workerAddr_]`, may reuse `update_worker_map`, and inserts a new `INITIAL` worker when missing.
+4. `InitRing` detects restart vs first start by `workers[workerAddr_]` and inserts a new `INITIAL` worker when missing.
 5. If the existing ring is already initialized, `UpdateWhenNodeRestart` force-updates local state so the worker can restore unfinished scaling tasks.
 6. In distributed-master mode, `HashRingHealthCheck` starts after init.
 
@@ -149,15 +147,14 @@ Important nuance:
 2. After `UpdateRing`, `UpdateLocalState` sets `needVoluntaryScaleDown_`.
 3. Periodic `InspectAndProcessPeriodically` waits for the local node to be primary for its DB, then calls `GenerateVoluntaryScaleDownChangingInfo`.
 4. That CAS changes the worker to `LEAVING` and uses `HashRingAllocator::RemoveNodeVoluntarily` to write `add_node_info` toward standby workers.
-5. Scale-up-style metadata migration runs; when uuid-range migration finishes, `ClearTokenForScaleDown` moves `key_with_worker_id_meta_map`, writes `update_worker_map`, clears the leaving worker UUID, and removes matching hash tokens.
+5. Scale-up-style metadata migration runs; once normal hash ranges finish, `ClearTokenForScaleDown` removes matching hash tokens while preserving the worker UUID as an internal worker/replica identity.
 6. After metadata is migrated and `DataMigrationReady` succeeds, `SubmitMigrateDataTask` notifies `BeforeVoluntaryExit`, then CAS-erases the worker from the ring.
 
 ### Restart / Rolling Upgrade
 
 1. `InitRing` sees an existing `workers[workerAddr_]` entry and sets `StartUpState::RESTART`.
-2. If `update_worker_map[workerAddr_]` exists, the worker may reuse the previous UUID.
-3. `AddUpgradeRange` injects point-range migration work (`from == end`) so metadata with the reused UUID can move back.
-4. `ClearWorkerMapOnInterval` removes stale `update_worker_map` entries after `rolling_update_timeout_s` unless a worker is waiting for UUID restoration.
+2. If the worker was fully removed from the ring before restart, rejoining creates a new worker UUID; worker UUID no longer controls object-key routing.
+3. Restart recovery and scale work use normal object-key hash ranges rather than UUID point ranges.
 
 ### Other-AZ Read Ring
 
@@ -187,14 +184,14 @@ Important nuance:
   - ring updates are CAS-heavy and usually retried by many workers, so harmless-looking loops can amplify ETCD pressure;
   - `HashRingPb` and local derived maps are separate state copies, so bugs often appear as stale route maps rather than malformed protobuf;
   - `add_node_info` and `del_node_info` are both task queues and state-machine guards; clearing either too early can lose migration/recovery work;
-  - `from == end` is overloaded for UUID metadata migration and must not be simplified as an empty range;
+  - `from == end` is no longer used for UUID metadata migration after worker-UUID routing removal; normal range handling should avoid treating it as real hash-range work;
   - `state_ == FAIL` is terminal in `ChangeStateTo`; avoid code that expects recovery from `FAIL` in-process.
 - Important invariants:
   - active/leaving workers with hash tokens populate `tokenMap_`;
   - `cluster_has_init=true` means the ring can route, but pending `add_node_info` or `del_node_info` still means migration or recovery is active;
   - scale-up and scale-down are serialized by checks in `GetAddingWorkers` and `GetLeavingWorkers`;
   - passive deletion requires `enable_distributed_master && auto_del_dead_node`;
-  - worker UUID mappings must stay consistent across `workers`, `key_with_worker_id_meta_map`, and `update_worker_map`.
+  - worker UUID mappings must stay consistent with current `workers` entries because replica and internal DB identity still use worker UUIDs.
 - Observability or debugging hooks:
   - logs from `SummarizeHashRing`, `SplitRingJson`, `HashRingHealthCheck`, and `HashRingTaskExecutor`;
   - inject points beginning with `HashRing.*`, `hashring.*`, `worker.HashRingHealthCheck`, and `voluntaryscaledown.*`;

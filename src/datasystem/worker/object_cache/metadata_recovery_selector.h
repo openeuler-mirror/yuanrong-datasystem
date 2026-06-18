@@ -39,7 +39,6 @@ public:
 
     struct SelectionRequest {
         worker::HashRange ranges;
-        std::vector<std::string> workerUuids;
         bool includeL2CacheIds{ false };
 
         bool Empty() const;

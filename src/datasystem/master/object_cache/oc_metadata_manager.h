@@ -1034,7 +1034,7 @@ public:
      * @return Status of the call.
      */
     Status ClearDataWithoutMeta(const worker::HashRange &range, const std::string &workerAddr,
-                                const worker::HashRange &halfCompletedRanges, const std::vector<std::string> &uuids);
+                                const worker::HashRange &halfCompletedRanges);
 
     /**
      * @brief Clear device metadata for scaled-in worker nodes if current node is the metadata master
@@ -1069,11 +1069,10 @@ public:
 
     /**
      * @brief Recover data of faulty worker from etcd.
-     * @param[in] workerUuids The uuids to be recovered.
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverDataOfFaultyWorker(const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
+    Status RecoverDataOfFaultyWorker(const worker::HashRange &extraRanges);
 
     /**
      * @brief Get the usage of the queue for asynchronously writing ETCD data.
@@ -1085,11 +1084,10 @@ public:
 
     /**
      * @brief Recover global cache del and cache invalid task
-     * @param[in] workerUuids The uuids to be recovered.
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverAsyncTask(const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
+    Status RecoverAsyncTask(const worker::HashRange &extraRanges);
 
     /**
      * @brief Check meta table is empty;
@@ -1358,8 +1356,6 @@ private:
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * the current node should be used as the object expiration time, because the steady_clock of different machines may
      * be different. The question needs to be optimized later.
-     * @param[in] workerUuids Load the data of specified worker uuids. If the value is empty, obtains the data of the
-     * current worker.
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
@@ -1367,20 +1363,17 @@ private:
         std::vector<std::pair<std::string, std::string>> &metas,
         std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
         const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
-        bool &isFromRocksdb, const std::vector<std::string> &workerUuids, const worker::HashRange &extraRanges);
+        bool &isFromRocksdb, const worker::HashRange &extraRanges);
 
     /**
      * @brief Load meta into the cache from the object meta table.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * the current node should be used as the object expiration time, because the steady_clock of different machines may
      * be different. The question needs to be optimized later.
-     * @param[in] workerUuids Load the data of specified worker uuids. If the value is empty, obtains the data of the
-     * current worker.
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
-    Status LoadMeta(bool isFromRocksdb, const std::vector<std::string> &workerUuids = {},
-                    const worker::HashRange &extraRanges = {});
+    Status LoadMeta(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
 
     /**
      * @brief SendChangePrimaryCopy
@@ -1745,15 +1738,12 @@ private:
      * @param[in] tablePrefix ETCD table prefix.
      * @param[in] rocksTable Need write rocksdb table.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[in] workerUuids Load the data of specified worker uuids. If the value is empty, obtains the data of the
-     * current worker.
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @param[out] outMetas The output metas in table.
      * @return Status of the call.
      */
     Status CheckRocksdbStatusAndLoadL2Table(const std::string &tablePrefix, const std::string &rocksTable,
-                                            bool isFromRocksdb, const std::vector<std::string> &workerUuids,
-                                            const worker::HashRange &extraRanges,
+                                            bool isFromRocksdb, const worker::HashRange &extraRanges,
                                             std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**

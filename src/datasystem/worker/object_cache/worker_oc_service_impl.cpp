@@ -874,21 +874,6 @@ Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string>
     return summary.status;
 }
 
-void WorkerOCServiceImpl::CollectRecoveryWorkerUuidsForRestart(const std::string &workerAddr,
-                                                               const std::string &restartWorkerUuid,
-                                                               const HashRingPb &ringPb,
-                                                               std::vector<std::string> &recoverUuids)
-{
-    recoverUuids.emplace_back(restartWorkerUuid);
-    for (const auto &item : ringPb.key_with_worker_id_meta_map()) {
-        if (item.second == workerAddr && item.first != restartWorkerUuid) {
-            recoverUuids.emplace_back(item.first);
-        }
-    }
-    std::sort(recoverUuids.begin(), recoverUuids.end());
-    recoverUuids.erase(std::unique(recoverUuids.begin(), recoverUuids.end()), recoverUuids.end());
-}
-
 Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
 {
     RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
@@ -899,18 +884,11 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     auto *hashRing = etcdCM_->GetHashRing();
     CHECK_FAIL_RETURN_STATUS(hashRing != nullptr, K_RUNTIME_ERROR, "hashRing is null");
 
-    std::string restartWorkerUuid;
-    RETURN_IF_NOT_OK(hashRing->GetUuidByWorkerAddr(workerAddr, restartWorkerUuid));
-    auto ringPb = hashRing->GetHashRingPb();
-    std::vector<std::string> recoverUuids;
-    CollectRecoveryWorkerUuidsForRestart(workerAddr, restartWorkerUuid, ringPb, recoverUuids);
-    RETURN_OK_IF_TRUE(recoverUuids.empty());
-
     MetadataRecoverySelector selector(objectTable_, etcdCM_);
     MetadataRecoverySelector::SelectionRequest selectReq;
     selectReq.includeL2CacheIds = true;
     selectReq.ranges = hashRing->GetHashRangeByWorker(workerAddr);
-    selectReq.workerUuids = recoverUuids;
+    RETURN_OK_IF_TRUE(selectReq.ranges.empty());
     LOG(INFO) << "Recover metadata after node restart, select request: " << selectReq.ToString();
     std::vector<std::string> matchObjIds;
     RETURN_IF_NOT_OK(selector.Select(selectReq, matchObjIds));

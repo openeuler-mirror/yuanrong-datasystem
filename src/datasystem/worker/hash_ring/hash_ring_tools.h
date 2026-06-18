@@ -63,26 +63,22 @@ void GenerateHashRingUuidMap(const HashRingPb &ringInfo, std::map<std::string, H
 
 /**
  * @brief Get the worker address of specific workerUuid for addressing.
- * @param[in] ringInfo The ring
  * @param[in] workerUuid2AddrMap The {workerUuid, workerAddr} map of input ringInfo
  * @param[in] workerUuid The workerUuid of the wanted worker
  * @param[out] workerAddr The worker address of the wanted worker
  * @return Status of the call.
  */
-Status GetWorkerAddrByUuidForAddressing(const HashRingPb &ringInfo,
-                                        const std::map<std::string, HostPort> &workerUuid2AddrMap,
+Status GetWorkerAddrByUuidForAddressing(const std::map<std::string, HostPort> &workerUuid2AddrMap,
                                         const std::string &workerUuid, HostPort &workerAddr);
 
 /**
- * @brief Get the metadata owner address of specific workerUuid.
- * @param[in] ringInfo The ring
+ * @brief Get the worker address of specific workerUuid.
  * @param[in] workerUuid2AddrMap The {workerUuid, workerAddr} map of input ringInfo
  * @param[in] workerUuid The workerUuid of the wanted worker
  * @param[out] workerAddr The worker address of the wanted worker
  * @return Status of the call.
  */
-Status GetWorkerAddrByUuidForMetadata(const HashRingPb &ringInfo,
-                                      const std::map<std::string, HostPort> &workerUuid2AddrMap,
+Status GetWorkerAddrByUuidForMetadata(const std::map<std::string, HostPort> &workerUuid2AddrMap,
                                       const std::string &workerUuid, HostPort &workerAddr);
 
 /**
@@ -132,22 +128,6 @@ std::string HashRingToJsonString(const HashRingPb &ring);
  * @return The lines
  */
 std::vector<std::string> SplitRingJson(const std::string &prefix, const HashRingPb &ring);
-
-/**
- * @brief Clear worker map if uuid expired.
- * @param[in] ring The ring.
- * @return Return true if the ring clean up worker map.
- */
-bool ClearWorkerMapIfNeed(HashRingPb &ring);
-
-/**
- * @brief Check worker uuid is removable.
- * @param[in] addr Worker address.
- * @param[in] updateNodePb Update node protobuf.
- * @param[in] ring Hash ring protobuf.
- * @return True if worker uuid is removable.
- */
-bool WorkerUuidRemovable(const std::string &addr, const UpdateNodePb &updateNodePb, const HashRingPb &ring);
 
 /**
  * @brief Clear worker map if uuid expired.

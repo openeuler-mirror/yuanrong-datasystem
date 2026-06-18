@@ -265,15 +265,11 @@ void HashRingAllocator::FinishAddNodeInfoIfNeed(HashRingPb &ring)
 {
     // check if scale-up migration is complete
     bool isAllNodeFinished = true;
-    std::vector<std::string> scaleDownWorkers;
     for (auto &i : ring.add_node_info()) {
         for (auto &range : i.second.changed_ranges()) {
             if (!range.finished()) {
                 isAllNodeFinished = false;
                 break;
-            }
-            if (range.from() == range.end() && !range.is_upgrade()) {
-                scaleDownWorkers.emplace_back(range.workerid());
             }
         }
     }
@@ -290,8 +286,7 @@ void HashRingAllocator::FinishAddNodeInfoIfNeed(HashRingPb &ring)
     return;
 }
 
-Status HashRingAllocator::UpdateHashWhenSrcWorkerFailed(const std::string &worker, HashRingPb &ring,
-                                                        bool &isVoluntaryNodeAddInfoExist)
+Status HashRingAllocator::UpdateHashWhenSrcWorkerFailed(const std::string &worker, HashRingPb &ring)
 {
     for (auto &add_node_info : (*ring.mutable_add_node_info())) {
         for (auto &range : (*add_node_info.second.mutable_changed_ranges())) {
@@ -305,10 +300,6 @@ Status HashRingAllocator::UpdateHashWhenSrcWorkerFailed(const std::string &worke
                 delRange->set_workerid(add_node_info.first);
                 delRange->set_from(range.from());
                 delRange->set_end(range.end());
-                if (range.from() == range.end() && !range.is_upgrade()) {
-                    // if range == end, is voluntary scale down add node info.
-                    isVoluntaryNodeAddInfoExist = true;
-                }
             }
         }
     }
@@ -323,12 +314,10 @@ Status HashRingAllocator::RemoveNode(const std::string &nodeId, HashRingPb &hash
     bool faultNodeIsNewNode = hashRing.add_node_info().find(nodeId) != hashRing.add_node_info().end();
     bool oldNodeFaultWhileAdding =
         !hashRing.add_node_info().empty() && hashRing.add_node_info().find(nodeId) == hashRing.add_node_info().end();
-    bool nodeIsLeavingAndAddInfoExist = false;
-
     if (oldNodeFaultWhileAdding) {
         // when src worker failed, if src node is voluntary scale down node, erase add node info
         // if src node is voluntary scale down node, dest node recover data need to migrate.
-        UpdateHashWhenSrcWorkerFailed(nodeId, hashRing, nodeIsLeavingAndAddInfoExist);
+        UpdateHashWhenSrcWorkerFailed(nodeId, hashRing);
     }
 
     AddRangeFunc addRange = [&](uint32_t rangeBegin, uint32_t rangeEnd, std::string &nextWorker, RingNode &currNode) {
@@ -341,9 +330,7 @@ Status HashRingAllocator::RemoveNode(const std::string &nodeId, HashRingPb &hash
         (*hashRing.mutable_del_node_info())[nodeId].mutable_changed_ranges()->Add(std::move(range));
     };
     // when node removes, its ranges will tansfer to next node
-    if (!nodeIsLeavingAndAddInfoExist) {
-        RETURN_IF_NOT_OK(GetNextNode(nodeId, addRange));
-    }
+    RETURN_IF_NOT_OK(GetNextNode(nodeId, addRange));
     // if the faulty node has recovery task of other, delete.
     hashRing = EraseDelNodeInfoTask(nodeId, hashRing);
     if (faultNodeIsNewNode) {
@@ -355,11 +342,7 @@ Status HashRingAllocator::RemoveNode(const std::string &nodeId, HashRingPb &hash
     auto iter = hashRing.mutable_workers()->find(nodeId);
     if (iter != hashRing.mutable_workers()->end()) {
         if (iter->second.hash_tokens().empty() && iter->second.state() == WorkerPb::LEAVING) {
-            if (iter->second.worker_uuid().empty()) {
-                hashRing.mutable_workers()->erase(iter);
-            } else {
-                hashRing.mutable_del_node_info()->insert({ nodeId, {} });
-            }
+            hashRing.mutable_workers()->erase(iter);
         }
     }
     auto isTarget = [nodeId](const RingNode &node) { return node.nodeId == nodeId; };
@@ -388,8 +371,8 @@ void HashRingAllocator::AddDelNodeInfoVoluntaryScaleDestNodeDown(HashRingPb &has
     }
 }
 
-Status HashRingAllocator::RemoveNodeVoluntarily(const std::string &workerId, const std::string &standbyWorkerId,
-                                                uint32_t hashVal, const std::unordered_set<std::string> &excludeAddrs,
+Status HashRingAllocator::RemoveNodeVoluntarily(const std::string &workerId,
+                                                const std::unordered_set<std::string> &excludeAddrs,
                                                 HashRingPb &hashRing)
 {
     // Add hash range migratory information to add_node_info
@@ -401,24 +384,6 @@ Status HashRingAllocator::RemoveNodeVoluntarily(const std::string &workerId, con
     };
 
     RETURN_IF_NOT_OK(GetNextNode(workerId, addRange, excludeAddrs));
-
-    if (standbyWorkerId.empty()) {
-        // no need to add uuid range
-        return Status::OK();
-    }
-
-    // Add uuid migratory information to add_node_info, using same hash value represent the uuid migration.
-    ChangeNodePb::RangePb range = ConstructChangeNode(hashVal, hashVal, workerId);
-    INJECT_POINT("StandbyWorkerNotSame", [&] {
-        for (const auto &workerInfo : hashRing.workers()) {
-            if (workerInfo.first != hashRing.add_node_info().begin()->first && workerInfo.first != workerId) {
-                (*hashRing.mutable_add_node_info())[workerInfo.first].mutable_changed_ranges()->Add(std::move(range));
-                break;
-            }
-        }
-        return Status::OK();
-    });
-    (*hashRing.mutable_add_node_info())[standbyWorkerId].mutable_changed_ranges()->Add(std::move(range));
     return Status::OK();
 }
 

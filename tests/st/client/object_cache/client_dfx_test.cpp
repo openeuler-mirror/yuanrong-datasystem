@@ -1097,7 +1097,8 @@ public:
         for (size_t i = 0; i < WORKER_NUM; ++i) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
-        GetWorkerUuids();
+        GetHashOnWorker();
+        SetWorkerHashInjection();
         InitializeTest();
     }
 
@@ -1113,17 +1114,49 @@ public:
         }
     }
 
-    void GetWorkerUuids()
+    void GetHashOnWorker()
     {
         std::string value;
         DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
         HashRingPb ring;
-        ring.ParseFromString(value);
-        for (auto worker : ring.workers()) {
-            HostPort workerAddr;
-            DS_ASSERT_OK(workerAddr.ParseString(worker.first));
-            uuidMap_.emplace(std::move(workerAddr), worker.second.worker_uuid());
+        ASSERT_TRUE(ring.ParseFromString(value));
+        workerHashValues_.clear();
+        workerHashValues_.resize(WORKER_NUM);
+        const size_t hashNumPerWorker = CLIENT_NUM / WORKER_NUM;
+        for (size_t i = 0; i < WORKER_NUM; ++i) {
+            HostPort workerAddress;
+            DS_ASSERT_OK(cluster_->GetWorkerAddr(i, workerAddress));
+            auto worker = ring.workers().find(workerAddress.ToString());
+            ASSERT_NE(worker, ring.workers().end());
+            ASSERT_GE(static_cast<size_t>(worker->second.hash_tokens_size()), hashNumPerWorker);
+            for (size_t j = 0; j < hashNumPerWorker; ++j) {
+                workerHashValues_[i].emplace_back(worker->second.hash_tokens(j) - 1);
+            }
         }
+    }
+
+    void SetWorkerHashInjection()
+    {
+        for (size_t i = 0; i < WORKER_NUM; ++i) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
+        }
+    }
+
+    std::string ObjectKeyHashTo(size_t workerIndex, size_t hashIndex) const
+    {
+        return "a_key_hash_to_" + std::to_string(workerHashValues_[workerIndex][hashIndex]);
+    }
+
+    static std::string AddHashInjectAction(const std::string &workerParams)
+    {
+        const std::string hashInjectAction = "MurmurHash3:return()";
+        if (workerParams.empty()) {
+            return " -inject_actions=" + hashInjectAction;
+        }
+        if (workerParams.find("-inject_actions=") != std::string::npos) {
+            return workerParams + ";" + hashInjectAction;
+        }
+        return workerParams + " -inject_actions=" + hashInjectAction;
     }
 
     void InitializeTest()
@@ -1165,13 +1198,13 @@ public:
         std::vector<std::string> failedIds;
         std::vector<std::string> objKeys(CLIENT_NUM);
         // obj0 by client0, primary copy on node0, meta on node0
-        objKeys[0] = GetStringUuid() + ";" + uuidMap_[workerAddr0_];
+        objKeys[0] = ObjectKeyHashTo(0, 0);
         // obj1 by client1, primary copy on node0, meta on node1
-        objKeys[1] = GetStringUuid() + ";" + uuidMap_[workerAddr1_];
+        objKeys[1] = ObjectKeyHashTo(1, 0);
         // obj2 by client2, primary copy on node1, meta on node1
-        objKeys[2] = GetStringUuid() + ";" + uuidMap_[workerAddr1_];
+        objKeys[2] = ObjectKeyHashTo(1, 1);
         // obj3 by client3, primary copy on node1, meta on node0
-        objKeys[3] = GetStringUuid() + ";" + uuidMap_[workerAddr0_];
+        objKeys[3] = ObjectKeyHashTo(0, 1);
         for (size_t i = 0; i < CLIENT_NUM; ++i) {
             DS_ASSERT_OK(
                 clients_[i]->Put(objKeys[i], reinterpret_cast<uint8_t *>(&data.front()), sz, CreateParam(), {}));
@@ -1208,7 +1241,7 @@ protected:
     HostPort workerAddr0_;
     HostPort workerAddr1_;
     HostPort etcdAddress_;
-    std::unordered_map<HostPort, std::string> uuidMap_;
+    std::vector<std::vector<uint32_t>> workerHashValues_;
     std::string ak_ = "QTWAOYTTINDUT2QVKYUC";
     std::string sk_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     const size_t CLIENT_NUM = 4;
@@ -1238,7 +1271,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerRestart1)
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1282,7 +1315,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1327,7 +1360,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1363,8 +1396,8 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart4)
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
     // restart node0 first and then node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
@@ -1401,8 +1434,8 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart5)
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
     // restart node1 first and then node0
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
 
@@ -1450,7 +1483,8 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(
-        WORKER, 1, " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call(1000)"));
+        WORKER, 1,
+        AddHashInjectAction(" -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call(1000)")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1524,7 +1558,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerNetworkIssueAnd
     std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
 
     // restart worker0
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     // wait for reconciliation between restarted master and all workers
     waitTimeSec = 10;
@@ -1564,9 +1598,11 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0,
-                                     " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call("
-                                     "5000);worker.PreShutDown.skip:return(K_OK)"));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, "-inject_actions=worker.PreShutDown.skip:return(K_OK)"));
+                                     AddHashInjectAction(
+                                         " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call("
+                                         "5000);worker.PreShutDown.skip:return(K_OK)")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1,
+                                     AddHashInjectAction("-inject_actions=worker.PreShutDown.skip:return(K_OK)")));
 
     // cluster node table should not contain "restart" tag
     auto waitSwitch = [](uint64_t num) {
@@ -1620,7 +1656,8 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     inject::Set("ObjectClientImpl.ProcessWorkerLost", "call()");
     // restart node 1
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, "-inject_actions=worker.PreShutDown.skip:return(K_OK)"));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1,
+                                     AddHashInjectAction("-inject_actions=worker.PreShutDown.skip:return(K_OK)")));
     auto waitCallNum2 = 2;
     waitSwitch(waitCallNum2);
     DS_ASSERT_OK(isAllNodeReady(utSvcStub0_));

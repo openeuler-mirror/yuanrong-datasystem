@@ -358,9 +358,8 @@ public class KVClientTest {
         KVClient client = getKVClient(1).get(0);
         try {
             String key = client.generateKey();
-            int len = 73;
-            Assert.assertEquals(key.length(), len);
-            Assert.assertEquals(key.contains(";"), true);
+            Assert.assertFalse(key.isEmpty());
+            Assert.assertFalse(key.contains(";"));
         } finally {
             client.close();
         }

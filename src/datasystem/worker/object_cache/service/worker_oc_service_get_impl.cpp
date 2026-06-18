@@ -1434,12 +1434,8 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     std::unordered_set<std::string> objectKeysNotExistNeedQueryInEtcd;
     if (HaveOtherAZ() && !FLAGS_cross_cluster_get_meta_from_worker) {
         for (auto it = objectKeysNotExist.begin(); it != objectKeysNotExist.end();) {
-            if (!HasWorkerId(*it)) {
-                objectKeysNotExistNeedQueryInEtcd.insert(std::move(*it));
-                it = objectKeysNotExist.erase(it);
-            } else {
-                ++it;
-            }
+            objectKeysNotExistNeedQueryInEtcd.insert(std::move(*it));
+            it = objectKeysNotExist.erase(it);
         }
     }
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
@@ -1458,30 +1454,26 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
 
     std::unordered_map<std::string, std::unordered_set<std::string>> groupedObjectKeysQueryMetaFailed;
     for (const auto &objKey : objectKeysPuzzled) {
-        std::string workerId;
-        (void)TrySplitWorkerIdFromObjecId(objKey, workerId);
-        auto iter = groupedObjectKeysQueryMetaFailed.find(workerId);
+        auto iter = groupedObjectKeysQueryMetaFailed.find("");
         if (iter == std::end(groupedObjectKeysQueryMetaFailed)) {
             std::unordered_set<std::string> objectKeyList({ objKey });
-            groupedObjectKeysQueryMetaFailed.insert(std::make_pair(workerId, std::move(objectKeyList)));
+            groupedObjectKeysQueryMetaFailed.insert(std::make_pair("", std::move(objectKeyList)));
         } else {
             iter->second.emplace(objKey);
         }
     }
 
     for (const auto &kv : groupedObjectKeysQueryMetaFailed) {
-        // If workerId not in hash ring, try to find meta data in local and other's AZ
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, kv.first, true, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd by worker id failed.");
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, true, queryMetas, absentObjectKeys),
+                     "Query metadata from etcd by hash failed.");
     }
-    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysNotExistNeedQueryInEtcd, "", true, queryMetas, absentObjectKeys),
+    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysNotExistNeedQueryInEtcd, true, queryMetas, absentObjectKeys),
                  "Query metadata from etcd by hash failed.");
-    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysMayInOtherAz, "", true, queryMetas, absentObjectKeys),
+    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysMayInOtherAz, true, queryMetas, absentObjectKeys),
                  "Query metadata from etcd by hash failed.");
     for (const auto &kv : objKeysUndecidedMaster) {
-        // If workerId not in hash ring, try to find meta data in local and other's AZ
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, kv.first, true, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd by worker id failed.");
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, true, queryMetas, absentObjectKeys),
+                     "Query metadata from etcd by hash failed.");
     }
 }
 
@@ -1498,12 +1490,8 @@ Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
 
     auto extractObjectsMayExistInOtherAz = [&objectKeysMayInOtherAz](auto &set) {
         for (auto iter = set.begin(); iter != set.end();) {
-            if (!HasWorkerId(*iter)) {
-                objectKeysMayInOtherAz.insert(std::move(*iter));
-                iter = set.erase(iter);
-            } else {
-                ++iter;
-            }
+            objectKeysMayInOtherAz.insert(std::move(*iter));
+            iter = set.erase(iter);
         }
     };
     std::apply([&](auto &...sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
@@ -1706,16 +1694,10 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
 }
 
 /*
- * There are 4 scenarios should query meata from ECTD
- * 1. Normal ObjectKey: we can certainly get a Worker by ObjectKey no matter whether it's belong to local AZ
- *   (1) The Worker's status is ACTIVE, and if failed to get Meta Data, then try to get from other AZ's ETCD;
- *   (2) The Worker's status is FAILED or TIMEOUT, then try to get from both local and other AZ's ETCD;
- * 2. ObjectKey with WorkerId: we can be definitely sure whether the WorkerId belong to local AZ
- *   (1) The Worker belong to local AZ but the status is NOT ACTIVE, then try to get from local ETCD;
- *   (2) The Worker doesn't belong to local AZ, then try to get from other AZ's ETCD;
+ * Query missing metadata from ETCD by complete object-key hash. If the local AZ lookup fails, query other AZs when
+ * cross-AZ metadata lookup is available.
  */
-Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
-                                                     const std::string &workerId, bool getLocalAz,
+Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys, bool getLocalAz,
                                                      std::vector<master::QueryMetaInfoPb> &queryMetas,
                                                      std::vector<std::string> &absentObjectKeys)
 {
@@ -1728,7 +1710,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
     Status rc;
     for (const std::string &objKey : objectKeys) {
         if (getLocalAz) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_cluster_name, objKey, workerId, queryMetas);
+            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_cluster_name, objKey, queryMetas);
             if (rc.IsOk()) {
                 continue;
             }
@@ -1739,7 +1721,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
         }
         std::stringstream errLog;
         for (const auto &azName : otherAZNames_) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(azName, objKey, workerId, queryMetas);
+            rc = ConstructKeyAndQueryMetaFromEtcd(azName, objKey, queryMetas);
             if (rc.IsOk()) {
                 break;
             }
@@ -1754,27 +1736,16 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
 }
 
 Status WorkerOcServiceGetImpl::ConstructKeyAndQueryMetaFromEtcd(const std::string &azName, const std::string &objKey,
-                                                                const std::string &workerId,
                                                                 std::vector<master::QueryMetaInfoPb> &queryMetas)
 {
-    std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX);
-    std::string hashValue;
-    if (workerId.empty()) {
-        // /azName/ETCD_META_HASH_TABLE/key_hash/key
-        etcdTableName.append(ETCD_HASH_SUFFIX);
-        hashValue = Hash2Str(MurmurHash3_32(objKey));
-    } else {
-        // /azName/ETCD_META_WORKER_TABLE/worker_id_hash/objKey
-        etcdTableName.append(ETCD_WORKER_SUFFIX);
-        hashValue = Hash2Str(MurmurHash3_32(workerId));
-    }
+    std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
+    std::string hashValue = Hash2Str(MurmurHash3_32(objKey));
     std::string tablePrefix;
     if (!FLAGS_cluster_name.empty()) {
         tablePrefix = FormatString("/%s", azName);
     }
     std::string etcdKey = tablePrefix + FormatString("%s/%zu/%s", etcdTableName, hashValue, objKey);
-    LOG(INFO) << "Query objKey: " << objKey << ", workerId: " << workerId << ", AZ name: " << azName
-              << ", query ETCD key: " << etcdKey;
+    LOG(INFO) << "Query objKey: " << objKey << ", AZ name: " << azName << ", query ETCD key: " << etcdKey;
 
     auto metaPb = std::make_unique<ObjectMetaPb>();
     CHECK_FAIL_RETURN_STATUS(!etcdStore_->IsKeepAliveTimeout(), K_RPC_UNAVAILABLE, "etcd is unavailable");
@@ -2125,7 +2096,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                                         objKey));
             }
         }
-        TryGetObjectFromOtherAZ(meta, hostAddr, objectKV, status, false);
+        TryGetObjectFromOtherAZ(meta, hostAddr, objectKV, status);
     } else {
         status = Status(K_RUNTIME_ERROR,
                         FormatString("Fail to get object %s from remote worker, no object copy exists.", objKey));
@@ -2156,7 +2127,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
 }
 
 void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr,
-                                                     ReadObjectKV &objectKV, Status &status, bool isBatchGet)
+                                                     ReadObjectKV &objectKV, Status &status)
 {
     if (!FLAGS_cross_cluster_get_data_from_worker || !etcdCM_->CheckIfOtherAzNodeConnected(hostAddr)) {
         return;
@@ -2167,14 +2138,9 @@ void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, c
     // If the hash type keys of other clusters are also cached locally, we cannot distinguish whether the key belongs to
     // this cluster or other clusters when deleting it. It may be a feasible method to store the keys of each cluster in
     // separate tables, but unfortunately it is not currently implemented, so an additional judgment is needed here.
-    if (HasWorkerId(objKey)) {
-        status =
-            GetObjectFromRemoteWorkerAndDump(address, meta.primary_address(), meta.data_size(), objectKV, isBatchGet);
-    } else {
-        Timer timer;
-        status = GetObjectFromRemoteWorkerWithoutDump(address, meta.primary_address(), meta.data_size(), objectKV);
-        LOG(INFO) << "Query from other AZ node use " << timer.ElapsedMilliSecond() << " millisecond.";
-    }
+    Timer timer;
+    status = GetObjectFromRemoteWorkerWithoutDump(address, meta.primary_address(), meta.data_size(), objectKV);
+    LOG(INFO) << "Query from other AZ node use " << timer.ElapsedMilliSecond() << " millisecond.";
 }
 
 void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectMetaPb &meta, const std::string &address,
@@ -2269,8 +2235,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         objDatas[i++] = std::move(payloads[idx]);
     }
     RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, objDatas, evictionManager_, memCpyThreadPool_));
-    const auto &meta = queryMeta.meta();
-    if (queryMeta.is_from_other_az() && !HasWorkerId(meta.object_key())) {
+    if (queryMeta.is_from_other_az()) {
         objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     } else {
         if (FLAGS_enable_data_replication) {

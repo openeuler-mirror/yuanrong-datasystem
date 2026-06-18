@@ -418,20 +418,12 @@ public:
     std::shared_ptr<ThreadPool> GetMemoryCopyThreadPool();
 
     /**
-     * @brief Generate a key with workeId.
+     * @brief Generate a key.
      * @param[in] prefixKey The user specified key prefix.
-     * If the prefix is empty, return uuid;workerId
-     * @return The key with workeId, if the key fails to be generated, an empty string is returned.
+     * If the prefix is empty, return a random unique key.
+     * @return The generated key. If prefixKey is not empty, the generated key is prefixKey.
      */
     Status GenerateKey(std::string &key, const std::string &prefixKey = "");
-
-    /**
-     * @brief Get objectKey from a key with workerUuid.
-     * @param[in] key The key with workerUuid.
-     * @param[out] prefix The objectKey.
-     * @return K_OK on any object success; the error code otherwise.
-     */
-    Status GetPrefix(const std::string &key, std::string &prefix);
 
     /**
      * @brief Publish device object to datasystem.

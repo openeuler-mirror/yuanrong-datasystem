@@ -90,18 +90,12 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
         LOG(INFO) << FormatString("The AZ %s ClearDataWithoutMeta", azName_);
 
         std::unordered_set<std::string> delNodeAddrs;
-        std::unordered_set<std::string> delNodeIds;
+        worker::HashRange clearRanges;
         for (const auto &delInfo : newRing.del_node_info()) {
-            const auto& delNodeAddr = delInfo.first;
-            if (delNodeAddrs.insert(delNodeAddr).second) {
-                std::string workerId;
-                auto rc = ::worker::GetWorkeridByWorkerAddr(newRing, delNodeAddr, workerId);
-                if (rc.IsError()) {
-                    LOG(WARNING) << FormatString("get workerId by workerAddr[%s] failed: %s", delNodeAddr,
-                                                 rc.ToString());
-                    continue;
-                }
-                (void)delNodeIds.insert(std::move(workerId));
+            const auto &delNodeAddr = delInfo.first;
+            (void)delNodeAddrs.insert(delNodeAddr);
+            for (const auto &range : delInfo.second.changed_ranges()) {
+                clearRanges.emplace_back(range.from(), range.end());
             }
         }
 
@@ -110,22 +104,12 @@ Status ReadHashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_
                          FormatString("Clear AZ %s async notify op failed.", azName_));
         }
 
-        std::vector<std::string> delNodeIdsVec(std::make_move_iterator(delNodeIds.begin()),
-                                               std::make_move_iterator(delNodeIds.end()));
-        LOG_IF_ERROR(
-            HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(worker::HashRange{}, delNodeIdsVec),
-            FormatString("Clear AZ %s data failed.", azName_));
+        LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(clearRanges),
+                     FormatString("Clear AZ %s data failed.", azName_));
     }
 
     GenerateHashRingUuidMap(newRing, workerUuid2AddrMap_, workerAddr2UuidMap_, relatedWorkerMap_);
     HashRing::UpdateTokenMap();
-    return Status::OK();
-}
-
-Status ReadHashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid,
-                                          std::optional<RouteInfo> &routeInfo)
-{
-    RETURN_IF_NOT_OK_APPEND_MSG(HashRing::GetUuidInCurrCluster(oldUuid, newUuid, routeInfo), " in az: " + azName_);
     return Status::OK();
 }
 
@@ -182,10 +166,8 @@ Status ReadHashRing::GetMasterUuid(const std::string &objKey, std::string &maste
     if (!IsWorkable()) {
         RETURN_STATUS(K_NOT_READY, FormatString("Hash ring of %s not ready, get workerId failed", azName_));
     }
-    if (TrySplitWorkerIdFromObjecId(objKey, masterUuid).IsError()) {
-        std::optional<RouteInfo> routeInfo;
-        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
-    }
+    std::optional<RouteInfo> routeInfo;
+    RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
     return Status::OK();
 }
 }  // namespace worker

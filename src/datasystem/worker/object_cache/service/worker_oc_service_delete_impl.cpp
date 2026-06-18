@@ -258,55 +258,6 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyWithLock(const std::vector<std::s
     return lastErr;
 }
 
-void WorkerOcServiceDeleteImpl::ExtractCrossAzOfflineWorkerIdKeyWithEmptyAddress(
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMasterId,
-    std::unordered_map<std::string, Status> &errInfos,
-    std::unordered_map<std::string, std::vector<std::string>> &crossAzOfflineWorkerIdKeys)
-{
-    MetaAddrInfo emptyInfo;
-    auto objectKeysUnknownMaster = objKeysGrpByMasterId.find(emptyInfo);
-    if (objectKeysUnknownMaster == objKeysGrpByMasterId.end()) {
-        return;
-    }
-    auto &objKeys = objectKeysUnknownMaster->second;
-
-    // isWorkerIdKey && belongToOtherAz && masterIsOffline, then:
-    //   record in crossAzOfflineWorkerIdKeys and remove from objKeysGrpByMasterId and errInfos
-    (void)EraseIf(objKeys, [this, &crossAzOfflineWorkerIdKeys, &errInfos](const std::string &objKey) {
-        std::string workerId;
-        if (TrySplitWorkerIdFromObjecId(objKey, workerId).IsError()) {
-            return false;
-        }
-        std::string azName = etcdCM_->GetOtherAzNameByWorkerIdInefficient(workerId);
-        if (azName.empty()) {
-            return false;
-        }
-        if (etcdCM_->CheckConnection(objKey).GetCode() != K_NOT_FOUND) {
-            return false;
-        }
-        crossAzOfflineWorkerIdKeys.emplace(objKey,
-                                           std::vector<std::string>{ azName });  // key: objectKey, value: azName
-        errInfos.erase(objKey);
-        return true;  // delete from objKeysGrpByMasterId
-    });
-}
-
-void WorkerOcServiceDeleteImpl::DeleteCrossAzKeyWhenMasterFailed(
-    const std::unordered_map<std::string, std::vector<std::string>> &keys)
-{
-    if (keys.empty()) {
-        return;
-    }
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localAddress_);
-    auto localApi = std::dynamic_pointer_cast<worker::WorkerLocalMasterOCApi>(workerMasterApi);
-    if (localApi == nullptr) {
-        LOG(ERROR) << "WorkerLocalMasterOCApi not found. local address is " << localAddress_.ToString();
-        return;
-    }
-    // use the local master service as an agent to delete cross-az meta and data.
-    localApi->AsyncNotifyCrossAzDelete(keys);
-}
-
 Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<std::string> &needDeleteObjectKey,
                                                               std::unordered_set<std::string> &failedObjectKeys)
 {
@@ -316,10 +267,6 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
     std::optional<std::unordered_map<std::string, Status>> errInfos;
     errInfos.emplace();
     etcdCM_->GroupObjKeysByMasterHostPortWithStatus(needDeleteObjectKey, objKeysGrpByMasterId, errInfos);
-
-    std::unordered_map<std::string, std::vector<std::string>> crossAzOfflineWorkerIdKeys;  // map<objectKey, azName>
-    ExtractCrossAzOfflineWorkerIdKeyWithEmptyAddress(objKeysGrpByMasterId, *errInfos, crossAzOfflineWorkerIdKeys);
-    DeleteCrossAzKeyWhenMasterFailed(crossAzOfflineWorkerIdKeys);
 
     for (const auto &kv : *errInfos) {
         // If objectKey don't belong to any master, just ignore it.

@@ -845,10 +845,7 @@ TEST_F(HashRingTest, RemoveInitNode)
     std::string expectRing = R"({
         "clusterHasInit": true,
         "workers": {
-            "127.0.0.1:0": {"hashTokens": [90000, 270000], "workerUuid": "dXVpZDA=", "state": "ACTIVE"},
-        },
-        "keyWithWorkerIdMetaMap": {
-            "uuid1": "127.0.0.1:0"
+            "127.0.0.1:0": {"hashTokens": [90000, 270000], "workerUuid": "dXVpZDA=", "state": "ACTIVE"}
         }
     })";
     CheckRingInEtcd(expectRing, 5'000);  // wait for 5'000 ms

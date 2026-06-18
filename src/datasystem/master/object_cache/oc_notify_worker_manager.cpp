@@ -512,14 +512,13 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
 }
 
 Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb,
-                                                               const std::vector<std::string> &workerUuids,
                                                                const worker::HashRange &extraRanges)
 {
     std::vector<std::pair<std::string, std::string>> cacheInvalids;
     if (!objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, workerUuids,
-                                      extraRanges, cacheInvalids),
+            objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, extraRanges,
+                                      cacheInvalids),
             "Load meta from etcd into memory failed.");
         for (const auto &iter : cacheInvalids) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(ASYNC_WORKER_OP_TABLE, iter.first, iter.second));
@@ -530,8 +529,8 @@ Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksd
                                              "Load meta from rocksdb into memory failed.");
         } else {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, workerUuids,
-                                          extraRanges, cacheInvalids),
+                objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, extraRanges,
+                                          cacheInvalids),
                 "Load meta from etcd into memory failed.");
         }
     }
@@ -724,8 +723,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
 }
 
 Status OCNotifyWorkerManager::ClearDataWithoutMeta(const worker::HashRange &ranges, const std::string &workerAddr,
-                                                   const std::vector<std::string> &objsMigrateFinished,
-                                                   const std::vector<std::string> &uuids)
+                                                   const std::vector<std::string> &objsMigrateFinished)
 {
     RETURN_IF_NOT_OK(CheckWorkerIsHealthy(workerAddr));
     std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
@@ -739,8 +737,6 @@ Status OCNotifyWorkerManager::ClearDataWithoutMeta(const worker::HashRange &rang
         tempRange->set_end(range.second);
     }
     *req.mutable_objkeys_migrate_finished() = { objsMigrateFinished.begin(), objsMigrateFinished.end() };
-
-    *req.mutable_worker_ids() = { uuids.begin(), uuids.end() };
     return masterWorkerApi->ClearData(req, rsp);
 }
 

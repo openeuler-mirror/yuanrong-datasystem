@@ -648,16 +648,6 @@ public:
     Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
 
     /**
-     * @brief Collect worker UUIDs whose metadata should be recovered after restart.
-     * @param[in] workerAddr Restarted worker address.
-     * @param[in] restartWorkerUuid Restarted worker uuid.
-     * @param[in] ringPb Current hash ring protobuf.
-     * @param[out] recoverUuids UUIDs to recover.
-     */
-    void CollectRecoveryWorkerUuidsForRestart(const std::string &workerAddr, const std::string &restartWorkerUuid,
-                                              const HashRingPb &ringPb, std::vector<std::string> &recoverUuids);
-
-    /**
      * @brief Handle worker restart event for metadata recovery.
      * @param[in] workerAddr Restarted worker address.
      * @return Status of the call.

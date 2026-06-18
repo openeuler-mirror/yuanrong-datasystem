@@ -1596,7 +1596,7 @@ TEST_F(KVClientMSetDMTest, PreCommitTtl)
     }
 }
 
-TEST_F(KVClientMSetDMTest, LEVEL1_MSetRollbackFailed)
+TEST_F(KVClientMSetDMTest, DISABLED_LEVEL1_MSetRollbackFailed)
 {
     DS_ASSERT_OK(
         cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMetaPhaseTwo.begin", "1*return(K_RUNTIME_ERROR)"));

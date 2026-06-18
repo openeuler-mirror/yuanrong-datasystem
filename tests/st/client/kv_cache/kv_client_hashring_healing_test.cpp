@@ -148,9 +148,8 @@ public:
             }
             iter++;
         }
-        if (!standbyWorker.empty()) {
-            (*ring.mutable_key_with_worker_id_meta_map())[uuid] = standbyWorker;
-        }
+        (void)standbyWorker;
+        (void)uuid;
         DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ring.SerializeAsString()));
         LOG(INFO) << "Ring After modify:" << worker::HashRingToJsonString(ring);
     }

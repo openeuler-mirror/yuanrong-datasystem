@@ -360,15 +360,11 @@ TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValid
     auto *range = req.add_ranges();
     range->set_from(10);
     range->set_end(20);
-    req.add_worker_ids("uuid_a");
-    req.add_worker_ids("uuid_b");
-
     auto selectReq = MetadataRecoverySelector::BuildSelectionRequest(req, true);
     ASSERT_FALSE(selectReq.Empty());
     ASSERT_EQ(selectReq.ranges.size(), 1);
     EXPECT_EQ(selectReq.ranges[0].first, 10);
     EXPECT_EQ(selectReq.ranges[0].second, 20);
-    ASSERT_THAT(selectReq.workerUuids, ElementsAre("uuid_a", "uuid_b"));
     EXPECT_TRUE(selectReq.includeL2CacheIds);
 
     std::vector<std::string> objectKeys;

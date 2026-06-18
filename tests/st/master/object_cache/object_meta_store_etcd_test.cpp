@@ -28,7 +28,6 @@
 #include "gtest/gtest.h"
 
 #include "common.h"
-#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -59,7 +58,6 @@ void MakeObjectMetas(size_t createNum, std::unordered_map<std::string, ObjectMet
 }
 
 constexpr static int ETCD_KEYS_NUM{40};
-constexpr static int SPLIT_KEY_NUM{2};
 
 class ObjectMetaStoreEtcdTest : public ExternalClusterTest {
 public:
@@ -95,16 +93,6 @@ public:
                                           std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
             DS_ASSERT_OK(db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
                                           std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX));
-
-            // Worker table for key with worker id.
-            DS_ASSERT_OK(db_->CreateTable(std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                          std::string(ETCD_META_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-            DS_ASSERT_OK(db_->CreateTable(std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                          std::string(ETCD_LOCATION_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-            DS_ASSERT_OK(db_->CreateTable(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                          std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
-            DS_ASSERT_OK(db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
-                                          std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX));
         }
 
         FLAGS_etcd_address = etcdAddress;
@@ -138,20 +126,9 @@ public:
         return ss.str();
     }
 
-    std::pair<std::string, bool> HashFunction(const std::string &key)
+    std::string HashFunction(const std::string &key)
     {
-        auto res = Split(key, ";");
-        uint32_t hash;
-        bool specKey;
-        // key with worker id.
-        if (res.size() == SPLIT_KEY_NUM) {
-            hash = MurmurHash3_32(res[1]);
-            specKey = true;
-        } else {
-            hash = MurmurHash3_32(key);
-            specKey = false;
-        }
-        return { Hash2Str(hash), specKey };
+        return Hash2Str(MurmurHash3_32(key));
     }
 
     void WaitAsyncTaskDone()
@@ -173,17 +150,10 @@ public:
     {
         for (const auto &item : keys) {
             std::string value;
-            auto res = Split(item.first, ";");
             std::string key = item.second + "/" + workerIp + "_" + item.first;
-            if (res.size() == SPLIT_KEY_NUM) {
-                ASSERT_EQ(
-                    db_->Get(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, key, value).GetCode(),
-                    code);
-            } else {
-                ASSERT_EQ(
-                    db_->Get(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
-                    code);
-            }
+            ASSERT_EQ(
+                db_->Get(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
+                code);
         }
     }
 
@@ -192,17 +162,9 @@ public:
     {
         for (const auto &item : keys) {
             std::string value;
-            auto res = Split(item.first, ";");
             std::string key = item.second + "/" + item.first + "/" + std::to_string(version);
-            if (res.size() == SPLIT_KEY_NUM) {
-                ASSERT_EQ(
-                    db_->Get(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX, key, value).GetCode(),
-                    code);
-            } else {
-                ASSERT_EQ(
-                    db_->Get(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
-                    code);
-            }
+            ASSERT_EQ(
+                db_->Get(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(), code);
         }
     }
 
@@ -225,8 +187,8 @@ TEST_F(ObjectMetaStoreEtcdTest, DISABLED_TestSyncPutNormalKeyToEtcd)
     size_t metasNum = 50;
     MakeObjectMetas(metasNum, metas);
     for (auto &item : metas) {
-        auto res = HashFunction(item.first);
-        etcdKeys.emplace_back(res.first + "/" + item.first);
+        auto hash = HashFunction(item.first);
+        etcdKeys.emplace_back(hash + "/" + item.first);
         std::string serializedStr;
         DS_ASSERT_OK(objectMetaStore_->CreateSerializedStringForMeta(item.first, item.second.meta, serializedStr));
         DS_ASSERT_OK(objectMetaStore_->CreateOrUpdateMeta(item.first, serializedStr,
@@ -240,7 +202,7 @@ TEST_F(ObjectMetaStoreEtcdTest, DISABLED_TestSyncPutNormalKeyToEtcd)
     }
 }
 
-TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestSyncPutMixKeyToEtcd)
+TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestSyncPutUuidSuffixKeyToHashEtcd)
 {
     LOG(INFO) << "Test sync put data to ETCD.";
     InitInstance();
@@ -248,8 +210,8 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestSyncPutMixKeyToEtcd)
     std::string workerId = cm_->GetLocalWorkerUuid();
     for (int i = 0; i < ETCD_KEYS_NUM; ++i) {
         std::string key = i % 2 == 0 ? "Worrior" + std::to_string(i) : "Worrior" + std::to_string(i) + ";" + workerId;
-        auto res = HashFunction(key);
-        etcdKeys.emplace_back(key, res.first);
+        auto hash = HashFunction(key);
+        etcdKeys.emplace_back(key, hash);
     }
 
     std::string workerIp = "127.0.0.1:18481";
@@ -272,7 +234,7 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestSyncPutMixKeyToEtcd)
     VerifyDataInAsyncTable(workerIp, etcdKeys, StatusCode::K_NOT_FOUND);
 }
 
-TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestASyncPutMixKeyToEtcd)
+TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestASyncPutUuidSuffixKeyToHashEtcd)
 {
     LOG(INFO) << "Test async put data to ETCD.";
     InitInstance();
@@ -280,8 +242,8 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestASyncPutMixKeyToEtcd)
     std::string workerId = cm_->GetLocalWorkerUuid();
     for (int i = 0; i < ETCD_KEYS_NUM; ++i) {
         std::string key = i % 2 == 0 ? "Worrior" + std::to_string(i) : "Worrior" + std::to_string(i) + ";" + workerId;
-        auto res = HashFunction(key);
-        etcdKeys.emplace_back(key, res.first);
+        auto hash = HashFunction(key);
+        etcdKeys.emplace_back(key, hash);
     }
 
     uint64_t version = 0;
@@ -348,8 +310,8 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestRecoveryFromEtcd)
     std::string workerId = cm_->GetLocalWorkerUuid();
     for (int i = 0; i < ETCD_KEYS_NUM; ++i) {
         std::string key = i % 2 == 0 ? "Worrior" + std::to_string(i) : "Worrior" + std::to_string(i) + ";" + workerId;
-        auto res = HashFunction(key);
-        etcdKeys.emplace_back(key, res.first);
+        auto hash = HashFunction(key);
+        etcdKeys.emplace_back(key, hash);
     }
     uint64_t version = 0;
     for (const auto &item : etcdKeys) {
@@ -363,13 +325,13 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestRecoveryFromEtcd)
     // wait for async task done and verify.
     WaitAsyncTaskDone();
     std::vector<std::pair<std::string, std::string>> outMetas;
-    DS_ASSERT_OK(objectMetaStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, { workerId },
+    DS_ASSERT_OK(objectMetaStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE,
                                                { { 0, UINT32_MAX } }, outMetas));
     ASSERT_EQ(outMetas.size(), 40ul);
     verifyFunc(etcdKeys, outMetas, true, version);
 
     outMetas.clear();
-    DS_ASSERT_OK(objectMetaStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, { workerId },
+    DS_ASSERT_OK(objectMetaStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE,
                                                { { 0, UINT32_MAX } }, outMetas));
     ASSERT_EQ(outMetas.size(), 40ul);
     verifyFunc(etcdKeys, outMetas, false, version);

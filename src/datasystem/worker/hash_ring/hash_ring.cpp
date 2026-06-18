@@ -255,27 +255,21 @@ Status HashRing::InitRing(const std::string &oldValue, std::unique_ptr<std::stri
 
     // set uuid and get the restart state
     newRing.set_cluster_id("");
-    auto reusedUuid = GetReusedUuid(newRing);
     auto workerInRing = newRing.mutable_workers()->find(workerAddr_);
     if (workerInRing == newRing.mutable_workers()->end()) {
         startUpState_ = StartUpState::START;
-        workerUuid_ = reusedUuid.empty() ? GetStringUuid() : reusedUuid;
+        workerUuid_ = GetStringUuid();
         INJECT_POINT("HashRing.InitRing.CustomWorkerId", [this](const std::string &customizedWorkerId) {
             workerUuid_ = customizedWorkerId;
             return Status::OK();
         });
         WorkerPb workerPb;
-        // If the reusedUuid is not empty, set the workerPb uuid after the uuid metadata is migrated back.
-        if (reusedUuid.empty()) {
-            workerPb.set_worker_uuid(workerUuid_);
-        }
+        workerPb.set_worker_uuid(workerUuid_);
         workerPb.set_state(WorkerPb::INITIAL);
         (void)newRing.mutable_workers()->insert({ workerAddr_, workerPb });
     } else {
         startUpState_ = StartUpState::RESTART;
         workerUuid_ = workerInRing->second.worker_uuid();
-        // After the uuid metadata is migrated in voluntary scale down, will clear the worker uuid, so reused uuid.
-        workerUuid_ = workerUuid_.empty() ? reusedUuid : workerUuid_;
         // A node that should be scaled in restarts before the scale-in starts, the scale-in should be canceled.
         if (workerInRing->second.need_scale_down() && workerInRing->second.state() == WorkerPb::ACTIVE) {
             LOG(INFO) << "Cancel the unstarted scale-in task of " << workerAddr_;
@@ -375,10 +369,8 @@ void HashRing::EraseUnFinishMigrateDataWorker(HashRingPb &oldRing, std::unique_p
 {
     HashRingPb newRing = oldRing;
     for (const auto &worker : oldRing.workers()) {
-        // if workerid, hashtoken is empty and state is leaving, the node is voluntary scale down and meta migrate
-        // finished, if all node exist, the node no need migrate data.
-        if (worker.second.worker_uuid().empty() && worker.second.hash_tokens().empty()
-            && worker.second.state() == WorkerPb::LEAVING) {
+        // If hash tokens are empty and state is leaving, the voluntary scale-down metadata migration has finished.
+        if (worker.second.hash_tokens().empty() && worker.second.state() == WorkerPb::LEAVING) {
             newRing.mutable_workers()->erase(worker.first);
         }
     }
@@ -425,19 +417,8 @@ void HashRing::GenerateVoluntaryScaleDownChangingInfo()
                 INJECT_POINT("hashring.regenerate.sleep");
                 LOG(INFO) << "Regenerate voluntary scale add_node_info for " << workerId;
             }
-            std::string standbyWorker;
-            if (!worker.worker_uuid().empty()) {
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                    GetStandbyWorkerExceptNoLock(worker.worker_uuid(), allScaleDownWorkers, standbyWorker),
-                    "Cannot find standby node for " + workerId);
-            }
-            INJECT_POINT("GetStandbyWorkerExceptNoLock", [&standbyWorker](std::string addr) {
-                standbyWorker = addr;
-                return Status::OK();
-            });
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                allocator.RemoveNodeVoluntarily(workerId, standbyWorker, hashFunction_(worker.worker_uuid()),
-                                                allScaleDownWorkers, oldRing),
+                allocator.RemoveNodeVoluntarily(workerId, allScaleDownWorkers, oldRing),
                 "RemoveNodeVoluntarily failed");
             if (workerId == workerAddr_) {
                 // If the voluntary scale down node is not the current node, there is no need to clean up
@@ -515,10 +496,6 @@ void HashRing::InspectAndProcessPeriodically()
         GenerateVoluntaryScaleDownChangingInfo();
         SubmitMigrateDataTaskIfNeed(ringInfo_);
     }
-
-    if (state_.load() == RUNNING) {
-        ClearWorkerMapOnInterval();
-    }
 }
 
 void HashRing::TryGenerateHashRange(int waitTime, std::function<void()> func)
@@ -544,7 +521,7 @@ std::set<std::string> HashRing::GetAddingWorkers(const HashRingPb &ring) const
             return {};
         }
         // 2. scale down is happening, and it holds token and exists add_node_info (metadata migration is not complete).
-        if (i.second.state() == WorkerPb::LEAVING && hasToken && !i.second.worker_uuid().empty() && !needForceJoin_) {
+        if (i.second.state() == WorkerPb::LEAVING && hasToken && !needForceJoin_) {
             return {};
         }
 
@@ -581,13 +558,12 @@ std::unordered_set<std::string> HashRing::GetLeavingWorkers(const HashRingPb &ri
             continue;
         }
         // for not finish migrate meta leaving workers, regenarate addNodeInfo.
-        if (i.second.state() == WorkerPb::LEAVING
-            && (!i.second.worker_uuid().empty() || !i.second.hash_tokens().empty())) {
+        if (i.second.state() == WorkerPb::LEAVING && !i.second.hash_tokens().empty()) {
             leavingWorkers.emplace(i.first);
         }
         if (i.second.need_scale_down()) {
             allScaleDownWorkers.emplace(i.first);
-            if (!i.second.worker_uuid().empty() || !i.second.hash_tokens().empty()) {
+            if (!i.second.hash_tokens().empty()) {
                 workers.emplace(i.first);
             }
         }
@@ -623,7 +599,6 @@ Status HashRing::AddNode(const HashRingPb &currRing)
     for (auto &info : addNodeInfos) {
         (*newRing.mutable_add_node_info())[info.first] = std::move(info.second);
     }
-    AddUpgradeRange(newRing, workers);
     RangeSearchResult res;
     RETURN_IF_NOT_OK(etcdStore_->CAS(
         ETCD_RING_PREFIX, "",
@@ -733,40 +708,8 @@ bool HashRing::CheckAllAddNodeFinishWhenSrcFailed(const std::string &workerAddr,
     return true;
 }
 
-bool HashRing::IsInRange(const HashRange &ranges, const std::string &objKey, const std::string &dbName)
+bool HashRing::IsInRange(const HashRange &ranges, const std::string &objKey)
 {
-    std::string workerId;
-    if (TrySplitWorkerIdFromObjecId(objKey, workerId).IsOk()) {
-        uint32_t hashVal1 = hashFunction_(dbName);
-        uint32_t hashVal2 = hashFunction_(workerId);
-        uint32_t hashVal3 = 0;
-        {
-            std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-            auto substitute = ringInfo_.key_with_worker_id_meta_map().find(workerId);
-            if (substitute != ringInfo_.key_with_worker_id_meta_map().end()) {
-                auto standbyWorkerAddr = substitute->second;
-                auto it = workerAddr2UuidMap_.find(standbyWorkerAddr);
-                if (it != workerAddr2UuidMap_.end()) {
-                    hashVal3 = hashFunction_(it->second);
-                }
-            }
-        }
-
-        for (auto &range : ranges) {
-            // First equal to the second represent the migration of uuid object
-            // - hashVal1: voluntary node Migrates all objects with uuid metadata, including those migrated from other
-            // workers with different uuids.
-            // - hashVal2: Migrates objects with uuid metadata back to the original worker (upgrade scenarios).
-            // - hashVal3: for other node to migrate all objects with uuid metadata, including those migrated from other
-            // workers with different uuids.
-            if (range.first == range.second
-                && (range.first == hashVal1 || range.first == hashVal2 || range.first == hashVal3)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     return HashInRange(ranges, objKey);
 }
 
@@ -897,10 +840,10 @@ std::string HashRing::SummarizeHashRing(const HashRingPb &ring)
     }
     return FormatString(
         "Ring summarize: total:%d, active:%d, joining:%d(%s), initial:%d, leaving:%d(%s) add_node_info: %d(%s), "
-        "del_node_info: %d(%s), key_with_worker_id_meta_map: %d",
+        "del_node_info: %d(%s)",
         ring.workers_size(), activeNum, joiningNum, joiningNodes, initNum, leavingNum, leavingNodes,
         ring.add_node_info_size(), GetUnProcessedNodeInfo(ring.add_node_info()), ring.del_node_info_size(),
-        GetUnProcessedNodeInfo(ring.del_node_info()), ring.key_with_worker_id_meta_map_size());
+        GetUnProcessedNodeInfo(ring.del_node_info()));
 }
 
 void HashRing::SubmitMigrateDataTaskIfNeed(const HashRingPb &ring)
@@ -912,8 +855,7 @@ void HashRing::SubmitMigrateDataTaskIfNeed(const HashRingPb &ring)
     if (iter == ring.workers().end()) {
         return;
     }
-    if (iter->second.worker_uuid().empty() && iter->second.hash_tokens().empty()
-        && iter->second.state() == WorkerPb::LEAVING) {
+    if (iter->second.hash_tokens().empty() && iter->second.state() == WorkerPb::LEAVING) {
         const int logInterval = 10;
         LOG_EVERY_T(INFO, logInterval) << "Worker " << workerAddr_
                                        << " meta data migrate finish, begin to trigger data migration.";
@@ -929,6 +871,7 @@ void HashRing::ProcessUpdateRingEventIfLeaving(const HashRingPb &oldRing, const 
     if (newRing.workers().find(workerAddr_) == newRing.workers().end()) {
         int waitTimeMs = 1000;  // Wait 1000ms let other worker receive hash ring event before worker shutdown
         std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+        needVoluntaryScaleDown_ = false;
         voluntaryScaleDownDone_ = true;
     }
 
@@ -1074,7 +1017,7 @@ Status HashRing::ProcessForScaleDownFinish(HashRingPb &oldRing, HashRingPb &newR
         }
         std::string dbName = worker.second;
         if (dbName.empty()) {
-            LOG(WARNING) << "The uuid is empty for " << worker.first << " and not exists in update_worker_map";
+            LOG(WARNING) << "The uuid is empty for " << worker.first;
             continue;
         }
         needDeleteDbNames.emplace_back(dbName);
@@ -1242,17 +1185,6 @@ bool HashRing::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
     if (IsCentralized()) {
         return false;
     }
-    // If the key carries workerId, we need to check whether redirection is required only when the migration of meta
-    // with workerId occurs. There are currently some scenarios where the above situation will occur:
-    // 1. The local node is scaling down voluntarily.
-    // 2. The workerId is in update_worker_map, which means that this workerId may be reused after a node is restarted.
-    // If this happens, the local node will migrate the metadata with workerId to the restarted node.
-    // 3. Following the above situation 2, after completing the migration task, the source node will remove the target
-    // node's workerId from update_worker_map and update the hash ring. If the source node of the request has not yet
-    // updated to this version of the hash ring and sent the request, local node still needs to reply that redirection
-    // is required. Considering this situation, the key carrying the workerId cannot short-circuit the following
-    // redirection judgment logic.
-
     // check if in add_node_info, return new node if true
     {
         HashRange ranges;
@@ -1261,7 +1193,7 @@ bool HashRing::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
             for (auto &r : i.second.changed_ranges()) {
                 ranges.emplace_back(r.from(), r.end());
             }
-            if (IsInRange(ranges, objKey, workerUuid_)) {
+            if (IsInRange(ranges, objKey)) {
                 LOG_IF_ERROR(masterAddr.ParseString(i.first), "parse failed: " + i.first);
                 VLOG(1) << "adding node, return new master: " << masterAddr.ToString();
                 return true;
@@ -1285,13 +1217,13 @@ bool HashRing::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
 Status HashRing::GetWorkerAddrByUuidForAddressing(const std::string &workerUuid, HostPort &workerAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    return ::worker::GetWorkerAddrByUuidForAddressing(ringInfo_, workerUuid2AddrMap_, workerUuid, workerAddr);
+    return ::worker::GetWorkerAddrByUuidForAddressing(workerUuid2AddrMap_, workerUuid, workerAddr);
 }
 
 Status HashRing::GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    return ::worker::GetWorkerAddrByUuidForMetadata(ringInfo_, workerUuid2AddrMap_, workerUuid, workerAddr);
+    return ::worker::GetWorkerAddrByUuidForMetadata(workerUuid2AddrMap_, workerUuid, workerAddr);
 }
 
 Status HashRing::GetUuidByWorkerAddr(const std::string &workerAddr, std::string &uuid)
@@ -1303,14 +1235,8 @@ Status HashRing::GetUuidByWorkerAddr(const std::string &workerAddr, std::string 
 Status HashRing::GetUuidByWorkerAddrNoLock(const std::string &workerAddr, std::string &uuid) const
 {
     auto it = workerAddr2UuidMap_.find(workerAddr);
-    if (it != workerAddr2UuidMap_.end()) {
-        uuid = it->second;
-        return Status::OK();
-    }
-    auto updateIt = ringInfo_.update_worker_map().find(workerAddr);
-    CHECK_FAIL_RETURN_STATUS(updateIt != ringInfo_.update_worker_map().end(), K_NOT_FOUND,
-                             "Cannot find node with addr " + workerAddr);
-    uuid = updateIt->second.worker_uuid();
+    CHECK_FAIL_RETURN_STATUS(it != workerAddr2UuidMap_.end(), K_NOT_FOUND, "Cannot find node with addr " + workerAddr);
+    uuid = it->second;
     return Status::OK();
 }
 
@@ -1330,10 +1256,8 @@ Status HashRing::GetMasterUuid(const std::string &objKey, std::string &masterUui
 {
     // To make sure hash ring is running
     RETURN_IF_NOT_OK(WaitWorkable());
-    if (TrySplitWorkerIdFromObjecId(objKey, masterUuid).IsError()) {
-        std::optional<RouteInfo> routeInfo;
-        RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
-    }
+    std::optional<RouteInfo> routeInfo;
+    RETURN_IF_NOT_OK(GetPrimaryWorkerUuid(objKey, masterUuid, routeInfo));
     return Status::OK();
 }
 
@@ -1505,8 +1429,7 @@ Status HashRing::RemoveWorker(const std::string &workerAddr, const std::unordere
     RangeSearchResult res;
     auto ret = etcdStore_->CAS(
         ETCD_RING_PREFIX, "",
-        [this, &workerAddr, &uuidOfRemoveWorker](const std::string &oldValue, std::unique_ptr<std::string> &newValue,
-                                                 bool &retry) {
+        [this, &workerAddr](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
             HashRingPb currRing;
             if (!currRing.ParseFromString(oldValue)) {
                 return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
@@ -1541,13 +1464,6 @@ Status HashRing::RemoveWorker(const std::string &workerAddr, const std::unordere
                     }
                     return Status::OK();
                 }
-            }
-
-            if (!uuidOfRemoveWorker.empty()) {
-                (*currRing.mutable_key_with_worker_id_meta_map())[uuidOfRemoveWorker] = workerAddr_;
-            } else {
-                LOG(INFO) << FormatString("workerId of %s is empty, skip update key_with_worker_id_meta_map",
-                                          workerAddr);
             }
 
             if (google::protobuf::util::MessageDifferencer::Equals(ringInfo_, currRing)) {
@@ -1847,134 +1763,6 @@ Status HashRing::GetPrevWorker(const std::string &currWorkerUuid, std::string &p
     std::string prevWorkerAddr;
     return GetRelatedWorkerImpl(currWorkerUuid, { WorkerPb::ACTIVE, WorkerPb::LEAVING }, {}, false, prevWorkerUuid,
                                 prevWorkerAddr);
-}
-
-Status HashRing::GetUuidInCurrCluster(const std::string &oldUuid, std::string &newUuid,
-                                      std::optional<RouteInfo> &routeInfo)
-{
-    CHECK_FAIL_RETURN_STATUS(Validator::IsUuid(oldUuid), K_INVALID,
-                             FormatString("%s must be in the format of uuid", oldUuid));
-    if (routeInfo) {
-        routeInfo->payload = oldUuid;
-    }
-    newUuid.clear();
-    RETURN_IF_NOT_OK(WaitWorkable());
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    auto iter1 = workerUuid2AddrMap_.find(oldUuid);
-    if (iter1 != workerUuid2AddrMap_.end()) {
-        newUuid = oldUuid;
-        return Status::OK();
-    }
-    auto iter2 = ringInfo_.key_with_worker_id_meta_map().find(oldUuid);
-    if (iter2 != ringInfo_.key_with_worker_id_meta_map().end()) {
-        VLOG(1) << FormatString("node[%s] has been remove, try to rehash to other worker", oldUuid);
-        auto iter3 = workerAddr2UuidMap_.find(iter2->second);
-        if (iter3 != workerAddr2UuidMap_.end()) {
-            newUuid = iter3->second;
-            return Status::OK();
-        }
-        LOG(ERROR) << FormatString("The msg in ringInfo_[%s] and workerAddr2UuidMap_[%s] is inconsistent",
-                                   MapToString(ringInfo_.key_with_worker_id_meta_map()),
-                                   MapToString(workerAddr2UuidMap_));
-        RETURN_STATUS(K_RUNTIME_ERROR, "Cannot find the master of " + oldUuid);
-    }
-    RETURN_STATUS(K_NOT_FOUND, FormatString("%s is not in this az", oldUuid));
-}
-
-std::string HashRing::GetReusedUuid(HashRingPb &ring) const
-{
-    const auto &iter = ring.update_worker_map().find(workerAddr_);
-    if (iter != ring.update_worker_map().end()) {
-        LOG(INFO) << FormatString("Worker %s reused uuid %s", workerAddr_, iter->second.worker_uuid());
-        return iter->second.worker_uuid();
-    }
-    return "";
-}
-
-void HashRing::ClearWorkerMapOnInterval()
-{
-    static int count = 0;
-    static const int intervalTimes = 10;
-    count++;
-    if (count % intervalTimes != 0) {
-        return;
-    }
-    HashRingPb newRing = ringInfo_;
-    if (!ClearWorkerMapIfNeed(newRing)) {
-        return;
-    }
-    LOG_IF_ERROR(
-        etcdStore_->CAS(
-            ETCD_RING_PREFIX, "",
-            [this, &newRing](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
-                HashRingPb oldRing;
-                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(oldRing.ParseFromString(oldValue), K_RUNTIME_ERROR,
-                                                     "Failed to parse HashRingPb from string");
-                std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-                if (!google::protobuf::util::MessageDifferencer::Equals(ringInfo_, oldRing)) {
-                    VLOG(1) << "ring has changed. give up and wait for next time if needed.";
-                    return Status::OK();
-                }
-                newValue = std::make_unique<std::string>(newRing.SerializeAsString());
-                return Status::OK();
-            }),
-        "Clear update_worker_map failed");
-}
-
-void HashRing::AddUpgradeRange(HashRingPb &ring, std::set<std::string> &workers)
-{
-    for (const auto &worker : workers) {
-        auto uuidIt = ring.update_worker_map().find(worker);
-        if (uuidIt == ring.update_worker_map().end()) {
-            continue;
-        }
-        auto &uuid = uuidIt->second.worker_uuid();
-        auto iter = ring.mutable_workers()->find(worker);
-        if (iter != ring.mutable_workers()->end() && iter->second.worker_uuid().empty()) {
-            iter->second.set_worker_uuid(uuid);
-        }
-        auto addrIt = ring.key_with_worker_id_meta_map().find(uuid);
-        if (addrIt == ring.key_with_worker_id_meta_map().end()) {
-            continue;
-        }
-        uint32_t hash = hashFunction_(uuid);
-        ChangeNodePb::RangePb range;
-        range.set_workerid(addrIt->second);
-        range.set_from(hash);
-        range.set_end(hash);
-        range.set_finished(false);
-        range.set_is_upgrade(true);
-        (*ring.mutable_add_node_info())[worker].mutable_changed_ranges()->Add(std::move(range));
-        VLOG(1) << FormatString("Begin to restore worker(%s) uuid meta(%s)", worker, uuid);
-    }
-}
-
-Status HashRing::RemoveExpiredMap(const std::set<std::string> &expiredUuids)
-{
-    return etcdStore_->CAS(
-        ETCD_RING_PREFIX, "",
-        [&expiredUuids](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
-            HashRingPb currRing;
-            if (!currRing.ParseFromString(oldValue)) {
-                return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
-            }
-            for (auto &expiredUuid : expiredUuids) {
-                currRing.mutable_key_with_worker_id_meta_map()->erase(expiredUuid);
-            }
-            newValue = std::make_unique<std::string>(currRing.SerializeAsString());
-            return Status::OK();
-        });
-}
-
-bool HashRing::IsInUpdateWorkerMap(const std::string &workerId)
-{
-    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    for (const auto &itr : ringInfo_.update_worker_map()) {
-        if (itr.second.worker_uuid() == workerId) {
-            return true;
-        }
-    }
-    return false;
 }
 
 Status HashRing::WaitWorkable()

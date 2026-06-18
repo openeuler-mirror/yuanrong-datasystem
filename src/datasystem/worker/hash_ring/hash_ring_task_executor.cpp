@@ -197,8 +197,7 @@ Status HashRingTaskExecutor::SubmitMigrateDataTask()
 }
 
 void HashRingTaskExecutor::ClearTokenForScaleDown(HashRingPb &ring, const std::string &srcNode,
-                                                  const std::string &destAddr, HashRange &finishRanges,
-                                                  bool uuidRangeFinished) const
+                                                  HashRange &finishRanges) const
 {
     auto worker = ring.mutable_workers()->find(srcNode);
     if (worker == ring.mutable_workers()->end()) {
@@ -221,23 +220,6 @@ void HashRingTaskExecutor::ClearTokenForScaleDown(HashRingPb &ring, const std::s
                                      return false;
                                  }),
                   tokens->end());
-    if (!uuidRangeFinished) {
-        return;
-    }
-    // If worker uuid range finished, record key_with_worker_id_meta_map and update_worker_map, then clear uuid.
-    if (!worker->second.worker_uuid().empty()) {
-        (*ring.mutable_key_with_worker_id_meta_map())[worker->second.worker_uuid()] = destAddr;
-        UpdateNodePb update;
-        update.set_worker_uuid(worker->second.worker_uuid());
-        update.set_timestamp(GetSystemClockTimeStampUs());
-        ring.mutable_update_worker_map()->insert({ worker->first, update });
-        worker->second.clear_worker_uuid();
-    }
-    for (auto &iter : (*ring.mutable_key_with_worker_id_meta_map())) {
-        if (iter.second == srcNode) {
-            iter.second = destAddr;
-        }
-    }
 }
 
 Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &destAddr, const std::string &srcNode,
@@ -257,7 +239,6 @@ Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &destAddr
     // mark the finished ranges.
     bool isThisNodeFinished{ true };
     HashRange finishRanges;
-    bool uuidRangeFinished{ false };
     for (auto &range : (*nodePb->second.mutable_changed_ranges())) {
         if (range.workerid() != srcNode) {
             if (!range.finished()) {
@@ -267,25 +248,9 @@ Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &destAddr
         }
         range.set_finished(true);
         finishRanges.emplace_back(range.from(), range.end());
-        if (range.is_upgrade()) {
-            auto iter = ring.update_worker_map().find(destAddr);
-            if (iter != ring.update_worker_map().end()) {
-                ring.mutable_key_with_worker_id_meta_map()->erase(iter->second.worker_uuid());
-                ring.mutable_update_worker_map()->erase(destAddr);
-            }
-            auto destWorker = ring.mutable_workers()->find(destAddr);
-            if (destWorker == ring.mutable_workers()->end() || destWorker->second.worker_uuid().empty()) {
-                LOG(WARNING) << FormatString("destNode[%s] can not be found in hash ring", destAddr);
-            } else if (ring.mutable_key_with_worker_id_meta_map()->erase(destWorker->second.worker_uuid())) {
-                LOG(INFO) << FormatString(
-                    "Erase destNode[%s]'s workerId in keyWithWorkerIdMetaMap without check updateWorkerMap", destAddr);
-            }
-        } else if (range.from() == range.end()) {
-            uuidRangeFinished = true;
-        }
     }
     if (worker->second.need_scale_down()) {
-        ClearTokenForScaleDown(ring, srcNode, destAddr, finishRanges, uuidRangeFinished);
+        ClearTokenForScaleDown(ring, srcNode, finishRanges);
     }
 
     if (!isThisNodeFinished) {
@@ -330,73 +295,83 @@ Status HashRingTaskExecutor::SubmitScaleDownTaskRecoverFromEtcd(const HashRingPb
               << " with traceid " << traceId;
     scaleThreadPool_->Execute([this, currRing, traceId]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        INJECT_POINT("SubmitScaleDownTask.skip", [] { return; });
-
-        // clean up dev client metadata
-        ClearDevClientMetaForScaledInWorker(currRing);
-
-        Status status;
-        HashRange ranges;
-        std::vector<std::string> processedNodes, allSubstitueUuidList;
-        ClearDataWithoutMeta(currRing, ranges);
-        if (ranges.empty()) {
-            LOG(INFO) << "all scale down task is processing, no need to excute, skip";
-            return;
-        }
-        for (auto &removeNode : currRing.del_node_info()) {
-            LOG(INFO) << "Process del_node_info: " << removeNode.first;
-            processedNodes.emplace_back(removeNode.first);
-            RecoverMetaAndDataOfFaultWorker(currRing, removeNode, allSubstitueUuidList);
-        }
-        // 3. remove del_node_info together
-        LOG(INFO) << "remove del_node_info range from etcd: ";
-        RetryHashRingTaskUntil([this, &processedNodes, &allSubstitueUuidList]() {
-            auto status = etcdStore_->CAS(
-                ETCD_RING_PREFIX, "",
-                [this, &processedNodes, &allSubstitueUuidList](
-                    const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
-                    HashRingPb oldRing;
-                    if (!oldRing.ParseFromString(oldValue)) {
-                        return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
-                    }
-                    HashRingPb ringAfterClear = EraseFinishedDelNodeInfo(oldRing, processedNodes, allSubstitueUuidList);
-                    google::protobuf::util::MessageDifferencer differencer;
-                    differencer.set_repeated_field_comparison(google::protobuf::util::MessageDifferencer::AS_SET);
-                    if (differencer.Compare(oldRing, ringAfterClear)) {
-                        VLOG(1) << "Not responsible for the scale down of " << VectorToString(processedNodes)
-                                << ", no need to modify";
-                        return Status::OK();
-                    }
-                    newValue = std::make_unique<std::string>(ringAfterClear.SerializeAsString());
-                    VLOG(1) << "After mark del_node_info finished: " << MapToString(ringAfterClear.del_node_info());
-                    INJECT_POINT("HashRingTaskExecutor.SubmitScaleDownTask.ProcessSlowly");
-                    return Status::OK();
-                });
-            HASH_RING_LOG_IF_ERROR(status, "Mark failed");
-            return status;
-        });
-        RemoveClearDataTask(ranges);
+        ExecuteScaleDownTaskRecoverFromEtcd(currRing);
     });
     LOG(INFO) << scaleThreadPool_->GetStatistics();
     return Status::OK();
 }
 
-void HashRingTaskExecutor::GetRemoveNodeKeyWithUuidsInfo(const HashRingPb &currRing, const std::string &removeNodeAddr,
-                                                         std::vector<std::string> &uuids)
+bool HashRingTaskExecutor::HasFinalizeOnlyScaleDownNode(const HashRingPb &ring) const
 {
-    for (const auto &keyWithWorkerIdReplaceInfo : currRing.key_with_worker_id_meta_map()) {
-        if (keyWithWorkerIdReplaceInfo.second != removeNodeAddr) {
-            continue;
+    for (const auto &removeNode : ring.del_node_info()) {
+        if (removeNode.second.changed_ranges().empty()) {
+            return true;
         }
-        uuids.emplace_back(keyWithWorkerIdReplaceInfo.first);
     }
+    return false;
+}
+
+std::vector<std::string> HashRingTaskExecutor::RecoverScaleDownNodes(const HashRingPb &ring)
+{
+    std::vector<std::string> processedNodes;
+    processedNodes.reserve(ring.del_node_info_size());
+    for (auto &removeNode : ring.del_node_info()) {
+        LOG(INFO) << "Process del_node_info: " << removeNode.first;
+        processedNodes.emplace_back(removeNode.first);
+        RecoverMetaAndDataOfFaultWorker(removeNode);
+    }
+    return processedNodes;
+}
+
+void HashRingTaskExecutor::ClearFinishedScaleDownNodes(const std::vector<std::string> &processedNodes)
+{
+    LOG(INFO) << "remove del_node_info range from etcd: ";
+    RetryHashRingTaskUntil([this, &processedNodes]() {
+        auto status = etcdStore_->CAS(
+            ETCD_RING_PREFIX, "",
+            [this, &processedNodes](const std::string &oldValue, std::unique_ptr<std::string> &newValue,
+                                    bool & /* retry */) {
+                HashRingPb oldRing;
+                if (!oldRing.ParseFromString(oldValue)) {
+                    return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
+                }
+                HashRingPb ringAfterClear = EraseFinishedDelNodeInfo(oldRing, processedNodes);
+                google::protobuf::util::MessageDifferencer differencer;
+                differencer.set_repeated_field_comparison(google::protobuf::util::MessageDifferencer::AS_SET);
+                if (differencer.Compare(oldRing, ringAfterClear)) {
+                    VLOG(1) << "Not responsible for the scale down of " << VectorToString(processedNodes)
+                            << ", no need to modify";
+                    return Status::OK();
+                }
+                newValue = std::make_unique<std::string>(ringAfterClear.SerializeAsString());
+                VLOG(1) << "After mark del_node_info finished: " << MapToString(ringAfterClear.del_node_info());
+                INJECT_POINT("HashRingTaskExecutor.SubmitScaleDownTask.ProcessSlowly");
+                return Status::OK();
+            });
+        HASH_RING_LOG_IF_ERROR(status, "Mark failed");
+        return status;
+    });
+}
+
+void HashRingTaskExecutor::ExecuteScaleDownTaskRecoverFromEtcd(const HashRingPb &currRing)
+{
+    INJECT_POINT("SubmitScaleDownTask.skip", [] { return; });
+    ClearDevClientMetaForScaledInWorker(currRing);
+    HashRange ranges;
+    ClearDataWithoutMeta(currRing, ranges);
+    if (ranges.empty() && !HasFinalizeOnlyScaleDownNode(currRing)) {
+        LOG(INFO) << "all scale down task is processing, no need to excute, skip";
+        return;
+    }
+    auto processedNodes = RecoverScaleDownNodes(currRing);
+    ClearFinishedScaleDownNodes(processedNodes);
+    RemoveClearDataTask(ranges);
 }
 
 void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRingPb &currRing, HashRange &recoverRanges)
 {
     LOG(INFO) << "clear meta data without meta";
     HashRange clearRanges;
-    std::vector<std::string> uuids;
     for (const auto &delInfo : currRing.del_node_info()) {
         for (const auto &range : delInfo.second.changed_ranges()) {
             if (InsertClearDataSubmitTask(range)) {
@@ -406,26 +381,12 @@ void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRingPb &currRing, Hash
                 recoverRanges.emplace_back(range.from(), range.end());
             }
         }
-        std::string uuid;
-        HASH_RING_LOG_IF_ERROR(GetWorkeridByWorkerAddr(currRing, delInfo.first, uuid),
-                               "Failed to clear data because uuid not found");
-        uuids.emplace_back(uuid);
-        auto iter = currRing.key_with_worker_id_meta_map().find(uuid);
-        if (iter != currRing.key_with_worker_id_meta_map().end() && iter->second == workerAddr_) {
-            datasystem::ChangeNodePb_RangePb tmpRange;
-            tmpRange.set_from(MurmurHash3_32(uuid));
-            tmpRange.set_end(MurmurHash3_32(uuid));
-            if (InsertClearDataTask(tmpRange)) {
-                recoverRanges.emplace_back(tmpRange.from(), tmpRange.end());
-            }
-        }
-        GetRemoveNodeKeyWithUuidsInfo(currRing, delInfo.first, uuids);
     }
     if (clearRanges.empty()) {
         LOG(INFO) << "Skip clear data task submission because all matching clear tasks are already in progress";
         return;
     }
-    ClearDataWithoutMeta(clearRanges, uuids);
+    ClearDataWithoutMeta(clearRanges);
 }
 
 void HashRingTaskExecutor::ClearDevClientMetaForScaledInWorker(const HashRingPb &currRing)
@@ -485,9 +446,9 @@ bool HashRingTaskExecutor::InsertClearDataSubmitTask(const datasystem::ChangeNod
     return false;
 }
 
-void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRange &ranges, const std::vector<std::string> &uuids)
+void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRange &ranges)
 {
-    HASH_RING_LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(ranges, uuids),
+    HASH_RING_LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMeta::GetInstance().NotifyAll(ranges),
                            "Local ClearData failed.");
     INJECT_POINT("ClearDataDelay", [] { return; });
     INJECT_POINT("notExcuteClearData", [] {
@@ -503,8 +464,7 @@ void HashRingTaskExecutor::ClearDataWithoutMeta(const HashRange &ranges, const s
 }
 
 HashRingPb HashRingTaskExecutor::EraseFinishedDelNodeInfo(const HashRingPb &ring,
-                                                          const std::vector<std::string> &processedNodes,
-                                                          const std::vector<std::string> &allSubstitueUuidList) const
+                                                          const std::vector<std::string> &processedNodes) const
 {
     // erase the finished range.
     HashRingPb ringAfterClear = ring;
@@ -529,117 +489,19 @@ HashRingPb HashRingTaskExecutor::EraseFinishedDelNodeInfo(const HashRingPb &ring
         }
     }
 
-    // replace the uuid
-    for (const auto &uuid : allSubstitueUuidList) {
-        (*ringAfterClear.mutable_key_with_worker_id_meta_map())[uuid] = workerAddr_;
-    }
-
     return ringAfterClear;
 }
 
-Status HashRingTaskExecutor::RecoverMetaWithWorkerIdOfFaultyWorker(const std::string &removeWorkerAddr,
-                                                                   const HashRingPb &currRing,
-                                                                   std::vector<std::string> &allSubstituteUuidList,
-                                                                   bool isVoluntaryDownNodeFault)
-{
-    std::string removeNodeUuid;
-    RETURN_IF_NOT_OK(GetWorkeridByWorkerAddr(currRing, removeWorkerAddr, removeNodeUuid));
-
-    if (!isVoluntaryDownNodeFault) {
-        auto substituteNode = currRing.key_with_worker_id_meta_map().find(removeNodeUuid);
-        if (substituteNode == currRing.key_with_worker_id_meta_map().end()) {
-            return Status(K_RUNTIME_ERROR, "Cannot find the substitute node of remove worker.");
-        }
-        if (substituteNode->second != workerAddr_) {
-            LOG(INFO) << "Skip, substitute node is " << substituteNode->second;
-            return Status::OK();
-        }
-    } else if (removeWorkerAddr != workerAddr_) {
-        LOG(INFO) << "Skip, recover node is " << removeWorkerAddr;
-        return Status::OK();
-    }
-
-    LOG(INFO) << workerAddr_ << " Recover meta with workerid of " << removeWorkerAddr;
-
-    std::vector<std::string> recoverUuids{ removeNodeUuid };
-    // if the removeWorker is the substitute node of any other, recover
-    for (auto &keyWithWorkerIdReplaceInfo : currRing.key_with_worker_id_meta_map()) {
-        if (keyWithWorkerIdReplaceInfo.second != removeWorkerAddr) {
-            continue;
-        }
-        recoverUuids.emplace_back(keyWithWorkerIdReplaceInfo.first);
-        if (!isVoluntaryDownNodeFault) {
-            allSubstituteUuidList.emplace_back(keyWithWorkerIdReplaceInfo.first);
-        }
-    }
-    RETURN_IF_NOT_OK(HashRingEvent::RecoverMetaRanges::GetInstance().NotifyAll(recoverUuids, worker::HashRange{}));
-    return Status::OK();
-}
-
-Status HashRingTaskExecutor::ExcuteScaleDownMigrateUuidTask(const std::string &removeWorkerAddr,
-                                                            const HashRingPb &currRing, bool isVoluntaryDownNodeFault,
-                                                            ScaleDownMigrationTaskInfo &taskInfos)
-{
-    MigrateScaleDownInfo uuidRecoverTask;
-    HostPort removeWorkerPrimaryReplicaAddr;
-    std::string removeWorkerDbName;
-    RETURN_IF_NOT_OK(HashRingEvent::GetDbPrimaryLocation::GetInstance().NotifyAll(
-        removeWorkerAddr, removeWorkerPrimaryReplicaAddr, removeWorkerDbName));
-    HostPort destWorkerReceiveMetaAddr;
-    std::string destWorkerReceiveMetaDbName;
-    if (!isVoluntaryDownNodeFault) {
-        auto substituteNode = currRing.key_with_worker_id_meta_map().find(removeWorkerDbName);
-        if (substituteNode == currRing.key_with_worker_id_meta_map().end()) {
-            return Status(K_RUNTIME_ERROR, "Cannot find the substitute node of remove worker.");
-        }
-        if (removeWorkerPrimaryReplicaAddr.ToString() != workerAddr_) {
-            return Status::OK();
-        }
-        RETURN_IF_NOT_OK(HashRingEvent::GetDbPrimaryLocation::GetInstance().NotifyAll(
-            substituteNode->second, destWorkerReceiveMetaAddr, destWorkerReceiveMetaDbName));
-        uuidRecoverTask.destPrimaryReplicaAddress = destWorkerReceiveMetaAddr.ToString();
-        uuidRecoverTask.ranges.emplace_back(MurmurHash3_32(removeWorkerDbName), MurmurHash3_32(removeWorkerDbName));
-    } else {
-        taskInfos[removeWorkerDbName].destWorker = removeWorkerAddr;
-        taskInfos[removeWorkerDbName].destPrimaryReplicaAddress = removeWorkerPrimaryReplicaAddr.ToString();
-    }
-
-    LOG(INFO) << workerAddr_ << " Recover meta with workerid of " << removeWorkerAddr;
-
-    LOG_IF_ERROR(HashRingEvent::MigrateRanges::GetInstance().NotifyAll(
-                     removeWorkerDbName, uuidRecoverTask.destPrimaryReplicaAddress, destWorkerReceiveMetaDbName,
-                     uuidRecoverTask.ranges, false),
-                 "scale down migrate task failed");
-    return Status::OK();
-}
-
-Status HashRingTaskExecutor::GetWorkerByHash(const HashRingPb &ring, uint32_t hash, std::string &workerId)
-{
-    for (auto &worker : ring.workers()) {
-        if (HashRing::hashFunction_(worker.second.worker_uuid()) == hash) {
-            workerId = worker.first;
-            return Status::OK();
-        }
-    }
-    return Status(K_RUNTIME_ERROR, "cant find worker by hash, the worker not exist");
-}
-
-HashRange HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePb(const HashRingPb &ring, const ChangeNodePb &changeNode,
-                                                                 std::string &workerId)
+HashRange HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePb(const ChangeNodePb &changeNode)
 {
     HashRange targetRanges;
     for (auto &range : changeNode.changed_ranges()) {
         if (range.workerid() != workerAddr_ || range.finished()) {
             continue;
         }
-        // if range from == end, the worker receive the key with uuid of voluntary scale node
-        if (range.from() == range.end()) {
-            LOG_IF_ERROR(GetWorkerByHash(ring, range.from(), workerId), "failed to get worker by hash");
-            continue;
-        }
         if (range.from() < range.end()) {
             targetRanges.emplace_back(range.from(), range.end());
-        } else {
+        } else if (range.from() > range.end()) {
             targetRanges.emplace_back(range.from(), UINT32_MAX);
             targetRanges.emplace_back(0, range.end());
         }
@@ -648,11 +510,13 @@ HashRange HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePb(const HashRingP
 }
 
 ScaleDownMigrationTaskInfo HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePbByDbName(
-    const HashRingPb &ring, const ChangeNodePb &changeNode, std::string &workerId)
+    const ChangeNodePb &changeNode)
 {
     ScaleDownMigrationTaskInfo infos;
     for (auto &range : changeNode.changed_ranges()) {
-        // if range from == end, the worker receive the key with uuid of voluntary scale node
+        if (range.finished()) {
+            continue;
+        }
         HostPort hashRangeRecoverDbAddr;
         std::string hashRangeRecoverDbName;
         // wait retry?
@@ -662,21 +526,15 @@ ScaleDownMigrationTaskInfo HashRingTaskExecutor::GetWorkHashRangeFromChangeNodeP
             LOG(ERROR) << "get primary db addr failed";
             continue;
         }
-        if (range.finished()) {
-            continue;
-        }
-        if (range.from() == range.end()) {
-            std::string UuidRecoverWorkerAddr;
-            LOG_IF_ERROR(GetWorkerByHash(ring, range.from(), UuidRecoverWorkerAddr), "failed to get worker by hash");
-            workerId = UuidRecoverWorkerAddr;
-        }
         if (range.from() < range.end()) {
             infos[hashRangeRecoverDbName].destPrimaryReplicaAddress = hashRangeRecoverDbAddr.ToString();
             infos[hashRangeRecoverDbName].ranges.emplace_back(range.from(), range.end());
-        } else {
+        } else if (range.from() > range.end()) {
             infos[hashRangeRecoverDbName].destPrimaryReplicaAddress = hashRangeRecoverDbAddr.ToString();
             infos[hashRangeRecoverDbName].ranges.emplace_back(range.from(), UINT32_MAX);
             infos[hashRangeRecoverDbName].ranges.emplace_back(0, range.end());
+        } else {
+            continue;
         }
         infos[hashRangeRecoverDbName].destWorker = range.workerid();
     }
@@ -684,40 +542,22 @@ ScaleDownMigrationTaskInfo HashRingTaskExecutor::GetWorkHashRangeFromChangeNodeP
 }
 
 void HashRingTaskExecutor::RecoverMetaAndDataOfFaultWorker(
-    const HashRingPb &currRing,
-    const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode,
-    std::vector<std::string> &allSubstitueUuidList)
+    const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode)
 {
     // 1. delete if needed.
     // 2.1 recover according to hash range
-    std::string workerId;
-    auto hashRanges = GetWorkHashRangeFromChangeNodePb(currRing, removeNode.second, workerId);
-    if (!workerId.empty()) {
-        HASH_RING_LOG_IF_ERROR(RecoverMetaWithWorkerIdOfFaultyWorker(workerId, currRing, allSubstitueUuidList, true),
-                               "[dfx]voluntary worker recover not success: ");
-    }
-    auto status = HashRingEvent::RecoverMetaRanges::GetInstance().NotifyAll(std::vector<std::string>{}, hashRanges);
+    auto hashRanges = GetWorkHashRangeFromChangeNodePb(removeNode.second);
+    auto status = HashRingEvent::RecoverMetaRanges::GetInstance().NotifyAll(hashRanges);
     HASH_RING_LOG_IF_ERROR(status, "[dfx]recover not success");
     INJECT_POINT("SubmitScaleDownTask.delay", [](uint32_t delay_s) { sleep(delay_s); });
-    // 2.2 recover meta key with id (only substitute node needs)
-    status = RecoverMetaWithWorkerIdOfFaultyWorker(removeNode.first, currRing, allSubstitueUuidList);
-    HASH_RING_LOG_IF_ERROR(status, "[dfx]recover not success");
 }
 
 void HashRingTaskExecutor::RecoverMetaAndDataOfFaultWorkerByStandbyMaster(
-    const std::string &scaleDownWorkerDbName, const HashRingPb &currRing,
+    const std::string &scaleDownWorkerDbName,
     const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode)
 {
     std::vector<std::future<void>> tasks;
-    std::string workerId;
-    auto recoverMigrateTaskInfos = GetWorkHashRangeFromChangeNodePbByDbName(currRing, removeNode.second, workerId);
-    if (!workerId.empty()) {
-        LOG_IF_ERROR(ExcuteScaleDownMigrateUuidTask(workerId, currRing, true, recoverMigrateTaskInfos),
-                     "[dfx]voluntary worker recover not success: ");
-    } else {
-        LOG_IF_ERROR(ExcuteScaleDownMigrateUuidTask(removeNode.first, currRing, false, recoverMigrateTaskInfos),
-                     "[dfx] worker recover not success: ");
-    }
+    auto recoverMigrateTaskInfos = GetWorkHashRangeFromChangeNodePbByDbName(removeNode.second);
     for (const auto &recoverMigrateTaskInfo : recoverMigrateTaskInfos) {
         SubmitScaleDownMigrateTask(recoverMigrateTaskInfo.second, recoverMigrateTaskInfo.first, scaleDownWorkerDbName,
                                    removeNode);
@@ -783,7 +623,6 @@ void HashRingTaskExecutor::SubmitScaleDownMigrateTask(
 Status HashRingTaskExecutor::VoluntaryRecoveryAsyncTask(const HashRingPb &oldRing,
                                                         const std::string &voluntaryDonwWorker)
 {
-    std::string workerUuid;
     HashRange targetRanges;
     for (const auto &info : oldRing.add_node_info()) {
         if (info.first != workerAddr_) {
@@ -795,31 +634,17 @@ Status HashRingTaskExecutor::VoluntaryRecoveryAsyncTask(const HashRingPb &oldRin
             }
             if (range.from() < range.end()) {
                 targetRanges.emplace_back(range.from(), range.end());
-            } else if (range.from() == range.end()) {
-                workerUuid = oldRing.workers().at(voluntaryDonwWorker).worker_uuid();
-            } else {
+            } else if (range.from() > range.end()) {
                 targetRanges.emplace_back(range.from(), UINT32_MAX);
                 targetRanges.emplace_back(0, range.end());
             }
         }
     }
-    std::vector<std::string> recoverUuids;
-    if (!workerUuid.empty()) {
-        recoverUuids.emplace_back(workerUuid);
-        // if the removeWorker is the substitute node of any other, recover
-        for (auto &keyWithWorkerIdReplaceInfo : oldRing.key_with_worker_id_meta_map()) {
-            if (keyWithWorkerIdReplaceInfo.second != workerUuid) {
-                continue;
-            }
-            recoverUuids.emplace_back(keyWithWorkerIdReplaceInfo.first);
-        }
-    }
-    RETURN_OK_IF_TRUE(recoverUuids.empty() && targetRanges.empty());
+    RETURN_OK_IF_TRUE(targetRanges.empty());
     LOG(INFO) << "local worker: " << workerAddr_
               << " recover async task for voluntary scale down worker: " << voluntaryDonwWorker;
-    RETURN_IF_NOT_OK_APPEND_MSG(
-        HashRingEvent::RecoverAsyncTaskRanges::GetInstance().NotifyAll(recoverUuids, targetRanges),
-        "voluntary scale down recover async failed");
+    RETURN_IF_NOT_OK_APPEND_MSG(HashRingEvent::RecoverAsyncTaskRanges::GetInstance().NotifyAll(targetRanges),
+                                "voluntary scale down recover async failed");
 
     return Status::OK();
 }
@@ -829,8 +654,7 @@ void HashRingTaskExecutor::SubmitVoluntaryRecoveryAsyncTask(const HashRingPb &ol
     std::vector<std::string> voluntaryDownWorkerAddrs;
     for (const auto &worker : oldRing.workers()) {
         if (worker.second.state() == WorkerPb::LEAVING
-            && (newRing.workers().find(worker.first) == newRing.workers().end()
-                || newRing.workers().at(worker.first).worker_uuid().empty())) {
+            && newRing.workers().find(worker.first) == newRing.workers().end()) {
             voluntaryDownWorkerAddrs.emplace_back(worker.first);
         }
     }

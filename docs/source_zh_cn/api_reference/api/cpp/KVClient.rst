@@ -321,21 +321,21 @@ KVClient
 
     .. cpp:function:: std::string GenerateKey(const std::string &prefixKey = "")
 
-        生成带有 Worker ID 的键。
+        生成键。prefixKey为空时生成随机唯一键；prefixKey非空时返回prefixKey本身。
 
         参数：
             - **prefixKey** - 用户指定的键前缀。
 
         返回：
-            返回带有 Worker ID 的键，如果生成失败返回空字符串。
+            返回生成的键，如果生成失败返回空字符串。
 
     .. cpp:function:: Status GenerateKey(const std::string &prefixKey, std::string &key)
 
-        生成带有 Worker ID 的键。
+        生成键。prefixKey为空时生成随机唯一键；prefixKey非空时返回prefixKey本身。
 
         参数：
             - **prefixKey** - 用户指定的键前缀。
-            - **key** - 传出参数，返回带有 Worker ID 的键，如果生成失败返回空字符串。
+            - **key** - 传出参数，返回生成的键，如果生成失败返回空字符串。
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示成功，否则返回其他错误码。
