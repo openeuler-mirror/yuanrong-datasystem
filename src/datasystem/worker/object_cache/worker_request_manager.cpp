@@ -379,8 +379,7 @@ Status GetRequest::ReturnToClient(const Status &rc)
 Status GetRequest::ConstructResponse(uint64_t &totalSize, GetRspPb &resp, std::vector<RpcMessage> &payloads,
                                      std::map<std::string, uint64_t> &needDeleteObjects)
 {
-    auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId_);
-    bool shmEnabled = clientInfo != nullptr && clientInfo->ShmEnabled();
+    bool shmEnabled = worker::ClientManager::Instance().ClientShmEnabled(clientId_);
     bool useUbGet = IsUrmaEnabled() && !shmEnabled && hasUbGetInfo_;
     uint64_t ubWriteOffset = 0;
 
