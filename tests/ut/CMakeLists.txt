@@ -137,7 +137,7 @@ add_ds_ut_executable(log_perf_ut
 target_link_libraries(log_perf_ut PRIVATE ${DS_UT_DEPEND_LIBS})
 
 add_executable(flags_ut "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
-target_link_libraries(flags_ut ds_flags ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
+target_link_libraries(flags_ut ds_flags common_util ${SECUREC_LIBRARY} GTest::gtest GTest::gmock)
 add_datasystem_test(flags_ut)
 
 if (BUILD_HETERO AND BUILD_HETERO_NPU)

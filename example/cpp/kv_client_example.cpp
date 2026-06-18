@@ -23,6 +23,7 @@
 
 using datasystem::ConnectOptions;
 using datasystem::Context;
+using datasystem::KVClientConfig;
 using datasystem::Optional;
 using datasystem::ReadOnlyBuffer;
 using datasystem::KVClient;
@@ -35,6 +36,59 @@ static constexpr int DEFAULT_PORT = 9088;
 static constexpr int PARAMETERS_NUM = 3;
 static constexpr int SUCCESS = 0;
 static constexpr int FAILED = -1;
+
+struct ClientOptionsParam {
+    std::string ip = DEFAULT_IP;
+    int port = DEFAULT_PORT;
+    std::string clientPublicKey;
+    std::string clientPrivateKey;
+    std::string serverPublicKey;
+};
+
+static int BuildConnectOptions(int argc, char *argv[], ConnectOptions &connectOpts)
+{
+    const int authParametersNum = 6;
+    ClientOptionsParam param;
+    int index = 0;
+    if (argc == PARAMETERS_NUM) {
+        param.ip = argv[++index];
+        param.port = atoi(argv[++index]);
+    } else if (argc == authParametersNum) {
+        param.ip = argv[++index];
+        param.port = atoi(argv[++index]);
+        param.clientPublicKey = argv[++index];
+        param.clientPrivateKey = argv[++index];
+        param.serverPublicKey = argv[++index];
+    } else if (argc != 1) {
+        std::cerr << "Invalid input parameters.";
+        return FAILED;
+    }
+
+    connectOpts = { .host = param.ip,
+                    .port = param.port,
+                    .connectTimeoutMs = 3 * 1000,
+                    .requestTimeoutMs = 0,
+                    .token = "",
+                    .clientPublicKey = param.clientPublicKey,
+                    .clientPrivateKey = param.clientPrivateKey,
+                    .serverPublicKey = param.serverPublicKey };
+    connectOpts.enableExclusiveConnection = false;
+    return SUCCESS;
+}
+
+static Status BuildClientConfig(KVClientConfig &clientConfig)
+{
+    return KVClientConfig::Builder()
+        .LogDir("/tmp/datasystem/log")
+        .LogName("kv_client")
+        .AccessLogName("kv_client_access")
+        .MaxLogSize(100)
+        .MaxLogFileNum(10)
+        .LogRetentionDay(7)
+        .LogAsyncEnable(true)
+        .LogAsyncQueueSize(4096)
+        .Build(clientConfig);
+}
 
 static int Write()
 {
@@ -155,43 +209,20 @@ int Start()
 
 int main(int argc, char *argv[])
 {
-    const int authParametersNum = 6;
-    std::string ip;
-    int port = 0;
-    int index = 0;
-    std::string clientPublicKey, clientPrivateKey, serverPublicKey;
-
-    if (argc == 1) {
-        ip = DEFAULT_IP;
-        port = DEFAULT_PORT;
-    } else if (argc == PARAMETERS_NUM) {
-        ip = argv[++index];
-        port = atoi(argv[++index]);
-    } else if (argc == authParametersNum) {
-        // example call:
-        // ./kv_example 127.0.0.1 18482 <client public key> <client private key> <worker public key>
-        ip = argv[++index];
-        port = atoi(argv[++index]);
-        clientPublicKey = argv[++index];
-        clientPrivateKey = argv[++index];
-        serverPublicKey = argv[++index];
-    } else {
-        std::cerr << "Invalid input parameters.";
+    ConnectOptions connectOpts;
+    if (BuildConnectOptions(argc, argv, connectOpts) == FAILED) {
         return FAILED;
     }
 
-    ConnectOptions connectOpts{ .host = ip,
-                                .port = port,
-                                .connectTimeoutMs = 3 * 1000,
-                                .requestTimeoutMs = 0,
-                                .token = "",
-                                .clientPublicKey = clientPublicKey,
-                                .clientPrivateKey = clientPrivateKey,
-                                .serverPublicKey = serverPublicKey };
-    connectOpts.enableExclusiveConnection = false;
     client_ = std::make_shared<KVClient>(connectOpts);
     (void)Context::SetTraceId("init");
-    Status status = client_->Init();
+    KVClientConfig clientConfig;
+    Status status = BuildClientConfig(clientConfig);
+    if (status.IsError()) {
+        std::cerr << "Failed to build kv client config, detail: " << status.ToString() << std::endl;
+        return FAILED;
+    }
+    status = client_->Init(clientConfig);
     if (status.IsError()) {
         std::cerr << "Failed to init kv client, detail: " << status.ToString() << std::endl;
         return FAILED;
@@ -204,6 +235,5 @@ int main(int argc, char *argv[])
 
     client_->ShutDown();
     client_.reset();
-
     return SUCCESS;
 }

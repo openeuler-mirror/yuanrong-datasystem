@@ -15,6 +15,7 @@
  */
 
 #include "datasystem/common/flags/flag_manager.h"
+
 #include <cerrno>
 #include <cmath>
 #include <cstddef>
@@ -33,6 +34,8 @@
 
 #include "datasystem/common/flags/string_to_long.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/utils/embedded_config.h"
+#include "datasystem/utils/kv_client_config.h"
 
 DS_DECLARE_bool(help);
 DS_DECLARE_bool(version);
@@ -447,9 +450,12 @@ FlagManager *FlagManager::GetInstance()
     return &manager;
 }
 
-bool FlagManager::ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
+bool FlagManager::ParseCommandLineFlagsFromArgsLocked(const std::unordered_map<std::string, std::string> &args,
+                                                      std::string &errMsg)
 {
-    for (const auto &flagKv : config.GetArgs()) {
+    errorFlags_.clear();
+    unknownFlags_.clear();
+    for (const auto &flagKv : args) {
         if (flagKv.first == "connectTimeoutMs") {
             continue;
         }
@@ -467,14 +473,30 @@ bool FlagManager::ParseCommandLineFlags(const EmbeddedConfig &config, std::strin
         (void)AssignFlagValue(flag, flagKv.second);
     }
 
-    // 3. Validate the default value.
     ValidateDefaultFlagsLocked();
 
-    // 4. Report error and exit if need.
     if (CheckAndReportErrors(errMsg)) {
         return false;
     }
     return true;
+}
+
+bool FlagManager::ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg)
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    return ParseCommandLineFlagsFromArgsLocked(args, errMsg);
+}
+
+bool FlagManager::ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    return ParseCommandLineFlagsFromArgsLocked(config.GetArgs(), errMsg);
+}
+
+bool FlagManager::ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg)
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    return ParseCommandLineFlagsFromArgsLocked(config.GetArgs(), errMsg);
 }
 
 void FlagManager::ParseCommandLineFlags(int argc, char **argv)
@@ -564,6 +586,19 @@ void FlagManager::GetAllFlags(std::vector<FlagInfo> &output) const
                        .wasSpecified = flag.wasSpecified_ };
         output.emplace_back(std::move(info));
     }
+}
+
+bool FlagManager::WasFlagSpecified(const char *name) const
+{
+    if (name == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = flagMap_.find(name);
+    if (it == flagMap_.end()) {
+        return false;
+    }
+    return it->second.wasSpecified_;
 }
 
 void FlagManager::SetVersionString(const std::string &version)

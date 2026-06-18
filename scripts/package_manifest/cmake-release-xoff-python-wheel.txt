@@ -106,6 +106,7 @@ yr/datasystem/include/datasystem/transfer_engine/transfer_engine.h
 yr/datasystem/include/datasystem/utils/BUILD.bazel
 yr/datasystem/include/datasystem/utils/connection.h
 yr/datasystem/include/datasystem/utils/embedded_config.h
+yr/datasystem/include/datasystem/utils/kv_client_config.h
 yr/datasystem/include/datasystem/utils/optional.h
 yr/datasystem/include/datasystem/utils/sensitive_value.h
 yr/datasystem/include/datasystem/utils/service_discovery.h

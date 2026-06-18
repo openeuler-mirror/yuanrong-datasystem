@@ -126,6 +126,7 @@ ds_cc_library(
         ":common_util_impl",
         ":status_helper",
         ":meta_route_tool",
+        "//src/datasystem/common/flags:kv_client_config",
     ],
 )
 

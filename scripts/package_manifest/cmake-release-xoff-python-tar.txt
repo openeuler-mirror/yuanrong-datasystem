@@ -59,6 +59,7 @@ datasystem/sdk/cpp/include/datasystem/stream_client.h
 datasystem/sdk/cpp/include/datasystem/utils/
 datasystem/sdk/cpp/include/datasystem/utils/connection.h
 datasystem/sdk/cpp/include/datasystem/utils/embedded_config.h
+datasystem/sdk/cpp/include/datasystem/utils/kv_client_config.h
 datasystem/sdk/cpp/include/datasystem/utils/optional.h
 datasystem/sdk/cpp/include/datasystem/utils/sensitive_value.h
 datasystem/sdk/cpp/include/datasystem/utils/service_discovery.h

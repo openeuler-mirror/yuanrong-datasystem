@@ -112,6 +112,13 @@ DS_DECLARE_string(log_filename);
 using namespace std::chrono;
 
 namespace datasystem {
+namespace {
+std::mutex g_clientLogConfigMutex;
+bool g_hasClientLogWithoutPidConfig = false;
+bool g_clientLogWithoutPidConfig = false;
+bool g_hasClientAccessLogNameConfig = false;
+std::string g_clientAccessLogNameConfig;
+}  // namespace
 
 std::string Logging::podName_ = Provider::GetPodName();
 
@@ -297,24 +304,24 @@ void Logging::InitClientBasicConfig()
         }
     }
 
-    if (FLAGS_max_log_size == DEFAULT_MAX_LOG_SIZE_MB) {
+    if (!WasCommandLineFlagSpecified("max_log_size")) {
         FLAGS_max_log_size = GetUint32FromEnv(MAX_LOG_SIZE_ENV.c_str(), DEFAULT_CLIENT_MAX_LOG_SIZE_MB);
     }
 
-    if (FLAGS_max_log_file_num == DEFAULT_MAX_LOG_FILE_NUM) {
+    if (!WasCommandLineFlagSpecified("max_log_file_num")) {
         FLAGS_max_log_file_num = GetUint32FromEnv(MAX_LOG_FILE_NUM_ENV.c_str(), DEFAULT_MAX_LOG_FILE_NUM);
     }
 
-    if (FLAGS_log_compress == DEFAULT_LOG_COMPRESS) {
+    if (!WasCommandLineFlagSpecified("log_compress")) {
         FLAGS_log_compress = GetBoolFromEnv(LOG_COMPRESS_ENV.c_str(), DEFAULT_LOG_COMPRESS);
     }
 
-    if (FLAGS_v == DEFAULT_LOG_LEVEL) {
+    if (!WasCommandLineFlagSpecified("v")) {
         uint32_t value = GetUint32FromEnv(LOG_V.c_str(), DEFAULT_LOG_LEVEL);
         FLAGS_v = static_cast<int32_t>(value > INT32_MAX ? 0 : value);
     }
 
-    if (FLAGS_minloglevel == DEFAULT_LOG_LEVEL) {
+    if (!WasCommandLineFlagSpecified("minloglevel")) {
         uint32_t value = GetUint32FromEnv(MIN_LOG_LEVEL.c_str(), DEFAULT_LOG_LEVEL);
         FLAGS_minloglevel = static_cast<int32_t>(value > INT32_MAX ? 0 : value);
     }
@@ -323,42 +330,44 @@ void Logging::InitClientBasicConfig()
 void Logging::InitClientAdvancedConfig()
 {
     std::string errMsg;
-    if (FLAGS_log_retention_day == DEFAULT_LOG_RETENTION_DAY) {
+    if (!WasCommandLineFlagSpecified("log_retention_day")) {
         FLAGS_log_retention_day = GetUint32FromEnv(LOG_RETENTION_DAY_ENV.c_str(), DEFAULT_LOG_RETENTION_DAY);
     }
 
     // Keep client don't print log to stderror.
     // Upstream can change FLAGS_ variable directly in fL#shorttype# namespace(high priority) to change log behavior.
-    if (FLAGS_logtostderr == DEFAULT_LOG_TO_STDERR) {
+    if (!WasCommandLineFlagSpecified("logtostderr")) {
         // If FLAGS_ variable is default value, can use "DATASYSTEM_xx" environment variable when to change behavior.
         FLAGS_logtostderr = GetBoolFromEnv(LOG_TO_STDERR_ENV.c_str(), DEFAULT_LOG_TO_STDERR);
     }
 
-    if (FLAGS_alsologtostderr == DEFAULT_ALSO_LOG_TO_STDERR) {
+    if (!WasCommandLineFlagSpecified("alsologtostderr")) {
         FLAGS_alsologtostderr = GetBoolFromEnv(ALSO_LOG_TO_STDERR_ENV.c_str(), DEFAULT_ALSO_LOG_TO_STDERR);
     }
 
-    if (FLAGS_stderrthreshold == DEFAULT_STDERRTHRESHOLD) {
+    if (!WasCommandLineFlagSpecified("stderrthreshold")) {
         // Change stderrthreshold default value to HIGHEST_STDERRTHRESHOLD to avoid error message log to stderr.
         FLAGS_stderrthreshold = GetUint32FromEnv(STDERR_THRESHOLD_ENV.c_str(), HIGHEST_STDERRTHRESHOLD);
     }
 
-    if (FLAGS_log_async == DEFAULT_LOG_ASYNC_FLAG) {
+    if (!WasCommandLineFlagSpecified("log_async")) {
         FLAGS_log_async = GetBoolFromEnv(LOG_ASYNC_ENABLE.c_str(), DEFAULT_LOG_ASYNC_FLAG);
     }
 
-    if (FLAGS_log_async_queue_size == DEFAULT_LOG_ASYNC_QUEUE_SIZE) {
+    if (!WasCommandLineFlagSpecified("log_async_queue_size")) {
         FLAGS_log_async_queue_size =
             GetUint32FromEnv(LOG_ASYNC_QUEUE_SIZE.c_str(), DEFAULT_CLIENT_LOG_ASYNC_QUEUE_SIZE);
     }
 
-    FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
+    if (!WasCommandLineFlagSpecified("log_monitor")) {
+        FLAGS_log_monitor = GetBoolFromEnv(LOG_MONITOR_ENABLE.c_str(), DEFAULT_CLIENT_LOG_MONITOR);
+    }
 
-    if (FLAGS_zmq_client_io_thread == 1) {
+    if (!WasCommandLineFlagSpecified("zmq_client_io_thread")) {
         FLAGS_zmq_client_io_thread = GetInt32FromEnv("DATASYSTEM_ZMQ_CLIENT_IO_THREAD", 1);
     }
 
-    if (FLAGS_log_only_write_info_file == DEFAULT_LOG_ONLY_WRITE_INFO_FILE) {
+    if (!WasCommandLineFlagSpecified("log_only_write_info_file")) {
         FLAGS_log_only_write_info_file = GetBoolFromEnv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(),
                                                         DEFAULT_LOG_ONLY_WRITE_INFO_FILE);
     }
@@ -381,8 +390,46 @@ std::string Logging::GetClientLogName(const std::string &baseName, int pid)
 
 bool Logging::IsClientLogWithoutPidEnabled()
 {
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    if (g_hasClientLogWithoutPidConfig) {
+        return g_clientLogWithoutPidConfig;
+    }
     return GetBoolFromEnv(CLIENT_LOG_WITHOUT_PID_ENV.c_str(), DEFAULT_CLIENT_LOG_WITHOUT_PID);
 }
+
+void Logging::SetClientLogWithoutPid(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    g_hasClientLogWithoutPidConfig = true;
+    g_clientLogWithoutPidConfig = enabled;
+}
+
+void Logging::SetClientAccessLogName(const std::string &logName)
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    g_hasClientAccessLogNameConfig = true;
+    g_clientAccessLogNameConfig = logName;
+}
+
+std::string Logging::GetClientAccessLogName()
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    if (g_hasClientAccessLogNameConfig) {
+        return g_clientAccessLogNameConfig;
+    }
+    return GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
+}
+
+#ifdef WITH_TESTS
+void Logging::ResetClientLogConfigForTest()
+{
+    std::lock_guard<std::mutex> lock(g_clientLogConfigMutex);
+    g_hasClientLogWithoutPidConfig = false;
+    g_clientLogWithoutPidConfig = false;
+    g_hasClientAccessLogNameConfig = false;
+    g_clientAccessLogNameConfig.clear();
+}
+#endif
 
 Logging::Logging() : init_(false)
 {
@@ -408,13 +455,17 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
     if (isClient_) {
         GetInstance()->InitClientConfig();
 
-        const std::string defaultClientLogName = GetClientLogName(logFilename, getpid());
-        clientLogName = defaultClientLogName;
+        if (!FLAGS_log_filename.empty()) {
+            clientLogName = FLAGS_log_filename;
+        } else {
+            const std::string defaultClientLogName = GetClientLogName(logFilename, getpid());
+            clientLogName = defaultClientLogName;
 
-        // Allow overriding client log filename via environment variable
-        std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
-        if (ValidateLogName(logName)) {
-            clientLogName = std::move(logName);
+            // Allow overriding client log filename via environment variable
+            std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
+            if (ValidateLogName(logName)) {
+                clientLogName = std::move(logName);
+            }
         }
     } else {
         clientLogName = logFilename;

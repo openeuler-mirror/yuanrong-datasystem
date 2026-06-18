@@ -33,6 +33,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/utils/embedded_config.h"
+#include "datasystem/utils/kv_client_config.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -88,8 +89,26 @@ public:
 
     /// \brief Init KVClient object.
     ///
+    /// Equivalent to Init with an empty KVClientConfig (no Builder fields set). If this is the
+    /// first Init in a process, it solidifies an empty explicit config snapshot; if process-level
+    /// config has already been frozen, it reuses that snapshot without clearing or comparing fields.
+    /// See KVClientConfig for priority and Init rules.
+    ///
     /// \return Status of the call.
     Status Init();
+
+    /// \brief Init KVClient object.
+    ///
+    /// \param[in] clientConfig The client initialization config.
+    ///
+    /// On the first Init in a process, explicit fields take precedence over command-line flags,
+    /// environment variables, and defaults; the config snapshot is then frozen. Subsequent Init
+    /// calls only check fields explicitly present in clientConfig; missing fields, including an
+    /// empty config, are treated as unspecified. Differences are logged, Init returns K_OK, and
+    /// the frozen process-level settings are not overridden. See KVClientConfig for details.
+    ///
+    /// \return Status of the call.
+    Status Init(const KVClientConfig &clientConfig);
 
     /// \brief Init KVClient object with worker in the same process.
     /// \param[in] config configs of the embedded worker.

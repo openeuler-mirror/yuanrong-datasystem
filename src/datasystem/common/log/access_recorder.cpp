@@ -941,8 +941,8 @@ Status AccessRecorderManager::ResetWriteLogger(bool isEmbeddedClient)
     if (isClient_) {
         std::string clientAccessLogName = Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid());
 
-        // Allow overriding client log filename via environment variable
-        std::string accessLogName = GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
+        // Allow overriding client access log filename via config or environment variable.
+        std::string accessLogName = Logging::GetClientAccessLogName();
         if (Logging::ValidateLogName(accessLogName)) {
             clientAccessLogName = std::move(accessLogName);
         }

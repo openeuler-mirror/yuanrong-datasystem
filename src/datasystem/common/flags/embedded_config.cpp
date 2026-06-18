@@ -18,7 +18,6 @@
 #include "datasystem/utils/embedded_config.h"
 
 namespace datasystem {
-
 EmbeddedConfig &EmbeddedConfig::Address(const std::string &address)
 {
     extraArgs["worker_address"] = address;

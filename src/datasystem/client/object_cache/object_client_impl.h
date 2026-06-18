@@ -121,9 +121,10 @@ public:
      * @param[in] enableHeartbeat If resources do not need to be released, set this parameter to false.
      * @param[out] needRollbackState If the client status is successfully changed to INTERMEDIATE,
      * the status needs to be rolled back based on the completion status when the request is completed.
+     * @param[in] clientConfig Optional initialization config from public client API.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Init(bool &needRollbackState, bool enableHeartbeat = true);
+    Status Init(bool &needRollbackState, bool enableHeartbeat = true, const KVClientConfig *clientConfig = nullptr);
 
     /**
      * @brief  Invoke worker client to seal the object.

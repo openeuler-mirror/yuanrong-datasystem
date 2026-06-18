@@ -35,9 +35,24 @@ void ParseCommandLineFlags(int argc, char **argv)
     FlagManager::GetInstance()->ParseCommandLineFlags(argc, argv);
 }
 
+bool ParseCommandLineFlags(const std::unordered_map<std::string, std::string> &args, std::string &errMsg)
+{
+    return FlagManager::GetInstance()->ParseCommandLineFlags(args, errMsg);
+}
+
 bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg)
 {
     return FlagManager::GetInstance()->ParseCommandLineFlags(config, errMsg);
+}
+
+bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg)
+{
+    return FlagManager::GetInstance()->ParseCommandLineFlags(config, errMsg);
+}
+
+bool WasCommandLineFlagSpecified(const char *name)
+{
+    return FlagManager::GetInstance()->WasFlagSpecified(name);
 }
 
 std::string ProgramInvocationShortName()
@@ -104,6 +119,14 @@ Type GetFromEnv(const char *env, Type defValue, FlagType type)
     Flag flag(type, "", "", "", reinterpret_cast<void *>(&result), reinterpret_cast<void *>(&defValue));
     std::string errMsg;
     return flag.Assign(std::string(value), errMsg) ? result : defValue;
+}
+
+bool ParseBoolFromString(const std::string &value, bool defValue)
+{
+    bool result = defValue;
+    Flag flag(FLAG_BOOL, "", "", "", reinterpret_cast<void *>(&result), reinterpret_cast<void *>(&defValue));
+    std::string errMsg;
+    return flag.Assign(value, errMsg) ? result : defValue;
 }
 
 bool GetBoolFromEnv(const char *env, bool defValue)
