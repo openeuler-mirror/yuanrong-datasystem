@@ -17,10 +17,27 @@ from urllib.request import Request, urlopen
 
 TOKEN_ENV_NAMES = ("GITCODE_TOKEN", "GITCODE_ACCESS_TOKEN")
 DEFAULT_TOKEN_FILE = Path.home() / ".local" / "gitcode_token"
+DISPLAY_TOKEN_FILE = "~/.local/gitcode_token"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PR_TEMPLATE_FILE = (
     REPO_ROOT / ".gitee" / "PULL_REQUEST_TEMPLATE" / "PULL_REQUEST_TEMPLATE.zh-cn.md"
 )
+
+
+def redact_text(value: str) -> str:
+    redacted = value or ""
+    redacted = re.sub(r"(?i)(access_token=)[^&\s]+", r"\1<REDACTED>", redacted)
+    redacted = re.sub(
+        r"(?i)(token|password|passwd|secret|access[_ -]?key|secret[_ -]?key|ak|sk)\s*[:=]\s*\S+",
+        r"\1=<REDACTED>",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?<![\w.-])/(?:Users|home|root|tmp|var|mnt|opt|workspace|Volumes)(?:/[^\s`'\"<>]+)+",
+        "<REDACTED_PATH>",
+        redacted,
+    )
+    return redacted
 REPO_TEMPLATE_TARGET = ("openeuler", "yuanrong-datasystem")
 SENSITIVE_CONTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -60,7 +77,7 @@ def require_non_empty_token(token: str, source: str, fallback_path: Path) -> str
         return stripped
     raise SystemExit(
         f"{source} is configured but empty. Set a non-empty GitCode token there, "
-        f"or remove it and use GITCODE_TOKEN/GITCODE_ACCESS_TOKEN or {fallback_path}."
+        f"or remove it and use GITCODE_TOKEN/GITCODE_ACCESS_TOKEN or {DISPLAY_TOKEN_FILE}."
     )
 
 
@@ -73,14 +90,14 @@ def load_token(explicit_token: str | None, token_file: Path | None) -> str:
             return require_non_empty_token(os.environ[name], name, path)
     if token_file is not None and not path.exists():
         raise SystemExit(
-            f"GitCode token file not found: {path}. Create it with a non-empty token, "
-            "or set GITCODE_TOKEN/GITCODE_ACCESS_TOKEN."
+            "GitCode token file not found. Create a local token file with a non-empty token, "
+            f"or set GITCODE_TOKEN/GITCODE_ACCESS_TOKEN. Default token file: {DISPLAY_TOKEN_FILE}."
         )
     if path.exists():
-        return require_non_empty_token(path.read_text(encoding="utf-8"), f"GitCode token file {path}", path)
+        return require_non_empty_token(path.read_text(encoding="utf-8"), "GitCode token file", path)
     raise SystemExit(
         "Missing GitCode token. Set GITCODE_TOKEN/GITCODE_ACCESS_TOKEN "
-        f"or create {path}."
+        f"or create {DISPLAY_TOKEN_FILE}. Do not paste the token into chat."
     )
 
 
@@ -193,7 +210,7 @@ def request_json(method: str, url: str, payload: dict[str, Any] | None, timeout:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+        body = redact_text(exc.read().decode("utf-8", errors="replace"))
         raise SystemExit(f"GitCode API failed: HTTP {exc.code}\n{body}") from exc
     except URLError as exc:
         raise SystemExit(f"GitCode API request failed: {exc}") from exc

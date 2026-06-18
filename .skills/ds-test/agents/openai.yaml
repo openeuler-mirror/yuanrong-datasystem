@@ -1,0 +1,4 @@
+interface:
+  display_name: "DS Test"
+  short_description: "Run configured remote validation for yuanrong-datasystem"
+  default_prompt: "Use $ds-test to validate my current yuanrong-datasystem branch."

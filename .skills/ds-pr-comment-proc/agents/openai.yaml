@@ -1,0 +1,4 @@
+interface:
+  display_name: "DS PR Comments"
+  short_description: "Fetch, reply to, resolve, and verify GitCode PR comments"
+  default_prompt: "Use $ds-pr-comment-proc to address unresolved review comments on this PR."

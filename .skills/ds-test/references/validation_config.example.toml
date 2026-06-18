@@ -1,0 +1,26 @@
+# Copy this file to a private path, fill in the placeholders, and set:
+#   mkdir -p ~/.config/yuanrong
+#   cp .skills/ds-test/references/validation_config.example.toml ~/.config/yuanrong/ds-test.toml
+# Do not commit the filled config file.
+
+[repo]
+# Local remote that points to the fork or validation source repository.
+required_origin_url = "git@gitcode.com:<your-namespace>/yuanrong-datasystem.git"
+clone_url = "https://gitcode.com/<your-namespace>/yuanrong-datasystem.git"
+remote_worktree = "/path/on/validation/host/yuanrong-datasystem"
+remote_log_dir = "/path/on/validation/host/yuanrong-datasystem/logs"
+
+[ssh]
+# Example: "user@jump-host" or leave empty when no jump host is needed.
+jump = ""
+user = "<validation-user>"
+
+[[targets]]
+name = "preferred"
+host = "<validation-host>"
+port = 22
+
+[[targets]]
+name = "fallback"
+host = "<another-validation-host>"
+port = 22
