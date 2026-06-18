@@ -52,8 +52,7 @@
       "consistent hash",
       "scale up",
       "scale down",
-      "voluntary scale down",
-      "ReadHashRing"
+      "voluntary scale down"
     ],
     "intent_examples": [
       "understand hash ring initialization and token allocation",

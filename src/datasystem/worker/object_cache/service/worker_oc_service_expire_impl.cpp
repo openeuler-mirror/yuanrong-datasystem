@@ -29,17 +29,12 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
-#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
-DS_DECLARE_string(other_cluster_names);
-DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(cross_cluster_get_data_from_worker);
-DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -48,13 +43,7 @@ namespace object_cache {
 WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
                                                      std::shared_ptr<AkSkManager> akSkManager)
     : WorkerOcServiceCrudCommonApi(initParam), etcdCM_(etcdCM), akSkManager_(std::move(akSkManager))
-{
-    for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
-        if (azName != FLAGS_cluster_name) {
-            otherAZNames_.emplace_back(azName);
-        }
-    }
-}
+{ }
 
 Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
@@ -109,45 +98,12 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
         absentObjectKeys.insert(absentObjectKeys.end(), kv.second.begin(), kv.second.end());
     }
 
-    std::unordered_set<std::string> objectKeysMayInOtherAz;
-    if (!absentObjectKeys.empty() &&
-        FLAGS_cross_cluster_get_data_from_worker &&
-        FLAGS_cross_cluster_get_meta_from_worker) {
-        rc = TryExpireObjKeyFromOtherAZ(objectKeysMayInOtherAz, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
-    }
     objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
     *rsp.mutable_failed_object_keys() = { objKeysExpireFailed.begin(), objKeysExpireFailed.end() };
     access.Result(rc).Record();
     workerOperationTimeCost.Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
     LOG(INFO) << FormatString("The operations of Expire %s", workerOperationTimeCost.GetInfo());
     return rc;
-}
-
-Status WorkerOcServiceExpireImpl::TryExpireObjKeyFromOtherAZ(std::unordered_set<std::string> objectKeys,
-                                                             uint32_t ttlSeconds, std::vector<std::string> &absentObj,
-                                                             std::unordered_set<std::string> &objExpireFailed,
-                                                             ExpireRspPb &rsp)
-{
-    for (auto iter = absentObj.begin(); iter != absentObj.end();) {
-        objectKeys.insert(std::move(*iter));
-        iter = absentObj.erase(iter);
-    }
-    RETURN_OK_IF_TRUE(objectKeys.empty());
-    LOG(INFO) << "Try expire some miss objs from other az: " << VectorToString(objectKeys);
-    for (const auto &otherAZName : otherAZNames_) {
-        for (const auto &objectKey : objectKeys) {
-            MetaAddrInfo metaAddrInfo;
-            auto rc = etcdCM_->QueryMasterAddrInOtherAz(otherAZName, objectKey, metaAddrInfo);
-            if (rc.IsError()) {
-                LOG(WARNING) << "QueryMasterAddrInOtherAz failed, msg: " << rc.ToString();
-                continue;
-            }
-            auto masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
-            RETURN_IF_NOT_OK(ExpireFromMaster({ objectKey }, masterAddr, ttlSeconds, absentObj, objExpireFailed, rsp));
-            objectKeys.erase(objectKey);
-        }
-    }
-    return Status::OK();
 }
 
 Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> objectKeys, const HostPort &masterAddr,

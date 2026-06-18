@@ -51,15 +51,12 @@
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/util/meta_route_tool.h"
-#include "datasystem/worker/hash_ring/read_hash_ring.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 
 namespace datasystem {
 struct ClusterInfo {
     std::vector<std::pair<std::string, std::string>> localHashRing;     // <azName, hashRingPb>
-    std::vector<std::pair<std::string, std::string>> otherAzHashrings;  // <azName, hashRingPb>
     std::vector<std::pair<std::string, std::string>> workers;           // <addr, nodeMsg>
-    std::vector<std::pair<std::string, std::string>> otherAzWorkers;    // <addr, nodeMsg>
     int64_t revision = -1;
     bool etcdAvailable = true;
 
@@ -106,16 +103,14 @@ public:
     /**
      * @brief Check rpc network status between worker and objectKey's master for multiple ids
      * @param[in] objectKeys Container(Vector or list) of objectkeys
-     * @param[in] allowInOtherAz If the corresponding node can only be found in other clusters, K_OK will be returned if
-     * true, and K_NOT_FOUND will be returned if false, but relevant logs will be printed to indicate this scenario.
      * @return Status - Success only if all connections are good
      */
     template <class container>
-    Status CheckConnection(const container &objectKeys, bool allowInOtherAz = false)
+    Status CheckConnection(const container &objectKeys)
     {
         for (std::string objectKey : objectKeys) {
             VLOG(1) << "Check Connection with " << objectKey;
-            RETURN_IF_NOT_OK(CheckConnection(objectKey, allowInOtherAz));
+            RETURN_IF_NOT_OK(CheckConnection(objectKey));
         }
         return Status::OK();
     }
@@ -128,20 +123,16 @@ public:
     /**
      * @brief Check rpc network status between worker and the given objectKey's master
      * @param[in] objKey The object to identify its master
-     * @param[in] allowInOtherAz If the corresponding node can only be found in other clusters, K_OK will be returned if
-     * true, and K_NOT_FOUND will be returned if false, but relevant logs will be printed to indicate this scenario.
      * @return Status of the call
      */
-    Status CheckConnection(const std::string &objKey, bool allowInOtherAz = false);
+    Status CheckConnection(const std::string &objKey);
 
     /**
      * @brief Check rpc network status between the caller node and target node
      * @param[in] nodeAddr The HostPort of the node to check
-     * @param[in] allowInOtherAz If the corresponding node can only be found in other clusters, K_OK will be returned if
-     * true, and K_NOT_FOUND will be returned if false, but relevant logs will be printed to indicate this scenario.
      * @return Status of the call
      */
-    Status CheckConnection(const HostPort &nodeAddr, bool allowInOtherAz = false, bool allowNotFound = false);
+    Status CheckConnection(const HostPort &nodeAddr, bool allowNotFound = false);
 
     /**
      * @brief Check if the current node is the master node of the cluster.
@@ -151,13 +142,6 @@ public:
     {
         return masterAddress_ == workerAddress_ || !IsCentralized();
     }
-
-    /**
-     * @brief Check rpc network status between the caller node and target node
-     * @param[in] nodeAddr The HostPort of the other AZ's node to check
-     * @return true if node is connected
-     */
-    bool CheckIfOtherAzNodeConnected(const HostPort &nodeAddr);
 
     /**
      * @brief Get redirct meta address
@@ -388,7 +372,7 @@ public:
      * @param[out] workerNum The number of workers.
      * @return Status of the call.
      */
-    Status GetHashRingWorkerNum(int &workerNum, bool withOtherAz = false) const;
+    Status GetHashRingWorkerNum(int &workerNum) const;
 
     /**
      * @brief Start to voluntary scale down before worker shutdown.
@@ -596,88 +580,6 @@ public:
     std::string GetWorkerIdByWorkerAddr(const std::string &address) const;
 
     /**
-     * @brief Query master address in other az using consistent hash algorithm.
-     * @param[in] otherAZName The other az name.
-     * @param[in] objKey The object key.
-     * @param[out] metaAddrInfo The metaAddrInfo for the objectKey.
-     * @return Status of the call.
-     */
-    Status QueryMasterAddrInOtherAz(const std::string &otherAZName, const std::string &objKey,
-                                    MetaAddrInfo &metaAddrInfo);
-
-    /**
-     * @brief Get node in given other az by hash.
-     * @param[in] objKey The object key.
-     * @param[in] azName Other az name.
-     * @param[out] metaAddrInfo <azName, masterAddr>. The node in given other az.
-     * @return Status of the call.
-     */
-    Status GetNodeInGivenOtherAzByHash(const std::string &objKey, const std::string &azName,
-                                       MetaAddrInfo &metaAddrInfo);
-
-    /**
-     * @brief Get all nodes in other azs by hash.
-     * @param[in] objKey The object key.
-     * @param[out] metaAddrInfos <azName, masterAddr>. All nodes in other azs.
-     * @param[in] allowNotReady Used to determine whether the request is considered failed if the hash ring of an az is
-     * not ready.
-     * @return Status of the call.
-     */
-    Status GetAllNodesInOtherAzsByHash(const std::string &objKey,
-                                       std::unordered_map<std::string, MetaAddrInfo> &metaAddrInfos,
-                                       bool allowNotReady = false);
-
-    /**
-     * @brief Group hash objs in given other az.
-     * @param[in] otherAZName Other az name.
-     * @param[in] objKeyS The object key.
-     * @param[out] objKeysGrpByMaster map with master as key and objectkeys belong to the master as value
-     * @param[in] groupFailedObjs Object key of failed grouping.
-     * @return Status of the call.
-     */
-    template <class container>
-    Status GroupHashObjsInGivenOtherAz(const std::string &otherAZName, const container &objKeys,
-                                       std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-                                       std::vector<std::string> &groupFailedObjs)
-    {
-        auto iter = otherAzHashRings_.find(otherAZName);
-        CHECK_FAIL_RETURN_STATUS(iter != otherAzHashRings_.end(), K_RUNTIME_ERROR,
-                                 "Cannot find hashRing of az: " + otherAZName);
-        for (const auto &objKey : objKeys) {
-            HostPort masterHostPort;
-            std::string dbName;
-            auto rc = GetMasterAddrInOtherAzForHashKey(iter, objKey, masterHostPort, dbName);
-            if (rc.IsError()) {
-                LOG(WARNING) << "Cannot get master addr for obj: " + objKey + " in az: " + otherAZName
-                                    + ", rc: " + rc.ToString();
-                groupFailedObjs.emplace_back(objKey);
-                continue;
-            }
-            MetaAddrInfo metaAddrInfo;
-            metaAddrInfo.SetAddress(masterHostPort);
-            metaAddrInfo.SetDbName(dbName);
-            metaAddrInfo.MarkMetaIsFromOtherAz();
-            auto iter = objKeysGrpByMaster.find(metaAddrInfo);
-            if (iter == std::end(objKeysGrpByMaster)) {
-                std::vector<std::string> objectKeyList({ objKey });
-                objKeysGrpByMaster.insert(std::make_pair(metaAddrInfo, std::move(objectKeyList)));
-            } else {
-                iter->second.push_back(objKey);
-            }
-        }
-        return Status::OK();
-    }
-
-    /**
-     * @brief Get other az names.
-     * @return Other az names.
-     */
-    const std::vector<std::string> &GetOtherAzNames() const
-    {
-        return otherAZNames_;
-    }
-
-    /**
      * @brief Construct cluster info via etcd.
      * @param[in] etcdStore The pointer of etcd store.
      * @param[out] clusterInfo The necessary cluster information at startup.
@@ -801,26 +703,6 @@ protected:
     Status DequeEventCallHandler(bool &isHandleEvent);
 
     /**
-     * @brief Split AZ Name from eventKey
-     * @param[in] key event key
-     * @param[out] azName AZ Name
-     */
-    void TrySplitAzNameFromEventKey(const std::string &key, std::string &azName);
-
-    /**
-     * @brief Split AZ Name from eventKey
-     * @param[in] key event key
-     * @param[out] azName AZ Name
-     * @return Status
-     */
-    Status SplitAzNameFromEventKey(const std::string &key, std::string &azName);
-
-    /**
-     * @brief Construct other Az ReadHashRings
-     */
-    void ConstructOtherAzHashRings();
-
-    /**
      * @brief Called when etcd event is about /datasystem/ring
      * @param[in] event etcd event
      * @return Status
@@ -871,16 +753,6 @@ protected:
                                    const std::string &azName);
 
     /**
-     * @brief Execute actions related to an other AZ's node addition event
-     * @param[in] eventNodeKey The host port (key) used to identify the event node
-     * @param[in] eventNode The node that triggered the event handling
-     * @param[in] azName The AZ where the event occurred
-     * @return Status of the call
-     */
-    Status HandleOtherAzNodeAddEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
-                                     const std::string &azName);
-
-    /**
      * @brief A helper function to execute actions related to an etcd cluster node removal event
      * @param eventNodeKey The host port (key) used to identify the event node
      * @param eventNode The node that triggered the event handling
@@ -888,15 +760,6 @@ protected:
      */
     Status HandleNodeRemoveEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
                                  const std::string &azName);
-
-    /**
-     * @brief Execute actions related to an other AZ's  node removal event
-     * @param eventNodeKey The host port (key) used to identify the event node
-     * @param eventNode The node that triggered the event handling
-     * @return Status of the call
-     */
-    Status HandleOtherAzNodeRemoveEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
-                                        const std::string &azName);
 
     /**
      * @brief A helper function to execute actions related to a topology change event that dealt with a failed node
@@ -956,11 +819,6 @@ protected:
      * @brief Display all of the currently tracked nodes
      */
     std::string NodesToString();
-
-    /**
-     * @brief Display all of the currently tracked other AZs' nodes
-     */
-    std::string OtherAzNodesToString();
 
     /**
      * @brief Helper function to fetch and setup nodes with etcd during Init() call
@@ -1040,18 +898,6 @@ protected:
     Status ProcessGetMetaAddressByHash(const std::string &objKey, std::string &dbName, HostPort &masterAddr,
                                        std::optional<RouteInfo> &routeInfo);
 
-    /**
-     * @brief Query master address in other az using consistent hash algorithm.
-     * @param[in] iter A pointer of hash ring in other az
-     * @param[in] objKey Object key.
-     * @param[out] masterHostPort The address of the master that manages metadata for objKey.
-     * @param[out] dbName The dbName.
-     * @return Status of the call.
-     */
-    Status GetMasterAddrInOtherAzForHashKey(
-        const std::unordered_map<std::string, std::unique_ptr<worker::ReadHashRing>>::iterator &iter,
-        const std::string &objKey, HostPort &masterHostPort, std::string &dbName);
-
     template <typename T>
     void ModifyObjKeysGrpByMasterByCheckConnection(std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
                                                    std::optional<std::unordered_map<std::string, Status>> &errInfos)
@@ -1059,13 +905,7 @@ protected:
         static const auto checkConnectionFunc = [](EtcdClusterManager *ptr,
                                                    const MetaAddrInfo &metaAddrInfo) -> Status {
             const auto &masterAddr = metaAddrInfo.GetAddress();
-            if (metaAddrInfo.IsFromOtherAz()) {
-                CHECK_FAIL_RETURN_STATUS(ptr->CheckIfOtherAzNodeConnected(masterAddr), K_RPC_UNAVAILABLE,
-                                         FormatString("The other az node %s disconnected.", masterAddr.ToString()));
-            } else {
-                return ptr->CheckConnection(masterAddr);
-            }
-            return Status::OK();
+            return ptr->CheckConnection(masterAddr);
         };
         std::vector<std::string> failedMasters;
         auto emptyIt = objKeysGrpByMaster.end();  // Iterator for the key of the target node not found.
@@ -1132,8 +972,6 @@ protected:
     HostPort workerAddress_;
     HostPort masterAddress_;
     TbbNodeTable clusterNodeTable_;       // Tracks node states of the cluster nodes
-    TbbNodeTable otherClusterNodeTable_;  // Tracks node states of the other AZ's cluster nodes
-    mutable std::shared_timed_mutex otherClusterNodeMutex_;
 
     using TbbOrphanTable = tbb::concurrent_hash_map<std::string, std::string>;
     TbbOrphanTable orphanNodeTable_;
@@ -1147,8 +985,6 @@ protected:
     EtcdStore *etcdDB_;
     mutable std::shared_timed_mutex mutex_;  // TbbNodeTable is not threadsafe for iterations
     std::unique_ptr<worker::HashRing> hashRing_{ nullptr };
-
-    std::unordered_map<std::string, std::unique_ptr<worker::ReadHashRing>> otherAzHashRings_;
 
     // Pointer to the timeout-checking thread
     std::unique_ptr<Thread> thread_{ nullptr };
@@ -1168,7 +1004,6 @@ protected:
     std::string clusterPrefix_;
     std::atomic<bool> isLeaving_{ false };
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::vector<std::string> otherAZNames_;
 
     bool isEtcdAvailableWhenStart_{ true };
 };

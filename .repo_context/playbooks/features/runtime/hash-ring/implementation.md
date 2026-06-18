@@ -31,7 +31,7 @@
   - hash-ring changes cross persisted ETCD state, routing, migration, cleanup, and worker lifecycle boundaries.
 - What change class it standardizes:
   - changes to ring initialization, add/remove node algorithms, voluntary scale-down, passive deletion, restart recovery,
-    other-AZ routing, health-check repair, or `HashRingPb`.
+    health-check repair, or `HashRingPb`.
 - What risks it is meant to reduce:
   - CAS storms, lost migration tasks, stale route maps, accidental metadata loss, and incompatible protobuf changes.
 
@@ -111,7 +111,6 @@
 - Must verify in source before claiming:
   - object-cache/stream-cache event behavior;
   - local metadata-holder routing behavior;
-  - cross-AZ read-ring behavior.
 
 ## Validation Plan
 
@@ -121,7 +120,7 @@
 - Representative tests:
   - `tests/st/worker/object_cache/hash_ring_test.cpp`
   - `tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp`
-  - affected scale, voluntary-scale-down, cross-AZ, or replica tests under `tests/st/client/kv_cache`
+  - affected scale, voluntary-scale-down, or replica tests under `tests/st/client/kv_cache`
 - Manual verification:
   - inspect `/datasystem/ring` before and after the scenario;
   - confirm `add_node_info` and `del_node_info` drain as expected;

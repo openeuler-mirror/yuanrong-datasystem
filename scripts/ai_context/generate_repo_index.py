@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_DIR = REPO_ROOT / ".repo_context" / "generated"
+REPO_ROOT_LABEL = "."
 
 SECTIONS = [
     {"name": "core_source", "path": "src/datasystem", "max_depth": 2},
@@ -65,7 +66,7 @@ def tree_lines(root: Path, max_depth: int) -> list[str]:
 def build_payload() -> dict:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     payload = {
-        "repo_root": str(REPO_ROOT),
+        "repo_root": REPO_ROOT_LABEL,
         "generated_at_utc": generated_at,
         "root_files": [name for name in ROOT_FILES if (REPO_ROOT / name).exists()],
         "sections": [],

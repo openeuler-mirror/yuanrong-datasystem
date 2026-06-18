@@ -491,14 +491,6 @@ global:
     # Worker worker batch rsp control nums, 0 means unlimited.
     ocWorkerWorkerParallelNums: 16
 
-  crossAz:
-    # Specify other az names using the same etcd. Only split by ','
-    otherClusterNames: ""
-    # Control whether to try to get data from other cluster's worker first. If false, data will be retrieved directly from the L2 cache.
-    crossAzGetDataFromWorker: true
-    # Control whether to get meta data from other cluster's worker, if false then get meta data from local cluster.
-    crossAzGetMetaFromWorker: false
-
   akSk:
     # The access key used by the system.
     systemAccessKey: ""

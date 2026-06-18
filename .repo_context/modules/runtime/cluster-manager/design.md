@@ -42,7 +42,7 @@
 - Initialize worker membership and hash-ring state from ETCD or degraded local snapshots.
 - Keep cluster-node state aligned enough with hash-ring state to route requests and drive scale tasks.
 - Notify metadata, slot-recovery, and worker cleanup subsystems when workers time out, recover, restart, or leave voluntarily.
-- Provide route helpers for local and other-AZ metadata access.
+- Provide route helpers for local metadata access.
 - Gate worker readiness and ETCD state transitions through reconciliation and health probes.
 
 ## Non-Goals
@@ -56,7 +56,7 @@
 ## Architecture Overview
 
 - High-level structure:
-  - `EtcdClusterManager` owns worker membership tables, event queue, background threads, hash-ring pointer, read rings, and route helpers.
+  - `EtcdClusterManager` owns worker membership tables, event queue, background threads, hash-ring pointer, and route helpers.
   - `ClusterNode` stores membership event timestamp, lifecycle tag, and local state.
   - `worker_health_check` owns a process-global health flag and optional probe file.
   - `cluster_event_type.h` and `hash_ring_event.h` provide event-bus contracts to neighboring modules.
@@ -65,10 +65,10 @@
   - ETCD hash-ring protobuf;
   - RocksDB cluster snapshots used during ETCD-down restart.
 - Key in-memory state:
-  - `clusterNodeTable_`, `otherClusterNodeTable_`, `orphanNodeTable_`;
+  - `clusterNodeTable_`, `orphanNodeTable_`;
   - priority event queue and temporary cluster-event cache;
   - `nodeTableCompletionTimer_`;
-  - local `HashRing` and other-AZ `ReadHashRing`s;
+  - local `HashRing`;
   - `isLeaving_`, `isEtcdAvailableWhenStart_`, `workerWaitPost_`, and health probe state.
 
 ## Core Components
@@ -81,7 +81,7 @@
 | node utility thread | event handling, demotion, hash-ring progress, sync | `StartNodeUtilThread` | overloaded loop |
 | orphan monitor | cleanup nodes missing from hash ring/ETCD | `StartOrphanNodeMonitorThread` | per-orphan ETCD get |
 | fake node repair | synthesize add/delete for ring workers absent from node table | `CompleteNodeTableWithFakeNode` | repairs full-cluster restart gaps |
-| route helpers | map object keys to `MetaAddrInfo` via hash ring | route methods in header/cpp | uses hash ring and cluster-node/read-ring state |
+| route helpers | map object keys to `MetaAddrInfo` via hash ring | route methods in header/cpp | uses hash ring and cluster-node state |
 | health probe | process readiness state and optional file | `worker_health_check.*` | used by startup and fake-node scheduling |
 
 ## Data And State Model
@@ -98,11 +98,10 @@
   - `exiting`: voluntary scale-down flow has started;
   - `d_rst`: downgrade restart when worker starts with ETCD unavailable.
 - `ClusterInfo`:
-  - startup transport object containing local/other-AZ rings, local/other-AZ workers, ETCD revision, and backend availability.
+  - startup transport object containing local ring data, local workers, ETCD revision, and backend availability.
 - Route model:
   - in distributed mode, all object keys route by hashing the full key to a primary worker UUID via hash ring; worker UUID is an internal identity only, not embedded in object keys.
   - route batching caches hash-range decisions per call.
-  - `cross_cluster_get_meta_from_worker` gates cross-AZ metadata read-ring lookups.
 
 ## Main Flows
 
@@ -128,12 +127,11 @@ Failure-sensitive steps:
 1. Watch callback classifies events by key prefix.
 2. Queue priority gives ring changes precedence over cluster changes.
 3. Cluster events are cached while distributed hash ring is not workable.
-4. Ring event updates local or other-AZ ring.
-5. Cluster event parses host address and lifecycle state, then handles local or other-AZ membership.
+4. Ring event updates the local hash ring.
+5. Cluster event parses host address and lifecycle state, then handles local membership.
 
 Failure-sensitive steps:
 
-- Prefix string matching is the routing condition for local vs other-AZ events.
 - Cluster event parsing depends on `KeepAliveValue` format even for fake node values.
 
 ### Passive Failure
@@ -173,7 +171,7 @@ Failure-sensitive steps:
 
 Failure-sensitive steps:
 
-- Restart recovery depends on hash-ring worker count and can be affected by other-AZ rings.
+- Restart recovery depends on hash-ring worker count.
 - Give-up path can set health and ready after timeout even if not all reconciliation messages arrived.
 
 ### Route Lookup
@@ -181,12 +179,12 @@ Failure-sensitive steps:
 1. Centralized mode returns configured `master_address`.
 2. Distributed mode hashes the full object key to a primary worker UUID via hash ring.
 3. Hash ring maps the owner UUID to worker address.
-4. Connection check validates cluster-node or other-AZ node state before returning.
+4. Connection check validates cluster-node state before returning.
 
 Failure-sensitive steps:
 
 - A worker can be in hash ring but not active/ready in cluster-node table.
-- Route lookup now depends on hash-ring and cluster-node/read-ring state.
+- Route lookup now depends on hash-ring and cluster-node state.
 
 ## External Interaction And Dependency Analysis
 
@@ -194,7 +192,7 @@ Failure-sensitive steps:
   - supplies cluster-table watches, ring watches, keepalive state, and backend health.
   - failure impact: fake events and local snapshots try to preserve progress but increase state ambiguity.
 - Hash ring:
-  - supplies route ownership, worker UUID mapping, voluntary/passive scale-down state, and other-AZ read rings.
+  - supplies route ownership, worker UUID mapping, and voluntary/passive scale-down state.
   - failure impact: cluster-manager may cache cluster events until ring is workable.
 - Object-cache metadata:
   - handles node timeout, restart, network recovery, metadata request, change primary, and failed-worker API cleanup.
@@ -211,16 +209,14 @@ Failure-sensitive steps:
 
 | Config | Type | Effect | Risk if changed |
 | --- | --- | --- | --- |
-| `enable_distributed_master` | bool | enables hash-ring route path and other-AZ read rings | false bypasses many ring waits |
+| `enable_distributed_master` | bool | enables hash-ring route path | false bypasses many ring waits |
 | `etcd_address` / `metastore_address` | string | backend for cluster metadata | backend health changes startup path |
-| `cluster_name` | string | local AZ/prefix namespace | string parsing and watch dispatch depend on it |
-| `other_cluster_names` | string | enables other-AZ read rings/watch handling | stale names create ignored rings/events |
+| `cluster_name` | string | cluster/prefix namespace | namespace changes persisted key prefixes |
 | `node_timeout_s` | uint32 | lease timeout and fake-node delay | too small creates fast timeout events |
 | `node_dead_timeout_s` | uint32 | demotion from TIMEOUT to FAILED | must be greater than node timeout |
 | `heartbeat_interval_ms` | int32 | lower bound for node timeout | must be less than node timeout in ms |
 | `add_node_wait_time_s` | uint32 | affects startup table wait and hash-ring add timing | high values extend readiness wait |
 | `auto_del_dead_node` | bool | allows local failed-worker deletion through hash ring | false leaves failed workers until manual action |
-| `cross_cluster_get_meta_from_worker` | bool | allows cross-AZ metadata read-ring lookups | false keeps cross-AZ lookups local |
 | `health_check_path` | string | optional liveness file path | readiness integrations depend on file state |
 
 ## Availability, Reliability, And Resilience
@@ -240,7 +236,7 @@ Failure-sensitive steps:
 
 - Main logs:
   - cluster info dump at startup;
-  - `NodesToString` and `OtherAzNodesToString`;
+  - `NodesToString`;
   - event queue enqueue/processing logs;
   - timeout demotion logs;
   - fake-node completion logs;
@@ -257,18 +253,17 @@ Failure-sensitive steps:
   - health probe is set;
   - `clusterNodeTable_` includes all active hash-ring workers;
   - no long-lived fake node timers or orphan nodes;
-  - route lookups return connected local or other-AZ nodes.
+  - route lookups return connected local nodes.
 
 ## Performance Characteristics
 
 - Hot paths:
-  - route lookup reads hash-ring maps and cluster-node/read-ring tables.
+  - route lookup reads hash-ring maps and cluster-node tables.
   - background utility thread wakes every 100 ms when idle.
 - Known expensive operations:
   - per-worker watch/keepalive/background loops;
   - periodic `GetFailedWorkers` table iteration and hash-ring inspection;
   - orphan cleanup ETCD `Get` per candidate worker;
-  - other-AZ route scans over read rings;
   - group routing connection checks for many masters.
 - Scaling assumptions:
   - cluster size is small enough that every worker can maintain full membership state and full ring snapshots.

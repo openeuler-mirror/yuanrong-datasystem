@@ -155,7 +155,6 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
         std::vector<RpcMessage> payloads;
         queryMeta.mutable_meta()->CopyFrom(req.meta());
         queryMeta.set_address(req.address());
-        queryMeta.set_is_from_other_az(req.is_from_other_az());
         ReadKey readKey(queryMeta.meta().object_key());
         RetryGetObjectFromRemote(readKey, queryMeta, payloads);
     });

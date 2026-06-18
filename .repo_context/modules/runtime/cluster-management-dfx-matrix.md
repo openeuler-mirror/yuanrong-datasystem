@@ -44,14 +44,14 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 - Event source: real ETCD watch, active watch compensation, passive watch compensation, keepalive fake DELETE,
   cluster-manager fake add/delete, local RocksDB startup snapshot.
 - Worker role: local worker, remote worker, selected process worker, joining destination, failed source,
-  voluntary leaving worker, standby/recovery worker, other-AZ worker.
+  voluntary leaving worker, standby/recovery worker.
 - Ring phase: `NO_INIT`, first init, `INITIAL`, `JOINING`, `ACTIVE`, `PRE_LEAVING`, `LEAVING`, `FAIL`.
 - Persisted ring records: `workers`, `add_node_info`, `del_node_info`, `cluster_has_init`.
 - Cluster-node state: ETCD keepalive value `start`, `restart`, `recover`, `ready`, `exiting`, `d_rst`;
   in-memory `ClusterNode` state `ACTIVE`, `TIMEOUT`, `FAILED`.
 - Backend condition: ETCD available, ETCD unavailable at startup, ETCD unavailable after startup, ETCD recovered,
   ETCD watch stream lost, ETCD writable to peers but not to local node, Metastore compatibility mode.
-- Deployment mode: distributed master, centralized master, cross-AZ metadata enabled. Standby metadata ownership mode is removed;
+- Deployment mode: distributed master and centralized master. Standby metadata ownership mode is removed;
   data replication remains a separate data-plane feature.
 
 ## Scale-Up Matrix
@@ -70,7 +70,6 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | SU-10 | Scale-up starts while hash ring is not fully initialized | cluster events cached before ring workable | local ring state before `cluster_has_init` | Cluster events are cached or ignored until the ring can process them; a node removed during init should still be passively removed after init. | `TestScaleDownDuringScaleUp` |
 | SU-11 | ETCD watch delay in centralized-master scale-up | delayed `HandleNodeAdditionEvent` | cluster table has new worker, local master event delayed | Client operations should retry/redirect until master sees the worker and routing converges. | `RetryWhenEtcdWatchDelay` |
 | SU-12 | Scale-up during ETCD crash | worker start with ETCD unavailable | `CheckEtcdHealth` fails, no writable ring CAS | New node cannot safely join because the ring key cannot be mutated; expected result is start failure until ETCD recovers. | `LEVEL1_TestScaleUpWorkerDuringEtcdCrash` |
-| SU-13 | Cross-AZ scale-up event | other-AZ cluster-table PUT | `otherClusterNodeTable_`, other-AZ ring maps | Other-AZ state is tracked separately; local ring ownership is not changed by another AZ's add event. | cross-AZ ETCD DFX tests |
 
 ## Scale-Down Matrix
 
@@ -111,7 +110,6 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | SD-F-02 | Fake DELETE races with real node | `HandleNodeRemoveEvent` fake guard | fake event value versus real node event value | Fake remove cannot remove a real node that has already rejoined. | `CompleteNodeTableWithFakeNode` guard |
 | SD-F-03 | Zombie worker in ring | scheduled fake completion and ring health check | worker in ring with no real process/cluster row | Zombie worker is eventually removed from hash ring. | `ZombieNodeInHashRing` |
 | SD-F-04 | Orphan cluster node not found in ring | orphan node monitor | node table has entry, hash ring does not | Orphan cleanup verifies ETCD row/timestamp and erases stale API/meta resources. | `SyncClusterNodes`, orphan cleanup paths |
-| SD-F-05 | Other-AZ worker removal | `HandleOtherAzNodeRemoveEvent` | `otherClusterNodeTable_`, other-AZ hash ring | Local cluster table/ring are not directly mutated; cross-AZ metadata events are emitted separately. | cross-AZ DFX tests |
 
 ## Restart Matrix
 
@@ -120,7 +118,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | RS-01 | Normal worker restart with ETCD available | keepalive `restart`; `HandleNodeAdditionEvent` | cluster node active/failed/timeout, event type `restart` | Master triggers reconciliation when current node is master; worker becomes ready after reconciliation or controlled give-up. | `RestartAllClusterManagers1`, `RestartAllClusterManagers2` |
 | RS-02 | Restart from failed state | `HandleNodeStateToActive` and `HandleFailedNodeToActive` | found node `FAILED`, event type `restart` or `recover` | Master sends local-failed-node and metadata recovery events; dead worker APIs are removed. | restart flows in `etcd_cluster_manager_test.cpp` |
 | RS-03 | Restart from timeout/network-recovery state | `ProcessNetworkRecovery` | found node `TIMEOUT`, event type `recover` or `d_rst` | Network recovery event runs; `hashRing_->RecoverMigrationTask` restores unfinished scale-up work for that node. | `LEVEL1_ClearWorkerWhenEtcdWorkerNetCrash`, keepalive tests |
-| RS-04 | Downgrade restart after ETCD unavailable at startup | keepalive state `d_rst` | `InitKeepAlive(..., isEtcdAvailableWhenStart=false)`, event type `d_rst` | Node is treated as downgrade restart; new-node metadata check runs after ETCD recovery. | `LEVEL1_TestRestartWorkerDuringEtcdCrash`, cross-AZ restart during crash |
+| RS-04 | Downgrade restart after ETCD unavailable at startup | keepalive state `d_rst` | `InitKeepAlive(..., isEtcdAvailableWhenStart=false)`, event type `d_rst` | Node is treated as downgrade restart; new-node metadata check runs after ETCD recovery. | `LEVEL1_TestRestartWorkerDuringEtcdCrash` |
 | RS-05 | Restart while scale-up or scale-down tasks are pending | `RestoreScalingTaskIfNeeded(true)` and task executor restore | non-empty `add_node_info` or `del_node_info` at startup | Worker restores scale-up and scale-down tasks after becoming healthy enough; restart restoration waits for health in task executor. | `LEVEL2_RestoreScaleDown`, `LEVEL2_StartWhenScalingDown` |
 | RS-06 | Restart with unfinished scale task | `RestoreScalingTaskIfNeeded(true)` and task executor restore | non-empty `add_node_info` or `del_node_info` | Reused worker UUID remains an internal worker identity; object metadata recovery follows hash ranges and unfinished task records. | scale-task restart metadata paths |
 | RS-08 | Reconciliation cannot complete | `WorkerOCServiceImpl` reconciliation and health probe | worker not ready, health probe false | Worker readiness is withheld until reconciliation completes or controlled skip/give-up path is used. | `TestSetHealthProbe`, `LEVEL1_TestRestartWorkerDuringEtcdCrash2` |
@@ -128,14 +126,13 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | RS-10 | Restart after passive scale-down | restarted old worker no longer in ring | worker absent from ring, old uuid moved/recovered | Old worker joins as a new node and must not recover stale RocksDB data as authoritative. | `LEVEL2_KeyWithL2Cache`, `WorkerRestartRecoverTest` |
 | RS-11 | Restart and delete ETCD metadata | restart worker then metadata delete | `ETCD_META_TABLE_PREFIX`, `ETCD_LOCATION_TABLE_PREFIX` | Metadata owned by restarted worker remains addressable and deletable after restart. | `LEVEL1_RestartDelEtcd` |
 | RS-12 | Centralized-master restart difference | centralized mode branch | `enable_distributed_master=false`, master address | Worker restart may not trigger the same distributed-master recovery path; centralized master owns reconciliation. | centralized master scale/restart tests |
-| RS-13 | Cross-AZ restart during ETCD crash | RocksDB snapshot plus remote peer reconciliation | local and other-AZ rings/workers | Restarted worker can serve cross-AZ metadata when distributed-master degraded startup succeeds. | `KVClientEtcdDfxCrossAzTest.LEVEL1_TestRestartWorkerDuringEtcdCrash` |
 
 ## ETCD Crash And Recovery Matrix
 
 | ID | Scenario / fault point | Primary path | State to inspect | Expected DFX behavior | Tests / hooks |
 | --- | --- | --- | --- | --- | --- |
 | EC-01 | ETCD crashes after cluster is running | keepalive/watch failures after workers are ready | keepalive timeout flag, ring local cache, RocksDB cluster snapshot | Existing workers continue serving operations that do not require fresh ETCD writes; ETCD writes fail or retry depending operation. | `LEVEL1_TestEtcdRestart` |
-| EC-02 | ETCD unavailable at worker startup in distributed-master mode | `ConstructClusterInfoDuringEtcdCrash` | `clusterInfo.etcdAvailable=false`, RocksDB hash rings/workers | Worker loads local cluster state from RocksDB, queries a bounded set of active peers, reconciles, and starts with keepalive state `d_rst`. | `TestRestartDuringEtcdCrash`, cross-AZ crash restart |
+| EC-02 | ETCD unavailable at worker startup in distributed-master mode | `ConstructClusterInfoDuringEtcdCrash` | `clusterInfo.etcdAvailable=false`, RocksDB hash rings/workers | Worker loads local cluster state from RocksDB, queries a bounded set of active peers, reconciles, and starts with keepalive state `d_rst`. | `TestRestartDuringEtcdCrash` |
 | EC-03 | ETCD unavailable at worker startup in centralized-master mode | `ConstructClusterInfoDuringEtcdCrash` guard | `enable_distributed_master=false` | Startup is rejected because centralized-master degraded restart is not supported. | centralized disabled ETCD DFX restart test |
 | EC-04 | Restart worker during ETCD crash, reconciliation impossible | degraded startup cannot reconcile enough state | missing local ring or peer state | Worker start/ready fails rather than serving with unverifiable metadata. | `LEVEL1_TestRestartWorkerDuringEtcdCrash2` |
 | EC-05 | Scale-up during ETCD crash | new worker needs ring CAS and keepalive | ETCD health check failed, no cluster PUT/ring CAS | New worker cannot join until ETCD recovers; expected start failure. | `LEVEL1_TestScaleUpWorkerDuringEtcdCrash` |
@@ -164,7 +161,6 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | X-07 | ETCD crash during passive scale-down | Real DELETE/watch may be missing; keepalive/writable checks decide retry versus fake DELETE. | `LaunchKeepAliveThreads`, `HandleKeepAliveFailed`, watch compensation. |
 | X-08 | ETCD crash during voluntary scale-down | `exiting` state and `need_scale_down` CAS may split; crash before ring completion must fall to passive handling. | `HandleExitingNodeRemoveEvent`, `IsPreLeaving`, `IsLeaving`. |
 | X-09 | full cluster restart with missing nodes | ETCD cluster table can be empty while ring still has workers. | `CompleteNodeTableWithFakeNode` fake add/delete completion. |
-| X-10 | cross-AZ restart or ETCD crash | Local and other-AZ ring/node tables must not be conflated. | other-AZ handlers and `ConstructClusterInfoDuringEtcdCrash` loading other-AZ snapshots. |
 | X-11 | local metadata recovery during topology change | Scale-down recovery must move metadata/data for removed workers using local metadata ownership. | `SubmitScaleDownTaskRecoverFromEtcd`, hash-ring migration and cleanup events. |
 | X-12 | local worker is both participant and victim | Self-removal must stop service to avoid stale async tasks. | `NeedToTryRemoveWorker(workerAddr_)`, health probe, SIGTERM/SIGKILL paths. |
 
@@ -184,7 +180,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
   and cluster-manager repair. They share handlers with real events, so provenance must be checked manually.
 - Module boundaries are blurry: cluster-manager directly coordinates hash-ring, ETCD store, object-cache, stream-cache,
   slot recovery, worker APIs, fast transport, and health probes.
-- Centralized-master, distributed-master, and cross-AZ paths do not have the same failure envelope.
+- Centralized-master and distributed-master paths do not have the same failure envelope.
 - No source-backed evidence was found that this model can safely handle thousand-node expansion/shrink. The design
   suggests severe ETCD and CAS contention before that scale.
 
@@ -198,5 +194,5 @@ Before claiming a DFX scenario is covered, verify:
 - Whether the local worker is the actor, the victim, or only an observer.
 - Whether an unfinished `add_node_info` or `del_node_info` record exists.
 - Whether readiness/health is gated by reconciliation.
-- Whether the scenario differs in centralized-master, distributed-master, or cross-AZ mode.
+- Whether the scenario differs in centralized-master or distributed-master mode.
 - Whether the expected behavior is covered by an enabled test, a disabled test, or only an inject point.

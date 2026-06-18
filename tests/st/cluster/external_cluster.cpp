@@ -1141,10 +1141,7 @@ std::string ExternalCluster::GetProperMasterAddrParam(int index, const HostPort 
         return prefix + defaultMasterAddr.ToString();
     }
     if (GetMasterNum() == 0) {
-        if (!opts_.crossAZMap.empty()) {
-            auto masterIndex = opts_.crossAZMap[index];
-            return prefix + opts_.workerConfigs[masterIndex].ToString();
-        }
+        (void)index;
         return prefix + defaultMasterAddr.ToString();
     }
     return "";

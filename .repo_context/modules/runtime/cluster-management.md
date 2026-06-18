@@ -47,13 +47,13 @@
     election, and built-in Metastore.
 - `modules/runtime/hash-ring/README.md`
   - persisted `HashRingPb`, initial token generation, add node, passive remove, voluntary scale-down, restart/rolling
-    UUID restoration, other-AZ read rings, and hash-ring health-check repair.
+    UUID restoration, and hash-ring health-check repair.
 - `modules/runtime/cluster-manager/README.md`
   - `EtcdClusterManager`, cluster-node table, event priority queue, restart reconciliation, passive/voluntary
-    scale-down coordination, route lookup, health probes, and other-AZ membership.
+    scale-down coordination, route lookup, and health probes.
 - `modules/runtime/cluster-management-dfx-matrix.md`
   - standalone DFX scenario matrix for scale-up, passive/voluntary scale-down, restart, ETCD crash/recovery,
-    fake-node repair, cross-AZ, and combined failure timing.
+    fake-node repair, and combined failure timing.
 
 Use this file as the cross-module map. Use the detailed package for source-level behavior.
 
@@ -99,7 +99,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 - Verified from `etcd_cluster_manager.cpp`:
   - cluster manager owns worker-address keyed node state and subscribes to several hash-ring and cluster-related events
-  - it can construct other-AZ hash rings when distributed-master and multi-cluster settings are enabled
+  - cross-cluster/cross-AZ read-ring and worker-access paths have been removed; routing is local-cluster only
   - shutdown removes subscribers and stops background threads cleanly
   - `EtcdClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
     `WaitWorkerReadyIfNeed()` before processing node utility events
@@ -188,18 +188,15 @@ Use this file as the cross-module map. Use the detailed package for source-level
 - The design does not fit thousand-node scale well: every worker watches broad prefixes, keeps full membership/ring
   state, runs keepalive/background loops, scans node tables, and can participate in ring inspection.
 - State is duplicated across ETCD cluster-table values, `clusterNodeTable_`, `HashRingPb`, hash-ring derived maps,
-  read-ring maps, RocksDB cluster snapshots, and health files. Correctness depends on eventual convergence among all of
-  them.
+  RocksDB cluster snapshots, and health files. Correctness depends on eventual convergence among all of them.
 - The lifecycle state machine is fragmented across ETCD keepalive values, `ClusterNode` state, hash-ring worker state,
   hash-ring local state, task records, worker health, and service reconciliation counters.
 - Watch and repair semantics are hard to reason about because real ETCD events, ETCD watch-compensation fake events,
   startup fake events, and cluster-manager fake add/delete events all feed similar handlers.
 - Module boundaries are unclear. Cluster-manager reaches into hash-ring behavior, ETCD store behavior,
   object/stream metadata events, slot recovery, worker APIs, fast-transport cleanup, and health probes.
-- Routing depends on hash-ring state and cluster-node/read-ring readiness. A worker can be active in one state copy but
+- Routing depends on hash-ring state and cluster-node readiness. A worker can be active in one state copy but
   not ready or not resolvable in another.
-- Cross-AZ event dispatch and worker parsing use string-prefix conventions around cluster names and ETCD table names,
-  which makes namespace changes risky.
 - Metastore shares ETCD-compatible APIs but the verified implementation is in-memory with limited per-key history, so
   its operational envelope is not equivalent to an external persistent ETCD cluster.
 
@@ -218,7 +215,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
 - For explicit scale-up, scale-down, restart, and ETCD crash/recovery coverage, use
   `modules/runtime/cluster-management-dfx-matrix.md`.
 - That matrix separates normal paths from combined DFX cases such as scale-down during scale-up, restart during
-  scale-down, ETCD crash during restart, fake-node repair after full-cluster restart, and cross-AZ recovery.
+  scale-down, ETCD crash during restart, and fake-node repair after full-cluster restart.
 
 ## CLI And Config Mapping
 

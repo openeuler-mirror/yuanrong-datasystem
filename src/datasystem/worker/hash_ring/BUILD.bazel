@@ -8,13 +8,11 @@ ds_cc_library(
         "hash_ring.cpp",
         "hash_ring_health_check.cpp",
         "hash_ring_task_executor.cpp",
-        "read_hash_ring.cpp",
     ],
     hdrs = [
         "hash_ring.h",
         "hash_ring_health_check.h",
         "hash_ring_task_executor.h",
-        "read_hash_ring.h",
     ],
     deps = [
         "//src/datasystem/common/flags:ds_flags",

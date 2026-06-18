@@ -83,21 +83,10 @@ public:
         return ss.str();
     }
 
-    void MarkMetaIsFromOtherAz()
-    {
-        isFromOtherAz_ = true;
-    }
-
-    bool IsFromOtherAz() const
-    {
-        return isFromOtherAz_;
-    }
-
     void Clear()
     {
         addr_.Clear();
         dbName_.clear();
-        isFromOtherAz_ = false;
     }
 
     bool Empty() const
@@ -118,7 +107,6 @@ public:
 private:
     HostPort addr_;
     std::string dbName_;
-    bool isFromOtherAz_ = false;
     Status rc_;
 };
 }  // namespace datasystem

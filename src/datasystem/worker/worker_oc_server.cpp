@@ -142,9 +142,10 @@ DS_DEFINE_bool(start_metastore_service, false,
                "metadata storage, default is false.");
 DS_DEFINE_bool(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
-DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
-               "Control whether try to get data from other cluster's worker firstly.");
 DS_DECLARE_uint32(node_timeout_s);
+DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
+               "[DEPRECATED] Cross-cluster data access from workers has been removed. This flag is kept for "
+               "compatibility and is ignored.");
 DS_DEFINE_bool(enable_hash_ring_self_healing, false,
                "Whether to support self-healing when the hash ring is in an abnormal state, default is false.");
 DS_DEFINE_string(liveness_check_path, "",
@@ -748,9 +749,7 @@ Status WorkerOCServer::LoadHashRingFromRocksDb(ClusterInfo &clusterInfo, HashRin
             return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
         }
         auto azName = GetSubStringBeforeField(itr->first, std::string(ETCD_RING_PREFIX) + "/").erase(0, 1);
-        if (!FLAGS_cluster_name.empty() && azName != FLAGS_cluster_name) {
-            clusterInfo.otherAzHashrings.emplace_back(std::move(azName), std::move(itr->second));
-        } else {
+        if (FLAGS_cluster_name.empty() || azName == FLAGS_cluster_name) {
             clusterInfo.localHashRing.emplace_back(std::move(*itr));
             localHashRingPb = std::move(hashRingPb);
         }
@@ -769,9 +768,7 @@ Status WorkerOCServer::LoadWorkersFromRocksDb(ClusterInfo &clusterInfo,
         auto workerAddr = GetSubStringAfterField(itr->first, std::string(ETCD_CLUSTER_TABLE) + "/");
         CHECK_FAIL_RETURN_STATUS(!workerAddr.empty(), K_RUNTIME_ERROR, "The loaded cluster information is incomplete");
         auto azName = GetSubStringBeforeField(itr->first, "/" + std::string(ETCD_CLUSTER_TABLE) + "/").erase(0, 1);
-        if (!FLAGS_cluster_name.empty() && azName != FLAGS_cluster_name) {
-            clusterInfo.otherAzWorkers.emplace_back(std::move(workerAddr), std::move(itr->second));
-        } else {
+        if (FLAGS_cluster_name.empty() || azName == FLAGS_cluster_name) {
             if (workerAddr != hostPort_.ToString()) {
                 activeNodesInLocalCluster.emplace_back(workerAddr);
             }

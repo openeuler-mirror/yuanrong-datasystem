@@ -46,18 +46,6 @@ public:
 
 private:
     /**
-     * @brief Try to set expiration time for keys from other AZ.
-     * @param[in] objectKeys The objKey which need to be tried to get metadata from other AZ.
-     * @param[in] ttlSeconds TTL in seconds.
-     * @param[in] absentObj The objects whose metadata fails to be queried.
-     * @param[in] objExpireFailed The objects failed to expire.
-     * @param[out] rsp The expire response protobuf.
-     */
-    Status TryExpireObjKeyFromOtherAZ(std::unordered_set<std::string> objectKeys, uint32_t ttlSeconds,
-                                      std::vector<std::string> &absentObj,
-                                      std::unordered_set<std::string> &objExpireFailed, ExpireRspPb &rsp);
-
-    /**
      * @brief Set expiration time of the specified objects in the master.
      * @param[in] objectKeys The keys to set expiration for.
      * @param[in] masterAddr The dest master hostPort.
@@ -75,8 +63,6 @@ private:
     std::shared_ptr<ThreadPool> batchExpireThreadPool_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-
-    std::vector<std::string> otherAZNames_;
 };
 
 }  // namespace object_cache

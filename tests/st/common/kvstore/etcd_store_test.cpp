@@ -356,7 +356,7 @@ TEST_F(EtcdStoreTest, TestWatchEvents1)
 
     LOG(INFO) << "Create a watcher for monitoring events";
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
-    Status rc = db_->WatchEvents(tableName_, "keyA", false, 1);
+    Status rc = db_->WatchEvents(tableName_, "keyA", 1);
     DS_EXPECT_OK(rc);
 
     rc = db_->Put(tableName_, watchKey_[0], watchValue_[0]);
@@ -394,7 +394,7 @@ TEST_F(EtcdStoreTest, LEVEL1_TestWatchEvents2)
 
     LOG(INFO) << "Create a watcher for monitoring events";
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
-    Status rc = db_->WatchEvents(tableName_, "keyA", false, 1);
+    Status rc = db_->WatchEvents(tableName_, "keyA", 1);
     DS_EXPECT_OK(rc);
 
     // Create a leaseID with 10s ttl
@@ -448,7 +448,7 @@ TEST_F(EtcdStoreTest, TestWatchEvents3)
     auto fstatus = threadPool.Submit([this]() {
         LOG(INFO) << "Create a watcher for monitoring events";
         db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
-        Status rrc = db_->WatchEvents(tableName_, "keyA", false, 1);
+        Status rrc = db_->WatchEvents(tableName_, "keyA", 1);
         EXPECT_EQ(rrc, Status::OK());
 
         // wait for lease timeout of 6 sec
@@ -479,7 +479,7 @@ TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
     db_->SetCheckEtcdStateWhenNetworkFailedHandler([]() { return true; });
     LOG(INFO) << "Create a watcher for monitoring events";
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
-    DS_ASSERT_OK(db_->WatchEvents(tableName_, "keyA", false, 1));
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "keyA", 1));
     DS_ASSERT_OK(db_->InitKeepAlive(tableName_, watchKey_[0], false));
     sleep(1);  // wait etcd notify new event before shutdown.
     auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
@@ -504,7 +504,7 @@ TEST_F(EtcdStoreTest, LEVEL1_TestRetrieveEvent)
     int eventNum = keyNum * eventTypeNum;
 
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents2(std::move(event)); });
-    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", false, 1));
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", 1));
 
     for (int i = 0; i < keyNum; i++) {
         std::atomic<int64_t> leaseID;
@@ -533,7 +533,7 @@ TEST_F(EtcdStoreTest, TestRetrieveCrossVersionEvent)
     ASSERT_TRUE(db_ != nullptr && tableCreated_);
 
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents2(std::move(event)); });
-    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", false, 1));
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", 1));
 
     std::atomic<int64_t> leaseID;
     int ttlSec = 10;
@@ -561,7 +561,7 @@ TEST_F(EtcdStoreTest, LEVEL2_TestRetrieveEventOrder)
     int putEventNum = keyNum;
 
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents3(std::move(event)); });
-    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", false, 1));
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "", 1));
 
     for (int i = 0; i < keyNum; i++) {
         std::atomic<int64_t> leaseID;

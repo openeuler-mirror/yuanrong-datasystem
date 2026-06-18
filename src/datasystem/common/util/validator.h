@@ -1108,9 +1108,9 @@ public:
     }
 
     /**
-     * @brief Validate OtherAzNames
-     * @param flagName[in] OtherAzNames flags.
-     * @param value[in] OtherAzNames value.
+     * @brief Validate deprecated other AZ names compatibility flag.
+     * @param flagName[in] Other AZ names flag.
+     * @param value[in] Other AZ names value.
      * @return True if valid.
      */
     static bool ValidateOtherAzNames(const char *flagName, const std::string &value)

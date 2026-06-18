@@ -84,7 +84,6 @@ DS_DECLARE_int32(rpc_thread_num);
 
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
-DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_bool(enable_data_replication);
 
@@ -184,8 +183,7 @@ void OCMetadataManager::StartMetaMonitor()
 void OCMetadataManager::InitSubscribeEvent()
 {
     NodeTimeoutEvent::GetInstance().AddSubscriber(
-        eventName_, [this](const std::string &workerAddr, bool changePrimary, bool removeMeta, bool isOtherAzNode) {
-            (void)isOtherAzNode;
+        eventName_, [this](const std::string &workerAddr, bool changePrimary, bool removeMeta) {
             return ProcessWorkerTimeout(workerAddr, changePrimary, removeMeta);
         });
     NodeNetworkRecoveryEvent::GetInstance().AddSubscriber(
@@ -226,8 +224,6 @@ void OCMetadataManager::InitSubscribeEvent()
         eventName_, [this](const std::vector<std::string> removeNodes) {
             return ClearDevClientMetaForScaledInWorker(removeNodes);
         });
-    HashRingEvent::OtherAzNodeDeadEvent::GetInstance().AddSubscriber(
-        eventName_, [this](const std::string &workerAddr) { return ProcessOtherAzWorkerDead(workerAddr); });
 }
 
 OCMetadataManager::~OCMetadataManager()
@@ -253,7 +249,6 @@ void OCMetadataManager::Shutdown()
     HashRingEvent::RecoverAsyncTaskRanges::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::ClearDataWithoutMeta::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::ClearDevClientMetaForScaledInWorker::GetInstance().RemoveSubscriber(eventName_);
-    HashRingEvent::OtherAzNodeDeadEvent::GetInstance().RemoveSubscriber(eventName_);
 
     asyncPool_.reset();
     if (monitor_ != nullptr && monitor_->joinable()) {
@@ -442,28 +437,6 @@ void OCMetadataManager::SetMetaInfo(const ObjectMetaPb &newMeta, const std::stri
     metaCache.locations[address] = AckState::ACK;
 }
 
-Status OCMetadataManager::NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version,
-                                                      ObjectMetaStore::WriteType type)
-{
-    RETURN_OK_IF_TRUE(FLAGS_other_cluster_names.empty());
-    LOG(INFO) << "Notify nodes in other clusters to remove meta for object: " << objectKey;
-    std::unordered_map<std::string, MetaAddrInfo> metaAddrInfos;
-    RETURN_IF_NOT_OK(etcdCM_->GetAllNodesInOtherAzsByHash(objectKey, metaAddrInfos, true));
-    for (const auto &item : metaAddrInfos) {
-        HostPort masterHostPort = item.second.GetAddressAndSaveDbName();
-        std::unordered_set<std::string> failedObjs;
-        auto rc = notifyWorkerManager_->NotifyMasterRemoveMeta(masterHostPort, { { objectKey, version } }, failedObjs);
-        if (rc.IsError() || !failedObjs.empty()) {
-            LOG(WARNING) << "Fail to notify other az's node to remove meta: " << rc.ToString();
-            // DFX
-            LOG_IF_ERROR(notifyWorkerManager_->InsertAsyncWorkerOp(
-                             "", objectKey, { NotifyWorkerOpType::REMOVE_META, version, { item.first } }, true, type),
-                         "Insert remote meta notification to AsyncWorkerOpTable failed, obj: " + objectKey);
-        }
-    }
-    return Status::OK();
-}
-
 Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
                                               const std::set<ImmutableString> &nestedObjectKeys,
                                               TbbMetaTable::accessor &accessor)
@@ -489,7 +462,6 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
         return status;
     }
     accessor.release();
-    RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
 
     // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
     UpdateSubscribeCache(objectKey, metaCache);
@@ -627,20 +599,6 @@ Status OCMetadataManager::CheckExistenceOpt(const ObjectMeta &meta, const std::s
     return Status::OK();
 }
 
-void OCMetadataManager::MarkUpdatingAndUpdateRemoveMetaNotification(const std::string &objectKey, int64_t version,
-                                                                    RaiiPlus &raiiP)
-{
-    {
-        std::lock_guard<std::shared_timed_mutex> lck(updatingObjsTableMutex_);
-        updatingObjsTable_.emplace(objectKey, version);
-    }
-    raiiP.AddTask([this, &objectKey]() {
-        std::lock_guard<std::shared_timed_mutex> lck(updatingObjsTableMutex_);
-        updatingObjsTable_.erase(objectKey);
-    });
-    notifyWorkerManager_->UpdateRemoteMetaNotification(objectKey, version);
-}
-
 Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta, const std::string &address,
                                                     const std::set<ImmutableString> &nestedObjectKeys, int64_t &version,
                                                     bool &firstOne)
@@ -654,11 +612,6 @@ Status OCMetadataManager::CreateMetaForBinaryFormat(const ObjectMetaPb &newMeta,
     // it is not allowed to double Set.
     RETURN_IF_NOT_OK(CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne));
     version = static_cast<int64_t>(GetSystemClockTimeStampUs());
-
-    RaiiPlus raiiP;
-    if (!firstOne) {
-        MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
-    }
 
     if (!firstOne) {
         auto &prevMeta = accessor->second;
@@ -726,8 +679,6 @@ Status OCMetadataManager::UpdateMeta(ObjectMeta &meta, const ObjectMetaPb &newMe
     // it is not allowed to double Set.
     bool firstOne = false;
     RETURN_IF_NOT_OK(CheckExistenceOpt(meta, objectKey, newMeta.existence(), firstOne));
-    RaiiPlus raiiP;
-    MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
     CHECK_FAIL_RETURN_STATUS(
         meta.multiSetState != PENDING, K_TRY_AGAIN,
         FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
@@ -777,9 +728,6 @@ Status OCMetadataManager::CreateMeta(const std::string &objectKey, ObjectMeta &n
     }
     accessor->second = std::move(newMeta);
     accessor.release();
-    if (!FLAGS_other_cluster_names.empty()) {
-        RETURN_IF_NOT_OK(NotifyOtherAzNodeRemoveMeta(objectKey, version, type));
-    }
     return expiredObjectManager_->InsertObject(objectKey, version, ttl);
 }
 
@@ -1298,9 +1246,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
                 // 2. If location exist and it's state is UNACK, we no need to modify it.
                 // 3. If the key type is hash and the req is from another worker, no need to keep worker address to
                 // location.
-                auto isHashKeyCrossAz = req.is_from_other_az();
-                if (accessor->second.locations.find(address) == accessor->second.locations.end()
-                    && !isHashKeyCrossAz) {
+                if (accessor->second.locations.find(address) == accessor->second.locations.end()) {
                     accessor->second.locations[address] = AckState::UNACK;
                     RETURN_IF_NOT_OK(objectStore_->AddObjectLocation(objectKey, address));
                 }
@@ -1367,7 +1313,7 @@ Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaRe
     RETURN_OK_IF_TRUE(timeout == 0 || objectKeys.empty());
     LOG(INFO) << "Try to subscribe, sub_timeout: " << timeout;
     auto subMeta =
-        std::make_shared<SubscribeMeta>(reqPb.request_id(), objectKeys, reqPb.address(), reqPb.is_from_other_az());
+        std::make_shared<SubscribeMeta>(reqPb.request_id(), objectKeys, reqPb.address());
     TimerQueue::TimerImpl timer;
     auto traceID = Trace::Instance().GetTraceID();
     auto weakThis = weak_from_this();
@@ -1396,57 +1342,6 @@ Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaRe
     return Status::OK();
 }
 
-void OCMetadataManager::ProcessRemoveMetaNotifyFromOtherAz(const RemoveMetaReqPb &request, RemoveMetaRspPb &response)
-{
-    std::vector<std::string> needHandleObjs;
-    std::unordered_map<std::string, uint64_t> objs2Version;
-    for (const auto &idWithVersion : request.id_with_version()) {
-        needHandleObjs.emplace_back(idWithVersion.id());
-        objs2Version.insert({ idWithVersion.id(), idWithVersion.version() });
-    }
-    FillRedirectResponseInfos(response, needHandleObjs, request.redirect());
-    if (response.meta_is_moving()) {
-        return;
-    }
-
-    for (auto itr = needHandleObjs.begin(); itr != needHandleObjs.end();) {
-        std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-        TbbMetaTable::const_accessor accessor;
-        if (!metaTable_.find(accessor, *itr)) {
-            itr = needHandleObjs.erase(itr);
-            continue;
-        }
-        if (objs2Version.at(*itr) < accessor->second.meta.version()) {
-            response.add_outdated_ids(*itr);
-            itr = needHandleObjs.erase(itr);
-            continue;
-        }
-        ++itr;
-    }
-
-    VLOG(1) << "Objs need to be processed: " << VectorToString(needHandleObjs)
-            << "; Outdated objs: " << VectorToString(response.outdated_ids());
-
-    DeleteAllCopyMetaReqPb deleteReq;
-    for (const auto &needHandleObj : needHandleObjs) {
-        auto *id2Version = deleteReq.add_ids_with_version();
-        id2Version->set_id(needHandleObj);
-        id2Version->set_version(objs2Version.at(needHandleObj));
-    }
-    if (!needHandleObjs.empty()) {
-        deleteReq.set_address(request.address());
-        deleteReq.set_redirect(true);
-        DeleteAllCopyMetaRspPb deleteRsp;
-        DeleteAllCopyMeta(deleteReq, deleteRsp);
-        for (const auto &outdatedObj : deleteRsp.outdated_objs()) {
-            response.add_outdated_ids(outdatedObj);
-        }
-        *response.mutable_failed_ids() = { deleteRsp.failed_object_keys().begin(),
-                                           deleteRsp.failed_object_keys().end() };
-    }
-    INJECT_POINT_NO_RETURN("OCMetadataManager.ProcessRemoveMetaNotifyFromOtherAz.ReturnSlowly");
-}
-
 Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaRspPb &response)
 {
     // Validate the input.
@@ -1463,9 +1358,6 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
             break;
         case RemoveMetaReqPb_Cause_GIVEUP_PRIMARY:
             GiveUpPrimaryLocation(request, address, response);
-            break;
-        case RemoveMetaReqPb_Cause_OTHER_AZ_META_UPDATE:
-            ProcessRemoveMetaNotifyFromOtherAz(request, response);
             break;
         default:
             LOG(WARNING) << "Unsupported type: " << request.cause();
@@ -1831,137 +1723,6 @@ void OCMetadataManager::TransferSyncDeleteRequest(
     });
 }
 
-void OCMetadataManager::ProcessForwardDeleteAllCopyMetaInCurrAz(
-    const std::string &otherAZName,
-    const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-    std::unordered_set<std::string> &objsNeedTryInOtherAz,
-    std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify,
-    DeleteObjectMediator &deleteMediator)
-{
-    for (auto &item : objKeysGrpByMaster) {
-        HostPort masterHostPort = item.first.GetAddressAndSaveDbName();
-        std::unordered_set<std::string> failedObjsInThisLoop;
-        std::unordered_set<std::string> objsWithoutMetaInThisLoop;
-        auto rc = notifyWorkerManager_->NotifyMasterDeleteAllCopyMeta(masterHostPort, item.second, failedObjsInThisLoop,
-                                                                      objsWithoutMetaInThisLoop);
-        if (rc.IsError()) {
-            LOG(WARNING) << FormatString(
-                "Fail to notify other az[%s]'s node[%s] to delete all copy meta, rc: %s, objs: %s", otherAZName,
-                masterHostPort.ToString(), rc.ToString(), VectorToString(item.second));
-            for (const auto &objectKey : item.second) {
-                objsNeedAsyncNotify[objectKey].emplace_back(otherAZName);
-            }
-            objsNeedTryInOtherAz.insert(std::make_move_iterator(item.second.begin()),
-                                        std::make_move_iterator(item.second.end()));
-            continue;
-        }
-        // The failed objs means that there is meta on this az; now that we have found the metadata, we do not
-        // need to go to other az to retry this key; but we must remember to return this failure message.
-        deleteMediator.AddFailedDelIds(failedObjsInThisLoop);
-        // Some metadata cannot be found in this az. Record these keys and continue trying in the next az.
-        objsNeedTryInOtherAz.insert(std::make_move_iterator(objsWithoutMetaInThisLoop.begin()),
-                                    std::make_move_iterator(objsWithoutMetaInThisLoop.end()));
-    }
-}
-
-void OCMetadataManager::ForwardDeleteAllCopyMeta2OtherAz(std::unordered_set<std::string> &&objsNeedTryInOtherAz,
-                                                         DeleteObjectMediator &deleteMediator)
-{
-    // The current target node may fail, so some notifications need to be asynchronous. <objectKey, azName>
-    std::unordered_map<std::string, std::vector<std::string>> objsNeedAsyncNotify;
-    const std::vector<std::string> &otherAZNames = etcdCM_->GetOtherAzNames();
-    for (const auto &otherAZName : otherAZNames) {
-        std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-        std::vector<std::string> groupFailedObjs;
-        auto rc = etcdCM_->GroupHashObjsInGivenOtherAz(otherAZName, objsNeedTryInOtherAz, objKeysGrpByMaster,
-                                                       groupFailedObjs);
-        // This means that the hash ring of the az cannot be found. This may only happen when the corresponding az is
-        // started for the first time. In this case, just skip the az.
-        if (rc.IsError()) {
-            LOG(WARNING) << FormatString("Group hash objs in az[%s] failed, rc: %s", otherAZName, rc.ToString());
-            continue;
-        }
-        objsNeedTryInOtherAz.clear();
-        // If the group process fails, it means that the target node in the az may have failed. In this case, an
-        // asynchronous retry is required.
-        for (const auto &objectKey : groupFailedObjs) {
-            objsNeedAsyncNotify[objectKey].emplace_back(otherAZName);
-        }
-        objsNeedTryInOtherAz.insert(std::make_move_iterator(groupFailedObjs.begin()),
-                                    std::make_move_iterator(groupFailedObjs.end()));
-
-        ProcessForwardDeleteAllCopyMetaInCurrAz(otherAZName, objKeysGrpByMaster, objsNeedTryInOtherAz,
-                                                objsNeedAsyncNotify, deleteMediator);
-
-        // Clean up redundant asynchronous notifications.
-        if (objsNeedTryInOtherAz.empty()) {
-            objsNeedAsyncNotify.clear();
-            break;
-        }
-        for (auto iter = objsNeedAsyncNotify.begin(); iter != objsNeedAsyncNotify.end();) {
-            if (objsNeedTryInOtherAz.find(iter->first) == objsNeedTryInOtherAz.end()) {
-                iter = objsNeedAsyncNotify.erase(iter);
-            } else {
-                ++iter;
-            }
-        }
-    }
-
-    AsyncNotifyCrossAzDelete(objsNeedAsyncNotify);
-}
-
-void OCMetadataManager::AsyncNotifyCrossAzDelete(
-    const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify)
-{
-    std::stringstream asyncNotifyMsg;
-    auto deleteAllCopyMetaVersion = static_cast<int64_t>(GetSystemClockTimeStampUs());
-    for (auto &kv : objsNeedAsyncNotify) {
-        std::string targetWorkerAddress;
-        {
-            std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-            TbbMetaTable::const_accessor accessor;
-            if (metaTable_.find(accessor, kv.first)) {
-                targetWorkerAddress = accessor->second.meta.primary_address();
-            }
-        }
-        // 1. delete l2 cache at first, in case a get operation later retrive data from l2 cache
-        Status status = globalCacheDeleteManager_->InsertDeletedObject(kv.first, UINT64_MAX, deleteAllCopyMetaVersion,
-                                                                       targetWorkerAddress, true,
-                                                                       ObjectMetaStore::WriteType::ROCKS_ASYNC_ETCD);
-        if (status.IsError()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] Global cache delete failed, error: %s", kv.first,
-                                       status.ToString());
-        }
-        // 2. insert an async notification
-        asyncNotifyMsg << kv.first << ",";
-        NotifyWorkerOp op;
-        op.type = NotifyWorkerOpType::DELETE_ALL_COPY_META;
-        op.deleteAllCopyMetaAzNames.insert(std::make_move_iterator(kv.second.begin()),
-                                           std::make_move_iterator(kv.second.end()));
-        op.deleteAllCopyMetaVersion = deleteAllCopyMetaVersion;
-        // In this case, the type of persistence cannot be determined.
-        LOG_IF_ERROR(notifyWorkerManager_->InsertAsyncWorkerOp("", kv.first, op, true), "");
-    }
-    LOG_IF(INFO, !objsNeedAsyncNotify.empty())
-        << "objs need to async notify delete all copy meta: " << asyncNotifyMsg.str();
-}
-
-void OCMetadataManager::ProcessHashObjsWithoutMetaWhenDeleteAllCopyMeta(
-    const DeleteAllCopyMetaReqPb &request, std::unordered_set<std::string> &&hashObjsWithoutMeta,
-    DeleteAllCopyMetaRspPb &response, DeleteObjectMediator &deleteMediator)
-{
-    if (hashObjsWithoutMeta.empty()) {
-        return;
-    }
-    if (request.need_forward_objs_without_meta()) {
-        LOG(INFO) << "Notify nodes in other clusters to delete all copy meta for object: "
-                  << VectorToString(hashObjsWithoutMeta);
-        ForwardDeleteAllCopyMeta2OtherAz(std::move(hashObjsWithoutMeta), deleteMediator);
-    } else {
-        *response.mutable_objs_without_meta() = { hashObjsWithoutMeta.begin(), hashObjsWithoutMeta.end() };
-    }
-}
-
 void OCMetadataManager::DeleteAllCopyMetaImpl(
     const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response,
     const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi,
@@ -1993,8 +1754,9 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
     } else {
         FindNeedDeleteIds(deleteMediator);
         std::unordered_set<std::string> hashObjsWithoutMeta = deleteMediator.GetHashObjsWithoutMeta();
-        ProcessHashObjsWithoutMetaWhenDeleteAllCopyMeta(request, std::move(hashObjsWithoutMeta), response,
-                                                        deleteMediator);
+        if (!hashObjsWithoutMeta.empty()) {
+            *response.mutable_objs_without_meta() = { hashObjsWithoutMeta.begin(), hashObjsWithoutMeta.end() };
+        }
         bool processFinished = deleteMediator.CheckNoNeedToNotifyWorker();
         if (processFinished || !needReleaseRpc || serverApi == nullptr) {
             NotifyDeleteAndClearMeta(deleteMediator, false);
@@ -2387,9 +2149,6 @@ Status OCMetadataManager::UpdateMetaByState(const UpdateMetaReqPb &request, Obje
     }
     int64_t version = GetSystemClockTimeStampUs();
 
-    RaiiPlus raiiP;
-    MarkUpdatingAndUpdateRemoveMetaNotification(objectKey, version, raiiP);
-
     response.set_version(version);
     Status s = DoBinaryCacheInvalidationUnlocked(
         objectKey, objectMeta,
@@ -2665,7 +2424,7 @@ void OCMetadataManager::UpdateSubscribeCache(const std::string &objectKey, const
                                      ? subMeta->timer_->GetTimestamp() - TimerQueue::GetInstance()->CurrentTimeMs()
                                      : 0;
             Status status = notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, subMeta->address_,
-                                                                      subMeta->isFromOtherAz_, timeoutMs);
+                                                                      timeoutMs);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("Notify subscribe of worker: %s for object: %s failed, status: %s.",
                                            subMeta->address_, objectKey, status.ToString());
@@ -2832,7 +2591,6 @@ void OCMetadataManager::FillSubMetas(const std::vector<std::string> &objKeys, st
         TbbSubMetaTable::const_accessor accessor;
         if (request2SubMeta_.find(accessor, info.first)) {
             meta.set_sub_address(accessor->second->address_);
-            meta.set_is_from_other_az(accessor->second->isFromOtherAz_);
             auto now = TimerQueue::GetInstance()->CurrentTimeMs();
             auto subTime = accessor->second->timer_->GetTimestamp();
             if (now < subTime) {
@@ -2948,7 +2706,6 @@ Status OCMetadataManager::SaveSubscribeData(const MigrateMetadataReqPb &req)
             QueryMetaReqPb queryReq;
             queryReq.set_address(info.sub_address());
             queryReq.set_request_id(info.request_id());
-            queryReq.set_is_from_other_az(info.is_from_other_az());
             std::list<std::string> ids = { info.objectkeys().begin(), info.objectkeys().end() };
             TryToSubscribeCache(info.timeout(), queryReq, ids);
         } else {
@@ -3704,11 +3461,6 @@ void OCMetadataManager::ProcessPrimaryCopyByWorkerTimeout(const std::string &wor
     }
     // Only timeout worker needs to add PRIMARY_COPY_INVALID async table.
     notifyWorkerManager_->AsyncChangePrimaryCopy(toBeChanged, ifvoluntaryScaleDown);
-}
-
-Status OCMetadataManager::ProcessOtherAzWorkerDead(const std::string &workerAddr)
-{
-    return notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr);
 }
 
 Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bool changePrimaryCopy,
@@ -4732,17 +4484,6 @@ int OCMetadataManager::GetL2CacheType(const std::string &objKey)
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::const_accessor accessor;
     return metaTable_.find(accessor, objKey) ? accessor->second.GetL2CacheType() : INT_MAX;
-}
-
-bool OCMetadataManager::CheckIfUpdating(const std::string &objKey, int64_t &version)
-{
-    std::shared_lock<std::shared_timed_mutex> lck(updatingObjsTableMutex_);
-    auto iter = updatingObjsTable_.find(objKey);
-    if (iter != updatingObjsTable_.end()) {
-        version = iter->second;
-        return true;
-    }
-    return false;
 }
 
 bool OCMetadataManager::GetObjectVersion(const std::string &objKey, int64_t &version)

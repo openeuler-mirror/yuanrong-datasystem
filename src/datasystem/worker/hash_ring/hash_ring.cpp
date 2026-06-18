@@ -1480,7 +1480,7 @@ Status HashRing::RemoveWorker(const std::string &workerAddr, const std::unordere
     return ret;
 }
 
-Status HashRing::GetHashRingWorkerNum(int &workerNum, bool isFromOtherAz) const
+Status HashRing::GetHashRingWorkerNum(int &workerNum) const
 {
     workerNum = 0;
     if (!IsCentralized()) {
@@ -1488,11 +1488,9 @@ Status HashRing::GetHashRingWorkerNum(int &workerNum, bool isFromOtherAz) const
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
         auto findLocalWorker = ringInfo_.workers().find(workerAddr_) != ringInfo_.workers().end();
 
-        if (!isFromOtherAz) {
-            CHECK_FAIL_RETURN_STATUS(
-                findLocalWorker, K_NOT_READY,
-                FormatString("Local worker not in hashring, worker not ready. workerAddr: %s", workerAddr_));
-        }
+        CHECK_FAIL_RETURN_STATUS(
+            findLocalWorker, K_NOT_READY,
+            FormatString("Local worker not in hashring, worker not ready. workerAddr: %s", workerAddr_));
 
         for (auto &i : ringInfo_.workers()) {
             if (ringInfo_.del_node_info().find(i.first) == ringInfo_.del_node_info().end()) {

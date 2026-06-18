@@ -48,7 +48,7 @@ enum ClusterEventType : uint32_t {
 using AddLocalFailedNodeEvent = EventSubscribers<ADD_LOCAL_FAILED_NODE, std::function<Status(const HostPort &)>>;
 using EraseFailedNodeApiEvent = EventSubscribers<ERASE_FAILED_NODE_API, std::function<void(HostPort &)>>;
 using StartNodeCheckEvent = EventSubscribers<START_NODE_CHECK, std::function<Status()>>;
-using NodeTimeoutEvent = EventSubscribers<NODE_TIMEOUT, std::function<Status(const std::string &, bool, bool, bool)>>;
+using NodeTimeoutEvent = EventSubscribers<NODE_TIMEOUT, std::function<Status(const std::string &, bool, bool)>>;
 using NodeNetworkRecoveryEvent =
     EventSubscribers<NODE_NETWORK_RECOVERY, std::function<Status(const std::string &, int64_t, bool)>>;
 using RemoveDeadWorkerEvent = EventSubscribers<REMOVE_DEAD_WORKER, std::function<void(const std::string &)>>;

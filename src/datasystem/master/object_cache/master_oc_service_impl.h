@@ -458,12 +458,6 @@ public:
     Status RollbackMultiMeta(const RollbackMultiMetaReqPb &req, RollbackMultiMetaRspPb &rsp) override;
 
     /**
-     * @brief Notify cross-az deletion
-     * @param[in] objsNeedAsyncNotify The objs grouping by <objectKey, azNames> that need to notify
-     */
-    void AsyncNotifyCrossAzDelete(const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify);
-
-    /**
      * @brief Expire metadata in directory.
      * @param[in] req The rpc req protobuf.
      * @param[in] rsp The rpc rsp protobuf.

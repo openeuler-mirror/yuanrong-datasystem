@@ -370,27 +370,6 @@ global:
 
 ::::
 
-### 多集群相关配置
-注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[FAQ](../FAQ/FAQ.md)
-
-| 配置项 | 类型 | 默认值 | 描述 |
-|-----|------|---------|-------------|
-| global.clusterName | string | `"AZ1"` | 可用区的名称 |
-| global.crossAz.otherClusterNames | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
-| global.crossAz.crossAzGetDataFromWorker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
-| global.crossAz.crossAzGetMetaFromWorker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
-
-**样例**：
-```yaml
-global:
-  clusterName: "az1"
-
-  crossAz:
-    otherClusterNames: "az2,az3,az4"
-    crossAzGetDataFromWorker: true
-    crossAzGetMetaFromWorker: false
-```
-
 ### 元数据相关配置
 
 | 配置项 | 类型 | 默认值 | 描述 |

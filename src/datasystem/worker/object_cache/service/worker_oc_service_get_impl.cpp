@@ -73,10 +73,7 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/shared_memory/allocator.h"
 
-DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
-DS_DECLARE_bool(cross_cluster_get_data_from_worker);
-DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(authorization_enable);
 DS_DECLARE_bool(enable_data_replication);
@@ -111,13 +108,6 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
       rateController_(std::move(rateController))
 {
     remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
-    if (HaveOtherAZ()) {
-        for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
-            if (azName != FLAGS_cluster_name) {
-                otherAZNames_.emplace_back(azName);
-            }
-        }
-    }
     workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQureyMeta");
     if (FLAGS_enable_worker_worker_batch_get) {
         workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
@@ -965,9 +955,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &o
         return Status::OK();
     }
     HostPort masterHostAddress;
-    // If we can't connect to the master (could be multiple reasons like cross_az_get_meta_from_worker=false or the
-    // master is indeed faulty), then we can't update the location to the master so just set the delete flag and
-    // return
+    // If we can't connect to the master, then we can't update the location to the master so just set the delete flag
+    // and return.
     if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
         LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
                      << ". Data will be automatically deleted after it is returned.";
@@ -1229,10 +1218,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         bool shmUnitAllocated = false;
         // Prepare the protobuf with urma/ucp info for data transfer if applicable.
         RETURN_IF_NOT_OK(PrepareGetRequestHelper(address, dataSize, objectKV, reqPb, shmUnitAllocated));
-        // If getting data from other AZ, then we leave 3/4 remain time to query from L2 cache in case getting data
-        // failed.
-        int64_t timeoutMs =
-            reqTimeoutDuration.CalcRealRemainingTime() / (etcdCM_->CheckIfOtherAzNodeConnected(hostAddr) ? 4 : 1);
+        int64_t timeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
         INJECT_POINT("worker_oc_service_get_impl.pull_object_data_from_remote_worker.before_get_from_remote");
         Status rc = RetryOnErrorRepent(
             timeoutMs,
@@ -1401,12 +1387,12 @@ void WorkerOcServiceGetImpl::AttemptGetObjectsLocally(const std::shared_ptr<GetR
 
 Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destMasterHostPort, uint64_t subTimeout,
                                                            const std::vector<std::string> &objKeysToQuery,
-                                                           bool isFromOtherAz, datasystem::master::QueryMetaRspPb &rsp,
+                                                           datasystem::master::QueryMetaRspPb &rsp,
                                                            std::vector<RpcMessage> &payloads)
 {
     PerfPoint point(PerfKey::WORKER_QUERY_META_IMPL);
     datasystem::master::QueryMetaReqPb req;
-    SetQueryMetaInfo(req, objKeysToQuery, destMasterHostPort.ToString(), true, isFromOtherAz);
+    SetQueryMetaInfo(req, objKeysToQuery, destMasterHostPort.ToString(), true);
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
         workerMasterApiManager_->GetWorkerMasterApi(destMasterHostPort);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get masterApi failed, cannot queryMeta");
@@ -1421,32 +1407,22 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
     std::vector<RpcMessage> tmpPayloads;
     RETURN_IF_NOT_OK(RedirectRetryWhenMetasMoving(req, rsp, tmpPayloads, func));
     RETURN_IF_NOT_OK(CorrectQueryMetaResponse(tmpPayloads, rsp, payloads));
-    RETURN_IF_NOT_OK(QueryMetadataFromRedirectMaster(rsp, subTimeout, isFromOtherAz, payloads));
+    RETURN_IF_NOT_OK(QueryMetadataFromRedirectMaster(rsp, subTimeout, payloads));
     return Status::OK();
 }
 
 void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     const std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
     std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
-    const std::unordered_set<std::string> &objectKeysMayInOtherAz, std::vector<master::QueryMetaInfoPb> &queryMetas,
-    std::vector<std::string> &absentObjectKeys)
+    std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys)
 {
-    std::unordered_set<std::string> objectKeysNotExistNeedQueryInEtcd;
-    if (HaveOtherAZ() && !FLAGS_cross_cluster_get_meta_from_worker) {
-        for (auto it = objectKeysNotExist.begin(); it != objectKeysNotExist.end();) {
-            objectKeysNotExistNeedQueryInEtcd.insert(std::move(*it));
-            it = objectKeysNotExist.erase(it);
-        }
-    }
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
-    if (objKeysUndecidedMaster.empty() && objectKeysNotExistNeedQueryInEtcd.empty() && objectKeysPuzzled.empty()
-        && objectKeysMayInOtherAz.empty()) {
+    if (objKeysUndecidedMaster.empty() && objectKeysPuzzled.empty()) {
         return;
     }
 
     std::stringstream msg;
-    msg << "Try get some miss objs from etcd:" << VectorToString(objectKeysMayInOtherAz)
-        << VectorToString(objectKeysPuzzled) << VectorToString(objectKeysNotExistNeedQueryInEtcd);
+    msg << "Try get some miss objs from etcd:" << VectorToString(objectKeysPuzzled);
     for (const auto &iter : objKeysUndecidedMaster) {
         msg << VectorToString(iter.second);
     }
@@ -1464,71 +1440,13 @@ void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
     }
 
     for (const auto &kv : groupedObjectKeysQueryMetaFailed) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, true, queryMetas, absentObjectKeys),
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, queryMetas, absentObjectKeys),
                      "Query metadata from etcd by hash failed.");
     }
-    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysNotExistNeedQueryInEtcd, true, queryMetas, absentObjectKeys),
-                 "Query metadata from etcd by hash failed.");
-    LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysMayInOtherAz, true, queryMetas, absentObjectKeys),
-                 "Query metadata from etcd by hash failed.");
     for (const auto &kv : objKeysUndecidedMaster) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, true, queryMetas, absentObjectKeys),
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, queryMetas, absentObjectKeys),
                      "Query metadata from etcd by hash failed.");
     }
-}
-
-Status WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
-    uint64_t subTimeout, std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
-    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, std::unordered_set<std::string> &objectKeysMayInOtherAz,
-    std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<RpcMessage> &payloads)
-{
-    auto iter = objKeysUndecidedMaster.find("");
-    if (iter != objKeysUndecidedMaster.end()) {
-        objectKeysMayInOtherAz = std::move(iter->second);
-        objKeysUndecidedMaster.erase(iter);
-    }
-
-    auto extractObjectsMayExistInOtherAz = [&objectKeysMayInOtherAz](auto &set) {
-        for (auto iter = set.begin(); iter != set.end();) {
-            objectKeysMayInOtherAz.insert(std::move(*iter));
-            iter = set.erase(iter);
-        }
-    };
-    std::apply([&](auto &...sets) { (extractObjectsMayExistInOtherAz(sets), ...); }, objectKeysQueryMetaFailed);
-
-    RETURN_OK_IF_TRUE(objectKeysMayInOtherAz.empty());
-    LOG(INFO) << "Try get some miss objs from other az: " << VectorToString(objectKeysMayInOtherAz);
-    for (const auto &otherAZName : otherAZNames_) {
-        for (auto it = objectKeysMayInOtherAz.begin(); it != objectKeysMayInOtherAz.end();) {
-            const auto &objectKey = *it;
-            MetaAddrInfo metaAddrInfo;
-            auto rc = etcdCM_->QueryMasterAddrInOtherAz(otherAZName, objectKey, metaAddrInfo);
-            if (rc.IsError()) {
-                LOG(WARNING) << "QueryMasterAddrInOtherAz failed, msg: " << rc.ToString();
-                ++it;
-                continue;
-            }
-            auto masterHostPort = metaAddrInfo.GetAddressAndSaveDbName();
-            datasystem::master::QueryMetaRspPb rsp;
-            bool isFromOtherAz = metaAddrInfo.IsFromOtherAz();
-            rc = QueryMetaDataFromMasterImpl(masterHostPort, subTimeout, { objectKey }, isFromOtherAz, rsp, payloads);
-            if (rc.IsError()) {
-                LOG(WARNING) << "Query meta from master[" << masterHostPort.ToString()
-                             << "] failed, msg: " << rc.ToString();
-            }
-            if (rc.IsError() || rsp.query_metas_size() == 0) {
-                ++it;
-                continue;
-            }
-            for (auto &meta : *rsp.mutable_query_metas()) {
-                meta.set_is_from_other_az(isFromOtherAz);
-            }
-            (void)queryMetas.insert(queryMetas.end(), rsp.mutable_query_metas()->begin(),
-                                    rsp.mutable_query_metas()->end());
-            it = objectKeysMayInOtherAz.erase(it);
-        }
-    }
-    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
@@ -1565,18 +1483,14 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
             HostPort masterAddr = itemPtr->first.GetAddressAndSaveDbName();
             const std::vector<std::string> &currentIds = itemPtr->second;
-            bool isFromOtherAz = itemPtr->first.IsFromOtherAz();
             datasystem::master::QueryMetaRspPb &rsp = res.rsp;
             Timer queryMetaTimer;
-            auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, isFromOtherAz, rsp, res.payloads);
+            auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, rsp, res.payloads);
             if (rc.IsError()) {
                 LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms", masterAddr.ToString(),
                                            rc.ToString(), queryMetaTimer.ElapsedMilliSecond());
                 res.failedKeys.insert(currentIds.begin(), currentIds.end());
                 return rc;
-            }
-            for (auto &meta : *rsp.mutable_query_metas()) {
-                meta.set_is_from_other_az(isFromOtherAz);
             }
             return Status::OK();
         };
@@ -1627,28 +1541,17 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
         return Status::OK();
     });
 
-    // 4. Handle objKeys needed to try to get metadata in other AZ
-    std::unordered_set<std::string> objectKeysMayInOtherAz;
-    if (FLAGS_cross_cluster_get_meta_from_worker) {
-        point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_CROSS_AZ);
-        LOG_IF_ERROR(ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(subTimeout, objKeysUndecidedMaster,
-                                                                     objectKeysQueryMetaFailed, objectKeysMayInOtherAz,
-                                                                     queryMetas, payloads),
-                     "Handle objKeys needed to try to get metadata in other AZ failed");
-    }
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_NOT_FOUND);
-    // 5. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
+    // 4. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata;
     // If l2cache is disabled, there is no need to query meta in etcd.
     bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
     if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {
         ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(objKeysUndecidedMaster, std::move(objectKeysNotExist),
-                                                       objectKeysPuzzled, objectKeysMayInOtherAz, queryMetas,
-                                                       absentObjectKeys);
+                                                       objectKeysPuzzled, queryMetas, absentObjectKeys);
     } else {
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysPuzzled.begin(), objectKeysPuzzled.end());
-        absentObjectKeys.insert(absentObjectKeys.end(), objectKeysMayInOtherAz.begin(), objectKeysMayInOtherAz.end());
         for (const auto &kv : objKeysUndecidedMaster) {
             absentObjectKeys.insert(absentObjectKeys.end(), kv.second.begin(), kv.second.end());
         }
@@ -1663,7 +1566,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
-                                                               bool isFromOtherAz, std::vector<RpcMessage> &payloads)
+                                                               std::vector<RpcMessage> &payloads)
 {
     for (const auto &redirectInfo : rsp.info()) {
         std::vector<RpcMessage> redirectPayloads;
@@ -1673,7 +1576,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
                                                  redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
-        SetQueryMetaInfo(redirectQueryReq, redirectIds, redirectMasterAddr.ToString(), false, isFromOtherAz);
+        SetQueryMetaInfo(redirectQueryReq, redirectIds, redirectMasterAddr.ToString(), false);
         std::shared_ptr<WorkerMasterOCApi> redirectWorkerMasterApi =
             workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
@@ -1694,79 +1597,51 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
 }
 
 /*
- * Query missing metadata from ETCD by complete object-key hash. If the local AZ lookup fails, query other AZs when
- * cross-AZ metadata lookup is available.
+ * Query missing metadata from ETCD by complete object-key hash.
  */
-Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys, bool getLocalAz,
+Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
                                                      std::vector<master::QueryMetaInfoPb> &queryMetas,
                                                      std::vector<std::string> &absentObjectKeys)
 {
     INJECT_POINT("worker.QueryMetaDataFromEtcd_failure");
-    if (!getLocalAz && !HaveOtherAZ()) {
-        VLOG(DEBUG_LOG_LEVEL) << "No need to query local: flag " << getLocalAz << ", other AZ flag " << HaveOtherAZ();
-        (void)absentObjectKeys.insert(absentObjectKeys.end(), objectKeys.begin(), objectKeys.end());
-        return Status::OK();
-    }
-    Status rc;
     for (const std::string &objKey : objectKeys) {
-        if (getLocalAz) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(FLAGS_cluster_name, objKey, queryMetas);
-            if (rc.IsOk()) {
-                continue;
-            }
+        std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
+        std::string hashValue = Hash2Str(MurmurHash3_32(objKey));
+        std::string tablePrefix;
+        if (!FLAGS_cluster_name.empty()) {
+            tablePrefix = FormatString("/%s", FLAGS_cluster_name);
         }
-        if (!HaveOtherAZ()) {
+        std::string etcdKey = tablePrefix + FormatString("%s/%zu/%s", etcdTableName, hashValue, objKey);
+        LOG(INFO) << "Query objKey: " << objKey << ", AZ name: " << FLAGS_cluster_name
+                  << ", query ETCD key: " << etcdKey;
+
+        auto metaPb = std::make_unique<ObjectMetaPb>();
+        CHECK_FAIL_RETURN_STATUS(!etcdStore_->IsKeepAliveTimeout(), K_RPC_UNAVAILABLE, "etcd is unavailable");
+        RangeSearchResult res;
+        Status rc = etcdStore_->RawGet(etcdKey, res, 0, reqTimeoutDuration.CalcRemainingTime());
+        if (rc.IsError()) {
             LOG(ERROR) << "Can not get meta: " << rc.ToString();
+            absentObjectKeys.emplace_back(objKey);
             continue;
         }
-        std::stringstream errLog;
-        for (const auto &azName : otherAZNames_) {
-            rc = ConstructKeyAndQueryMetaFromEtcd(azName, objKey, queryMetas);
-            if (rc.IsOk()) {
-                break;
-            }
-            errLog << FormatString("(%s : %s), ", azName, rc.ToString());
-        }
-        if (rc.IsError()) {
-            LOG(ERROR) << "Can not get meta from local or other az. " << errLog.str();
-            absentObjectKeys.emplace_back(objKey);
-        }
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            metaPb->ParseFromString(res.value), StatusCode::K_RUNTIME_ERROR,
+            FormatString("Parse string to ObjectMetaPb failed. String is: %s", res.value));
+        master::QueryMetaInfoPb queryMeta;
+        VLOG(DEBUG_LOG_LEVEL) << "Success to get ObjectKey " << objKey << ", metadata primary addr "
+                              << queryMeta.meta().primary_address() << " loadbalance addr " << queryMeta.address()
+                              << " from ETCD";
+        queryMeta.set_allocated_meta(metaPb.release());
+        // Using the primary address to indicate the worker that holds the Object, and the address will be checked
+        // before getting Object from the worker.
+        queryMeta.set_address(queryMeta.meta().primary_address());
+        queryMetas.emplace_back(std::move(queryMeta));
     }
-    return Status::OK();
-}
-
-Status WorkerOcServiceGetImpl::ConstructKeyAndQueryMetaFromEtcd(const std::string &azName, const std::string &objKey,
-                                                                std::vector<master::QueryMetaInfoPb> &queryMetas)
-{
-    std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
-    std::string hashValue = Hash2Str(MurmurHash3_32(objKey));
-    std::string tablePrefix;
-    if (!FLAGS_cluster_name.empty()) {
-        tablePrefix = FormatString("/%s", azName);
-    }
-    std::string etcdKey = tablePrefix + FormatString("%s/%zu/%s", etcdTableName, hashValue, objKey);
-    LOG(INFO) << "Query objKey: " << objKey << ", AZ name: " << azName << ", query ETCD key: " << etcdKey;
-
-    auto metaPb = std::make_unique<ObjectMetaPb>();
-    CHECK_FAIL_RETURN_STATUS(!etcdStore_->IsKeepAliveTimeout(), K_RPC_UNAVAILABLE, "etcd is unavailable");
-    RangeSearchResult res;
-    RETURN_IF_NOT_OK(etcdStore_->RawGet(etcdKey, res, 0, reqTimeoutDuration.CalcRemainingTime()));
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metaPb->ParseFromString(res.value), StatusCode::K_RUNTIME_ERROR,
-                                         FormatString("Parse string to ObjectMetaPb failed. String is: %s", res.value));
-    master::QueryMetaInfoPb queryMeta;
-    VLOG(DEBUG_LOG_LEVEL) << "Success to get ObjectKey " << objKey << ", metadata primary addr "
-                          << queryMeta.meta().primary_address() << " loadbalance addr " << queryMeta.address()
-                          << " from ETCD";
-    queryMeta.set_allocated_meta(metaPb.release());
-    // Using the primary address to indicate the worker that holds the Object, and the address will be checked
-    // before getting Object from the worker.
-    queryMeta.set_address(queryMeta.meta().primary_address());
-    queryMetas.emplace_back(std::move(queryMeta));
     return Status::OK();
 }
 
 void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const std::vector<std::string> &objectKeys,
-                                              const std::string &masterAddr, bool redirect, bool isFromOtherAz)
+                                              const std::string &masterAddr, bool redirect)
 {
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
@@ -1777,7 +1652,6 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
     req.set_request_id(queryReqId);
     req.set_redirect(redirect);
     req.set_address(localAddress_.ToString());
-    req.set_is_from_other_az(isFromOtherAz);
 }
 
 Status WorkerOcServiceGetImpl::CorrectQueryMetaResponse(std::vector<RpcMessage> &tmpPayloads,
@@ -2002,9 +1876,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromAnywhereWithLock(const ReadKey &read
     const auto &meta = queryMeta.meta();
     const auto &address = queryMeta.address();
     const auto objectKey = meta.object_key();
-    const auto &isFromOtherAz = queryMeta.is_from_other_az();
     VLOG(1) << "Get object from remote, object meta is: " << LogHelper::IgnoreSensitive(meta) << ", payload_index_size"
-            << queryMeta.payload_indexs_size() << ", addr: " << address << ", is_from_other_az: " << isFromOtherAz
+            << queryMeta.payload_indexs_size() << ", addr: " << address
             << ", cache_type: " << queryMeta.meta().config().cache_type();
     INJECT_POINT("worker.GetObjectFromAnywhere");
 
@@ -2080,7 +1953,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                          FormatString("Parse object %s address %s failed", objKey, address));
         // Step1: Try to get data from local AZ's worker
         checkConnectStatus =
-            etcdCM_->CheckConnection(hostAddr, false, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
+            etcdCM_->CheckConnection(hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
@@ -2096,7 +1969,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                                         objKey));
             }
         }
-        TryGetObjectFromOtherAZ(meta, hostAddr, objectKV, status);
     } else {
         status = Status(K_RUNTIME_ERROR,
                         FormatString("Fail to get object %s from remote worker, no object copy exists.", objKey));
@@ -2124,23 +1996,6 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
 
     isFromL2 ? CacheHitInfo::Instance().IncL2Hit(1) : CacheHitInfo::Instance().IncRemoteHit(1);
     return UpdateRequestForSuccess(objectKV, request);
-}
-
-void WorkerOcServiceGetImpl::TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr,
-                                                     ReadObjectKV &objectKV, Status &status)
-{
-    if (!FLAGS_cross_cluster_get_data_from_worker || !etcdCM_->CheckIfOtherAzNodeConnected(hostAddr)) {
-        return;
-    }
-    const std::string &objKey = meta.object_key();
-    const std::string &address = hostAddr.ToString();
-    LOG(INFO) << FormatString("Try get object[%s] from other az worker[%s].", objKey, address);
-    // If the hash type keys of other clusters are also cached locally, we cannot distinguish whether the key belongs to
-    // this cluster or other clusters when deleting it. It may be a feasible method to store the keys of each cluster in
-    // separate tables, but unfortunately it is not currently implemented, so an additional judgment is needed here.
-    Timer timer;
-    status = GetObjectFromRemoteWorkerWithoutDump(address, meta.primary_address(), meta.data_size(), objectKV);
-    LOG(INFO) << "Query from other AZ node use " << timer.ElapsedMilliSecond() << " millisecond.";
 }
 
 void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectMetaPb &meta, const std::string &address,
@@ -2235,18 +2090,14 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
         objDatas[i++] = std::move(payloads[idx]);
     }
     RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, objDatas, evictionManager_, memCpyThreadPool_));
-    if (queryMeta.is_from_other_az()) {
-        objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
+    if (FLAGS_enable_data_replication) {
+        UpdateLocationParam param = { objectKey, objectKV.GetObjEntry()->GetCreateTime(),
+                                      static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()) };
+        UpdateLocationTask task = UpdateLocationTask(param);
+        RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
+        evictionManager_->Add(objectKey);
     } else {
-        if (FLAGS_enable_data_replication) {
-            UpdateLocationParam param = { objectKey, objectKV.GetObjEntry()->GetCreateTime(),
-                                          static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()) };
-            UpdateLocationTask task = UpdateLocationTask(param);
-            RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
-            evictionManager_->Add(objectKey);
-        } else {
-            objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
-        }
+        objectKV.GetObjEntry()->stateInfo.SetNeedToDelete(true);
     }
     point.Record();
     CacheHitInfo::Instance().IncRemoteHit(1);
@@ -2512,11 +2363,6 @@ bool WorkerOcServiceGetImpl::IsGetFromL2Storage(bool canNotFindInWorker, bool wr
                                                 datasystem::L2StorageType storageType)
 {
     return canNotFindInWorker && writeToL2Storage && TESTFLAG(supportL2Storage_, storageType);
-}
-
-bool WorkerOcServiceGetImpl::HaveOtherAZ()
-{
-    return !FLAGS_other_cluster_names.empty();
 }
 
 Status WorkerOcServiceGetImpl::BatchLockForGet(const std::set<ReadKey> &readKeys,

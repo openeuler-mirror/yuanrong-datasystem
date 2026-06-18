@@ -129,160 +129,6 @@ void OCNotifyWorkerManager::ProcessAsyncNotifyOp()
     LOG(INFO) << "Terminating processing asynchronous notification operation thread.";
 }
 
-void OCNotifyWorkerManager::ProcessObjsNeedRemoveMeta(
-    const std::unordered_map<std::string, NotifyWorkerOp> &objsNeedRemoveMeta)
-{
-    // <masterAddr, <azName, <objectKey, removeMetaVersion>>>
-    std::unordered_map<MetaAddrInfo, std::pair<std::string, std::unordered_map<std::string, int64_t>>>
-        groupedObjsNeedRemoveMeta;
-    for (const auto &objNeedRemoveMeta : objsNeedRemoveMeta) {
-        for (const auto &azName : objNeedRemoveMeta.second.removeMetaAzNames) {
-            MetaAddrInfo metaAddrInfo;
-            auto rc = EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().NotifyAll(
-                azName, objNeedRemoveMeta.first, metaAddrInfo);
-            if (rc.IsError()) {
-                continue;
-            }
-            auto iter = groupedObjsNeedRemoveMeta.find(metaAddrInfo);
-            if (iter == groupedObjsNeedRemoveMeta.end()) {
-                std::pair<std::string, std::unordered_map<std::string, int64_t>> tmpObjsNeedRemoveMeta = {
-                    azName, { { objNeedRemoveMeta.first, objNeedRemoveMeta.second.removeMetaVersion } }
-                };
-                groupedObjsNeedRemoveMeta.insert({ metaAddrInfo, std::move(tmpObjsNeedRemoveMeta) });
-                continue;
-            } else {
-                iter->second.second.insert({ objNeedRemoveMeta.first, objNeedRemoveMeta.second.removeMetaVersion });
-            }
-        }
-    }
-
-    // <objectKey, <azName>>
-    std::unordered_map<std::string, std::unordered_set<std::string>> successRecords;
-    for (const auto &objsNeedRemoveMeta : groupedObjsNeedRemoveMeta) {
-        HostPort masterAddr = objsNeedRemoveMeta.first.GetAddressAndSaveDbName();
-        Status status = CheckWorkerIsHealthy(masterAddr.ToString());
-        if (status.IsError()) {
-            VLOG(1) << "[async notify] Worker " << masterAddr.ToString()
-                    << " is unhealthy, retry next time. Detail: " << status.ToString();
-            continue;
-        }
-        std::unordered_set<std::string> failedObjs;
-        TraceGuard traceGuard = Trace::Instance().SetSubTraceID(GetStringUuid().substr(0, SHORT_TRACEID_SIZE));
-        LOG(INFO) << "Async notify remove meta, objs: " << MapToString(objsNeedRemoveMeta.second.second)
-                  << "; masterAddr: " << masterAddr.ToString();
-        auto rc = NotifyMasterRemoveMeta(masterAddr, objsNeedRemoveMeta.second.second, failedObjs);
-        LOG_IF_ERROR(rc, "NotifyMasterRemoveMeta failed");
-        if (rc.IsOk()) {
-            const auto &azName = objsNeedRemoveMeta.second.first;
-            for (const auto &pair : objsNeedRemoveMeta.second.second) {
-                if (failedObjs.find(pair.first) != failedObjs.end()) {
-                    continue;
-                }
-                successRecords[pair.first].insert(azName);
-            }
-        }
-    }
-    LOG_IF_ERROR(RemoveNoTargetAsyncWorkerOp(successRecords, NotifyWorkerOpType::REMOVE_META), ", remove op failed.");
-}
-
-void OCNotifyWorkerManager::ProcessObjsNeedDeleteAllCopyMeta(
-    const std::unordered_map<std::string, NotifyWorkerOp> &objsNeedDeleteAllCopyMeta)
-{
-    // <masterAddr, <azName, <objectKey, version>>>>
-    std::unordered_map<MetaAddrInfo, std::pair<std::string, std::vector<std::pair<std::string, int64_t>>>>
-        groupedObjsNeedDeleteAllCopyMeta;
-    for (const auto &objNeedDeleteAllCopyMeta : objsNeedDeleteAllCopyMeta) {
-        for (const auto &azName : objNeedDeleteAllCopyMeta.second.deleteAllCopyMetaAzNames) {
-            MetaAddrInfo metaAddrInfo;
-            auto rc = EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().NotifyAll(
-                azName, objNeedDeleteAllCopyMeta.first, metaAddrInfo);
-            if (rc.IsError()) {
-                continue;
-            }
-            auto iter = groupedObjsNeedDeleteAllCopyMeta.find(metaAddrInfo);
-            if (iter == groupedObjsNeedDeleteAllCopyMeta.end()) {
-                std::pair<std::string, std::vector<std::pair<std::string, int64_t>>> tmpObjsDeleteAllCopyMeta = {
-                    azName,
-                    { { objNeedDeleteAllCopyMeta.first, objNeedDeleteAllCopyMeta.second.deleteAllCopyMetaVersion } }
-                };
-                groupedObjsNeedDeleteAllCopyMeta.insert({ metaAddrInfo, std::move(tmpObjsDeleteAllCopyMeta) });
-            } else {
-                iter->second.second.emplace_back(std::make_pair(
-                    objNeedDeleteAllCopyMeta.first, objNeedDeleteAllCopyMeta.second.deleteAllCopyMetaVersion));
-            }
-        }
-    }
-
-    // <objectKey, <azName>>
-    std::unordered_map<std::string, std::unordered_set<std::string>> successRecords;
-    for (const auto &objsNeedDeleteAllCopyMetaPerMaster : groupedObjsNeedDeleteAllCopyMeta) {
-        HostPort masterAddr = objsNeedDeleteAllCopyMetaPerMaster.first.GetAddressAndSaveDbName();
-        Status status = CheckWorkerIsHealthy(masterAddr.ToString());
-        if (status.IsError()) {
-            VLOG(1) << "[async notify] Worker " << masterAddr.ToString()
-                    << " is unhealthy, retry next time. Detail: " << status.ToString();
-            continue;
-        }
-        TraceGuard traceGuard = Trace::Instance().SetSubTraceID(GetStringUuid().substr(0, SHORT_TRACEID_SIZE));
-        auto objs = objsNeedDeleteAllCopyMetaPerMaster.second.second;
-        std::unordered_map<std::string, int64_t> objMap(objs.begin(), objs.end());
-        LOG(INFO) << "Async notify delete all copy meta, objs: " << MapToString(objMap)
-                  << "; masterAddr: " << masterAddr.ToString();
-        std::unordered_set<std::string> failedObjs;
-        std::unordered_set<std::string> objsWithoutMeta;
-        auto rc = NotifyMasterDeleteAllCopyMeta(masterAddr, {}, failedObjs, objsWithoutMeta,
-                                                objsNeedDeleteAllCopyMetaPerMaster.second.second);
-        LOG_IF_ERROR(rc, "NotifyMasterDeleteAllCopyMeta failed");
-        if (rc.IsOk()) {
-            const auto &azName = objsNeedDeleteAllCopyMetaPerMaster.second.first;
-            for (const auto &kv : objsNeedDeleteAllCopyMetaPerMaster.second.second) {
-                const auto &objKey = kv.first;
-                if (failedObjs.find(objKey) != failedObjs.end()) {
-                    continue;
-                }
-                successRecords[objKey].insert(azName);
-            }
-        }
-    }
-
-    LOG_IF_ERROR(RemoveNoTargetAsyncWorkerOp(successRecords, NotifyWorkerOpType::DELETE_ALL_COPY_META),
-                 ", remove op failed.");
-}
-
-void OCNotifyWorkerManager::ProcessObjsWithoutTargetNode()
-{
-    std::unordered_map<std::string, NotifyWorkerOp> objsNeedRemoveMeta;
-    std::unordered_map<std::string, NotifyWorkerOp> objsNeedDeleteAllCopyMeta;
-    {
-        std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
-        TbbNotifyWorkerOpTable::accessor accessor;
-        if (!notifyWorkerOpTable_.find(accessor, "")) {
-            return;
-        }
-        if (accessor->second.empty()) {
-            notifyWorkerOpTable_.erase(accessor);
-            return;
-        }
-
-        for (const auto &objsWithoutTargetNode : accessor->second) {
-            if (TESTFLAG(objsWithoutTargetNode.second.type, NotifyWorkerOpType::REMOVE_META)) {
-                NotifyWorkerOp copyOp;
-                copyOp.removeMetaVersion = objsWithoutTargetNode.second.removeMetaVersion;
-                copyOp.removeMetaAzNames = objsWithoutTargetNode.second.removeMetaAzNames;
-                objsNeedRemoveMeta.insert({ objsWithoutTargetNode.first, std::move(copyOp) });
-            }
-            if (TESTFLAG(objsWithoutTargetNode.second.type, NotifyWorkerOpType::DELETE_ALL_COPY_META)) {
-                NotifyWorkerOp copyOp;
-                copyOp.deleteAllCopyMetaVersion = objsWithoutTargetNode.second.deleteAllCopyMetaVersion;
-                copyOp.deleteAllCopyMetaAzNames = objsWithoutTargetNode.second.deleteAllCopyMetaAzNames;
-                objsNeedDeleteAllCopyMeta.insert({ objsWithoutTargetNode.first, std::move(copyOp) });
-            }
-        }
-    }
-    ProcessObjsNeedRemoveMeta(objsNeedRemoveMeta);
-    ProcessObjsNeedDeleteAllCopyMeta(objsNeedDeleteAllCopyMeta);
-}
-
 Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
 {
     INJECT_POINT("OCNotifyWorkerManager.ProcessAsyncNotifyOpImpl.SkipProcess");
@@ -303,10 +149,6 @@ Status OCNotifyWorkerManager::ProcessAsyncNotifyOpImpl()
     });
 
     for (const auto &workerId : workerIds) {
-        if (workerId == "") {
-            ProcessObjsWithoutTargetNode();
-            continue;
-        }
         Status status = CheckWorkerIsHealthy(workerId);
         if (status.IsError()) {
             LOG(WARNING) << "[async notify] Worker " << workerId << " is unhealthy, detail: " << status.ToString();
@@ -656,8 +498,7 @@ Status OCNotifyWorkerManager::AsyncSendUpdateObject(const std::string &objectKey
 }
 
 Status OCNotifyWorkerManager::NotifySubscribeMeta(const std::string &objectKey, const ObjectMeta &objectMeta,
-                                                  const std::string &subAddress, bool isFromOtherAz,
-                                                  uint64_t &subTimeoutMs)
+                                                  const std::string &subAddress, uint64_t &subTimeoutMs)
 {
     LOG(INFO) << FormatString("Notify object meta to subscriber: %s, objectKey: %s", subAddress, objectKey);
     RETURN_IF_NOT_OK(CheckWorkerIsHealthy(subAddress));
@@ -669,7 +510,6 @@ Status OCNotifyWorkerManager::NotifySubscribeMeta(const std::string &objectKey, 
     request.mutable_meta()->CopyFrom(objectMeta.meta);
     request.mutable_meta()->set_object_key(objectKey);
     request.set_address(objectMeta.meta.primary_address());
-    request.set_is_from_other_az(isFromOtherAz);
     request.set_timeout(subTimeoutMs);
     RETURN_IF_NOT_OK(masterWorkerApi->PublishMeta(request, response));
     LOG(INFO) << FormatString("Notify object meta %s done.", objectKey);
@@ -1021,40 +861,6 @@ Status OCNotifyWorkerManager::RemoveAsyncWorkerOp(const std::string &workerId,
     return Status::OK();
 }
 
-Status OCNotifyWorkerManager::RemoveNoTargetAsyncWorkerOp(
-    const std::unordered_map<std::string, std::unordered_set<std::string>> &objectKeys, NotifyWorkerOpType op)
-{
-    CHECK_FAIL_RETURN_STATUS(op == NotifyWorkerOpType::DELETE_ALL_COPY_META || op == NotifyWorkerOpType::REMOVE_META,
-                             K_RUNTIME_ERROR, "op with target not support.");
-    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
-    TbbNotifyWorkerOpTable::accessor accessor;
-    std::string workerId = "";  // no target
-    RETURN_OK_IF_TRUE(!notifyWorkerOpTable_.find(accessor, workerId));
-    for (const auto &[objKey, azNames] : objectKeys) {
-        auto itr = accessor->second.find(objKey);
-        if (itr == accessor->second.end()) {
-            continue;
-        }
-        auto beforeModify = itr->second;
-        for (auto &azName : azNames) {
-            itr->second.deleteAllCopyMetaAzNames.erase(azName);
-        }
-        if (itr->second.deleteAllCopyMetaAzNames.empty()
-            && static_cast<uint32_t>(CLEARFLAG(itr->second.type, op)) == 0) {
-            accessor->second.erase(itr);
-            LOG_IF_ERROR(objectStore_->RemoveAsyncWorkerOp(workerId, objKey, false),
-                         "remove async worker op in l2 cacahe failed, key: " + objKey);
-            continue;
-        }
-        if (beforeModify.type != itr->second.type
-            || beforeModify.deleteAllCopyMetaAzNames != itr->second.deleteAllCopyMetaAzNames) {
-            LOG_IF_ERROR(objectStore_->AddAsyncWorkerOp(workerId, itr->first, itr->second),
-                         "modify async worker op in l2 cacahe failed, key: " + itr->first);
-        }
-    }
-    return Status::OK();
-}
-
 Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &workerId,
                                                        const std::unordered_map<std::string, uint64_t> &objectVersions)
 {
@@ -1386,123 +1192,6 @@ void OCNotifyWorkerManager::AssignLocalWorker(object_cache::MasterWorkerOCServic
     masterAddr_ = masterAddr;
 }
 
-Status OCNotifyWorkerManager::NotifyMasterRemoveMeta(const HostPort &masterAddr,
-                                                     const std::unordered_map<std::string, int64_t> &objKeys,
-                                                     std::unordered_set<std::string> &failedObjs)
-{
-    bool isConnect = false;
-    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
-    CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
-    auto api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
-    RETURN_RUNTIME_ERROR_IF_NULL(api);
-    RemoveMetaReqPb req;
-    for (const auto &kv : objKeys) {
-        auto *newKv = req.add_id_with_version();
-        newKv->set_id(kv.first);
-        newKv->set_version(kv.second);
-    }
-    req.set_cause(RemoveMetaReqPb::OTHER_AZ_META_UPDATE);
-    req.set_address(masterAddr_.ToString());
-    req.set_timeout(notifyMasterRemoveMetaTimeOutMs_);
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RemoveMetaRspPb rsp;
-
-    auto convertRedirectInfo2NewReqFunc = [this, &objKeys](const RedirectMetaInfo &redirectMetaInfo,
-                                                           RemoveMetaReqPb &req,
-                                                           std::shared_ptr<MasterMasterOCApi> &api) {
-        req.Clear();
-        HostPort masterAddr;
-        RETURN_IF_NOT_OK(masterAddr.ParseString(redirectMetaInfo.redirect_meta_address()));
-        bool isConnect = false;
-        EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
-        CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
-        api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
-        RETURN_RUNTIME_ERROR_IF_NULL(api);
-        for (const auto &objKey : redirectMetaInfo.change_meta_ids()) {
-            auto *kv = req.add_id_with_version();
-            kv->set_id(objKey);
-            kv->set_version(objKeys.at(objKey));
-        }
-        req.set_cause(RemoveMetaReqPb::OTHER_AZ_META_UPDATE);
-        req.set_address(masterAddr_.ToString());
-        req.set_timeout(notifyMasterRemoveMetaTimeOutMs_);
-        return akSkManager_->GenerateSignature(req);
-    };
-
-    std::function<Status(std::shared_ptr<MasterMasterOCApi> && api, RemoveMetaReqPb && req, RemoveMetaRspPb & rsp)>
-        sendReqAndHandleRspExceptRedirctInfoFunc;
-    sendReqAndHandleRspExceptRedirctInfoFunc = [this, &masterAddr, &failedObjs, &convertRedirectInfo2NewReqFunc,
-                                                &objKeys, &sendReqAndHandleRspExceptRedirctInfoFunc](
-                                                   std::shared_ptr<MasterMasterOCApi> &&api, RemoveMetaReqPb &&req,
-                                                   RemoveMetaRspPb &rsp) -> Status {
-        RETURN_IF_NOT_OK(api->RemoveMeta(req, rsp));
-        failedObjs.insert(rsp.failed_ids().begin(), rsp.failed_ids().end());
-
-        DeleteAllCopyMetaReqPb deleteReq;
-        RemoveMetaReqPb retryReq;
-        for (const auto &objKey : rsp.outdated_ids()) {
-            int64_t version;
-            if (ocMetadataManager_->CheckIfUpdating(objKey, version)
-                || (ocMetadataManager_->GetObjectVersion(objKey, version) && version > objKeys.at(objKey))) {
-                LOG(INFO) << FormatString("The version of object[%s] has been updated, retry. Curr version: %lld",
-                                          objKey, version);
-                auto *kv = retryReq.add_id_with_version();
-                kv->set_id(objKey);
-                kv->set_version(version);
-                continue;
-            }
-            auto *id2Version = deleteReq.add_ids_with_version();
-            id2Version->set_id(objKey);
-            id2Version->set_version(objKeys.at(objKey));
-        }
-        INJECT_POINT("OCNotifyWorkerManager.NotifyMasterRemoveMeta.ProcessSlowly");
-        LOG_IF(INFO,
-               !rsp.outdated_ids().empty() || !deleteReq.object_keys().empty() || !retryReq.id_with_version().empty())
-            << "Outdated objs: " << VectorToString(rsp.outdated_ids())
-            << "; Objs need to be deleted locally: " << LogHelper::IgnoreSensitive(deleteReq)
-            << "; Objs need to be retried: " << LogHelper::IgnoreSensitive(retryReq);
-
-        if (!deleteReq.ids_with_version().empty()) {
-            deleteReq.set_address(masterAddr.ToString());
-            deleteReq.set_redirect(true);
-            deleteReq.set_need_forward_objs_without_meta(false);
-            DeleteAllCopyMetaRspPb deleteRsp;
-            ocMetadataManager_->DeleteAllCopyMeta(deleteReq, deleteRsp);
-            failedObjs.insert(deleteRsp.failed_object_keys().begin(), deleteRsp.failed_object_keys().end());
-            for (const auto &outdatedObj : deleteRsp.outdated_objs()) {
-                int64_t version;
-                if (!ocMetadataManager_->GetObjectVersion(outdatedObj, version)) {
-                    continue;
-                }
-                LOG(INFO) << FormatString("The version of object[%s] has been updated, retry. Curr version: %lld",
-                                          outdatedObj, version);
-                auto *kv = retryReq.add_id_with_version();
-                kv->set_id(outdatedObj);
-                kv->set_version(version);
-            }
-        }
-
-        if (!retryReq.id_with_version().empty()) {
-            retryReq.set_cause(RemoveMetaReqPb::OTHER_AZ_META_UPDATE);
-            retryReq.set_address(masterAddr_.ToString());
-            retryReq.set_timeout(notifyMasterRemoveMetaTimeOutMs_);
-            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(retryReq));
-            RemoveMetaRspPb rsp;
-            auto rc = MetadataRedirectHelper::RetryForRedirict<MasterMasterOCApi, RemoveMetaReqPb, RemoveMetaRspPb>(
-                std::move(api), std::move(retryReq), rsp, "info", sendReqAndHandleRspExceptRedirctInfoFunc,
-                convertRedirectInfo2NewReqFunc);
-            LOG_IF_ERROR(rc, "Retry remove meta failed");
-        }
-        return Status::OK();
-    };
-
-    auto rc = MetadataRedirectHelper::RetryForRedirict<MasterMasterOCApi, RemoveMetaReqPb, RemoveMetaRspPb>(
-        std::move(api), std::move(req), rsp, "info", sendReqAndHandleRspExceptRedirctInfoFunc,
-        convertRedirectInfo2NewReqFunc);
-    LOG_IF(INFO, !failedObjs.empty()) << "All failed objs: " << VectorToString(failedObjs);
-    return rc;
-}
-
 NotifyWorkerOp OCNotifyWorkerManager::ParseNotifyWorkerOpFromMigration(const ObjectAsyncOpDetailPb &pb)
 {
     NotifyWorkerOp op;
@@ -1526,45 +1215,5 @@ NotifyWorkerOp OCNotifyWorkerManager::ParseNotifyWorkerOpFromL2Cache(const std::
     return ParseNotifyWorkerOpFromMigration(pb);
 }
 
-void OCNotifyWorkerManager::UpdateRemoteMetaNotification(const std::string &objKey, int64_t version)
-{
-    LOG(INFO) << FormatString("Update Remote Meta Notification of obj[%s] to new version[%lld]", objKey, version);
-    std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
-    TbbNotifyWorkerOpTable::accessor accessor;
-    if (notifyWorkerOpTable_.find(accessor, "")) {
-        auto itr = accessor->second.find(objKey);
-        if (itr != accessor->second.end() && TESTFLAG(itr->second.type, NotifyWorkerOpType::REMOVE_META)) {
-            itr->second.removeMetaVersion = version;
-        }
-    }
-}
-
-Status OCNotifyWorkerManager::NotifyMasterDeleteAllCopyMeta(
-    const HostPort &masterAddr, const std::vector<std::string> &objKeys, std::unordered_set<std::string> &failedObjs,
-    std::unordered_set<std::string> &objsWithoutMeta,
-    const std::vector<std::pair<std::string, int64_t>> &objKeyWithVersion)
-{
-    bool isConnect = false;
-    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().NotifyAll(masterAddr, isConnect);
-    CHECK_FAIL_RETURN_STATUS(isConnect, K_RPC_UNAVAILABLE, "Chech connection failed: " + masterAddr.ToString());
-    auto api = MasterMasterOCApi::CreateMasterMasterOCApi(masterAddr, masterAddr_, akSkManager_);
-    RETURN_RUNTIME_ERROR_IF_NULL(api);
-    DeleteAllCopyMetaReqPb deleteReq;
-    *deleteReq.mutable_object_keys() = { objKeys.begin(), objKeys.end() };
-    deleteReq.set_address(masterAddr_.ToString());
-    deleteReq.set_redirect(true);
-    deleteReq.set_need_forward_objs_without_meta(false);
-    for (const auto &kv : objKeyWithVersion) {
-        auto *newKv = deleteReq.add_ids_with_version();
-        newKv->set_id(kv.first);
-        newKv->set_version(kv.second);
-    }
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(deleteReq));
-    DeleteAllCopyMetaRspPb deleteRsp;
-    RETURN_IF_NOT_OK(api->DeleteAllCopyMeta(deleteReq, deleteRsp));
-    failedObjs.insert(deleteRsp.failed_object_keys().begin(), deleteRsp.failed_object_keys().end());
-    objsWithoutMeta.insert(deleteRsp.objs_without_meta().begin(), deleteRsp.objs_without_meta().end());
-    return Status::OK();
-}
 }  // namespace master
 }  // namespace datasystem

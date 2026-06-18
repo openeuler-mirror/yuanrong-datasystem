@@ -350,7 +350,6 @@ message PublishMetaReqPb {
   ObjectMetaPb meta = 1;
   bytes address = 2;
   uint64 timeout = 3;
-  bool is_from_other_az = 4;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -365,7 +364,6 @@ message MetaChangeReqPb {
   string new_meta_addr = 1;
   string object_key = 2;
   uint64 timeout = 3;
-  bool is_from_other_az = 4;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

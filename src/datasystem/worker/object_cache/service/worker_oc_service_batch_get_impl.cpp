@@ -604,13 +604,6 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }
         HandleBatchSubResponsePart2(subRc, address, metaIter, objectKV, checkConnectStatus, tryGetFromElsewhere,
                                     needEvictObjs);
-        if (subRc.IsError() && tryGetFromElsewhere && !address.empty()) {
-            point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_OTHER_AZ);
-            HostPort hostAddr;
-            hostAddr.ParseString(address);
-            // Note that rc can change upon TryGetObjectFromOtherAZ.
-            TryGetObjectFromOtherAZ(*metaIter, hostAddr, objectKV, subRc);
-        }
         if (subRc.IsError() && tryGetFromElsewhere) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_L2);
             Timer timer;
@@ -719,10 +712,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
                                              "Create remote worker api failed.");
             std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
-            // If getting data from other AZ, then we leave 3/4 remain time to query from L2 cache in case getting
-            // data failed.
-            int64_t timeoutMs =
-                reqTimeoutDuration.CalcRealRemainingTime() / (etcdCM_->CheckIfOtherAzNodeConnected(hostAddr) ? 4 : 1);
+            int64_t timeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
             timeoutMs = !isMigrateData ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
             auto inflightGauge =

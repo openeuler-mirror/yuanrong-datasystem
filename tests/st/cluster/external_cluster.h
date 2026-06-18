@@ -76,10 +76,6 @@ public:
     // on for object cache, off for file cache
     bool isObjectCache;
 
-    // Store the map of worker and master, key is worker index and value is master index.
-    // When start workers with crossAZMap, master_address will set by the map.
-    std::map<uint32_t, uint32_t> crossAZMap;
-
     // Parameters for starting the worker
     // For example, "-page_size=102400 -shared_memory_size_mb=1024"
     std::string workerGflagParams;

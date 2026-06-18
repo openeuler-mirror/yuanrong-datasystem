@@ -28,7 +28,7 @@ namespace datasystem {
 namespace st {
 class KVClientCommon : virtual public OCClientCommon {
 public:
-    void InitTestEtcdInstance(std::vector<std::string> otherAzNames = {})
+    void InitTestEtcdInstance()
     {
         if (db_ != nullptr) {
             return;
@@ -47,10 +47,6 @@ public:
         DS_ASSERT_OK(db_->Init());
         (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
         (void)db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE));
-        for (const auto &otherAzName : otherAzNames) {
-            auto otherAzRingStr = "/" + otherAzName + ETCD_RING_PREFIX;
-            (void)db_->CreateTable(otherAzRingStr, otherAzRingStr);
-        }
     }
 protected:
     std::unique_ptr<EtcdStore> db_;
