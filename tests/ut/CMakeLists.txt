@@ -62,7 +62,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp$)
-
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_store_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
@@ -106,6 +106,10 @@ add_ds_ut_executable(ds_ut_object
 add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_executable(coordinator_store_perf_test
+        common/coordinator/coordinator_store_perf_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>
+        $<TARGET_OBJECTS:_ds_ut_common_obj>)
 
 
 target_link_libraries(ds_ut PRIVATE
@@ -133,6 +137,8 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_slot_client
         common_log
         common_util)
+target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
+
 
 
 
@@ -159,6 +165,7 @@ add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 
 add_ds_ut_executable(log_perf_ut
