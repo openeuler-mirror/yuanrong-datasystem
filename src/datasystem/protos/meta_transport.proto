@@ -37,8 +37,17 @@ message UrmaBondSegInfoPb{
   int32 dev_num = 3;
 }
 
+message UrmaRjettyPb {
+    bytes rjetty_blob = 1;
+}
+
+message UrmaSegCtxPb {
+    bytes seg_blob = 1;
+}
+
 message UrmaImportSegmentPb {
   UrmaSegPb seg = 1;
+  UrmaSegCtxPb seg_ctx = 2;
 }
 
 message UrmaRemoteAddrPb {
@@ -67,6 +76,7 @@ message UrmaHandshakeReqPb {
     repeated UrmaImportSegmentPb seg_infos = 6;
     string client_id = 7;
     string client_entity_id = 8;
+    UrmaRjettyPb rjetty_info = 9;
 }
 
 message UrmaHandshakeRspPb {

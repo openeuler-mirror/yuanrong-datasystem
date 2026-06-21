@@ -572,6 +572,20 @@ Status UrmaManager::GetOrCreateLocalJetty(const std::string &key, uint32_t &jett
     return Status::OK();
 }
 
+Status UrmaManager::GetLocalJetty(const std::string &key, std::shared_ptr<UrmaJetty> &jetty, JettyType jettyType)
+{
+    const std::string jettyCacheKey = BuildLocalJettyKey(key, jettyType);
+    TbbJettyMap::const_accessor accessor;
+    if (!localJettyMap_.find(accessor, jettyCacheKey) || accessor->second == nullptr) {
+        RETURN_STATUS(K_URMA_NEED_CONNECT, FormatString("Local jetty not found for %s", jettyCacheKey.c_str()));
+    }
+    if (!accessor->second->IsValid()) {
+        RETURN_STATUS(K_URMA_NEED_CONNECT, FormatString("Local jetty is invalid for %s", jettyCacheKey.c_str()));
+    }
+    jetty = accessor->second;
+    return Status::OK();
+}
+
 Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
                                  urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr)
 {
@@ -617,6 +631,19 @@ Status UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
         auto *segInfo = handshakeReq.add_seg_infos();
         auto segPb = segInfo->mutable_seg();
         UrmaSeg::ToProto(iter->second->Raw()->seg, *segPb);
+
+        urma_seg_t *segCtx = nullptr;
+        uint32_t segCtxSize = 0;
+        urma_status_t urmaStatus = ds_urma_get_seg_ctx(iter->second->Raw(), &segCtx, &segCtxSize);
+        if (urmaStatus == URMA_SUCCESS && segCtx != nullptr && segCtxSize > 0) {
+            segInfo->mutable_seg_ctx()->set_seg_blob(reinterpret_cast<const char *>(segCtx), segCtxSize);
+            ds_urma_put_seg_ctx(segCtx);
+            LOG(INFO) << "[URMA_CONNECT] Got delegated seg context, va=" << iter->second->Raw()->seg.ubva.va
+                      << ", length=" << segCtxSize;
+        } else {
+            LOG(WARNING) << "[URMA_CONNECT] Failed to get delegated seg context, va="
+                         << iter->second->Raw()->seg.ubva.va << ", status=" << urmaStatus;
+        }
         LOG(INFO) << "local seg info: " << UrmaSeg::ToString(iter->second->Raw()->seg);
     }
     return Status::OK();
@@ -631,6 +658,19 @@ Status UrmaManager::GetSegmentInfo(UrmaHandshakeRspPb &handshakeRsp)
         auto *segInfo = handshakeRsp.mutable_hand_shake()->add_seg_infos();
         auto segPb = segInfo->mutable_seg();
         UrmaSeg::ToProto(iter->second->Raw()->seg, *segPb);
+
+        urma_seg_t *segCtx = nullptr;
+        uint32_t segCtxSize = 0;
+        urma_status_t urmaStatus = ds_urma_get_seg_ctx(iter->second->Raw(), &segCtx, &segCtxSize);
+        if (urmaStatus == URMA_SUCCESS && segCtx != nullptr && segCtxSize > 0) {
+            segInfo->mutable_seg_ctx()->set_seg_blob(reinterpret_cast<const char *>(segCtx), segCtxSize);
+            ds_urma_put_seg_ctx(segCtx);
+            LOG(INFO) << "[URMA_CONNECT] Got delegated seg context (rsp), va=" << iter->second->Raw()->seg.ubva.va
+                      << ", length=" << segCtxSize;
+        } else {
+            LOG(WARNING) << "[URMA_CONNECT] Failed to get delegated seg context (rsp), va="
+                         << iter->second->Raw()->seg.ubva.va << ", status=" << urmaStatus;
+        }
         LOG(INFO) << "local seg info (rsp): " << UrmaSeg::ToString(iter->second->Raw()->seg);
     }
     return Status::OK();
@@ -1146,18 +1186,35 @@ Status UrmaManager::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique
                                       urma_jetty_t *localJetty)
 {
     LOG(INFO) << "Begin to import target jft.";
-    bondp_rjetty_t bondpRemoteJetty{};
-    urma_rjetty_t remoteJetty{};
-    RETURN_IF_NOT_OK(BuildRemoteJetty(remoteInfo, remoteJetty));
-    bondpRemoteJetty.base = remoteJetty;
-    bondpRemoteJetty.jetty = localJetty;
-    bondpRemoteJetty.base.flag.bs.has_drv_ext = 1;
     Timer timer;
     METRIC_TIMER(metrics::KvMetricId::URMA_IMPORT_JFR);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        UrmaTargetJetty::Import(urmaResource_->GetContext(), &(bondpRemoteJetty.base), urmaResource_->GetUrmaToken(),
-                                targetJetty),
-        FormatString("Failed to import target jetty, remoteInfo: %s", remoteInfo.ToString()));
+    if (!remoteInfo.rjettyBuf.empty()) {
+        if (remoteInfo.rjettyBuf.size() < sizeof(urma_rjetty_t)) {
+            RETURN_STATUS(K_RUNTIME_ERROR,
+                          FormatString("Invalid delegated rjetty length=%zu", remoteInfo.rjettyBuf.size()));
+        }
+        // Make a local mutable copy of the delegated blob. The UMDK import API takes a
+        // non-const urma_rjetty_t*, and we must not modify the caller's const object.
+        std::string localRjettyBuf = remoteInfo.rjettyBuf;
+        auto *rjetty = reinterpret_cast<urma_rjetty_t *>(localRjettyBuf.data());
+        rjetty->tp_type = URMA_CTP;
+        LOG(INFO) << "[URMA_CONNECT] Import target jetty using delegated context, length=" << localRjettyBuf.size();
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UrmaTargetJetty::Import(urmaResource_->GetContext(), rjetty, urmaResource_->GetUrmaToken(), targetJetty),
+            FormatString("Failed to import target jetty, remoteInfo: %s", remoteInfo.ToString()));
+    } else {
+        bondp_rjetty_t bondpRemoteJetty{};
+        urma_rjetty_t remoteJetty{};
+        RETURN_IF_NOT_OK(BuildRemoteJetty(remoteInfo, remoteJetty));
+        bondpRemoteJetty.base = remoteJetty;
+        bondpRemoteJetty.jetty = localJetty;
+        bondpRemoteJetty.base.flag.bs.has_drv_ext = 1;
+        LOG(INFO) << "[URMA_CONNECT] Import target jetty using legacy handshake";
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            UrmaTargetJetty::Import(urmaResource_->GetContext(), &(bondpRemoteJetty.base),
+                                    urmaResource_->GetUrmaToken(), targetJetty),
+            FormatString("Failed to import target jetty, remoteInfo: %s", remoteInfo.ToString()));
+    }
     LOG_IF(INFO, timer.ElapsedMilliSecond() > 1)
         << "[URMA_CONNECT] Import target jetty elapsed = " << timer.ElapsedMilliSecond() << "ms"
         << ", cpuid: " << sched_getcpu() << ", remoteInfo: " << remoteInfo.ToString();
@@ -1669,6 +1726,23 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
         // Always populate response with local Jetty ID for the reverse connection
         auto localInfo = localUrmaInfo_;
         localInfo.jfrId = localJettyId;
+
+        std::shared_ptr<UrmaJetty> localRecvJetty;
+        const std::string remoteConnectionId =
+            urmaInfo.clientId.empty() ? urmaInfo.localAddress.ToString() : urmaInfo.clientId;
+        RETURN_IF_NOT_OK(GetLocalJetty(remoteConnectionId, localRecvJetty, JettyType::RECV));
+        urma_rjetty_t *rjetty = nullptr;
+        uint32_t rjettyLen = 0;
+        urma_status_t urmaStatus = ds_urma_get_rjetty(localRecvJetty->Raw(), &rjetty, &rjettyLen);
+        if (urmaStatus == URMA_SUCCESS && rjetty != nullptr && rjettyLen > 0) {
+            localInfo.rjettyBuf.assign(reinterpret_cast<const char *>(rjetty), rjettyLen);
+            ds_urma_put_rjetty(rjetty);
+            LOG(INFO) << "[URMA_CONNECT] Got delegated rjetty context for response, length=" << rjettyLen;
+        } else {
+            LOG(WARNING) << "[URMA_CONNECT] Failed to get delegated rjetty context for response, status=" << urmaStatus
+                         << ", fallback to legacy handshake";
+        }
+
         localInfo.ToProto(*rsp.mutable_hand_shake());
         RETURN_IF_NOT_OK(GetSegmentInfo(rsp));
     }
