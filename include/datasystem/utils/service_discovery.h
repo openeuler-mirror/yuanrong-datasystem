@@ -84,9 +84,11 @@ public:
      * @param[out] workerIp
      * @param[out] workerPort
      * @param[out] isSameNode If non-null, set to true when the selected worker is on the same node.
+     * @param[out] isNoAvailableWorker If non-null, set to true when no ready worker can be selected.
      * @return Status of the call.
      */
-    Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr);
+    Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr,
+                        bool *isNoAvailableWorker = nullptr);
 
     /**
      * @brief Select a same-node worker address only.

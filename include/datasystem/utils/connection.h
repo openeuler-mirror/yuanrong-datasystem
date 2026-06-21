@@ -34,7 +34,7 @@ struct ConnectOptions {
 
     std::string host;
     int32_t port;
-    int32_t connectTimeoutMs = 60 * 1000;  // 60s
+    int32_t connectTimeoutMs = 9 * 1000;  // 9s
     int32_t requestTimeoutMs = 0;
     SensitiveValue token = "";
     std::string clientPublicKey = "";

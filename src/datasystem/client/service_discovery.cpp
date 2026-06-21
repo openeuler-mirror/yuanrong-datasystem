@@ -137,17 +137,21 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
     return Status::OK();
 }
 
-Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode)
+Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode,
+                                      bool *isNoAvailableWorker)
 {
     std::vector<std::string> sameHost;
     std::vector<std::string> other;
     RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
+    if (isNoAvailableWorker != nullptr) {
+        *isNoAvailableWorker = false;
+    }
 
     std::string pickedAddr;
     bool pickedSameNode = false;
     if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
         CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
-        CHECK_FAIL_RETURN_STATUS(!sameHost.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
+        CHECK_FAIL_RETURN_STATUS(!sameHost.empty(), K_TRY_AGAIN, "No available same-node worker is detected.");
         pickedAddr = PickRandomAddr(sameHost, randomData_.get());
         pickedSameNode = true;
     } else if (affinityPolicy_ == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !sameHost.empty()) {
@@ -156,7 +160,12 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bo
     } else {
         // RANDOM, or PREFERRED_SAME_NODE with no same-host worker: pick uniformly across both partitions.
         size_t total = sameHost.size() + other.size();
-        CHECK_FAIL_RETURN_STATUS(total > 0, K_RUNTIME_ERROR, "No available worker is detected.");
+        if (total == 0) {
+            if (isNoAvailableWorker != nullptr) {
+                *isNoAvailableWorker = true;
+            }
+            RETURN_STATUS(K_TRY_AGAIN, "No available worker is detected.");
+        }
         size_t idx = randomData_->GetRandomIndex(total);
         if (idx < sameHost.size()) {
             pickedAddr = sameHost[idx];

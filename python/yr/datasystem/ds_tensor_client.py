@@ -167,7 +167,7 @@ class DsTensorClient:
         host,
         port,
         device_id,
-        connect_timeout_ms=60000,
+        connect_timeout_ms=9000,
         client_public_key="",
         client_private_key="",
         server_public_key="",

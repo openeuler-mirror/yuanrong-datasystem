@@ -37,9 +37,9 @@ public class ConnectOptions {
 
     /**
      * Timeout for establishing a connection with a worker, and the default value is
-     * 60s.
+     * 9s.
      */
-    private int connectTimeoutMs = 60 * 1000;
+    private int connectTimeoutMs = 9 * 1000;
 
     /**
      * Specify a tenant's token for tenant authentication.

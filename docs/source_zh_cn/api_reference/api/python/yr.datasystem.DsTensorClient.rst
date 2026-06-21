@@ -1,7 +1,7 @@
 yr.datasystem.DsTensorClient
 =====================================
 
-.. py:class:: yr.datasystem.DsTensorClient(host, port, device_id, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", req_timeout_ms=0, enable_remote_h2d=False)
+.. py:class:: yr.datasystem.DsTensorClient(host, port, device_id, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", req_timeout_ms=0, enable_remote_h2d=False)
 
     异构对象客户端。
 
@@ -9,7 +9,7 @@ yr.datasystem.DsTensorClient
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
         - **port** (int) - 数据系统 Worker 的端口号。
         - **device_id** (int) - 客户端所在进程绑定的device id。
-        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``60000`` 。
+        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。
