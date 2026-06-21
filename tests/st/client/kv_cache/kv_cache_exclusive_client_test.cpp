@@ -19,7 +19,10 @@
  */
 
 #include "client/object_cache/oc_client_common.h"
+
 #include <atomic>
+
+#include "datasystem/common/inject/inject_point.h"
 
 namespace datasystem {
 namespace st {
@@ -34,6 +37,7 @@ public:
 
     void SetUp() override
     {
+        DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
         ExternalClusterTest::SetUp();
         InitTestKVClient(0, client1_, timeoutMs_, false, true);
     }
@@ -41,6 +45,7 @@ public:
     void TearDown() override
     {
         client1_.reset();
+        (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
         ExternalClusterTest::TearDown();
     }
 

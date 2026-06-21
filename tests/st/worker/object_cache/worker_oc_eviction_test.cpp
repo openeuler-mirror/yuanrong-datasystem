@@ -1251,6 +1251,18 @@ class EvictionManagerEndToEndTest : public OCClientCommon {
 public:
     std::vector<std::string> workerAddress_;
 
+    void SetUp() override
+    {
+        DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
+        ExternalClusterTest::TearDown();
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts)
     {
         opts.numWorkers = 2;

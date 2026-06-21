@@ -30,6 +30,7 @@
 #include <thread>
 
 #include "common.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
@@ -53,6 +54,18 @@ namespace st {
 
 class KVClientLogMonitorTest : public OCClientCommon {
 public:
+    void SetUp() override
+    {
+        DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
+        ExternalClusterTest::TearDown();
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = 1;
