@@ -331,6 +331,17 @@ urma_status_t ds_urma_unimport_jetty(urma_target_jetty_t *tjetty)
         "urma_unimport_jetty", kUrmaDlopenErrorStatus, tjetty);
 }
 
+urma_status_t ds_urma_get_rjetty(urma_jetty_t *jetty, urma_rjetty_t **rjetty, uint32_t *length)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_rjetty)>(
+        "urma_get_rjetty", kUrmaDlopenErrorStatus, jetty, rjetty, length);
+}
+
+void ds_urma_put_rjetty(urma_rjetty_t *rjetty)
+{
+    CallVoid<decltype(&ds_urma_put_rjetty)>("urma_put_rjetty", rjetty);
+}
+
 urma_status_t ds_urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr)
 {
     return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_post_jetty_send_wr)>(
@@ -342,6 +353,17 @@ urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, 
 {
     return static_cast<urma_target_seg_t *>(
         CallPtr<decltype(&ds_urma_import_seg)>("urma_import_seg", context, seg, token, flags, import_flag));
+}
+
+urma_status_t ds_urma_get_seg_ctx(urma_target_seg_t *tseg, urma_seg_t **seg, uint32_t *size)
+{
+    return CallRet<UrmaLibType::URMA, urma_status_t, decltype(&ds_urma_get_seg_ctx)>(
+        "urma_get_seg_ctx", kUrmaDlopenErrorStatus, tseg, seg, size);
+}
+
+void ds_urma_put_seg_ctx(urma_seg_t *seg)
+{
+    CallVoid<decltype(&ds_urma_put_seg_ctx)>("urma_put_seg_ctx", seg);
 }
 
 urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg)

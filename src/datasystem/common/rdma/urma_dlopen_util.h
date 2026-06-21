@@ -66,9 +66,13 @@ void ds_urma_ack_jfc(urma_jfc_t **ev_jfc, uint32_t *ack_cnt, int num);
 urma_target_jetty_t *ds_urma_import_jetty(urma_context_t *context, urma_rjetty_t *remote_jetty,
                                           urma_token_t *token);
 urma_status_t ds_urma_unimport_jetty(urma_target_jetty_t *tjetty);
+urma_status_t ds_urma_get_rjetty(urma_jetty_t *jetty, urma_rjetty_t **rjetty, uint32_t *length);
+void ds_urma_put_rjetty(urma_rjetty_t *rjetty);
 urma_status_t ds_urma_post_jetty_send_wr(urma_jetty_t *jetty, urma_jfs_wr_t *wr, urma_jfs_wr_t **bad_wr);
 urma_target_seg_t *ds_urma_import_seg(urma_context_t *context, urma_seg_t *seg, urma_token_t *token, int flags,
                                       urma_import_seg_flag_t import_flag);
+urma_status_t ds_urma_get_seg_ctx(urma_target_seg_t *tseg, urma_seg_t **seg, uint32_t *size);
+void ds_urma_put_seg_ctx(urma_seg_t *seg);
 urma_status_t ds_urma_unregister_seg(urma_target_seg_t *seg);
 urma_status_t ds_urma_unimport_seg(urma_target_seg_t *seg);
 urma_status_t ds_urma_get_async_event(urma_context_t *context, urma_async_event_t *event);
