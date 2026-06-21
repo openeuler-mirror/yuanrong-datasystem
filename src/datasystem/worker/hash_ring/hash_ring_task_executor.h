@@ -33,17 +33,16 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/kv_store.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/worker/cluster_manager/cluster_store.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 namespace datasystem {
 namespace worker {
-
 
 struct MigrateScaleDownInfo {
     std::string destWorker = "";
@@ -56,7 +55,7 @@ using ScaleDownMigrationTaskInfo = std::unordered_map<std::string, MigrateScaleD
 
 class HashRingTaskExecutor {
 public:
-    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid, EtcdStore *etcdStore);
+    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid, IClusterStore *clusterStore);
 
     ~HashRingTaskExecutor();
 
@@ -135,7 +134,6 @@ public:
     Status SubmitMigrateDataTask();
 
 private:
-
     /**
      * @brief Mark specific add_node_info finished in hash ring.
      * @param[in] destAddr Indicate which part of the add_node_info to be erased.
@@ -157,8 +155,7 @@ private:
      * @param[in] processedNodes Indicate which part of the del_node_info to be erased.
      * @return Hash ring after erasure.
      */
-    HashRingPb EraseFinishedDelNodeInfo(const HashRingPb &ring,
-                                        const std::vector<std::string> &processedNodes) const;
+    HashRingPb EraseFinishedDelNodeInfo(const HashRingPb &ring, const std::vector<std::string> &processedNodes) const;
 
     /**
      * @brief Check whether the ring has scale-down nodes that only need finalize cleanup.
@@ -305,7 +302,7 @@ private:
 
     const std::string workerAddr_;
     const std::string workerUuid_;
-    EtcdStore *etcdStore_;
+    IClusterStore *clusterStore_;
 
     std::atomic<bool> exitFlag_{ false };
     std::shared_timed_mutex mutex_;  // protect the following variables

@@ -50,8 +50,8 @@ static constexpr uint32_t MAX_SCALE_TASK_THREAD = 4;
 static const std::string HASH_RING_TASK_EXECUTOR = "HashRingTaskExecutor";
 
 HashRingTaskExecutor::HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
-                                           EtcdStore *etcdStore)
-    : workerAddr_(workerAddr), workerUuid_(workerUuid), etcdStore_(etcdStore)
+                                           IClusterStore *clusterStore)
+    : workerAddr_(workerAddr), workerUuid_(workerUuid), clusterStore_(clusterStore)
 {
     scaleThreadPool_ = std::make_unique<ThreadPool>(0, MAX_SCALE_TASK_THREAD, "HashRingScaleTask");
     HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().AddSubscriber(
@@ -179,7 +179,7 @@ Status HashRingTaskExecutor::SubmitMigrateDataTask()
             LOG_IF_ERROR(rc, "worker voluntary scale down failed");
             return;
         }
-        rc = etcdStore_->CAS(
+        rc = clusterStore_->CAS(
             ETCD_RING_PREFIX, "",
             [&](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb ring;
@@ -265,7 +265,7 @@ Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &newNode,
 {
     VLOG(1) << "mark add_node_info finished to etcd: ";
     INJECT_POINT("hashring.finishaddnodeinfo");
-    return etcdStore_->CAS(
+    return clusterStore_->CAS(
         ETCD_RING_PREFIX, "", [&](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
             HashRingPb ring;
             if (!ring.ParseFromString(oldValue)) {
@@ -327,7 +327,7 @@ void HashRingTaskExecutor::ClearFinishedScaleDownNodes(const std::vector<std::st
 {
     LOG(INFO) << "remove del_node_info range from etcd: ";
     RetryHashRingTaskUntil([this, &processedNodes]() {
-        auto status = etcdStore_->CAS(
+        auto status = clusterStore_->CAS(
             ETCD_RING_PREFIX, "",
             [this, &processedNodes](const std::string &oldValue, std::unique_ptr<std::string> &newValue,
                                     bool & /* retry */) {
@@ -613,7 +613,7 @@ void HashRingTaskExecutor::SubmitScaleDownMigrateTask(
                                                                   recoverDbName, info.ranges, false),
             "scale down migrate task failed");
         RetryHashRingTaskUntil([this, &func]() {
-            auto status = etcdStore_->CAS(ETCD_RING_PREFIX, "", func);
+            auto status = clusterStore_->CAS(ETCD_RING_PREFIX, "", func);
             HASH_RING_LOG_IF_ERROR(status, "Mark failed.");
             return status;
         });

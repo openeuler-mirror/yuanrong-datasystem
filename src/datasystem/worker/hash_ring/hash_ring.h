@@ -32,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/kv_store.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/net_util.h"
@@ -43,6 +42,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
+#include "datasystem/worker/cluster_manager/cluster_store.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
 
 namespace datasystem {
@@ -54,7 +54,7 @@ public:
      * @param[in] workerId The worker uuid or ip address and port
      *
      */
-    explicit HashRing(std::string workerId, EtcdStore *etcdStore);
+    explicit HashRing(std::string workerId, IClusterStore *clusterStore);
 
     ~HashRing();
 
@@ -737,7 +737,7 @@ protected:
     const std::string MASTER_ADDRESS_KEY = "master_address";
     const std::string workerAddr_;
     std::string workerUuid_;
-    EtcdStore *etcdStore_;
+    IClusterStore *clusterStore_;
     std::atomic<HashState> state_;
     bool enableDistributedMaster_;
     std::atomic<StartUpState> startUpState_{ StartUpState::UNDETERMINED };

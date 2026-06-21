@@ -554,6 +554,7 @@ private:
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterManagerStore_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };

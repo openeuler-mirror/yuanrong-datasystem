@@ -884,8 +884,7 @@ Status WorkerOCServer::Init()
     builder_.SetCredential(cred);
 
     // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()),
-                                     "Failed to configure HCCS worker IP");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
 
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
@@ -936,9 +935,10 @@ Status WorkerOCServer::Init()
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
     etcdStore_->SetUpdateClusterInfoInRocksDbHandler(
         std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
+    clusterManagerStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, etcdStore_.get(), akSkManager_);
+    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 

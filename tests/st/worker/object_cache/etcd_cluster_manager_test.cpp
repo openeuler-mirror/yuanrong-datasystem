@@ -85,8 +85,9 @@ protected:
             workerIds_[i] = addr.ToString();
             etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
             DS_ASSERT_OK(etcdStores_.back()->Init());
-            etcdCMs_.emplace_back(
-                std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_.back().get(), nullptr, pqSize));
+            clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
+            etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+                                                                       nullptr, pqSize));
             ClusterInfo clusterInfo;
             DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
             DS_ASSERT_OK(etcdCMs_.back()->Init(clusterInfo));
@@ -97,6 +98,9 @@ protected:
     void ShutDownAllClusterManagers()
     {
         for (auto &a : etcdCMs_) {
+            a.reset();
+        }
+        for (auto &a : clusterStores_) {
             a.reset();
         }
         for (auto &a : etcdStores_) {
@@ -112,7 +116,9 @@ protected:
                 addr.ParseString("127.0.0.1:" + std::to_string(i));
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
-                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_[i].get(), nullptr);
+                clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
+                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[i].get(),
+                                                                   nullptr);
                 ClusterInfo clusterInfo;
                 DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
                 DS_ASSERT_OK(etcdCMs_[i]->Init(clusterInfo));
@@ -125,13 +131,16 @@ protected:
     {
         for (size_t i : idxs) {
             if (i < etcdCMs_.size()) {
-                etcdStores_[i].reset();
                 etcdCMs_[i].reset();
+                clusterStores_[i].reset();
+                etcdStores_[i].reset();
                 HostPort addr;
                 addr.ParseString("127.0.0.1:" + std::to_string(i));
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
-                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_[i].get(), nullptr);
+                clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
+                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[i].get(),
+                                                                   nullptr);
                 ClusterInfo clusterInfo;
                 DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
                 DS_ASSERT_OK(etcdCMs_[i]->Init(clusterInfo));
@@ -143,6 +152,7 @@ protected:
     std::unique_ptr<EtcdStore> db_;
     std::vector<std::string> workerIds_;
     std::vector<std::unique_ptr<EtcdStore>> etcdStores_;
+    std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
     std::vector<std::unique_ptr<EtcdClusterManager>> etcdCMs_;
 };
 

@@ -4,6 +4,7 @@ add_subdirectory(stream_cache)
 add_subdirectory(hash_ring)
 add_subdirectory(client_manager)
 add_subdirectory(cluster_manager)
+add_subdirectory(coordinator)
 
 # Set source files
 set(WORKER_SRCS

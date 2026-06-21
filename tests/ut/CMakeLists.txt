@@ -14,6 +14,7 @@ set(DS_UT_DEPEND_LIBS
         slot_recovery_protos
         common_etcd
         common_log_proto
+        common_coordinator_store
         common_log
         common_metrics
         common_buffer
@@ -53,8 +54,9 @@ set(BIN_PATH_LIST LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}")
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/device/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/binmock/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
-list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\\.cpp$)
-list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp$)
+
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/object_cache/.*)
@@ -94,6 +96,7 @@ add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
+
 target_link_libraries(ds_ut PRIVATE ${DS_UT_DEPEND_LIBS})
 target_link_libraries(ds_ut_stream PRIVATE ${DS_UT_DEPEND_LIBS} worker_stream_cache datasystem_worker_static)
 target_link_libraries(ds_ut_object PRIVATE ${DS_UT_DEPEND_LIBS})
@@ -105,6 +108,8 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_slot_client
         common_log
         common_util)
+
+
 
 target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
@@ -129,6 +134,7 @@ add_datasystem_test(ds_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
 
 add_ds_ut_executable(log_perf_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/log/log_performance_test.cpp"

@@ -375,7 +375,8 @@ protected:
         eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, workerId, workerId);
         worker_ = std::make_unique<WorkerOCServiceImpl>(workerId, workerId, nullptr, nullptr, eviction_, nullptr,
                                                         etcdStore_.get());
-        cm_ = std::make_unique<EtcdClusterManager>(workerId, workerId, etcdStore_.get(), nullptr);
+        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        cm_ = std::make_unique<EtcdClusterManager>(workerId, workerId, clusterStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
         DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
@@ -394,6 +395,7 @@ protected:
     std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> eviction_;
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterStore_;
     std::shared_ptr<ThreadPool> memCpyThreadPool_;
 };
 

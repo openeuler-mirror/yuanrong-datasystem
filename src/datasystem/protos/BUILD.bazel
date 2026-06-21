@@ -145,6 +145,14 @@ zmq_cc_proto_library(
     deps = [":generic_service_cc_proto"],
 )
 
+zmq_cc_proto_library(
+    name = "coordinator_zmq_cc_proto",
+    extra_protos = [],
+    proto = "coordinator.proto",
+    proto_root = ZMQ_PROTO_ROOT,
+    deps = [":coordinator_cc_proto"],
+)
+
 proto_library(
     name = "master_object_proto",
     srcs = ["master_object.proto"],
@@ -194,6 +202,19 @@ proto_library(
 cc_proto_library(
     name = "hash_ring_cc_proto",
     deps = [":hash_ring_proto"],
+)
+
+proto_library(
+    name = "coordinator_proto",
+    srcs = [
+        "coordinator.proto",
+    ],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "coordinator_cc_proto",
+    deps = [":coordinator_proto"],
 )
 
 proto_library(
