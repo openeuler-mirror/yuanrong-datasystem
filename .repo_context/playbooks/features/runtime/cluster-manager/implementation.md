@@ -42,7 +42,7 @@
   - changing `ClusterNode` states or `KeepAliveValue` lifecycle tags;
   - changing worker startup/shutdown flow around `EtcdClusterManager`;
   - changing object/stream metadata or slot recovery subscribers to cluster events;
-  - changing route helpers that use hash ring, cluster-node readiness, or read-ring state.
+  - changing route helpers that use hash ring or cluster-node readiness.
 - Do not use when:
   - changing only ETCD RPC internals with no lifecycle behavior; use ETCD metadata playbook.
   - changing only hash-ring range calculation; use hash-ring playbook.
@@ -69,7 +69,7 @@
   - `hash_ring_event.h`
 - Required assumptions to verify before coding:
   - whether the worker is centralized or distributed master;
-  - whether the change affects local AZ, other AZ, or both;
+  - whether the change affects local cluster routing or only lifecycle bookkeeping;
   - whether ETCD available and ETCD-down startup paths differ;
   - whether a node can be in a mismatched node-table/hash-ring state;
   - which event subscribers observe the change.
@@ -89,7 +89,7 @@
 ## Source Verification Checklist
 
 - [ ] confirm which event type triggers the path: ring, cluster, replica, fake node, or watch compensation
-- [ ] confirm local vs other-AZ dispatch
+- [ ] confirm local ring and cluster-event dispatch
 - [ ] confirm cluster-node state before and after the handler
 - [ ] confirm hash-ring state before relying on route or failed-worker behavior
 - [ ] confirm object/stream/replica/slot subscriber side effects
@@ -100,7 +100,7 @@
 ## Implementation Plan
 
 1. Classify the change as startup, event dispatch, node addition, node deletion, restart, voluntary exit, routing, fake repair, or health.
-2. Trace both local-AZ and other-AZ paths if the touched key comes from ETCD watch.
+2. Trace local paths if the touched key comes from ETCD watch.
 3. Trace both node-table and hash-ring state transitions.
 4. Trace event subscribers and ensure changed arguments remain compatible.
 5. Add targeted tests for state-machine behavior and system tests when ETCD/watch/hash-ring timing changes.
@@ -119,7 +119,7 @@
   - `FAKE_NODE_EVENT_VALUE` behavior;
   - `HandleExitingNodeRemoveEvent`;
   - background utility loop cadence and extra ETCD/hash-ring writes;
-  - route behavior for hash-based key routing across AZ.
+  - route behavior for hash-based key in the local cluster.
 - Must verify in source before claiming:
   - exact subscriber behavior for object-cache, stream-cache, and slot-recovery;
   - whether ETCD-down startup path is covered;
@@ -141,7 +141,6 @@
   - passive scale-down during scale-up;
   - voluntary scale-down with `exiting`;
   - fake node table completion after full-cluster restart;
-  - other-AZ ring and cluster event handling.
 
 ## Review Checklist
 

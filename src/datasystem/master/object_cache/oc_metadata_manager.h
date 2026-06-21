@@ -70,11 +70,10 @@ class WorkerWorkerOCServiceImpl;
 namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
-    SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address, bool isFromOtherAz)
+    SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
         : reqId_(std::move(reqId)),
           objects_(std::move(objects)),
           address_(std::move(address)),
-          isFromOtherAz_(isFromOtherAz),
           timer_(nullptr)
     {
     }
@@ -84,7 +83,6 @@ struct SubscribeMeta {
     std::list<std::string> objects_;
     // the subscribe rpc address
     std::string address_;
-    bool isFromOtherAz_;
     // The timer_ indicates timeout event, it needs to be canceled if the timeout event is returned in advance.
     std::unique_ptr<TimerQueue::TimerImpl> timer_;
 };
@@ -478,13 +476,6 @@ public:
      * @return Status of the call.
      */
     Status ProcessWorkerTimeout(const std::string &workerAddr, bool changePrimaryCopy, bool removeFailWorkerMetaData);
-
-    /**
-     * @brief Process other az worker dead event.
-     * @param[in] workerAddr The dead worker.
-     * @return Status of the call.
-     */
-    Status ProcessOtherAzWorkerDead(const std::string &workerAddr);
 
     /**
      * @brief Processing After the Worker Restart.
@@ -1198,12 +1189,6 @@ public:
                                TbbMetaTable::accessor &accessor, std::string &primaryCopy);
 
     /**
-     * @brief Notify cross-az deletion
-     * @param[in] objsNeedAsyncNotify The objs grouping by <objectKey, azNames> that need to notify
-     */
-    void AsyncNotifyCrossAzDelete(const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify);
-
-    /**
      * @brief Get object version.
      * @param[in] objectKey Object key.
      * @param[out] version The version of this object.
@@ -1747,77 +1732,9 @@ private:
                                             std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**
-     * @brief Check whether meta is updating.
-     * @param[in] objKey The object key.
-     * @param[out] version The updating meta version.
-     * @return T/F
-     */
-    bool CheckIfUpdating(const std::string &objKey, int64_t &version);
-
-    /**
      * @brief Start meta monitor thread.
      */
     void StartMetaMonitor();
-
-    /**
-     * @brief Notify nodes in other clusters to delete the metadata of an object.
-     * Note: Hash type keys will care about this.
-     * @param[in] objectKey The object key.
-     * @param[in] version The new meta's version.
-     * @param[in] type write type.
-     * @return Status of the call.
-     */
-    Status NotifyOtherAzNodeRemoveMeta(const std::string &objectKey, int64_t version, ObjectMetaStore::WriteType type);
-
-    /**
-     * @brief Process remove meta notification from other az.
-     * @param[in] request The rpc request.
-     * @param[out] response The rpc response.
-     */
-    void ProcessRemoveMetaNotifyFromOtherAz(const RemoveMetaReqPb &request, RemoveMetaRspPb &response);
-
-    /**
-     * @brief Mark meta is updating and update remove meta notification
-     * @param[in] objectKey The object key.
-     * @param[in] version The meta version.
-     * @param[out] raiiP The tmp lock cleaner.
-     */
-    void MarkUpdatingAndUpdateRemoveMetaNotification(const std::string &objectKey, int64_t version, RaiiPlus &raiiP);
-
-    /**
-     * @brief Forward delete all copy meta request to other az.
-     * @param[in] objsNeedTryInOtherAz The object key.
-     * @param[out] delMediator The object delete mediator to record delete state.
-     */
-    void ForwardDeleteAllCopyMeta2OtherAz(std::unordered_set<std::string> &&objsNeedTryInOtherAz,
-                                          DeleteObjectMediator &deleteMediator);
-
-    /**
-     * @brief Process hash objs without meta when delete all copy meta.
-     * @param[in] request DeleteAllCopyMeta request.
-     * @param[in] hashObjsWithoutMeta The object key.
-     * @param[out] response DeleteAllCopyMeta response.
-     * @param[out] delMediator The object delete mediator to record delete state.
-     */
-    void ProcessHashObjsWithoutMetaWhenDeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &request,
-                                                         std::unordered_set<std::string> &&hashObjsWithoutMeta,
-                                                         DeleteAllCopyMetaRspPb &response,
-                                                         DeleteObjectMediator &deleteMediator);
-
-    /**
-     * @brief Process hash objs without meta when delete all copy meta.
-     * @param[in] otherAZName The other AZ name.
-     * @param[in] objKeysGrpByMaster The object key grouped by master.
-     * @param[out] objsNeedTryInOtherAz The objects needed to be retried in other az.
-     * @param[out] objsNeedAsyncNotify Objects need to be added to a queue that notifies other nodes asynchronously.
-     * @param[out] delMediator The object delete mediator to record delete state.
-     */
-    void ProcessForwardDeleteAllCopyMetaInCurrAz(
-        const std::string &otherAZName,
-        const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-        std::unordered_set<std::string> &objsNeedTryInOtherAz,
-        std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify,
-        DeleteObjectMediator &deleteMediator);
 
     bool IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address);
 
@@ -1878,11 +1795,6 @@ private:
     std::shared_mutex isDeletingObjMutex_;
     // Record objects id deleting.
     std::unordered_set<ImmutableString> isDeletingObjs_;
-
-    // Protects updatingObjsTable_
-    std::shared_timed_mutex updatingObjsTableMutex_;
-    // <objKey, version>. Record the object whose metadata is being updated
-    std::unordered_map<ImmutableString, int32_t> updatingObjsTable_;
 
     std::atomic<bool> initialized_{ false };
     std::string eventName_;

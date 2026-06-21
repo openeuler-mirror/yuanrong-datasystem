@@ -819,15 +819,6 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | distributed_disk_compact_interval_s | uint32 | `3600` | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
 | enable_cloud_service_token_rotation | bool | `false` | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
-#### 多集群相关配置
-注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[FAQ](../FAQ/FAQ.md)
-
-| 配置项 | 类型 | 默认值 | 描述 |
-|-----|------|---------|-------------|
-| other_cluster_names | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
-| cross_cluster_get_data_from_worker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
-| cross_cluster_get_meta_from_worker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
-
 #### 元数据相关配置
 
 | 配置项 | 类型 | 默认值 | 描述 |

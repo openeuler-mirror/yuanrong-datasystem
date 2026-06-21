@@ -334,19 +334,6 @@ Status MasterOCServiceImpl::RemoveMetaImpl(const RemoveMetaReqPb &req, RemoveMet
     return status;
 }
 
-void MasterOCServiceImpl::AsyncNotifyCrossAzDelete(
-    const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify)
-{
-    masterOperationTimeCost.Clear();
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    auto status = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
-    if (status.IsError()) {
-        LOG_IF_ERROR(status, "GetOcMetadataManager failed");
-        return;
-    }
-    ocMetadataManager->AsyncNotifyCrossAzDelete(objsNeedAsyncNotify);
-}
-
 Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRspPb &rsp)
 {
     masterOperationTimeCost.Clear();

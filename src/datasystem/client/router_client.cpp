@@ -67,7 +67,7 @@ Status RouterClient::Init()
     int64_t ringRevision{};
     RETURN_IF_NOT_OK(SetupInitialWorkers(nodeRevision, ringRevision));
     RETURN_IF_NOT_OK(etcdStore_->WatchEvents(
-        { { ETCD_CLUSTER_TABLE, "", false, nodeRevision }, { ETCD_RING_PREFIX, "", false, ringRevision } }));
+        { { ETCD_CLUSTER_TABLE, "", nodeRevision }, { ETCD_RING_PREFIX, "", ringRevision } }));
     return Status::OK();
 }
  

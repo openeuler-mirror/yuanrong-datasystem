@@ -291,9 +291,6 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     mediator.SetObjKey2Version(std::move(expiredObjMap));
     ocMetadataManager_->FindNeedDeleteIds(mediator);
 
-    std::unordered_set<std::string> hashObjsWithoutMeta = mediator.GetHashObjsWithoutMeta();
-    ocMetadataManager_->ForwardDeleteAllCopyMeta2OtherAz(std::move(hashObjsWithoutMeta), mediator);
-
     ocMetadataManager_->NotifyDeleteAndClearMeta(mediator, true);
     if (mediator.GetStatus().IsError()) {
         LOG(ERROR) << FormatString("ExpiredObjectManager failed with status:%s", mediator.GetStatus().ToString());

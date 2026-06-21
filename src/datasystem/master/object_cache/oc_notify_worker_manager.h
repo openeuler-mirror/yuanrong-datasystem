@@ -107,11 +107,10 @@ public:
      * @param[in] objectKey object key parameters.
      * @param[in] objectMeta The created object meta.
      * @param[in] subAddress Address of the subscriber.
-     * @param[in] isFromOtherAz Specifies whether subscription requests are from other AZs.
      * @return Status of the call.
      */
     Status NotifySubscribeMeta(const std::string &objectKey, const ObjectMeta &objectMeta,
-                               const std::string &subAddress, bool isFromOtherAz, uint64_t &subTimeoutMs);
+                               const std::string &subAddress, uint64_t &subTimeoutMs);
 
     /**
      * @brief clear data without meta.
@@ -168,11 +167,10 @@ public:
      * @param[in] workerAddr Subscribe worker address
      * @param[in] sourceAddr New meta address
      * @param[in] timeout The subscribe timeout
-     * @param[in] isFromOtherAz Specifies whether subscription requests are from other AZs.
      * @return Status of the call
      */
     Status MetaChange(const std::string &objectKey, const std::string &workerAddr, const std::string &sourceAddr,
-                      const uint64_t &timeout, bool isFromOtherAz);
+                      const uint64_t &timeout);
 
     /**
      * @brief Set the faulty worker.
@@ -351,36 +349,6 @@ public:
     static NotifyWorkerOp ParseNotifyWorkerOpFromMigration(const ObjectAsyncOpDetailPb &pb);
 
     /**
-     * @brief Notify master remove meta.
-     * @param[in] masterAddr The dest master address.
-     * @param[in] objKeys The object key.
-     * @param[out] failedObjs Failed object keys.
-     * @return Status of the call.
-     */
-    Status NotifyMasterRemoveMeta(const HostPort &masterAddr, const std::unordered_map<std::string, int64_t> &objKeys,
-                                  std::unordered_set<std::string> &failedObjs);
-
-    /**
-     * @brief When the local meta version is updated, the version of the remove meta notification needs to be updated.
-     * @param[in] objKeys The object key.
-     * @param[in] version The new meta version.
-     */
-    void UpdateRemoteMetaNotification(const std::string &objKey, int64_t version);
-
-    /**
-     * @brief Notify master delete all copy meta.
-     * @param[in] masterAddr The dest master address.
-     * @param[in] objKeys The object key.
-     * @param[out] failedObjs Failed object keys.
-     * @param[out] objsWithoutMeta If the target node has no metadata, record it here.
-     * @return Status of the call.
-     */
-    Status NotifyMasterDeleteAllCopyMeta(const HostPort &masterAddr, const std::vector<std::string> &objKeys,
-                                         std::unordered_set<std::string> &failedObjs,
-                                         std::unordered_set<std::string> &objsWithoutMeta,
-                                         const std::vector<std::pair<std::string, int64_t>> &objKeyWithVersion = {});
-
-    /**
      * @brief Process changes to the primary copy.
      * @param[in] input Primary copy to be changed.
      * @param[in] ifvoluntaryScaleDown Judge whether the worker is voluntary scale down,
@@ -421,11 +389,6 @@ private:
      * @return Status of the call.
      */
     Status FillUpdateObjectInfoPb(const std::string &objectKey, UpdateObjectInfoPb *objectInfoPb);
-
-    /**
-     * @brief Process objs without target node. The request to notify master matches this situation.
-     */
-    void ProcessObjsWithoutTargetNode();
 
     /**
      * @brief Process async notify operation.
@@ -515,33 +478,11 @@ private:
     }
 
     /**
-     * @brief Process objs need remove meta.
-     * @param[in] objsNeedRemoveMeta The object key.
-     */
-    void ProcessObjsNeedRemoveMeta(const std::unordered_map<std::string, NotifyWorkerOp> &objsNeedRemoveMeta);
-
-    /**
-     * @brief Process objs need delete all copy meta.
-     * @param[in] objsNeedRemoveMeta The object key.
-     */
-    void ProcessObjsNeedDeleteAllCopyMeta(
-        const std::unordered_map<std::string, NotifyWorkerOp> &objsNeedDeleteAllCopyMeta);
-
-    /**
      * @brief Get WriteType of object.
      * @param[in] objKey Object key.
      * @return The WriteType of object.
      */
     ObjectMetaStore::WriteType GetWriteType(const std::string &objKey);
-
-    /**
-     * @brief Remove async worker op.
-     * @param[in] objectKeys <objectKey, <azNames>>.
-     * @param[in] op Async notify op type.
-     * @return Status of call.
-     */
-    Status RemoveNoTargetAsyncWorkerOp(
-        const std::unordered_map<std::string, std::unordered_set<std::string>> &objectKeys, NotifyWorkerOpType op);
 
     const size_t minDeleteThreadSize = 1;
     const size_t maxDeleteThreadSize = 8;

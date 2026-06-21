@@ -140,8 +140,6 @@ DS_DECLARE_string(worker_address);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(etcd_address);
-DS_DECLARE_bool(cross_cluster_get_data_from_worker);
-DS_DECLARE_bool(cross_cluster_get_meta_from_worker);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(memory_alignment);
 DS_DECLARE_bool(enable_metadata_recovery);
@@ -690,7 +688,7 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
 
 void WorkerOCServiceImpl::FindObjectKeyNotInRsp(std::vector<master::QueryMetaInfoPb> &queryMetas,
                                                 std::vector<std::string> &currentIds,
-                                                std::vector<std::string> &objectKeysMayInOtherAz)
+                                                std::vector<std::string> &objectKeysNotInRsp)
 {
     std::set<std::string> objectKeysReceivedMeta;
     for (auto &queryMeta : queryMetas) {
@@ -699,7 +697,7 @@ void WorkerOCServiceImpl::FindObjectKeyNotInRsp(std::vector<master::QueryMetaInf
     for (auto &objKey : currentIds) {
         if (objectKeysReceivedMeta.find(objKey) == objectKeysReceivedMeta.end()) {
             VLOG(1) << "objKey " << objKey << " not in rsp";
-            objectKeysMayInOtherAz.emplace_back(std::move(objKey));
+            objectKeysNotInRsp.emplace_back(std::move(objKey));
         }
     }
 }
@@ -1052,7 +1050,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
 {
     int hashWorkerNum = 0;
-    RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum, true));
+    RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum));
     if ((hashWorkerNum >= 0 && hashWorkerNum == numRecon_) || (hashWorkerNum < 0 && numRecon_ == 1)) {
         LOG(INFO) << "Reconciliation with all masters is done.";
         RETURN_IF_NOT_OK(CheckWaitNodeTableComplete());
@@ -1948,7 +1946,7 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
 {
     static const int64_t MAX_WAIT_TIME_SEC = 60;  // 60s
     int hashWorkerNum = 0;
-    RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum, true));
+    RETURN_IF_NOT_OK(etcdCM_->GetHashRingWorkerNum(hashWorkerNum));
     // no need to set health or not ready to set health
     if (setHealthFile_) {
         finishReason = "health file has already been set";

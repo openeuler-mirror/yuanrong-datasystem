@@ -14,7 +14,6 @@
   - `src/datasystem/worker/hash_ring/hash_ring_allocator.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring_task_executor.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring_health_check.cpp`
-  - `src/datasystem/worker/hash_ring/read_hash_ring.cpp`
   - `src/datasystem/protos/hash_ring.proto`
 - Last verified against source:
   - `2026-05-08`
@@ -31,9 +30,9 @@
 - Why this design document exists:
   - capture the current architecture and invariants of the ETCD-backed hash ring so future changes can be reviewed against real lifecycle behavior.
 - What problem this module solves:
-  - distributed-master metadata routing and topology change coordination across worker startup, scale-up, scale-down, failure, restart, and cross-AZ routing.
+  - distributed-master metadata routing and topology change coordination across worker startup, scale-up, scale-down, failure, and restart.
 - Who or what depends on this module:
-  - `EtcdClusterManager`, object-cache and stream-cache metadata managers, local `MetadataManagerHolder`, worker object-cache service, client redirect behavior, and multi-AZ route lookup.
+  - `EtcdClusterManager`, object-cache and stream-cache metadata managers, local `MetadataManagerHolder`, worker object-cache service, and client redirect behavior.
 
 ## Goals
 
@@ -42,7 +41,6 @@
 - Serialize scale-up and scale-down migrations so metadata and data cleanup can complete before a worker becomes active or disappears.
 - Allow passive deletion of failed workers when `auto_del_dead_node=true`.
 - Allow voluntary scale-down to migrate metadata and data before worker exit.
-- Support read-only routing against other AZ hash rings.
 
 ## Non-Goals
 
@@ -58,10 +56,9 @@
   - `HashRingAllocator` is a pure-ish token and range-change algorithm helper over `HashRingPb`.
   - `HashRingTaskExecutor` turns `add_node_info` and `del_node_info` into asynchronous migration/recovery/cleanup work.
   - `HashRingHealthCheck` periodically retries stuck tasks and can repair selected abnormal protobuf states.
-  - `ReadHashRing` is a protected `HashRing` subclass for read-only other-AZ rings.
   - `hash_ring_tools` maintains worker UUID/address mapping helpers and JSON log formatting.
 - Key persistent state:
-  - serialized `HashRingPb` under `ETCD_RING_PREFIX` (`/datasystem/ring`) and, for multi-AZ, prefixed AZ ring paths.
+  - serialized `HashRingPb` under `ETCD_RING_PREFIX` (`/datasystem/ring`).
 - Key in-memory state:
   - `ringInfo_`, `tokenMap_`, `workerUuidHashMap_`, `workerUuid2AddrMap_`, `workerAddr2UuidMap_`, `relatedWorkerMap_`, `hashRange_`,
     atomic state flags, and async task IDs.
@@ -74,7 +71,6 @@
 | `HashRingAllocator` | token generation, add/remove range calculation | `hash_ring_allocator.*` | default four virtual nodes per worker |
 | `HashRingTaskExecutor` | async scale-up/scale-down/voluntary migration work | `hash_ring_task_executor.*` | uses `HashRingEvent` subscribers and retries CAS marks |
 | `HashRingHealthCheck` | stuck-state detection and optional self-healing | `hash_ring_health_check.*` | timing based on `node_dead_timeout_s` and `add_node_wait_time_s` |
-| `ReadHashRing` | other-AZ read-side ring snapshot and route helper | `read_hash_ring.*` | updates from watch events without writing ring state |
 | `hash_ring_tools` | ring map derivation and JSON logging | `hash_ring_tools.*` | derives worker UUID/address maps from `HashRingPb.workers` |
 | `HashRingPb` | persisted topology and task schema | `src/datasystem/protos/hash_ring.proto` | compatibility-sensitive |
 
@@ -173,7 +169,7 @@ Failure-sensitive steps:
   - hot path for initialization, add, remove, voluntary scale-down, task completion, self-healing, and update-map cleanup.
   - failure impact: workers may keep stale local maps, restoration waits for health checks, and CAS loops can retry.
 - `EtcdClusterManager`:
-  - supplies watch events, failed-worker sets, DB primary location queries, cross-AZ rings, and route fallback.
+  - supplies watch events, failed-worker sets, DB primary location queries, and route fallback.
   - failure impact: ring may not receive enough evidence to add/delete workers.
 - Metadata managers:
   - implement the actual object/stream metadata movement.

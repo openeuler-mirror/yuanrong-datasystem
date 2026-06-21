@@ -118,7 +118,7 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         // 2. Submit the scale-up task first, and then process the put event of the clusterNodeTable of the scale-up
         // node, retry until success.
         // 3. for dest worker timeout, retry for 3 times, interval is 100 ms
-        if ((!isNetworkRecovery && (status = cm_->CheckConnection(destAddr, true)).IsError())) {
+        if ((!isNetworkRecovery && (status = cm_->CheckConnection(destAddr)).IsError())) {
             LOG(ERROR) << "Check connection of " << info.destAddr << " failed: " << status.ToString();
             static const int totleRetryTimes = 3;
             static const int sleepTimeMs = 100;

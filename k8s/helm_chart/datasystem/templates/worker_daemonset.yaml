@@ -233,7 +233,6 @@ spec:
         - -etcd_username={{ $.Values.global.etcd.etcdUsername }}
         - -etcd_password={{ $.Values.global.etcd.etcdPassword }}
         - -cluster_name={{ $.Values.global.clusterName }}
-        - -other_cluster_names={{ $.Values.global.crossAz.otherClusterNames }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -etcd_meta_pool_size={{ $.Values.global.etcd.etcdMetaPoolSize }}
         - -arena_per_tenant={{ $.Values.global.performance.arenaPerTenant }}
@@ -243,8 +242,6 @@ spec:
         - -monitor_config_file=/home/yuanrong/config/datasystem.config
         - -client_dead_timeout_s={{ $.Values.global.reliability.clientDeadTimeoutS }}
         - -enable_thp={{ $.Values.global.performance.enableThp }}
-        - -cross_cluster_get_data_from_worker={{ $.Values.global.crossAz.crossAzGetDataFromWorker }}
-        - -cross_cluster_get_meta_from_worker={{ $.Values.global.crossAz.crossAzGetMetaFromWorker }}
         - -enable_reconciliation={{ $.Values.global.reliability.enableReconciliation }}
         - -enable_hash_ring_self_healing={{ $.Values.global.reliability.enableHashRingSelfHealing }}
         - -liveness_probe_timeout_s={{ $.Values.global.reliability.livenessProbeTimeoutS }}

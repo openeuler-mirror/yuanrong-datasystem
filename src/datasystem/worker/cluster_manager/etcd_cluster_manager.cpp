@@ -60,11 +60,12 @@ DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(add_node_wait_time_s);
 DS_DECLARE_string(master_address);
-DS_DECLARE_string(other_cluster_names);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_bool(auto_del_dead_node);
-DS_DEFINE_bool(cross_cluster_get_meta_from_worker, false, "cross az to get metadata from worker");
+DS_DEFINE_bool(cross_cluster_get_meta_from_worker, false,
+               "[DEPRECATED] Cross-cluster metadata access from workers has been removed. This flag is kept for "
+               "compatibility and is ignored.");
 
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -105,14 +106,6 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
     eventPq_ = std::make_unique<PriorityQueue<std::unique_ptr<CmEvent>, CmEventCmp>>(pqSize);
     workerWaitPost_ = std::make_unique<WaitPost>();
 
-    if (!FLAGS_other_cluster_names.empty() && FLAGS_enable_distributed_master) {
-        ConstructOtherAzHashRings();
-        for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
-            if (azName != FLAGS_cluster_name) {
-                otherAZNames_.emplace_back(azName);
-            }
-        }
-    }
     etcdDB_->SetCheckEtcdStateWhenNetworkFailedHandler(
         std::bind(&EtcdClusterManager::CheckEtcdStateWhenNetworkFailed, this));
 
@@ -137,16 +130,6 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
             needRedirect = NeedRedirect(id, masterAddr);
             return;
         });
-
-    EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().AddSubscriber(
-        "QUERY_MASTER_ADDR_IN_OTHER_AZ",
-        [this](const std::string &otherAzName, const std::string &objKey, MetaAddrInfo &metaAddrInfo) {
-            return QueryMasterAddrInOtherAz(otherAzName, objKey, metaAddrInfo);
-        });
-
-    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().AddSubscriber(
-        "CHECK_IF_OTHER_AZ_NODE_CONNECTED",
-        [this](const HostPort &addr, bool &isConnect) { isConnect = CheckIfOtherAzNodeConnected(addr); });
 }
 
 EtcdClusterManager::~EtcdClusterManager()
@@ -158,16 +141,6 @@ EtcdClusterManager::~EtcdClusterManager()
     }
 }
 
-void EtcdClusterManager::ConstructOtherAzHashRings()
-{
-    for (const auto &azName : Split(FLAGS_other_cluster_names, ",")) {
-        if (azName != FLAGS_cluster_name) {
-            auto readRing = std::make_unique<worker::ReadHashRing>(azName, workerAddress_.ToString(), etcdDB_);
-            (void)otherAzHashRings_.insert(std::make_pair(azName, std::move(readRing)));
-        }
-    }
-}
-
 Status EtcdClusterManager::Shutdown()
 {
     HashRingEvent::SyncClusterNodes::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
@@ -175,9 +148,6 @@ Status EtcdClusterManager::Shutdown()
     HashRingEvent::GetDbPrimaryLocation::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     GetHashRangeNonBlockEvent::GetInstance().RemoveSubscriber("GET_HASH_RANGE_NON_BLOCK");
     HashRingEvent::CheckNeedRedirect::GetInstance().RemoveSubscriber("NEED_REDIRECT");
-    EtcdClusterMagagerEvent::QueryMasterAddrInOtherAz::GetInstance().RemoveSubscriber("QUERY_MASTER_ADDR_IN_OTHER_AZ");
-    EtcdClusterMagagerEvent::CheckIfOtherAzNodeConnected::GetInstance().RemoveSubscriber(
-        "CHECK_IF_OTHER_AZ_NODE_CONNECTED");
 
     // Clean up the node demotion thread if it was running
     if (thread_) {
@@ -221,21 +191,6 @@ Status EtcdClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterIn
         LOG(INFO) << "Adding key: " << node.first << " value: " << node.second << " to priority queue.";
         RETURN_IF_NOT_OK(eventPq_->EmplaceBack(new CmEvent(std::move(fakeEvent), PrefixType::CLUSTER)));
     }
-    {
-        std::lock_guard<std::shared_timed_mutex> lck(otherClusterNodeMutex_);
-        LOG(INFO) << "Query etcd to identify nodes from other az success. Number of nodes: "
-                  << clusterInfo.otherAzWorkers.size();
-        for (const auto &node : clusterInfo.otherAzWorkers) {
-            HostPort eventNodeKey;
-            if (eventNodeKey.ParseString(node.first).IsError()) {
-                LOG(ERROR) << "Fail to parse hostport string " << node.first << " from the other AZ's node.";
-                continue;
-            }
-            auto eventNode = std::make_unique<ClusterNode>(node.second, "start");
-            otherClusterNodeTable_.emplace(eventNodeKey, std::move(eventNode));
-        }
-    }
-    LOG(INFO) << "Init other az nodes success, node msg: " << this->OtherAzNodesToString();
     return Status::OK();
 }
 
@@ -294,8 +249,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     // 4. Watch for future changes to etcd table under directory /datasystem/cluster and /datasystem/ring)
     // The watch thread will enqueue the events in priority queue and the background thread will fetch the events
     // and handle them.
-    RETURN_IF_NOT_OK(etcdDB_->WatchEvents({ { ETCD_RING_PREFIX, "", true, clusterInfo.revision },
-                                            { ETCD_CLUSTER_TABLE, "", true, clusterInfo.revision } }));
+    RETURN_IF_NOT_OK(etcdDB_->WatchEvents({ { ETCD_RING_PREFIX, "", clusterInfo.revision },
+                                            { ETCD_CLUSTER_TABLE, "", clusterInfo.revision } }));
     // 5. Since the background and watch threads are up, it is time to initialize the hashring.
     if (clusterInfo.etcdAvailable) {
         RETURN_IF_NOT_OK(hashRing_->InitWithEtcd());
@@ -312,23 +267,13 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
         }
     }
 
-    for (const auto &kv : clusterInfo.otherAzHashrings) {
-        auto itr = otherAzHashRings_.find(kv.first);
-        if (itr == otherAzHashRings_.end()) {
-            LOG(INFO) << FormatString(
-                "The hashRing for AZ[%s] was found, but the AZ does not exist. Maybe there is old data left", kv.first);
-            continue;
-        }
-        RETURN_IF_NOT_OK(itr->second->Init(kv.second));
-    }
-
     bool isRestart = false;
     RETURN_IF_NOT_OK(IsRestart(isRestart));
     RETURN_IF_NOT_OK(
         etcdDB_->InitKeepAlive(ETCD_CLUSTER_TABLE, workerAddress_.ToString(), isRestart, isEtcdAvailableWhenStart_));
 
     // Display the final list of nodes that were set up into the log
-    LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString() << "\n" << this->OtherAzNodesToString();
+    LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
 
     return Status::OK();
 }
@@ -479,40 +424,6 @@ Status EtcdClusterManager::HandleNodeAdditionEvent(const HostPort &eventNodeKey,
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleOtherAzNodeAddEvent(const HostPort &eventNodeKey,
-                                                     std::unique_ptr<ClusterNode> eventNode, const std::string &azName)
-{
-    (void)azName;
-    LOG(INFO) << "Add to the other AZ cluster node: " << eventNodeKey.ToString();
-    std::string nodeAddr = eventNodeKey.ToString();
-    long timestamp = 0;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Uri::StrToLong(eventNode->GetTimeEpoch().c_str(), timestamp), K_RUNTIME_ERROR,
-                                         "timestamp StrToLong failed");
-    auto isRecovered = eventNode->NodeWasRecovered();
-    auto isRestarted = eventNode->NodeWasRestarted();
-
-    std::shared_lock<std::shared_timed_mutex> lock(otherClusterNodeMutex_);
-    TbbNodeTable::const_accessor accessor;
-    if (!otherClusterNodeTable_.find(accessor, eventNodeKey)) {
-        otherClusterNodeTable_.emplace(eventNodeKey, std::move(eventNode));
-    }
-    if (isRecovered) {
-        RETURN_IF_NOT_OK(AddLocalFailedNodeEvent::GetInstance().NotifyAll(eventNodeKey));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            RequestMetaFromWorkerEvent::GetInstance().NotifyAll(workerAddress_.ToString(), nodeAddr),
-            "Could not request worker to send metadata");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(NodeNetworkRecoveryEvent::GetInstance().NotifyAll(nodeAddr, timestamp, false),
-                                         "Network recovery failed for offline node");
-        return Status::OK();
-    }
-    if (isRestarted) {
-        RETURN_IF_NOT_OK(AddLocalFailedNodeEvent::GetInstance().NotifyAll(eventNodeKey));
-        RETURN_IF_NOT_OK(NodeRestartEvent::GetInstance().NotifyAll(eventNodeKey.ToString(), timestamp, false));
-        return Status::OK();
-    }
-    return Status::OK();
-}
-
 Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
                                                  const std::string &azName)
 {
@@ -545,7 +456,7 @@ Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, s
     }
 
     std::string workerAddr = eventNodeKey.ToString();
-    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, false, false),
+    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, false),
                  "Node timeout event process failed");
     LOG(INFO) << FormatString("Mark %s as timeout.", eventNodeKey.ToString());
     foundNode->SetTimedOut();
@@ -566,7 +477,7 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
 
     if ((!isLeaving_ && hashRing_->IsPreLeaving(workerAddr)) || hashRing_->IsLeaving(workerAddr)) {
         LOG(INFO) << "The voluntary scale down node " << workerAddr << " crush, Processworkertimeout";
-        LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, true, false),
+        LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, true, true),
                      "Error occurs when voluntary scale down node mark timeout: "
                          + (eventNode == nullptr ? "" : eventNode->ToString(eventNodeKey)));
         // Trigger slot recovery for the crashed voluntary scale down node.
@@ -576,7 +487,7 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
     }
 
     LOG(INFO) << "The voluntary scale down node finish, try remove worker " << workerAddr << " from cluster node table";
-    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true, false),
+    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true),
                  "Node timeout event process failed");
     ChangePrimaryCopy::GetInstance().NotifyAll(workerAddr, true);
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
@@ -584,45 +495,6 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
     HostPort addr = eventNodeKey;
     ClearWorkerMeta::GetInstance().NotifyAll(addr);
     EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
-    return Status::OK();
-}
-
-Status EtcdClusterManager::HandleOtherAzNodeRemoveEvent(const HostPort &eventNodeKey,
-                                                        std::unique_ptr<ClusterNode> eventNode,
-                                                        const std::string &azName)
-{
-    (void)eventNode;
-    LOG(INFO) << "Delete the node from the other AZ cluster: " << eventNodeKey.ToString();
-    std::shared_lock<std::shared_timed_mutex> lock(otherClusterNodeMutex_);
-    TbbNodeTable::accessor accessor;
-    if (!otherClusterNodeTable_.find(accessor, eventNodeKey)) {
-        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "The timeout node could not be found in other AZ nodes list");
-    }
-    ClusterNode *foundNode = accessor->second.get();
-    if (foundNode->NodeWasExiting()) {
-        auto iter = otherAzHashRings_.find(azName);
-        if (iter == otherAzHashRings_.end()) {
-            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
-                                    "The timeout node's hahs ring could not be found in other AZ hash ring list");
-        }
-        if (iter->second->IsPreLeaving(eventNodeKey.ToString())) {
-            LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(eventNodeKey.ToString(), true, true, true),
-                         "Node timeout event process failed");
-            otherClusterNodeTable_.erase(accessor);
-            return Status::OK();
-        }
-        auto workerAddr = eventNodeKey.ToString();
-        LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true, true),
-                     "Node timeout event process failed");
-        RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
-        HostPort addr = eventNodeKey;
-        EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
-        otherClusterNodeTable_.erase(accessor);
-        return Status::OK();
-    }
-    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(eventNodeKey.ToString(), true, true, true),
-                 "Node timeout event process failed");
-    otherClusterNodeTable_.erase(accessor);
     return Status::OK();
 }
 
@@ -703,8 +575,7 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
             RETURN_IF_NOT_OK(HandleClusterEvent(toProcess->event));
             // Display the list of nodes to the log now that the handling of cluster event has completed
             LOG(INFO) << "Nodes tracked by cluster manager:\n"
-                      << this->NodesToString() << "\n"
-                      << this->OtherAzNodesToString();
+                      << this->NodesToString();
             break;
         case PrefixType::RING:
             RETURN_IF_NOT_OK(HandleRingEvent(toProcess->event));
@@ -715,24 +586,6 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
     return Status::OK();
 }
 
-void EtcdClusterManager::TrySplitAzNameFromEventKey(const std::string &key, std::string &azName)
-{
-    auto res = Split(key, "/");
-    if (res.size() > 1) {
-        azName = res[1];
-    }
-}
-
-Status EtcdClusterManager::SplitAzNameFromEventKey(const std::string &key, std::string &azName)
-{
-    TrySplitAzNameFromEventKey(key, azName);
-    if (!azName.empty() && otherAzHashRings_.find(azName) != otherAzHashRings_.end()) {
-        return Status::OK();
-    }
-    azName.clear();
-    return { K_RUNTIME_ERROR, FormatString("[etcd eventKey %s] don't contain AZ Name.", key) };
-}
-
 Status EtcdClusterManager::HandleRingEvent(const mvccpb::Event &event)
 {
     if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
@@ -740,18 +593,7 @@ Status EtcdClusterManager::HandleRingEvent(const mvccpb::Event &event)
     }
     Status rc;
     std::string eventKey = event.kv().key();
-    if (eventKey == (ringPrefix_ + "/")) {
-        // local AZ hash ring
-        rc = hashRing_->HandleRingEvent(event, ringPrefix_);
-    } else {
-        // update other AZ read hash ring
-        std::string azName;
-        RETURN_IF_NOT_OK(SplitAzNameFromEventKey(eventKey, azName));
-        auto iter = otherAzHashRings_.find(azName);
-        CHECK_FAIL_RETURN_STATUS(iter != otherAzHashRings_.end(), K_RUNTIME_ERROR, "no readRing: " + azName);
-        auto &readRing = iter->second;
-        rc = readRing->HandleRingEvent(event);
-    }
+    rc = hashRing_->HandleRingEvent(event, ringPrefix_);
     return rc;
 }
 
@@ -776,34 +618,18 @@ Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
         }
     }
 
-    using ProcessEventFunc = Status (EtcdClusterManager::*)(
-        const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode, const std::string &azName);
-    ProcessEventFunc addNodeFunc;
-    ProcessEventFunc removeNodeFunc;
-    if (nodeHostPortStr.find(clusterPrefix_) != std::string::npos) {
-        // Local AZ node process function
-        addNodeFunc = &EtcdClusterManager::HandleNodeAdditionEvent;
-        removeNodeFunc = &EtcdClusterManager::HandleNodeRemoveEvent;
-    } else {
-        // Other AZ node process function
-        addNodeFunc = &EtcdClusterManager::HandleOtherAzNodeAddEvent;
-        removeNodeFunc = &EtcdClusterManager::HandleOtherAzNodeRemoveEvent;
-    }
-
     // Remove /TableName/ from key to get IP and port
     nodeHostPortStr.erase(0, nodeHostPortStr.find(ETCD_CLUSTER_TABLE) + strlen(ETCD_CLUSTER_TABLE) + 1);
     HostPort eventNodeKey;
     RETURN_IF_NOT_OK(eventNodeKey.ParseString(nodeHostPortStr));
-    std::string azName;
-    TrySplitAzNameFromEventKey(event.kv().key(), azName);
     auto eventNode = std::make_unique<ClusterNode>(nodeTimestamp, additionEventType);
     if (event.type() == mvccpb::Event_EventType::Event_EventType_PUT) {
         LOG(INFO) << "Event Type: Add Node: " << eventNode->ToString(eventNodeKey);
-        rc = (this->*addNodeFunc)(eventNodeKey, std::move(eventNode), azName);
+        rc = HandleNodeAdditionEvent(eventNodeKey, std::move(eventNode), "");
     } else if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
         LOG(INFO) << "Event Type: Remove Node: " << eventNode->ToString(eventNodeKey);
         LOG_IF_ERROR_EXCEPT(RemoveRemoteFastTransportNode(eventNodeKey), "", K_NOT_FOUND);
-        rc = (this->*removeNodeFunc)(eventNodeKey, std::move(eventNode), azName);
+        rc = HandleNodeRemoveEvent(eventNodeKey, std::move(eventNode), "");
     } else {
         rc = Status(K_RUNTIME_ERROR, "unknown type: " + event.DebugString());
     }
@@ -840,15 +666,15 @@ Status EtcdClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey
     return Status::OK();
 }
 
-Status EtcdClusterManager::CheckConnection(const std::string &objKey, bool allowInOtherAz)
+Status EtcdClusterManager::CheckConnection(const std::string &objKey)
 {
     MetaAddrInfo info;
     std::optional<RouteInfo> routeInfo;
     RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, info, routeInfo));
-    return CheckConnection(info.GetAddress(), allowInOtherAz);
+    return CheckConnection(info.GetAddress());
 }
 
-Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowInOtherAz, bool allowNotFound)
+Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowNotFound)
 {
     Timer timer;
     INJECT_POINT("EtcdClusterManager.checkConnection");
@@ -857,14 +683,6 @@ Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowI
     auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
     workerOperationTimeCost.Append("CheckConnection wait", elapsedMs);
     if (!clusterNodeTable_.find(accessor, nodeAddr)) {
-        bool nodeInOtherAzAndhealth = CheckIfOtherAzNodeConnected(nodeAddr);
-        if (nodeInOtherAzAndhealth && allowInOtherAz) {
-            return Status::OK();
-        }
-        if (nodeInOtherAzAndhealth && !allowInOtherAz) {
-            RETURN_STATUS(K_NOT_FOUND, "The node " + nodeAddr.ToString()
-                                           + " could not be found in cluster node table, but be found in other az.");
-        }
         if (allowNotFound) {
             return Status::OK();
         }
@@ -891,10 +709,6 @@ std::set<std::string> EtcdClusterManager::GetValidWorkersInHashRing() const
     std::set<std::string> validWorkersInHashRing;
     const auto &validWorkersInLocalAz = hashRing_->GetValidWorkersInHashRing();
     validWorkersInHashRing.insert(validWorkersInLocalAz.begin(), validWorkersInLocalAz.end());
-    for (auto &otherAzHashRing : otherAzHashRings_) {
-        const auto &validWorkersInOtherlAz = otherAzHashRing.second->GetValidWorkersInHashRing();
-        validWorkersInHashRing.insert(validWorkersInOtherlAz.begin(), validWorkersInOtherlAz.end());
-    }
     return validWorkersInHashRing;
 }
 
@@ -915,13 +729,6 @@ std::set<std::string> EtcdClusterManager::GetActiveWorkersInHashRing() const
         }
     }
     return activeWorkers;
-}
-
-bool EtcdClusterManager::CheckIfOtherAzNodeConnected(const HostPort &nodeAddr)
-{
-    std::shared_lock<std::shared_timed_mutex> lock(otherClusterNodeMutex_);
-    TbbNodeTable::const_accessor accessor;
-    return otherClusterNodeTable_.find(accessor, nodeAddr);
 }
 
 bool EtcdClusterManager::CheckReceiveMigrateInfo()
@@ -1103,7 +910,7 @@ void EtcdClusterManager::HandleFailedNode(const HostPort &addr)
         return;
     }
     // Perform dead node handling now to adjust any references
-    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(addr.ToString(), false, true, false),
+    LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(addr.ToString(), false, true),
                  "Failed to process worker timeout in etcd demotion thread");
     LOG_IF_ERROR(StartClearWorkerMeta::GetInstance().NotifyAll(addr), "Failed to clear worker meta data.");
 }
@@ -1271,17 +1078,6 @@ std::string EtcdClusterManager::NodesToString()
            + nodesStr;
 }
 
-std::string EtcdClusterManager::OtherAzNodesToString()
-{
-    std::string returnStr("Other AZ nodes currently tracked: ");
-    // tbb concurrent hash table does not support thread-safe iteration
-    std::lock_guard<std::shared_timed_mutex> lock(otherClusterNodeMutex_);
-    for (const auto &iter : otherClusterNodeTable_) {
-        returnStr += iter.first.ToString() + "; ";
-    }
-    return returnStr;
-}
-
 Status EtcdClusterManager::GetClusterNodeAddresses(std::vector<HostPort> &nodeAddrs)
 {
     // tbb concurrent hash table does not support thread-safe iteration
@@ -1349,14 +1145,7 @@ Status EtcdClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInf
     std::optional<RouteInfo> routeInfo;
     RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, metaAddrInfo, routeInfo));
     const auto &masterAddr = metaAddrInfo.GetAddress();
-    Status rc;
-    if (metaAddrInfo.IsFromOtherAz()) {
-        if (!CheckIfOtherAzNodeConnected(masterAddr)) {
-            rc = Status(K_RPC_UNAVAILABLE, FormatString("The other az node %s disconnected.", masterAddr.ToString()));
-        }
-    } else {
-        rc = CheckConnection(masterAddr);
-    }
+    Status rc = CheckConnection(masterAddr);
     if (rc.IsError()) {
         metaAddrInfo.Clear();
         RETURN_STATUS(K_RPC_UNAVAILABLE, rc.GetMsg());
@@ -1370,19 +1159,11 @@ void EtcdClusterManager::GetObjectKeysFromNotConnectedMaster(
 {
     for (const auto &[metaAddrInfo, keys] : metaAddrInfos) {
         const auto &masterAddr = metaAddrInfo.GetAddress();
-        if (metaAddrInfo.IsFromOtherAz()) {
-            if (!CheckIfOtherAzNodeConnected(masterAddr)) {
-                for (const auto &key : keys) {
-                    objectKeys.emplace(key);
-                }
+        if (CheckConnection(masterAddr).IsError()) {
+            for (const auto &key : keys) {
+                objectKeys.emplace(key);
             }
-        } else {
-            if (CheckConnection(masterAddr).IsError()) {
-                for (const auto &key : keys) {
-                    objectKeys.emplace(key);
-                }
-            };
-        }
+        };
     }
 }
 
@@ -1431,12 +1212,6 @@ Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std
     }
     std::string workerUuid;
     auto rc = hashRing_->GetUuidByWorkerAddr(address.ToString(), workerUuid);
-    if (rc.GetCode() == K_NOT_FOUND) {
-        for (auto iter = otherAzHashRings_.begin(); iter != otherAzHashRings_.end() && rc.GetCode() == K_NOT_FOUND;
-             ++iter) {
-            rc = iter->second->GetUuidByWorkerAddr(address.ToString(), workerUuid);
-        }
-    }
     RETURN_IF_NOT_OK(rc);
     dbNames.emplace_back(workerUuid);
     return Status::OK();
@@ -1448,12 +1223,6 @@ std::set<std::string> EtcdClusterManager::GetNodesInTable()
     {
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         for (const auto &iter : clusterNodeTable_) {
-            nodes.emplace(iter.first.ToString());
-        }
-    }
-    {
-        std::lock_guard<std::shared_timed_mutex> lck(otherClusterNodeMutex_);
-        for (const auto &iter : otherClusterNodeTable_) {
             nodes.emplace(iter.first.ToString());
         }
     }
@@ -1727,95 +1496,14 @@ std::string EtcdClusterManager::GetWorkerIdByWorkerAddr(const std::string &addre
     return workerId;
 }
 
-Status EtcdClusterManager::QueryMasterAddrInOtherAz(const std::string &otherAZName, const std::string &objKey,
-                                                    MetaAddrInfo &metaAddrInfo)
-{
-    HostPort masterHostPort;
-    std::string dbName;
-    auto iter = otherAzHashRings_.find(otherAZName);
-    if (iter != otherAzHashRings_.end()) {
-        auto &readRing = iter->second;
-        RETURN_IF_NOT_OK(readRing->GetMasterUuid(objKey, dbName));
-        RETURN_IF_NOT_OK(readRing->GetWorkerAddrByUuidForMetadata(dbName, masterHostPort));
-        CHECK_FAIL_RETURN_STATUS(
-            CheckIfOtherAzNodeConnected(masterHostPort), K_RPC_UNAVAILABLE,
-            FormatString("check connection failed, az: %s, addr: %s", otherAZName, masterHostPort.ToString()));
-    } else {
-        RETURN_STATUS(K_NOT_FOUND, "Cannot find az: " + otherAZName);
-    }
-    metaAddrInfo.SetAddress(masterHostPort);
-    metaAddrInfo.SetDbName(dbName);
-    metaAddrInfo.MarkMetaIsFromOtherAz();
-    return Status::OK();
-}
-
-Status EtcdClusterManager::GetNodeInGivenOtherAzByHash(const std::string &objKey, const std::string &azName,
-                                                       MetaAddrInfo &metaAddrInfo)
-{
-    auto itr = otherAzHashRings_.find(azName);
-    CHECK_FAIL_RETURN_STATUS(itr != otherAzHashRings_.end(), K_NOT_FOUND, "can not find hash ring of az: " + azName);
-    const auto &otherAzHashRing = itr->second;
-    CHECK_FAIL_RETURN_STATUS(otherAzHashRing->IsWorkable(), K_NOT_READY,
-                             FormatString("hash ring of az[%s] is not ready", azName));
-    std::string dbName;
-    std::optional<RouteInfo> routeInfo;
-    RETURN_IF_NOT_OK(otherAzHashRing->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
-    HostPort masterAddr;
-    RETURN_IF_NOT_OK(otherAzHashRing->GetWorkerAddrByUuidForMetadata(dbName, masterAddr));
-    metaAddrInfo.SetAddress(std::move(masterAddr));
-    metaAddrInfo.SetDbName(std::move(dbName));
-    return Status::OK();
-}
-
-Status EtcdClusterManager::GetAllNodesInOtherAzsByHash(const std::string &objKey,
-                                                       std::unordered_map<std::string, MetaAddrInfo> &metaAddrInfos,
-                                                       bool allowNotReady)
-{
-    for (const auto &kv : otherAzHashRings_) {
-        MetaAddrInfo metaAddrInfo;
-        auto rc = GetNodeInGivenOtherAzByHash(objKey, kv.first, metaAddrInfo);
-        if (rc.GetCode() == K_NOT_FOUND) {
-            LOG(WARNING) << "Get node in given other az by hash failed: " << rc.ToString();
-            continue;
-        }
-        if (rc.GetCode() == K_NOT_READY && allowNotReady) {
-            continue;
-        }
-        RETURN_IF_NOT_OK(rc);
-        metaAddrInfos.insert({ kv.first, std::move(metaAddrInfo) });
-    }
-    return Status::OK();
-}
-
-Status EtcdClusterManager::GetMasterAddrInOtherAzForHashKey(
-    const std::unordered_map<std::string, std::unique_ptr<worker::ReadHashRing>>::iterator &iter,
-    const std::string &objKey, HostPort &masterHostPort, std::string &dbName)
-{
-    std::optional<RouteInfo> routeInfo;
-    RETURN_IF_NOT_OK(iter->second->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
-    return iter->second->GetWorkerAddrByUuidForMetadata(dbName, masterHostPort);
-}
-
 std::string EtcdClusterManager::GetWorkerAddress() const
 {
     return workerAddress_.ToString();
 }
 
-Status EtcdClusterManager::GetHashRingWorkerNum(int &workerNum, bool withOtherAz) const
+Status EtcdClusterManager::GetHashRingWorkerNum(int &workerNum) const
 {
     RETURN_IF_NOT_OK(hashRing_->GetHashRingWorkerNum(workerNum));
-    if (withOtherAz) {
-        for (const auto &otherAzHashRing : otherAzHashRings_) {
-            int otherAzWorkerNum = 0;
-            auto rc = otherAzHashRing.second->GetHashRingWorkerNum(otherAzWorkerNum);
-            if (rc.GetCode() == K_NOT_READY) {
-                LOG(WARNING) << FormatString("The hash ring of az[%s] is not ready, rc: %s", otherAzHashRing.first,
-                                             rc.ToString());
-                continue;
-            }
-            workerNum += otherAzWorkerNum;
-        }
-    }
     return Status::OK();
 }
 
@@ -1832,9 +1520,6 @@ Status EtcdClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, Clu
 {
     RETURN_IF_NOT_OK(CreateEtcdStoreTable(etcdStore));
     RETURN_IF_NOT_OK(etcdStore->GetAll(ETCD_CLUSTER_TABLE, clusterInfo.workers, clusterInfo.revision));
-    RETURN_IF_NOT_OK(
-        etcdStore->GetOtherAzAllValue(ETCD_CLUSTER_TABLE, clusterInfo.revision, clusterInfo.otherAzWorkers));
-    RETURN_IF_NOT_OK(etcdStore->GetOtherAzAllHashRing(clusterInfo.revision, clusterInfo.otherAzHashrings));
     return Status::OK();
 }
 
@@ -1950,16 +1635,8 @@ std::string ClusterInfo::ToString()
     for (const auto &pair : localHashRing) {
         msg << pair.first << ", ";
     }
-    msg << std::endl << "other az hash ring: ";
-    for (const auto &pair : otherAzHashrings) {
-        msg << pair.first << ", ";
-    }
     msg << std::endl << "local workers: ";
     for (const auto &pair : workers) {
-        msg << pair.first << ", ";
-    }
-    msg << std::endl << "other az workers: ";
-    for (const auto &pair : otherAzWorkers) {
         msg << pair.first << ", ";
     }
     return msg.str();

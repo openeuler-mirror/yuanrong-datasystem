@@ -46,11 +46,8 @@ namespace datasystem {
 namespace st {
  
 constexpr size_t TOTAL_WORKER_NUM = 6;
-constexpr size_t EVERY_AZ_WORKER_NUM = 3;
-constexpr size_t AZ_NUM = 2;
 constexpr size_t ETCD_NUM = 2;
 const std::string AZ1 = "AZ1";
-const std::string AZ2 = "AZ2";
 const uint32_t ETCD_TIME_OUT_SECOND = 5;
 const uint32_t EXTRA_WAIT_SECOND = 3;
  
@@ -65,15 +62,8 @@ public:
             "-v=1 add_node_wait_time_s=5 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
         opts.workerGflagParams = workerGflags;
  
-        // specify az for every worker
         for (size_t i = 0; i < TOTAL_WORKER_NUM; i++) {
-            std::string param;
-            if (i % AZ_NUM == 0) {
-                param = "-cluster_name=" + AZ1 + " -other_cluster_names=" + AZ2;
-            } else {
-                param = "-cluster_name=" + AZ2 + " -other_cluster_names=" + AZ1;
-            }
-            opts.workerSpecifyGflagParams[i] = param;
+            opts.workerSpecifyGflagParams[i] = "-cluster_name=" + AZ1;
         }
     }
  
@@ -171,14 +161,12 @@ TEST_F(RouterClientTest, TestSelectOneLocalNodeWorker)
 {
     bool specifyNode = true;
     SelectWorkerAndConnect(AZ1, specifyNode);
-    SelectWorkerAndConnect(AZ2, specifyNode);
 }
  
 TEST_F(RouterClientTest, TestRandomSelectWorker)
 {
     bool specifyNode = false;
     SelectWorkerAndConnect(AZ1, specifyNode);
-    SelectWorkerAndConnect(AZ2, specifyNode);
 }
  
 TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
@@ -245,15 +233,8 @@ public:
             opts.workerConfigs.push_back(ipv6HostPort);
         }
 
-        // specify az for every worker
         for (size_t i = 0; i < TOTAL_WORKER_NUM; i++) {
-            std::string param;
-            if (i % AZ_NUM == 0) {
-                param = "-cluster_name=" + AZ1 + " -other_cluster_names=" + AZ2;
-            } else {
-                param = "-cluster_name=" + AZ2 + " -other_cluster_names=" + AZ1;
-            }
-            opts.workerSpecifyGflagParams[i] = param;
+            opts.workerSpecifyGflagParams[i] = "-cluster_name=" + AZ1;
         }
     }
 };

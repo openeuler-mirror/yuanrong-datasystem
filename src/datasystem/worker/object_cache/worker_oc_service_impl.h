@@ -1027,15 +1027,15 @@ private:
     }
 
     /**
-     * @brief Find object keys in currentIds but not in rsp, and add to objectKeysMayInOtherAz
+     * @brief Find object keys in currentIds but not in rsp.
      * @param[in] rsp The response after querying metadata from master.
      * @param[in] currentIds The vector of objects which query metadata from master.
-     * @param[out] objectKeysMayInOtherAz Store the objects not in response.
+     * @param[out] objectKeysNotInRsp Store the objects not in response.
      * @return Status
      */
     static void FindObjectKeyNotInRsp(std::vector<master::QueryMetaInfoPb> &queryMetas,
                                       std::vector<std::string> &currentIds,
-                                      std::vector<std::string> &objectKeysMayInOtherAz);
+                                      std::vector<std::string> &objectKeysNotInRsp);
 
     /**
      * @brief Check whether the size of the node table in EtcdClusterManager equals to the number of running workers.

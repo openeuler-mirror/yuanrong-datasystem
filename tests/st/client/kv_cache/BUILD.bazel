@@ -156,32 +156,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "kv_client_cross_az_del_test",
-    srcs = ["kv_client_cross_az_del_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/iam:common_iam",
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:format",
-    ],
-)
-
-ds_cc_test(
-    name = "kv_client_cross_az_test",
-    srcs = ["kv_client_cross_az_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/iam:common_iam",
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:format",
-    ],
-)
-
-ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],

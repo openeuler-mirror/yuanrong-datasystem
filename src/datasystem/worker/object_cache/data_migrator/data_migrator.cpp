@@ -397,7 +397,7 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
 
-    RETURN_IF_NOT_OK(etcdCM_->CheckConnection(workerAddr, true));
+    RETURN_IF_NOT_OK(etcdCM_->CheckConnection(workerAddr));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
                                                            remoteWorkerStub),
                                      "[Migrate Data] Create remote worker api failed.");

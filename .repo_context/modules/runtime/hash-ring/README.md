@@ -10,14 +10,13 @@
 - Why this module exists:
   - maintain the distributed-master ownership map used to route object and stream metadata;
   - serialize cluster topology and in-progress scale tasks through ETCD-compatible storage;
-  - drive metadata/data migration when workers join, leave, fail, restart, or move across AZ-aware routing boundaries.
+  - drive metadata/data migration when local-cluster workers join, leave, fail, or restart.
 - Primary source files to verify against:
   - `src/datasystem/worker/hash_ring/hash_ring.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring.h`
   - `src/datasystem/worker/hash_ring/hash_ring_allocator.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring_task_executor.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring_health_check.cpp`
-  - `src/datasystem/worker/hash_ring/read_hash_ring.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring_event.h`
   - `src/datasystem/worker/hash_ring/hash_ring_tools.cpp`
   - `src/datasystem/protos/hash_ring.proto`
@@ -29,10 +28,9 @@
   - stores the canonical ring as serialized `HashRingPb` at `ETCD_RING_PREFIX` (`/datasystem/ring`) and updates it mostly through `EtcdStore::CAS`;
   - assigns four virtual tokens per worker by default through `HashRingAllocator::defaultHashTokenNum`;
   - initializes the first cluster ring, adds `INITIAL` workers to an already initialized ring, removes failed workers, and marks voluntary scale-down workers;
-  - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, redirect checks, and cross-AZ cleanup;
+  - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, and redirect checks;
   - keeps local read-side maps (`tokenMap_`, `workerUuid2AddrMap_`, `workerAddr2UuidMap_`, `relatedWorkerMap_`) derived from `HashRingPb`;
   - runs `HashRingHealthCheck` to detect long-stuck scale-up, scale-down, initial, joining, and leaving states, optionally self-healing when `enable_hash_ring_self_healing=true`;
-  - provides `ReadHashRing` for read-only rings from other AZs when multi-cluster routing is enabled.
 - Pending verification:
   - exact object-cache and stream-cache side effects for every `HashRingEvent` subscriber.
 
@@ -58,7 +56,7 @@
   - `cluster_manager` is a sibling runtime module; it owns ETCD watches, worker keepalive state, and event dispatch into hash ring.
   - object/stream metadata managers stay outside this module; they subscribe to ring events and execute migrations.
 - Why they stay inside the parent module or split out:
-  - `HashRingAllocator`, `HashRingTaskExecutor`, `HashRingHealthCheck`, `ReadHashRing`, and `hash_ring_tools` are internal pieces of one persisted state machine and should be read together.
+  - `HashRingAllocator`, `HashRingTaskExecutor`, `HashRingHealthCheck`, and `hash_ring_tools` are internal pieces of one persisted state machine and should be read together.
 
 ## Key Entry Points
 
@@ -71,7 +69,6 @@
   - `HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)`
   - `HashRing::VoluntaryScaleDown()`
   - `HashRing::GetMasterAddr`, `GetMasterUuid`, `GetPrimaryWorkerUuid`
-  - `ReadHashRing::UpdateRing` for other-AZ ring snapshots
 - Persistent schema:
   - `WorkerPb`: worker `hash_tokens`, `worker_uuid`, `state`, `need_scale_down`
   - `ChangeNodePb`: changed hash ranges for scale-up or scale-down work
@@ -155,12 +152,6 @@ Important nuance:
 1. `InitRing` sees an existing `workers[workerAddr_]` entry and sets `StartUpState::RESTART`.
 2. If the worker was fully removed from the ring before restart, rejoining creates a new worker UUID; worker UUID no longer controls object-key routing.
 3. Restart recovery and scale work use normal object-key hash ranges rather than UUID point ranges.
-
-### Other-AZ Read Ring
-
-1. `EtcdClusterManager::ConstructOtherAzHashRing` creates `ReadHashRing` instances for configured other AZs.
-2. `ReadHashRing::UpdateRing` parses other-AZ ring events, marks itself `RUNNING` after `cluster_has_init`, updates maps, and emits `OtherAzNodeDeadEvent` or `LocalClearDataWithoutMeta` for cross-AZ deletion scenarios.
-3. Cross-AZ route queries use the read ring to rehash or translate worker UUIDs into addresses.
 
 ## Build And Test
 

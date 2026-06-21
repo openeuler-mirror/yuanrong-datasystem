@@ -220,11 +220,9 @@ public:
     /**
      * @brief Get the number of workers in hashring. For centralized master, return -1.
      * @param[out] workerNum The number of workers in hashring.
-     * @param[in] isFromOtherAz If this request comes from a node in another az, there is no need to ensure that the
-     * node is in this hash ring
      * @return Status of the call.
      */
-    Status GetHashRingWorkerNum(int &workerNum, bool isFromOtherAz = false) const;
+    Status GetHashRingWorkerNum(int &workerNum) const;
 
     /**
      * @brief Get the workers in hashring.

@@ -48,11 +48,9 @@ namespace datasystem {
 static constexpr char ETCD_ADDR_PATTREN[] = ",";
 const int64_t MIN_RPC_TIMEOUT_MS = 5000;  // 5s
 
-enum class PrefixType { OTHER, RING, CLUSTER };
 struct WatchElement {
     std::string tableName;
     std::string key;
-    bool ifWatchOtherAz;
     int64_t startRevision;
 };
 
@@ -170,11 +168,10 @@ public:
      * @brief Renew an existing lease repeatedly upto ttl seconds.
      * @param[in] tableName The table on which watch will be set.
      * @param[in] key The starting key of the key range on which watch will observe events.
-     * @param[in] ifWatchOtherAz Whether to watch other AZs' event.
      * @param[in] startRevision startRevision is an optional revision to watch from (inclusive).
      * @return Status of the call.
      */
-    Status WatchEvents(const std::string &tableName, const std::string &key, bool ifWatchOtherAz,
+    Status WatchEvents(const std::string &tableName, const std::string &key,
                        int64_t startRevision);
 
     /**
@@ -317,17 +314,6 @@ public:
      */
     Status GetAll(const std::string &tableName, int64_t reqRevision,
                   std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision);
-
-    /**
-     * @brief Get all other AZs' key-values from specific table.
-     * @param[in] tableName The table to get key-values.
-     * @param[in] revision Get the key of the specified version. If revision is less or equal to zero, the range is
-     * over the newest key-value store.
-     * @param[out] outKeyValues The output key-values in table.
-     * @return Status of the call.
-     */
-    Status GetOtherAzAllValue(const std::string &tableName, int64_t revision,
-                              std::vector<std::pair<std::string, std::string>> &outKeyValues);
 
     /**
      * @brief Prefix search in specific table.
@@ -508,17 +494,8 @@ public:
     EtcdStore(const EtcdStore &&) = delete;
     EtcdStore &operator=(const EtcdStore &&) = delete;
 
-    /**
-     * @brief Get other az all hashring.
-     * @param[in] revision Get the key of the specified version. If revision is less or equal to zero, the range is
-     * over the newest key-value store.
-     * @param[out] outKeyValues The output key-values in table.
-     */
-    Status GetOtherAzAllHashRing(int64_t revision, std::vector<std::pair<std::string, std::string>> &outKeyValues);
-
 private:
     using TableMap = std::unordered_map<std::string, std::string>;
-    using TableStrToVecMap = std::unordered_map<std::string, std::vector<std::string>>;
     const uint32_t CAS_MAX_SLEEP_TIME_US = 200000;
     const uint32_t CAS_ERROR_MAX_RETRY_NUM = 10;
     // Do not set it too long, otherwise in the scenario of etcd failure, the worker may have to wait for a long time
@@ -605,8 +582,6 @@ private:
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
     mutable std::shared_timed_mutex mutex_;
     TableMap tableMap_;
-    mutable std::shared_timed_mutex otherAzTblMutex_;
-    TableStrToVecMap otherAzTableMap_;
     std::unique_ptr<ThreadPool> keepAlivePool_{ nullptr };
     std::unique_ptr<ThreadPool> watchRunPool_{ nullptr };
     std::unique_ptr<GrpcSession<etcdserverpb::Lease>> leaseSession_;

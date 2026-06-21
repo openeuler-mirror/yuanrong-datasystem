@@ -38,13 +38,16 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 #include "etcd/api/etcdserverpb/rpc.pb.h"
 
 DS_DECLARE_string(etcd_address);
-DS_DEFINE_string(other_cluster_names, "", "Specify other az names using the same etcd. Split by ','");
+DS_DEFINE_string(other_cluster_names, "",
+                 "[DEPRECATED] Cross-cluster access has been removed. This flag is kept for compatibility and is "
+                 "ignored.");
 DS_DEFINE_validator(other_cluster_names, &Validator::ValidateOtherAzNames);
 DS_DEFINE_string(metastore_address, "", "Address of metastore server");
 DS_DECLARE_uint32(node_timeout_s);
@@ -295,15 +298,6 @@ Status EtcdStore::CreateTable(const std::string &tableName, const std::string &t
         tableMap_.emplace(tableName, "/" + FLAGS_cluster_name + tablePrefix);
     } else {
         tableMap_.emplace(tableName, tablePrefix);
-    }
-
-    if (!FLAGS_other_cluster_names.empty()) {
-        for (auto &azName : Split(FLAGS_other_cluster_names, ",")) {
-            if (azName != FLAGS_cluster_name) {
-                std::lock_guard<std::shared_timed_mutex> lck(otherAzTblMutex_);
-                otherAzTableMap_[tableName].emplace_back("/" + azName + tablePrefix);
-            }
-        }
     }
 
     return Status::OK();
@@ -732,10 +726,10 @@ Status EtcdStore::WatchRun()
     return Status::OK();
 }
 
-Status EtcdStore::WatchEvents(const std::string &tableName, const std::string &key, bool ifWatchOtherAz,
+Status EtcdStore::WatchEvents(const std::string &tableName, const std::string &key,
                               int64_t startRevision)
 {
-    return WatchEvents({ { tableName, key, ifWatchOtherAz, startRevision } });
+    return WatchEvents({ { tableName, key, startRevision } });
 }
 
 Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
@@ -746,7 +740,6 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
     for (const auto &watchKey : watchKeys) {
         const auto &tableName = watchKey.tableName;
         const auto &key = watchKey.key;
-        bool ifWatchOtherAz = watchKey.ifWatchOtherAz;
         auto startRevision = watchKey.startRevision;
         {
             std::shared_lock<std::shared_timed_mutex> lck(mutex_);
@@ -754,16 +747,6 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
             CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
                                      "The table does not exist. tableName:" + tableName);
             prefixToWatch->emplace(iter->second + "/" + key, startRevision);
-        }
-        if (ifWatchOtherAz) {
-            std::shared_lock<std::shared_timed_mutex> lck(otherAzTblMutex_);
-            auto iter = otherAzTableMap_.find(tableName);
-            if (iter == otherAzTableMap_.end()) {
-                continue;
-            }
-            for (std::string &prefix : iter->second) {
-                prefixToWatch->emplace(prefix + "/" + key, startRevision);
-            }
         }
     }
 
@@ -895,71 +878,6 @@ Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
         outKeyValues.emplace_back(std::make_pair(key, result.value()));
     }
     rspRevision = rsp.header().revision();
-    return Status::OK();
-}
-
-Status EtcdStore::GetOtherAzAllHashRing(int64_t revision,
-                                        std::vector<std::pair<std::string, std::string>> &outKeyValues)
-{
-    std::vector<std::string> allOtherAzHashRingTable;
-    {
-        std::shared_lock<std::shared_timed_mutex> lck(otherAzTblMutex_);
-        auto iter = otherAzTableMap_.find(ETCD_RING_PREFIX);
-        if (iter == otherAzTableMap_.end()) {
-            return Status::OK();
-        }
-        allOtherAzHashRingTable = iter->second;
-    }
-    for (std::string &prefix : allOtherAzHashRingTable) {
-        etcdserverpb::RangeRequest req;
-        std::string etcdKey = prefix + "/";
-        req.set_key(etcdKey);
-        req.set_range_end(StringPlusOne(etcdKey));
-        req.set_revision(revision);
-        etcdserverpb::RangeResponse rsp;
-        RETURN_IF_NOT_OK(
-            rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, GetAuthToken()));
-        for (auto &result : rsp.kvs()) {
-            std::string key;
-            size_t pos = result.key().find(ETCD_RING_PREFIX);
-            if (pos == std::string::npos) {
-                key = result.key();
-            } else {
-                auto subStr = result.key().substr(0, pos + 1);
-                size_t firstSlashPos = subStr.find('/');
-                size_t secondSlashPos = subStr.find('/', firstSlashPos + 1);
-                key = secondSlashPos == std::string::npos
-                          ? result.key()
-                          : result.key().substr(firstSlashPos + 1, secondSlashPos - firstSlashPos - 1);
-            }
-            outKeyValues.emplace_back(std::make_pair(key, result.value()));
-        }
-    }
-    return Status::OK();
-}
-
-Status EtcdStore::GetOtherAzAllValue(const std::string &tableName, int64_t revision,
-                                     std::vector<std::pair<std::string, std::string>> &outKeyValues)
-{
-    std::shared_lock<std::shared_timed_mutex> lck(otherAzTblMutex_);
-    auto iter = otherAzTableMap_.find(tableName);
-    if (iter == otherAzTableMap_.end()) {
-        return Status::OK();
-    }
-    for (std::string &prefix : iter->second) {
-        etcdserverpb::RangeRequest req;
-        std::string etcdKey = prefix + "/";
-        req.set_key(etcdKey);
-        req.set_range_end(StringPlusOne(etcdKey));
-        req.set_revision(revision);
-        etcdserverpb::RangeResponse rsp;
-        RETURN_IF_NOT_OK(
-            rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, GetAuthToken()));
-        for (auto &result : rsp.kvs()) {
-            std::string key = RemovePrefix(result.key(), prefix + "/");
-            outKeyValues.emplace_back(std::make_pair(key, result.value()));
-        }
-    }
     return Status::OK();
 }
 

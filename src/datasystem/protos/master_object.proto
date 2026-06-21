@@ -172,7 +172,6 @@ message QueryMetaReqPb {
   string request_id = 4;
   int64 timeout = 5; // rpc timeout
   bool redirect = 6;
-  bool is_from_other_az = 7;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -184,7 +183,6 @@ message QueryMetaInfoPb {
   ObjectMetaPb meta = 1;
   string address = 2;
   repeated uint32 payload_indexs = 3;
-  bool is_from_other_az = 4;
   bool single_copy = 5;
 }
 
@@ -203,7 +201,6 @@ message RemoveMetaReqPb {
     EVICTION = 1;
     INVALID_BUFFER = 2;
     GIVEUP_PRIMARY = 3; // voluntary scale down clear meta location.
-    OTHER_AZ_META_UPDATE = 4;
   }
   bytes address = 1;
   repeated string ids = 2;
@@ -561,7 +558,6 @@ message SubscribeInfoPb {
   string sub_address = 2;
   uint64 timeout = 3;
   repeated string objectKeys = 4;
-  bool is_from_other_az = 5;
 }
 
 message MigrateNestedMetaDataRspPb {

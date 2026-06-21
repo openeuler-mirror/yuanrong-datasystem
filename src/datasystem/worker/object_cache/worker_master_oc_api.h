@@ -575,12 +575,6 @@ public:
         }
     }
 
-    /**
-     * @brief Notify cross-az deletion
-     * @param[in] objsNeedAsyncNotify The objs grouping by <objectKey, azNames> that need to notify
-     */
-    void AsyncNotifyCrossAzDelete(const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify);
-
 private:
     master::MasterOCServiceImpl *masterOC_;  // A direct back-pointer to the local service
 };

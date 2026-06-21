@@ -61,15 +61,11 @@
     },
     "cluster_name": {
         "value": "",
-        "description": "cluster_name is typically used in scenarios where multiple AZ datasystem share a single etcd cluster, allowing different clusters to be distinguished by the cluster_name."
+        "description": "Cluster namespace used to distinguish metadata prefixes when needed."
     },
     "host_id_env_name": {
         "value": "",
         "description": "Environment variable name used to obtain the current host_id. Worker reports this host_id to ETCD for same-node worker affinity."
-    },
-    "other_cluster_names": {
-        "value": "",
-        "description": "Specify other az names using the same etcd. Split by ','"
     },
     "enable_distributed_master": {
         "value": "true",
@@ -322,14 +318,6 @@
     "enable_thp": {
         "value": "false",
         "description": "Control this process by enabling transparent huge pages, default is disabled. Enable Transparent Huge Pages (THP) can enhance performance and reduce page table overhead, but it may also lead to increased memory usage"
-    },
-    "cross_cluster_get_data_from_worker": {
-        "value": "true",
-        "description": "Control whether try to get data from other cluster's worker firstly, if false then get data from L2 cache directly."
-    },
-    "cross_cluster_get_meta_from_worker": {
-        "value": "false",
-        "description": "Control whether get meta data from other cluster's worker, if false then get meta data from local cluster."
     },
     "enable_worker_worker_batch_get": {
         "value": "false",

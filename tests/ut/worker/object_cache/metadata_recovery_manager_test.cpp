@@ -191,8 +191,8 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {
-    BINEXPECT_CALL((Status(EtcdClusterManager::*)(const HostPort &, bool, bool)) & EtcdClusterManager::CheckConnection,
-                   (_, _, _))
+    BINEXPECT_CALL((Status(EtcdClusterManager::*)(const HostPort &, bool)) & EtcdClusterManager::CheckConnection,
+                   (_, _))
         .WillRepeatedly(Return(Status::OK()));
 
     constexpr size_t totalObjects = 1201;

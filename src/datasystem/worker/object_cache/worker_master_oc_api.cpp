@@ -1500,12 +1500,6 @@ Status WorkerLocalMasterOCApi::RollbackMultiMeta(master::RollbackMultiMetaReqPb 
     return masterOC_->RollbackMultiMeta(req, rsp);
 }
 
-void WorkerLocalMasterOCApi::AsyncNotifyCrossAzDelete(
-    const std::unordered_map<std::string, std::vector<std::string>> &objsNeedAsyncNotify)
-{
-    masterOC_->AsyncNotifyCrossAzDelete(objsNeedAsyncNotify);
-}
-
 Status WorkerLocalMasterOCApi::Expire(master::ExpireReqPb &req, master::ExpireRspPb &rsp)
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));

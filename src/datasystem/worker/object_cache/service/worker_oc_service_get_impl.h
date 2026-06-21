@@ -122,7 +122,7 @@ public:
      * @param redirect if need redirect
      */
     void SetQueryMetaInfo(master::QueryMetaReqPb &req, const std::vector<std::string> &objectKeys,
-                          const std::string &masterAddr, bool redirect, bool isFromOtherAz);
+                          const std::string &masterAddr, bool redirect);
 
     /**
      * @brief Check and set status K_WORKER_PULL_OBJECT_NOT_FOUND to retry.
@@ -492,27 +492,18 @@ private:
      * @param[in] subTimeout Request timeout for subscribe.
      * @return Status of the call.
      */
-    Status QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout, bool isFromOtherAz,
+    Status QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
                                            std::vector<RpcMessage> &payloads);
 
     /**
-     * @brief Query metadata from different AZ in the etcd.
+     * @brief Query metadata from etcd by complete object-key hash.
      * @param[in] objectKeys The object keys need to get from ETCD.
-     * @param[in] getLocalAz If need query from local AZ.
      * @param[out] queryMetas The vector stored meta info.
+     * @param[out] absentObjectKeys The keys that could not be found.
      */
-    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys, bool getLocalAz,
+    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
                                  std::vector<master::QueryMetaInfoPb> &queryMetas,
                                  std::vector<std::string> &absentObjectKeys);
-
-    /**
-     * @brief The specific implementation of query Meta, including construct message and query from ETCD manager.
-     * @param[in] azName The name of AZ.
-     * @param[in] objKey The object keys need to get from ETCD.
-     * @param[out] queryMetas The vector stored meta info.
-     */
-    Status ConstructKeyAndQueryMetaFromEtcd(const std::string &azName, const std::string &objKey,
-                                            std::vector<master::QueryMetaInfoPb> &queryMetas);
 
     /**
      * @brief Remove object location.
@@ -780,16 +771,6 @@ private:
                                 bool &dataSizeChange);
 
     /**
-     * @brief Try get object from other AZ.
-     * @param[in] meta The object meta info contains remote address and data size.
-     * @param[in] hostAddr  The remote worker address.
-     * @param[out] objectKV The reserved and locked safe object and its corresponding objectKey.
-     * @param[out] status Status of the call.
-     */
-    void TryGetObjectFromOtherAZ(const ObjectMetaPb &meta, const HostPort &hostAddr, ReadObjectKV &objectKV,
-                                 Status &status);
-
-    /**
      * @brief Try to get object from L2 cache when object not found in other worker.
      * @param[in] meta The object meta info contains remote address and data size.
      * @param[in] address The remote worker address.
@@ -853,12 +834,6 @@ private:
     bool IsGetFromL2Storage(bool canNotFindInWorker, bool writeToL2Storage, datasystem::L2StorageType storageType);
 
     /**
-     * @brief Indicates whether the worker start with other az names.
-     * @return true if worker have other az names.
-     */
-    static bool HaveOtherAZ();
-
-    /**
      * @brief Batch lock for remote get scenario.
      * @param[in out] objectKeys Object key list that needs to be locked, if locked failed, the object key would be move
      * to failObjects.
@@ -912,38 +887,21 @@ private:
      * @return Status of the call.
      */
     Status QueryMetaDataFromMasterImpl(const HostPort &destMasterHostPort, uint64_t subTimeout,
-                                       const std::vector<std::string> &objKeysToQuery, bool isFromOtherAz,
+                                       const std::vector<std::string> &objKeysToQuery,
                                        datasystem::master::QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads);
-
-    /**
-     * @brief Process the object keys that fail to query metadata if cross-az get meta is allowed.
-     * @param[in] subTimeout Request timeout for subscribe.
-     * @param[out] objKeysUndecidedMaster The objects whose metadata location cannot be found.
-     * @param[out] objectKeysQueryMetaFailed The objects whose metadata location can be found, but querying the metadata
-     * fails.
-     * @param[out] objectKeysMayInOtherAz The objKey which need to be tried to get metadata from other AZ.
-     * @param[out] queryMetas The vector stored meta info.
-     * @param[out] payloads The payloads that contains object data.
-     */
-    Status ProcessQueryMetaFailedObjsIfAllowCrossAzGetMeta(
-        uint64_t subTimeout, std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
-        ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, std::unordered_set<std::string> &objectKeysMayInOtherAz,
-        std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Process the object keys that fail to query metadata If meta is stored in etcd.
      * @param[in] objKeysUndecidedMaster The objects whose metadata location cannot be found.
      * @param[in] objectKeysPuzzled The objects whose metadata location can be found, but querying the metadata
      * fails. (Excluding objects that are confirmed to have no metadata)
-     * @param[in] objectKeysMayInOtherAz The objKey which need to be tried to get metadata from other AZ.
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The objects whose metadata fails to be queried.
      */
     void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
         const std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
         std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
-        const std::unordered_set<std::string> &objectKeysMayInOtherAz, std::vector<master::QueryMetaInfoPb> &queryMetas,
-        std::vector<std::string> &absentObjectKeys);
+        std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys);
 
     void HandleGetFailureHelper(const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> &entry,
                                 bool isInsert);
@@ -1015,8 +973,6 @@ private:
     HostPort localAddress_;
 
     std::shared_ptr<MigrateDataRateController> rateController_;
-
-    std::vector<std::string> otherAZNames_;
 
     std::unique_ptr<AsyncUpdateLocationManager> asyncUpdateLocationManager_{ nullptr };
 

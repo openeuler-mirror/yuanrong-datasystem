@@ -67,7 +67,7 @@
 - Key persistent or backend state:
   - ETCD key prefixes for cluster table, ring, master address, metadata tables, and slot recovery.
 - Key in-memory state:
-  - `EtcdStore::tableMap_`, `otherAzTableMap_`, auth token, lease id, keepalive value, timers, watch instance;
+  - `EtcdStore::tableMap_`, auth token, lease id, keepalive value, timers, watch instance;
   - `EtcdWatch::keyVersion_`, prefix map, event queues;
   - Metastore `KVManager::data_`, revisions, lease maps, watch registrations, and limited history.
 
@@ -154,7 +154,7 @@ Failure-sensitive steps:
 
 ### Watch Recovery
 
-1. Start watch streams for all local and optional other-AZ prefixes.
+1. Start watch streams for configured local prefixes.
 2. Process real events in order from the stream queue.
 3. Record processed key version after event handler returns.
 4. Periodically prefix-search ETCD and compare current state against `keyVersion_`.
@@ -200,7 +200,6 @@ Failure-sensitive steps:
 | `etcd_address` | string | external ETCD backend address | empty requires Metastore path or startup rejection |
 | `metastore_address` | string | in-process ETCD-compatible backend address | selected by `GetBackendAddress` when present |
 | `cluster_name` | string | prefixes ETCD table keys | changes key namespace |
-| `other_cluster_names` | string/list | creates other-AZ prefixes | affects cross-AZ watch/read scope |
 | `node_timeout_s` | uint32 | lease TTL and renewal timing | too small causes aggressive liveness loss |
 | `node_dead_timeout_s` | uint32 | keepalive death policy | too small can kill workers during transient failures |
 | `auto_del_dead_node` | bool | enables local kill after liveness timeout | false changes passive deletion behavior |
