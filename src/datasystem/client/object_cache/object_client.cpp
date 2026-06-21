@@ -172,6 +172,12 @@ Status ObjectClient::GenerateObjectKey(const std::string &prefix, std::string &k
     return impl_->GenerateKey(key, prefix);
 }
 
+Status ObjectClient::GetPrefix(const std::string &key, std::string &prefix)
+{
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    return impl_->GetPrefix(key, prefix);
+}
+
 Status ObjectClient::HealthCheck()
 {
     ServerState state;

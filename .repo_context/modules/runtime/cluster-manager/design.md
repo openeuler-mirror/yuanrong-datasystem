@@ -81,7 +81,7 @@
 | node utility thread | event handling, demotion, hash-ring progress, sync | `StartNodeUtilThread` | overloaded loop |
 | orphan monitor | cleanup nodes missing from hash ring/ETCD | `StartOrphanNodeMonitorThread` | per-orphan ETCD get |
 | fake node repair | synthesize add/delete for ring workers absent from node table | `CompleteNodeTableWithFakeNode` | repairs full-cluster restart gaps |
-| route helpers | map object keys or worker UUIDs to `MetaAddrInfo` | route methods in header/cpp | uses hash ring and cluster-node/read-ring state |
+| route helpers | map object keys to `MetaAddrInfo` via hash ring | route methods in header/cpp | uses hash ring and cluster-node/read-ring state |
 | health probe | process readiness state and optional file | `worker_health_check.*` | used by startup and fake-node scheduling |
 
 ## Data And State Model
@@ -100,9 +100,9 @@
 - `ClusterInfo`:
   - startup transport object containing local/other-AZ rings, local/other-AZ workers, ETCD revision, and backend availability.
 - Route model:
-  - object key without embedded worker id routes by hash ring to the owning worker.
-  - object key with embedded worker id routes by UUID lookup; optional cross-AZ lookup is gated by `cross_cluster_get_meta_from_worker`.
-  - route batching caches worker-id and hash-range decisions per call.
+  - in distributed mode, all object keys route by hashing the full key to a primary worker UUID via hash ring; worker UUID is an internal identity only, not embedded in object keys.
+  - route batching caches hash-range decisions per call.
+  - `cross_cluster_get_meta_from_worker` gates cross-AZ metadata read-ring lookups.
 
 ## Main Flows
 
@@ -179,7 +179,7 @@ Failure-sensitive steps:
 ### Route Lookup
 
 1. Centralized mode returns configured `master_address`.
-2. Distributed mode without embedded worker id hashes object key to primary worker UUID.
+2. Distributed mode hashes the full object key to a primary worker UUID via hash ring.
 3. Hash ring maps the owner UUID to worker address.
 4. Connection check validates cluster-node or other-AZ node state before returning.
 
@@ -220,7 +220,7 @@ Failure-sensitive steps:
 | `heartbeat_interval_ms` | int32 | lower bound for node timeout | must be less than node timeout in ms |
 | `add_node_wait_time_s` | uint32 | affects startup table wait and hash-ring add timing | high values extend readiness wait |
 | `auto_del_dead_node` | bool | allows local failed-worker deletion through hash ring | false leaves failed workers until manual action |
-| `cross_cluster_get_meta_from_worker` | bool | allows worker-id lookup across AZ read rings | false keeps worker-id lookup local |
+| `cross_cluster_get_meta_from_worker` | bool | allows cross-AZ metadata read-ring lookups | false keeps cross-AZ lookups local |
 | `health_check_path` | string | optional liveness file path | readiness integrations depend on file state |
 
 ## Availability, Reliability, And Resilience

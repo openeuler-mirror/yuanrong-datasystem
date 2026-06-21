@@ -56,7 +56,7 @@ yr.datasystem.hetero_client.HeteroClient
        * - :doc:`async_dev_delete <yr.datasystem.hetero_client.HeteroClient.async_dev_delete>`
          - 从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。
        * - :doc:`generate_key <yr.datasystem.hetero_client.HeteroClient.generate_key>`
-         - 生成一个带数据系统 Worker UUID 的 key。
+         - 生成唯一的键。
        * - :doc:`get_meta_info <yr.datasystem.hetero_client.HeteroClient.get_meta_info>`
          - 获取keys 对应的元数据信息。
        * - :doc:`exist <yr.datasystem.hetero_client.HeteroClient.exist>`
