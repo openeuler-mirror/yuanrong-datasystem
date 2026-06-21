@@ -1,0 +1,20 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "coordinator_store",
+    srcs = [
+        "coordinator_service_proxy.cpp",
+    ],
+    hdrs = [
+        "coordinator_service_proxy.h",
+        "key_value_entry.h",
+    ],
+    copts = ["-std=c++17"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)

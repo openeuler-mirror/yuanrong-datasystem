@@ -194,7 +194,8 @@ public:
         cluster_->GetEtcdAddrs(0, addrs);
         etcdStore_ = std::make_unique<EtcdStore>(addrs.first.ToString());
         etcdStore_->Init();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, etcdStore_.get(), nullptr);
+        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, clusterStore_.get(), nullptr);
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
         objCacheMasterSvc_ = std::make_unique<datasystem::master::MasterOCServiceImpl>(
             localAddress_, nullptr, akSkManager_, metadataManagerHolder_.get(), nullptr);
@@ -339,6 +340,7 @@ public:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::shared_ptr<datasystem::AkSkManager> akSkManager_;
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterStore_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::MasterOCServiceImpl> objCacheMasterSvc_{ nullptr };
     HostPort localAddress_;

@@ -94,7 +94,8 @@ public:
     {
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
-        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, etcdStore_.get(), nullptr);
+        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, clusterStore_.get(), nullptr);
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
         NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_, apiManager_);
     }
@@ -185,6 +186,7 @@ public:
 private:
     HostPort localAddr_;
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterStore_;
     EtcdClusterManager *etcdCM_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_ { nullptr };
 };
@@ -616,8 +618,8 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots) {
 
 class EtcdCmHelper : public EtcdClusterManager {
 public:
-    EtcdCmHelper(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB)
-        : EtcdClusterManager(workerAddress, masterAddress, etcdDB, nullptr)
+    EtcdCmHelper(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore)
+        : EtcdClusterManager(workerAddress, masterAddress, clusterStore, nullptr)
     {
     }
 
@@ -659,7 +661,8 @@ public:
         MockCollectClusterInfo(nodes);
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
-        etcdCM_ = std::make_shared<EtcdCmHelper>(localAddr_, localAddr_, etcdStore_.get());
+        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        etcdCM_ = std::make_shared<EtcdCmHelper>(localAddr_, localAddr_, clusterStore_.get());
         apiManager_ = std::make_shared<datasystem::worker::WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
         NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_.get(), apiManager_);
     }
@@ -688,7 +691,7 @@ public:
         InsertWorker(ringPb, "127.0.0.1:1111", MakeWorkerPb({ 357913941, 1431655764, 2505397587, 3579139410 }));
         InsertWorker(ringPb, "127.0.0.1:1112", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
         InsertWorker(ringPb, "127.0.0.1:1113", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 3221225469 }));
-        std::unique_ptr<worker::HashRing> ring = std::make_unique<worker::HashRing>("127.0.0.1:1111", etcdStore_.get());
+        std::unique_ptr<worker::HashRing> ring = std::make_unique<worker::HashRing>("127.0.0.1:1111", clusterStore_.get());
         etcdCM_->SetHashRing(ring, ringPb);
     }
 
@@ -740,6 +743,7 @@ protected:
     HostPort localAddr_;
     std::shared_ptr<datasystem::worker::WorkerMasterOcApiManager> apiManager_;
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterStore_;
 };
 
 TEST_F(MigrateL2DataTest, MigrateL2Data)

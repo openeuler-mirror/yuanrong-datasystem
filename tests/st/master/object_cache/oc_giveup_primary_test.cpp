@@ -120,7 +120,9 @@ public:
         FLAGS_master_address = masterAddr_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
-        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, etcdStore_.get(), nullptr);
+        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, clusterStore_.get(),
+                                                       nullptr);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
@@ -227,6 +229,7 @@ public:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdClusterStore> clusterStore_;
     std::unique_ptr<EtcdClusterManager> etcdCM_;
     std::string workerUuid_;
     RandomData random_;

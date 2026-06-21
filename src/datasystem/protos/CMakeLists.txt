@@ -116,6 +116,19 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES})
 
+# Build coordinator RPC proto lib.
+GENERATE_ZMQ_CPP(zmq_proto_lib_depend COORDINATOR_PROTO_SRCS COORDINATOR_PROTO_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/coordinator.proto)
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME coordinator_protos
+        SOURCE ${COORDINATOR_PROTO_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+        NAME coordinator_protos_client
+        SOURCE ${COORDINATOR_PROTO_SRCS}
+        DEPEND zmq_proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+
 GENERATE_PROTO_CPP(SLOT_RECOVERY_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
         PROTO_FILES ${PROTO_SRC_DIR}/slot_recovery.proto
         PROTO_DEPEND proto_lib_depend)

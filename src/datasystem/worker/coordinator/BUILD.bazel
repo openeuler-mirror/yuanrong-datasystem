@@ -1,0 +1,13 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "coordinator_watch_service_impl",
+    srcs = ["coordinator_watch_service_impl.cpp"],
+    hdrs = ["coordinator_watch_service_impl.h"],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_zmq_cc_proto",
+    ],
+)

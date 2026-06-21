@@ -39,7 +39,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/worker/cluster_manager/cluster_store.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/priority_queue.h"
@@ -55,8 +55,8 @@
 
 namespace datasystem {
 struct ClusterInfo {
-    std::vector<std::pair<std::string, std::string>> localHashRing;     // <azName, hashRingPb>
-    std::vector<std::pair<std::string, std::string>> workers;           // <addr, nodeMsg>
+    std::vector<std::pair<std::string, std::string>> localHashRing;  // <azName, hashRingPb>
+    std::vector<std::pair<std::string, std::string>> workers;        // <addr, nodeMsg>
     int64_t revision = -1;
     bool etcdAvailable = true;
 
@@ -72,7 +72,7 @@ public:
     /**
      * @brief Constructor
      */
-    EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB,
+    EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore,
                        std::shared_ptr<AkSkManager> akSkManager = nullptr, const int pqSize = 5000);
 
     ~EtcdClusterManager();
@@ -441,7 +441,7 @@ public:
 
     bool IsCreateFirstLease()
     {
-        return etcdDB_->IsCreateFirstLease();
+        return clusterStore_->IsCreateFirstLease();
     }
 
     /**
@@ -634,7 +634,7 @@ protected:
      */
     struct CmEvent {
         CmEvent() = delete;
-        CmEvent(mvccpb::Event &&evt, PrefixType prf) : event(std::forward<mvccpb::Event>(evt)), prefix(prf)
+        CmEvent(ClusterStoreEvent &&evt, PrefixType prf) : event(std::move(evt)), prefix(prf)
         {
         }
 
@@ -657,10 +657,10 @@ protected:
             };
             std::stringstream s;
             s << "prefix: " << toString(prefix);
-            s << ", event msg: " << GetEventMsg(event);
+            s << ", event msg: " << event.ToString();
             return s.str();
         }
-        mvccpb::Event event;
+        ClusterStoreEvent event;
         PrefixType prefix;
     };
 
@@ -693,7 +693,7 @@ protected:
      * @brief Feed priority queue with ETCD event by watch thread.
      * @param[in] event - event from Etcd call back
      */
-    void EnqueEvent(mvccpb::Event &&event);
+    void EnqueEvent(ClusterStoreEvent &&event);
 
     /**
      * @brief Feed priority queue with ETCD event by watch thread.
@@ -707,14 +707,14 @@ protected:
      * @param[in] event etcd event
      * @return Status
      */
-    Status HandleRingEvent(const mvccpb::Event &event);
+    Status HandleRingEvent(const ClusterStoreEvent &event);
 
     /**
      * @brief Called when etcd event is about /datasystem/cluster
      * @param[in] event etcd event
      * @return Status
      */
-    Status HandleClusterEvent(const mvccpb::Event &event);
+    Status HandleClusterEvent(const ClusterStoreEvent &event);
 
     /**
      * @brief Called when Etcd lease renew fails
@@ -971,7 +971,7 @@ protected:
 
     HostPort workerAddress_;
     HostPort masterAddress_;
-    TbbNodeTable clusterNodeTable_;       // Tracks node states of the cluster nodes
+    TbbNodeTable clusterNodeTable_;  // Tracks node states of the cluster nodes
 
     using TbbOrphanTable = tbb::concurrent_hash_map<std::string, std::string>;
     TbbOrphanTable orphanNodeTable_;
@@ -982,7 +982,7 @@ protected:
     // The timers that generate fake node removal event, used only in StartNodeUtilThread thread.
     std::unordered_map<std::string, TimerQueue::TimerImpl> nodeTableCompletionTimer_;
 
-    EtcdStore *etcdDB_;
+    IClusterStore *clusterStore_;
     mutable std::shared_timed_mutex mutex_;  // TbbNodeTable is not threadsafe for iterations
     std::unique_ptr<worker::HashRing> hashRing_{ nullptr };
 

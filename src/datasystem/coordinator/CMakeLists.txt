@@ -1,0 +1,4 @@
+add_library(coordinator_service_impl STATIC coordinator_service_impl.cpp)
+target_include_directories(coordinator_service_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(coordinator_service_impl PUBLIC coordinator_protos common_util)
+add_dependencies(coordinator_service_impl coordinator_protos)

@@ -95,18 +95,19 @@ bool EtcdClusterManager::ClusterNode::DemoteTimedOutNode()
     return false;
 }
 
-EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, EtcdStore *etcdDB,
-                                       std::shared_ptr<AkSkManager> akSkManager, const int pqSize)
+EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
+                                       IClusterStore *clusterStore, std::shared_ptr<AkSkManager> akSkManager,
+                                       const int pqSize)
     : workerAddress_(workerAddress),
       masterAddress_(masterAddress),
-      etcdDB_(etcdDB),
+      clusterStore_(clusterStore),
       akSkManager_(std::move(akSkManager))
 {
-    hashRing_ = std::make_unique<worker::HashRing>(workerAddress.ToString(), etcdDB);
+    hashRing_ = std::make_unique<worker::HashRing>(workerAddress.ToString(), clusterStore_);
     eventPq_ = std::make_unique<PriorityQueue<std::unique_ptr<CmEvent>, CmEventCmp>>(pqSize);
     workerWaitPost_ = std::make_unique<WaitPost>();
 
-    etcdDB_->SetCheckEtcdStateWhenNetworkFailedHandler(
+    clusterStore_->SetCheckStoreStateWhenNetworkFailedHandler(
         std::bind(&EtcdClusterManager::CheckEtcdStateWhenNetworkFailed, this));
 
     HashRingEvent::SyncClusterNodes::GetInstance().AddSubscriber(
@@ -183,11 +184,7 @@ Status EtcdClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterIn
         if (workerAddress_.ToString() == node.first && clusterInfo.etcdAvailable) {
             continue;
         }
-        mvccpb::Event fakeEvent;
-        auto fakeKv = fakeEvent.mutable_kv();
-        fakeKv->set_key(clusterPrefix_ + "/" + node.first);
-        fakeKv->set_value(node.second);
-        fakeEvent.set_type(mvccpb::Event_EventType::Event_EventType_PUT);
+        ClusterStoreEvent fakeEvent{ ClusterStoreEventType::PUT, clusterPrefix_ + "/" + node.first, node.second };
         LOG(INFO) << "Adding key: " << node.first << " value: " << node.second << " to priority queue.";
         RETURN_IF_NOT_OK(eventPq_->EmplaceBack(new CmEvent(std::move(fakeEvent), PrefixType::CLUSTER)));
     }
@@ -207,7 +204,7 @@ bool EtcdClusterManager::IsPreLeaving(const std::string &workerAddr)
 Status EtcdClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs)
 {
     std::vector<std::pair<std::string, std::string>> activeNodes;
-    RETURN_IF_NOT_OK(etcdDB_->GetAll(ETCD_CLUSTER_TABLE, activeNodes));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(ETCD_CLUSTER_TABLE, activeNodes));
     nodeAddrs.clear();
     nodeAddrs.resize(activeNodes.size());
     for (size_t i = 0; i < activeNodes.size(); ++i) {
@@ -223,7 +220,7 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     LOG(INFO) << "Init etcd cluster manager.";
     auto traceId = Trace::Instance().GetTraceID();
     isEtcdAvailableWhenStart_ = clusterInfo.etcdAvailable;
-    etcdDB_->SetEventHandler([this, traceId](mvccpb::Event &&event) {
+    clusterStore_->SetEventHandler([this, traceId](ClusterStoreEvent &&event) {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         EnqueEvent(std::move(event));
     });
@@ -235,8 +232,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
         "The value of node_timeout_s must be one thousandth greater than the value of heartbeat_interval_ms.");
 
     // 2. Get prefix, otherwise the later background thread will have data race on these strings.
-    RETURN_IF_NOT_OK(etcdDB_->GetEtcdPrefix(ETCD_RING_PREFIX, ringPrefix_));
-    RETURN_IF_NOT_OK(etcdDB_->GetEtcdPrefix(ETCD_CLUSTER_TABLE, clusterPrefix_));
+    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(ETCD_RING_PREFIX, ringPrefix_));
+    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(ETCD_CLUSTER_TABLE, clusterPrefix_));
 
     // 3. Launch the background thread, as the hashring relies on it to become RUNNING. We want to start hashring
     // as early as possible. Also, cluster manager needs this thread to to add nodes to its node table.
@@ -249,8 +246,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     // 4. Watch for future changes to etcd table under directory /datasystem/cluster and /datasystem/ring)
     // The watch thread will enqueue the events in priority queue and the background thread will fetch the events
     // and handle them.
-    RETURN_IF_NOT_OK(etcdDB_->WatchEvents({ { ETCD_RING_PREFIX, "", clusterInfo.revision },
-                                            { ETCD_CLUSTER_TABLE, "", clusterInfo.revision } }));
+    RETURN_IF_NOT_OK(clusterStore_->WatchEvents(
+        { { ETCD_RING_PREFIX, "", clusterInfo.revision }, { ETCD_CLUSTER_TABLE, "", clusterInfo.revision } }));
     // 5. Since the background and watch threads are up, it is time to initialize the hashring.
     if (clusterInfo.etcdAvailable) {
         RETURN_IF_NOT_OK(hashRing_->InitWithEtcd());
@@ -269,8 +266,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
 
     bool isRestart = false;
     RETURN_IF_NOT_OK(IsRestart(isRestart));
-    RETURN_IF_NOT_OK(
-        etcdDB_->InitKeepAlive(ETCD_CLUSTER_TABLE, workerAddress_.ToString(), isRestart, isEtcdAvailableWhenStart_));
+    RETURN_IF_NOT_OK(clusterStore_->InitKeepAlive(ETCD_CLUSTER_TABLE, workerAddress_.ToString(), isRestart,
+                                                  isEtcdAvailableWhenStart_));
 
     // Display the final list of nodes that were set up into the log
     LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
@@ -355,7 +352,7 @@ Status EtcdClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
         if (eventNode->NodeWasRecovered() && eventNodeKey == workerAddress_) {
             // if etcd restart, set worker to ready from recover.
             INJECT_POINT("etcdrecover.worker.delaytoready");
-            RETURN_IF_NOT_OK(etcdDB_->UpdateNodeState(ETCD_NODE_READY));
+            RETURN_IF_NOT_OK(clusterStore_->UpdateNodeState(ETCD_NODE_READY));
         }
     } else {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Existing node has an unknown state during node addition event.");
@@ -498,7 +495,7 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
     return Status::OK();
 }
 
-void EtcdClusterManager::EnqueEvent(mvccpb::Event &&event)
+void EtcdClusterManager::EnqueEvent(ClusterStoreEvent &&event)
 {
     INJECT_POINT("EtcdClusterManager.EnqueEvent", [] { return; });
     if (thread_ == nullptr) {
@@ -511,7 +508,7 @@ void EtcdClusterManager::EnqueEvent(mvccpb::Event &&event)
     // check hashring but the hashring could be not in RUNNING state. However, the hashring initialization also relies
     // on this watch thread to process hashring-related events.
     Status rc;
-    const auto &key = event.kv().key();
+    const auto &key = event.key;
     Timer timer;
     int maxEnqueueTimeMs = 100, logEveryN = 30;
     if (key.find(ETCD_CLUSTER_TABLE) != std::string::npos) {
@@ -548,8 +545,7 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
     // Hashring event has higher priority so it will climb to head to pop up first.
     // If master is centralized, Hashring is not needed, so no need to wait for hashring to be in RUNNING state.
     if (!IsCentralized() && toProcess->prefix == PrefixType::CLUSTER && !hashRing_->IsWorkable()) {
-        LOG(INFO) << "Cache cluster event until hashring is workerable: "
-                  << LogHelper::IgnoreSensitive(toProcess->event);
+        LOG(INFO) << "Cache cluster event until hashring is workerable: " << toProcess->event.ToString();
         tmpClusterEvents_.emplace_back(std::move(toProcess));
         return Status::OK();
     }
@@ -574,8 +570,7 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
             RETURN_IF_NOT_OK(FlushTmpClusterEvents());
             RETURN_IF_NOT_OK(HandleClusterEvent(toProcess->event));
             // Display the list of nodes to the log now that the handling of cluster event has completed
-            LOG(INFO) << "Nodes tracked by cluster manager:\n"
-                      << this->NodesToString();
+            LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
             break;
         case PrefixType::RING:
             RETURN_IF_NOT_OK(HandleRingEvent(toProcess->event));
@@ -586,25 +581,23 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleRingEvent(const mvccpb::Event &event)
+Status EtcdClusterManager::HandleRingEvent(const ClusterStoreEvent &event)
 {
-    if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
+    if (event.type == ClusterStoreEventType::DELETE) {
         return Status::OK();
     }
-    Status rc;
-    std::string eventKey = event.kv().key();
-    rc = hashRing_->HandleRingEvent(event, ringPrefix_);
-    return rc;
+    auto etcdEvent = EtcdClusterStore::ToEtcdEvent(event);
+    return hashRing_->HandleRingEvent(etcdEvent, ringPrefix_);
 }
 
-Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
+Status EtcdClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
 {
     Status rc;
-    std::string nodeHostPortStr = event.kv().key();
-    std::string nodeTimestamp = event.kv().value();
+    std::string nodeHostPortStr = event.key;
+    std::string nodeTimestamp = event.value;
     // Parse the type of event of addition appended to timestamp.
     std::string additionEventType;  // "start", "restart", "recover"
-    if (event.type() == mvccpb::Event_EventType::Event_EventType_PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
+    if (event.type == ClusterStoreEventType::PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
         KeepAliveValue keepAliveValue;
         auto parseRc = KeepAliveValue::FromString(nodeTimestamp, keepAliveValue);
         if (parseRc.IsOk()) {
@@ -613,7 +606,7 @@ Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
         } else {
             std::stringstream ss;
             ss << "Event of node, key: " << nodeHostPortStr << " value: " << nodeTimestamp
-               << " type: " << mvccpb::Event::EventType_Name(event.type()) << ", is not recognized.";
+               << " type: " << event.ToString() << ", is not recognized.";
             RETURN_STATUS(K_RUNTIME_ERROR, ss.str());
         }
     }
@@ -623,15 +616,15 @@ Status EtcdClusterManager::HandleClusterEvent(const mvccpb::Event &event)
     HostPort eventNodeKey;
     RETURN_IF_NOT_OK(eventNodeKey.ParseString(nodeHostPortStr));
     auto eventNode = std::make_unique<ClusterNode>(nodeTimestamp, additionEventType);
-    if (event.type() == mvccpb::Event_EventType::Event_EventType_PUT) {
+    if (event.type == ClusterStoreEventType::PUT) {
         LOG(INFO) << "Event Type: Add Node: " << eventNode->ToString(eventNodeKey);
         rc = HandleNodeAdditionEvent(eventNodeKey, std::move(eventNode), "");
-    } else if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
+    } else if (event.type == ClusterStoreEventType::DELETE) {
         LOG(INFO) << "Event Type: Remove Node: " << eventNode->ToString(eventNodeKey);
         LOG_IF_ERROR_EXCEPT(RemoveRemoteFastTransportNode(eventNodeKey), "", K_NOT_FOUND);
         rc = HandleNodeRemoveEvent(eventNodeKey, std::move(eventNode), "");
     } else {
-        rc = Status(K_RUNTIME_ERROR, "unknown type: " + event.DebugString());
+        rc = Status(K_RUNTIME_ERROR, "unknown type: " + event.ToString());
     }
     return rc;
 }
@@ -803,7 +796,7 @@ void EtcdClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string,
         }
         // check the nodes that not found in hash ring
         RangeSearchResult res;
-        auto status = etcdDB_->Get(ETCD_CLUSTER_TABLE, orphanNode, res, timeoutMs);
+        auto status = clusterStore_->Get(ETCD_CLUSTER_TABLE, orphanNode, res, timeoutMs);
 
         typename TbbNodeTable::const_accessor accessor;
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
@@ -870,7 +863,7 @@ Status EtcdClusterManager::StartOrphanNodeMonitorThread()
             if (sz == 0) {
                 continue;
             }
-            if (etcdDB_->IsKeepAliveTimeout()) {
+            if (clusterStore_->IsKeepAliveTimeout()) {
                 const int logEveryN = 1000;
                 LOG_EVERY_N(INFO, logEveryN)
                     << "etcd is currently unavailable, synchronization cannot be completed, waiting for the next round "
@@ -1253,15 +1246,11 @@ void EtcdClusterManager::CompleteNodeTableWithFakeNode(const std::string &lackNo
 {
     // Enqueue a fake event and let the background thread to handle it.
     LOG(INFO) << "Create fake add-and-remove event of node " << lackNode << " to priority queue.";
-    mvccpb::Event fakeAddEvent;
-    auto fakeKv = fakeAddEvent.mutable_kv();
     // Key is the string of HostPort. Value is the timestamp with additionType.
-    fakeKv->set_key(clusterPrefix_ + "/" + lackNode);
-    fakeKv->set_value(FAKE_NODE_EVENT_VALUE);
-    fakeAddEvent.set_type(mvccpb::Event_EventType::Event_EventType_PUT);
-
-    mvccpb::Event fakeDeleteEvent = fakeAddEvent;
-    fakeDeleteEvent.set_type(mvccpb::Event_EventType::Event_EventType_DELETE);
+    ClusterStoreEvent fakeAddEvent{ ClusterStoreEventType::PUT, clusterPrefix_ + "/" + lackNode,
+                                    FAKE_NODE_EVENT_VALUE };
+    ClusterStoreEvent fakeDeleteEvent{ ClusterStoreEventType::DELETE, clusterPrefix_ + "/" + lackNode,
+                                       FAKE_NODE_EVENT_VALUE };
 
     if (eventPq_ && thread_) {
         eventPq_->EmplaceBack(new CmEvent(std::move(fakeAddEvent), PrefixType::CLUSTER));
@@ -1273,7 +1262,7 @@ Status EtcdClusterManager::WaitNodeJoinToTable()
 {
     using namespace std::chrono;
     std::vector<std::pair<std::string, std::string>> localAzValue;
-    RETURN_IF_NOT_OK(etcdDB_->GetAll(ETCD_CLUSTER_TABLE, localAzValue));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(ETCD_CLUSTER_TABLE, localAzValue));
     auto initClusterTableNum = localAzValue.size();
     LOG(INFO) << "Start waiting for nodes to join the table, expect nodes num: " << initClusterTableNum;
     auto start = GetSteadyClockTimeStampUs();
@@ -1406,7 +1395,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
 
 Status EtcdClusterManager::InformEtcdReconciliationDone()
 {
-    RETURN_IF_NOT_OK(etcdDB_->InformEtcdReconciliationDone(workerAddress_));
+    RETURN_IF_NOT_OK(clusterStore_->InformReconciliationDone(workerAddress_));
     return Status::OK();
 }
 
@@ -1578,9 +1567,9 @@ bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Has
     return false;
 }
 
-void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &objectKey,
-                                                       Hash2MetaInfoType &hash2MetaInfo, std::optional<Status> &rc,
-                                                       MetaAddrInfo &metaAddrInfo, bool disableCache)
+void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                                       std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo,
+                                                       bool disableCache)
 {
     std::optional<RouteInfo> routeInfo;
     routeInfo.emplace();

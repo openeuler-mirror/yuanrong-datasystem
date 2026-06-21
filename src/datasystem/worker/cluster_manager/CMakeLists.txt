@@ -1,5 +1,6 @@
 
 set(CLUSTER_MANAGER_SRCS
+        cluster_store.cpp
         etcd_cluster_manager.cpp
         )
 

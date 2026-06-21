@@ -145,7 +145,7 @@ Status HashRingHealthCheck::DoHealthCheck(bool checkRetry, bool checkFix)
         if (!CheckHashRing(autoFix, newRing)) {
             return Status::OK();
         }
-        RETURN_IF_NOT_OK(hashRing_->etcdStore_->CAS(
+        RETURN_IF_NOT_OK(hashRing_->clusterStore_->CAS(
             ETCD_RING_PREFIX, "",
             [&newRing, &ring](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb oldRing;
@@ -186,7 +186,7 @@ Status HashRingHealthCheck::TryGetAndParseHashRingPb(HashRingPb &ring, std::stri
     std::string errInfo;
     do {
         RangeSearchResult res;
-        Status rc = hashRing_->etcdStore_->Get(ETCD_RING_PREFIX, "", res);
+        Status rc = hashRing_->clusterStore_->Get(ETCD_RING_PREFIX, "", res);
         if (rc.IsOk()) {
             value = std::move(res.value);
             version = res.modRevision;
@@ -214,7 +214,7 @@ Status HashRingHealthCheck::TryGetAndParseHashRingPb(HashRingPb &ring, std::stri
     LOG(ERROR) << "HashRingHealthCheck: " << errInfo;
     if (FLAGS_enable_hash_ring_self_healing) {
         LOG(INFO) << "try init empty hash ring.";
-        RETURN_IF_NOT_OK(hashRing_->etcdStore_->CAS(
+        RETURN_IF_NOT_OK(hashRing_->clusterStore_->CAS(
             ETCD_RING_PREFIX, "",
             [](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb oldRing;

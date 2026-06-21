@@ -173,7 +173,9 @@ protected:
         addr.ParseString(addrStr);
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
-        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_.back().get(), nullptr));
+        clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
+        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+                                                                   nullptr));
         rings_.emplace_back(static_cast<TestHashRing *>(etcdCMs_.back()->GetHashRing()));
         ClusterInfo clusterInfo;
         DS_EXPECT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
@@ -184,6 +186,7 @@ protected:
     std::unique_ptr<EtcdStore> db_;
     std::vector<std::unique_ptr<EtcdClusterManager>> etcdCMs_;  // just used for construction of hash rings.
     std::vector<std::unique_ptr<EtcdStore>> etcdStores_;        // Each EtcdStore is used for each EtcdClusterManager.
+    std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     std::vector<std::future<Status>> futures_;
     std::vector<TestHashRing *> rings_;
@@ -278,7 +281,9 @@ void HashRingTest::InitRing(uint32_t workerNum)
         LOG(INFO) << "Ready to init for " << workerIds_[i];
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
-        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_.back().get(), nullptr));
+        clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
+        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+                                                                   nullptr));
         rings_[i] = static_cast<TestHashRing *>(etcdCMs_.back()->GetHashRing());
         futures_.emplace_back(threadPool_->Submit([this, i]() {
             ClusterInfo clusterInfo;
@@ -317,11 +322,14 @@ void HashRingTest::RestartRing(int workerIndex)
     LOG(INFO) << "Start to restart worker " << workerIds_[workerIndex];
     HostPort addr;
     addr.ParseString("127.0.0.1:" + std::to_string(workerIndex));
+    clusterStores_[workerIndex].reset();
     etcdStores_[workerIndex].reset();
     etcdStores_[workerIndex] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
     etcdStores_[workerIndex]->Init();
+    clusterStores_[workerIndex] = std::make_unique<EtcdClusterStore>(etcdStores_[workerIndex].get());
     etcdCMs_.emplace(etcdCMs_.begin() + workerIndex,
-                     std::make_unique<EtcdClusterManager>(addr, addr, etcdStores_[workerIndex].get(), nullptr));
+                     std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[workerIndex].get(),
+                                                          nullptr));
     const auto &cm = etcdCMs_[workerIndex];
     ClusterInfo clusterInfo;
     DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[workerIndex].get(), clusterInfo));
