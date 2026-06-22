@@ -56,6 +56,11 @@ function init_default_opts() {
 
   # Whether to build device object.
   export BUILD_HETERO="on"
+  export BUILD_HETERO_MODE="on"
+
+  # Hetero sub-options (defaults match cmake/options.cmake)
+  export BUILD_HETERO_NPU="on"
+  export BUILD_HETERO_GPU="off"
 
   # Whether to support os pipeline h2d
   export BUILD_PIPLN_H2D="off"

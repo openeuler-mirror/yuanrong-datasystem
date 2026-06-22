@@ -1,4 +1,6 @@
-add_subdirectory(ascend)
+if (BUILD_HETERO_NPU OR WITH_TESTS)
+    add_subdirectory(ascend)
+endif()
 if (BUILD_HETERO_GPU)
     add_subdirectory(nvidia)
 endif()
@@ -10,7 +12,9 @@ add_library(common_device STATIC
     acl_pipeline_p2p_task.cpp
 )
 
-target_link_libraries(common_device PRIVATE common_acl_device)
+if (BUILD_HETERO_NPU OR WITH_TESTS)
+    target_link_libraries(common_device PRIVATE common_acl_device)
+endif()
 if (BUILD_HETERO_GPU)
     target_link_libraries(common_device PRIVATE common_cuda_device)
 endif()

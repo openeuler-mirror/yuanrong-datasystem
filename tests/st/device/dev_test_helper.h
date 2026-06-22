@@ -37,7 +37,10 @@
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "mock/ascend_device_manager_mock.cpp"
+#ifdef USE_GPU
 #include "datasystem/common/device/nvidia/cuda_device_manager.h"
+#endif
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
@@ -51,11 +54,12 @@
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
-#include "mock/ascend_device_manager_mock.cpp"
 
 namespace datasystem {
 using namespace acl;
+#ifdef USE_GPU
 using namespace cuda;
+#endif
 namespace st {
 constexpr int DEFAULT_WORKER_NUM = 2;
 constexpr int DEFAULT_GET_TIMEOUT = 60000;
@@ -69,17 +73,17 @@ constexpr int PRINT_STR_LIMIT = 100;
 
 inline DeviceManagerBase *GetDefaultDeviceManager()
 {
-    auto *mgr = DeviceManagerFactory::GetDeviceManager();
-    if (mgr != nullptr) {
-        return mgr;
-    }
+    switch (DeviceManagerFactory::ProbeBackend()) {
+        case DeviceBackend::NPU:
+            return AclDeviceManager::Instance();
 #ifdef USE_GPU
-    return CudaDeviceManager::Instance();
-#elif defined(USE_NPU)
-    return AclDeviceManager::Instance();
-#else
-    return nullptr;
+        case DeviceBackend::GPU:
+            return CudaDeviceManager::Instance();
 #endif
+        case DeviceBackend::UNKNOWN:
+        default:
+            return AclDeviceManager::Instance();
+    }
 }
 
 class DevPtrQueue {
@@ -154,18 +158,9 @@ public:
 
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
-                return AclDeviceManagerMock::Instance();
-            });
-            // In special cases, wait () is trapped. This problem does not occur in mock ut and st.
-            BINEXPECT_CALL(&AclDeviceManager::Shutdown, ());
-        }
-
+        UseAclMockIfNoDeviceBackend();
         ExternalClusterTest::SetUp();
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclInit(nullptr));
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtSetDevice(deviceIdx_));
+        InitDevice(GetDefaultDeviceManager(), deviceIdx_);
     }
 
     static void SupportNPU(ConnectOptions &connectOptions)
@@ -176,8 +171,11 @@ public:
 
     void TearDown() override
     {
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclrtResetDevice(deviceIdx_));
-        DS_ASSERT_OK(AclDeviceManager::Instance()->aclFinalize());
+        if (mgr_ != nullptr) {
+            DS_ASSERT_OK(mgr_->ResetDevice(deviceIdx_));
+            DS_ASSERT_OK(mgr_->Finalize());
+        }
+        unsetenv("DS_TEST_FORCE_ASCEND_DEVICE_MANAGER");
         ExternalClusterTest::TearDown();
     }
 
@@ -234,9 +232,11 @@ public:
         deviceIdx_ = deviceId;
     }
 
-    // Convenience wrappers for backward compatibility.
-    void InitAcl(int32_t deviceId) { InitDevice(AclDeviceManager::Instance(), deviceId); }
+    // Convenience wrapper kept for older hetero tests; it selects the runtime backend.
+    void InitAcl(int32_t deviceId) { InitDevice(GetDefaultDeviceManager(), deviceId); }
+#ifdef USE_GPU
     void InitCuda(int32_t deviceId) { InitDevice(CudaDeviceManager::Instance(), deviceId); }
+#endif
 
     void GetAllFuture(std::vector<Future> &futVec)
     {
@@ -452,6 +452,28 @@ public:
     size_t deviceIdx_ = 0;
 
 protected:
+    static bool ShouldUseAclMock()
+    {
+        return DeviceManagerFactory::ProbePhysicalBackend() == DeviceBackend::UNKNOWN;
+    }
+
+    void UseAclMockIfNoDeviceBackend(bool forceRemoteHccl = false)
+    {
+        if (!ShouldUseAclMock()) {
+            return;
+        }
+        setenv("DS_TEST_FORCE_ASCEND_DEVICE_MANAGER", "1", 1);
+        DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
+        if (forceRemoteHccl) {
+            DS_ASSERT_OK(datasystem::inject::Set("client.GetOrCreateHcclComm.setIsSameNode", "call(0)"));
+        }
+        BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
+            return AclDeviceManagerMock::Instance();
+        });
+        // In special cases, wait () is trapped. This problem does not occur in mock ut and st.
+        BINEXPECT_CALL(&AclDeviceManager::Shutdown, ());
+    }
+
     AclDeviceManagerMock managerMock_;
 };
 class DeviceBlobListHelper {

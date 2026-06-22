@@ -35,9 +35,13 @@ except ImportError:
 
 def check_acl():
     """
-    Features: Return False if import acl failed or build without hetero.
+    Features: Return False if import acl failed or build without NPU hetero.
     """
-    return acl is not None and os.getenv("BUILD_HETERO", "off") == "on"
+    return (
+        acl is not None
+        and os.getenv("BUILD_HETERO", "off") == "on"
+        and os.getenv("BUILD_HETERO_NPU", "off") == "on"
+    )
 
 
 class TestDeviceOcClientMethods(unittest.TestCase):

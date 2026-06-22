@@ -32,7 +32,6 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/request_table.h"

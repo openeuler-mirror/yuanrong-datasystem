@@ -31,15 +31,10 @@
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
-
-#ifdef BUILD_HETERO
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
-#endif
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
 

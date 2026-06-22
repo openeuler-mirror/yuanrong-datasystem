@@ -277,11 +277,22 @@ endif()
 add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
 
 if (BUILD_HETERO)
-    set(DS_DEVICE_LLT_DEPEND_LIB
-            cluster
-            ${ASCEND_LIBRARY}
-            ${HCCL_LIBRARY}
-            binmock)
+    if (BUILD_HETERO_NPU)
+        set(DS_DEVICE_LLT_DEPEND_LIB
+                cluster
+                ${ASCEND_LIBRARY}
+                ${HCCL_LIBRARY}
+                common_acl_device
+                binmock)
+    else()
+        set(DS_DEVICE_LLT_DEPEND_LIB
+                cluster
+                common_acl_device
+                binmock)
+    endif()
+    if (BUILD_HETERO_GPU)
+        list(APPEND DS_DEVICE_LLT_DEPEND_LIB common_cuda_device)
+    endif()
     # copy acl plugin shared library to the same directory of ds_st.
     if (BUILD_HETERO_NPU)
         add_custom_command(
@@ -303,6 +314,7 @@ else()
     # Keep device LLT available in non-hetero builds and rely on the mock device manager.
     set(DS_DEVICE_LLT_DEPEND_LIB
             cluster
+            common_acl_device
             binmock)
 endif()
 

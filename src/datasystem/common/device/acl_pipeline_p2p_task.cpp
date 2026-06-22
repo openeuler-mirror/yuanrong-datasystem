@@ -59,7 +59,7 @@ PipeLineP2PBase::~PipeLineP2PBase()
     if (!transferUnitPools_.empty()) {
         LOG(WARNING) << "transfer buffer not release, remaining count:" << transferUnitPools_.size();
         for (auto &kv : transferUnitPools_) {
-            LOG_IF_ERROR(aclResourceMgr_->Device()->Free(kv.second), "Free send transfer pool failed");
+            LOG_IF_ERROR(resourceMgr_->Device()->Free(kv.second), "Free send transfer pool failed");
         }
     }
 }
@@ -81,7 +81,7 @@ Status PipeLineP2PBase::AllocTransferBuffer(size_t objectSize, Blob &transBuffer
                 transferVec = std::move(currentPool);
                 iter = transferUnitPools_.erase(iter);
             } else if (transferUnitPools_.size() > cacheSize) {
-                LOG_IF_ERROR(aclResourceMgr_->Device()->Free(currentPool), "Free transfer pool failed");
+                LOG_IF_ERROR(resourceMgr_->Device()->Free(currentPool), "Free transfer pool failed");
                 iter = transferUnitPools_.erase(iter);
             } else {
                 ++iter;
@@ -95,7 +95,7 @@ Status PipeLineP2PBase::AllocTransferBuffer(size_t objectSize, Blob &transBuffer
     const int maxRetrySec = 60;
     while (transferVec.empty()) {
         transferVec = std::move(std::vector<ShmUnit>(1));
-        auto rc = aclResourceMgr_->Device()->Allocate(
+        auto rc = resourceMgr_->Device()->Allocate(
             { BufferMetaInfo{ .blobCount = 1, .firstBlobOffset = 0, .size = objectSize } }, transferVec, true);
         if (rc.IsOk()) {
             break;
@@ -155,7 +155,7 @@ Status PipeLineP2PSend::WaitFinish()
 {
     auto stream = PrimaryStream();
     RETURN_RUNTIME_ERROR_IF_NULL(stream);
-    return aclApi_->RtSynchronizeStream(stream);
+    return DeviceManagerFactory::GetDeviceManager()->SynchronizeStream(stream);
 }
 
 Status PipeLineP2PSend::RunTaskPhaseOneImpl(size_t pipelineIndex, const P2PSendTask &task, aclrtStream stream)
@@ -164,6 +164,11 @@ Status PipeLineP2PSend::RunTaskPhaseOneImpl(size_t pipelineIndex, const P2PSendT
     if (!EnableMerge(task.srcBuffers)) {
         return Status::OK();
     }
+#ifndef USE_NPU
+    (void)task;
+    (void)stream;
+    return Status::OK();
+#else
     size_t MAX_FFTS_TASKS_COUNT = 8;
     auto &fftsDispatcher = GetResource()->fftsDispatcher;
     std::vector<int32_t> lastTaskId(MAX_FFTS_TASKS_COUNT, -1);
@@ -192,6 +197,7 @@ Status PipeLineP2PSend::RunTaskPhaseOneImpl(size_t pipelineIndex, const P2PSendT
                      "ffts LaunchFftsTask");
     CHECK_ACL_RESULT(fftsDispatcher->ReuseCtx(0), "ffts ReuseCtx");
     return Status::OK();
+#endif
 }
 
 Status PipeLineP2PSend::RunTaskPhaseTwoImpl(size_t pipelineIndex, const P2PSendTask &task, aclrtStream stream)
@@ -206,12 +212,16 @@ Status PipeLineP2PSend::RunTaskPhaseTwoImpl(size_t pipelineIndex, const P2PSendT
 Status PipeLineP2PSend::PostTaskProcessImpl(const P2PSendTask &task)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(task.event->RecordEvent(PrimaryStream()), "Record send event failed.");
+#ifndef USE_NPU
+    return Status::OK();
+#else
     auto callbackData = std::make_unique<CallbackData>();
     callbackData->self = this;
     callbackData->ackSeq = task.seq;
     RETURN_IF_NOT_OK(aclApi_->AclrtLaunchCallback(PipeLineP2PBase::NotifyCallback, callbackData.release(),
                                                   ACL_CALLBACK_NO_BLOCK, PrimaryStream()));
     return Status::OK();
+#endif
 }
 
 Status PipeLineP2PRecv::Submit(P2PRecvTask &&task)
@@ -232,7 +242,7 @@ Status PipeLineP2PRecv::WaitFinish()
 {
     auto stream = PrimaryStream();
     RETURN_RUNTIME_ERROR_IF_NULL(stream);
-    return aclApi_->RtSynchronizeStream(stream);
+    return DeviceManagerFactory::GetDeviceManager()->SynchronizeStream(stream);
 }
 
 Status PipeLineP2PRecv::RunTaskPhaseOneImpl(size_t pipelineIndex, const P2PRecvTask &task, aclrtStream stream)
@@ -251,6 +261,12 @@ Status PipeLineP2PRecv::RunTaskPhaseTwoImpl(size_t pipelineIndex, const P2PRecvT
     if (!EnableMerge(task.destBuffers)) {
         return Status::OK();
     }
+#ifndef USE_NPU
+    (void)pipelineIndex;
+    (void)task;
+    (void)stream;
+    return Status::OK();
+#else
     size_t MAX_FFTS_TASKS_COUNT = 8;
     auto &fftsDispatcher = GetResource()->fftsDispatcher;
     std::vector<int32_t> lastTaskId(MAX_FFTS_TASKS_COUNT, -1);
@@ -279,17 +295,22 @@ Status PipeLineP2PRecv::RunTaskPhaseTwoImpl(size_t pipelineIndex, const P2PRecvT
                      "ffts LaunchFftsTask");
     CHECK_ACL_RESULT(fftsDispatcher->ReuseCtx(0), "ffts ReuseCtx");
     return Status::OK();
+#endif
 }
 
 Status PipeLineP2PRecv::PostTaskProcessImpl(const P2PRecvTask &task)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(task.event->RecordEvent(PrimaryStream()), "Record recv event failed.");
+#ifndef USE_NPU
+    return Status::OK();
+#else
     auto callbackData = std::make_unique<CallbackData>();
     callbackData->self = this;
     callbackData->ackSeq = task.seq;
     RETURN_IF_NOT_OK(aclApi_->AclrtLaunchCallback(PipeLineP2PBase::NotifyCallback, callbackData.release(),
                                                   ACL_CALLBACK_NO_BLOCK, PrimaryStream()));
     return Status::OK();
+#endif
 }
 }  // namespace acl
 }  // namespace datasystem

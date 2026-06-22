@@ -221,8 +221,8 @@ class DsTensorClient:
     def _check_tensor_device_type(tensor: Tensor) -> None:
         """check the tensor type"""
         device_type = DsTensorClient._get_tensor_device_type(tensor)
-        if device_type not in ["Ascend", "npu"]:
-            raise ValueError(f"{device_type} tensor, not a npu/Ascend tensor")
+        if device_type not in ["Ascend", "npu", "cuda"]:
+            raise ValueError(f"{device_type} tensor, not a supported device tensor (expected npu/Ascend/cuda)")
 
     @staticmethod
     def _check_tensors_is_contiguous(tensors: List[Tensor]) -> None:

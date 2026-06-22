@@ -39,10 +39,6 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
 
-#ifdef BUILD_HETERO
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
-#endif
-
 namespace datasystem {
 
 using RemoteH2DHostInfoMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<RemoteH2DHostInfoPb>>;

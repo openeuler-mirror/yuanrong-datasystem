@@ -24,8 +24,12 @@
 
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_resource_manager.h"
+#ifdef USE_GPU
 #include "datasystem/common/device/nvidia/cuda_resource_manager.h"
+#endif
+#if defined(USE_NPU) || defined(WITH_TESTS)
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
+#endif
 
 namespace datasystem {
 
@@ -38,9 +42,17 @@ public:
 #else
         switch (DeviceManagerFactory::ProbeBackend()) {
             case DeviceBackend::NPU:
+#if defined(USE_NPU) || defined(WITH_TESTS)
                 return std::make_unique<AclResourceManager>();
+#else
+                return nullptr;
+#endif
             case DeviceBackend::GPU:
+#ifdef USE_GPU
                 return std::make_unique<CudaResourceManager>();
+#else
+                return nullptr;
+#endif
             case DeviceBackend::UNKNOWN:
             default:
                 LOG(INFO) << "No accelerator backend detected for DeviceResourceManagerFactory.";

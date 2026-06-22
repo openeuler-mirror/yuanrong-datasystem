@@ -45,7 +45,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/object_cache/object_base.h"
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 #include "datasystem/common/perf/perf_manager.h"

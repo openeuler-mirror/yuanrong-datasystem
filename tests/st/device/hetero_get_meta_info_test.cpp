@@ -56,14 +56,7 @@ namespace st {
 class HeteroGetMetaInfoTest : public DevTestHelper {
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
-            DS_ASSERT_OK(datasystem::inject::Set("client.GetOrCreateHcclComm.setIsSameNode", "call(0)"));
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
-                return AclDeviceManagerMock::Instance();
-            });
-        }
+        UseAclMockIfNoDeviceBackend(true);
         std::random_device rd;
         std::mt19937 gen(rd());
         gen_ = gen;

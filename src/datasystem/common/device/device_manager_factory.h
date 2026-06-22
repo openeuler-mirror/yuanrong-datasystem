@@ -34,7 +34,7 @@
 #include "datasystem/common/device/nvidia/cuda_device_manager.h"
 #endif
 
-#if defined(USE_NPU) || defined(USE_GPU)
+#if defined(USE_NPU) || defined(USE_GPU) || defined(WITH_TESTS)
 #include <glob.h>
 #include <cstdlib>
 #endif
@@ -58,26 +58,78 @@ class DeviceManagerFactory {
 public:
     static DeviceManagerBase *GetDeviceManager()
     {
+        if (auto *overrideMgr = DetectTestOverrideManager(); overrideMgr != nullptr) {
+            return overrideMgr;
+        }
         static DeviceManagerBase *inst = Detect();
         return inst;
     }
 
     static DeviceBackend ProbeBackend()
     {
-#ifdef USE_NPU
-        if (HasDevNode("/dev/davinci[0-16]*"))
+#ifdef WITH_TESTS
+        if (IsTestAscendMockForced()) {
             return DeviceBackend::NPU;
+        }
 #endif
-#ifdef USE_GPU
-        if (HasDevNode("/dev/nvidia[0-9]*") || HasNvidiaSmi())
-            return DeviceBackend::GPU;
-#endif
-        return DeviceBackend::UNKNOWN;
+        return ProbePhysicalBackend();
+    }
+
+    static DeviceBackend ProbePhysicalBackend()
+    {
+        static DeviceBackend backend = DetectPhysicalBackend();
+        return backend;
     }
 
 private:
     DeviceManagerFactory() = delete;
     ~DeviceManagerFactory() = delete;
+
+    static DeviceManagerBase *DetectTestOverrideManager()
+    {
+#ifdef WITH_TESTS
+        if (IsTestAscendMockForced()) {
+            return acl::AclDeviceManager::Instance();
+        }
+#endif
+        return nullptr;
+    }
+
+    static DeviceBackend DetectPhysicalBackend()
+    {
+        const bool hasNpu = HasNpuDevice();
+        const bool hasGpu = HasGpuDevice();
+        if (hasNpu && hasGpu) {
+            LOG(WARNING) << "Both NPU (/dev/davinci*) and GPU (/dev/nvidia*) devices detected. "
+                            "By policy, NPU backend is preferred.";
+            return DeviceBackend::NPU;
+        }
+        if (hasNpu) {
+            return DeviceBackend::NPU;
+        }
+        if (hasGpu) {
+            return DeviceBackend::GPU;
+        }
+        return DeviceBackend::UNKNOWN;
+    }
+
+    static bool HasNpuDevice()
+    {
+#ifdef USE_NPU
+        return HasDevNode("/dev/davinci[0-16]*");
+#else
+        return false;
+#endif
+    }
+
+    static bool HasGpuDevice()
+    {
+#ifdef USE_GPU
+        return HasDevNode("/dev/nvidia[0-9]*") || HasNvidiaSmi();
+#else
+        return false;
+#endif
+    }
 
     static bool HasDevNode(const char *pattern)
     {
@@ -107,55 +159,63 @@ private:
 #endif
     }
 
+    static bool IsTestAscendMockForced()
+    {
+#ifdef WITH_TESTS
+        const char *forceAscendMock = std::getenv("DS_TEST_FORCE_ASCEND_DEVICE_MANAGER");
+        return forceAscendMock != nullptr && forceAscendMock[0] != '\0' && forceAscendMock[0] != '0';
+#else
+        return false;
+#endif
+    }
+
+    static void LogNoAcceleratorDetected()
+    {
+        LOG(INFO) << "No accelerator device detected. "
+                     "Checked:"
+#ifdef USE_NPU
+                     " /dev/davinci[0-16]*"
+#endif
+#ifdef USE_GPU
+                     " /dev/nvidia[0-9]* and nvidia-smi"
+#endif
+                     ". Ensure the device driver is installed and "
+                     "the device node exists.";
+    }
+
+    static DeviceManagerBase *SelectManager(DeviceBackend backend)
+    {
+        switch (backend) {
+            case DeviceBackend::NPU:
+#if defined(USE_NPU) || defined(WITH_TESTS)
+                LOG(INFO) << "Detected NPU device (/dev/davinci*), using Ascend ACL backend.";
+                return acl::AclDeviceManager::Instance();
+#endif
+                break;
+            case DeviceBackend::GPU:
+#ifdef USE_GPU
+                LOG(INFO) << "Detected GPU device (/dev/nvidia*), using CUDA backend.";
+                return cuda::CudaDeviceManager::Instance();
+#endif
+                break;
+            case DeviceBackend::UNKNOWN:
+            default:
+                LogNoAcceleratorDetected();
+                break;
+        }
+        return nullptr;
+    }
+
     static DeviceManagerBase *Detect()
     {
+        if (auto *overrideMgr = DetectTestOverrideManager(); overrideMgr != nullptr) {
+            return overrideMgr;
+        }
 #if defined(WITH_TESTS) && !defined(BUILD_HETERO)
         LOG(INFO) << "BUILD_HETERO is OFF in test build, fallback to Ascend device manager for mock-based tests.";
         return acl::AclDeviceManager::Instance();
 #endif
-        bool hasNpu = false;
-        bool hasGpu = false;
-#ifdef USE_NPU
-        hasNpu = HasDevNode("/dev/davinci[0-16]*");
-#endif
-#ifdef USE_GPU
-        hasGpu = HasDevNode("/dev/nvidia[0-9]*") || HasNvidiaSmi();
-#endif
-        if (hasNpu && hasGpu) {
-            LOG(WARNING) << "Both NPU (/dev/davinci*) and GPU (/dev/nvidia*) devices detected. "
-                            "By policy, NPU backend is preferred.";
-#ifdef USE_NPU
-            return acl::AclDeviceManager::Instance();
-#endif
-#ifdef USE_GPU
-            return cuda::CudaDeviceManager::Instance();
-#endif
-            return nullptr;
-        }
-#ifdef USE_NPU
-        if (hasNpu) {
-            LOG(INFO) << "Detected NPU device (/dev/davinci*), using Ascend ACL backend.";
-            return acl::AclDeviceManager::Instance();
-        }
-#endif
-#ifdef USE_GPU
-        if (hasGpu) {
-            LOG(INFO) << "Detected GPU device (/dev/nvidia*), using CUDA backend.";
-            return cuda::CudaDeviceManager::Instance();
-        }
-#endif
-        LOG(INFO) << "No accelerator device detected. "
-                      "Checked:"
-#ifdef USE_NPU
-                      " /dev/davinci[0-16]*"
-#endif
-#ifdef USE_GPU
-                      " /dev/nvidia[0-9]* and nvidia-smi"
-#endif
-                      ". Ensure the device driver is installed and "
-                      "the device node exists.";
-
-        return nullptr;
+        return SelectManager(ProbePhysicalBackend());
     }
 };
 

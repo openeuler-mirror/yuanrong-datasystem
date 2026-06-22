@@ -17,7 +17,6 @@
 #include "datasystem/common/device/comm_wrapper_base.h"
 
 #include "datasystem/common/device/acl_pipeline_p2p_task.h"
-#include "datasystem/common/device/ascend/p2phccl_types.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
@@ -176,10 +175,10 @@ Status CommWrapperBase::CheckHealth(uint32_t createTimeoutMs)
 Status CommWrapperBase::InitPipeline(CommDirection direction)
 {
     if (direction == CommDirection::SEND) {
-        sender_ = std::make_unique<acl::PipeLineP2PSend>(static_cast<AclResourceManager *>(resourceMgr_));
+        sender_ = std::make_unique<acl::PipeLineP2PSend>(resourceMgr_);
         return sender_->Init(resource_);
     } else {
-        receiver_ = std::make_unique<acl::PipeLineP2PRecv>(static_cast<AclResourceManager *>(resourceMgr_));
+        receiver_ = std::make_unique<acl::PipeLineP2PRecv>(resourceMgr_);
         return receiver_->Init(resource_);
     }
 }

@@ -49,12 +49,7 @@ class EdgeConditionDevObjectHeteroTest : public DevTestHelper {
     void SetUp() override
     {
         DS_ASSERT_OK(datasystem::inject::Set("SubscribeReceiveEvent.quicklyTimeout", "call(8000)"));
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
-                return AclDeviceManagerMock::Instance();
-            });
-        }
+        UseAclMockIfNoDeviceBackend();
         ExternalClusterTest::SetUp();
     };
 
