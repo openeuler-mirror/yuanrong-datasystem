@@ -14,12 +14,16 @@
  * limitations under the License.
  */
 #include "datasystem/worker/worker_update_flag_check.h"
+
+#include <algorithm>
+
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/gflag/eviction_watermark.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
+DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -27,10 +31,18 @@ DS_DECLARE_uint32(node_dead_timeout_s);
 namespace {
 constexpr uint32_t kMinNodeTimeoutS = 3;
 constexpr uint32_t kMinNodeDeadTimeoutS = 5;
+constexpr uint32_t kMaxLeaseRenewIntervalMs = 60 * MS_PER_SECOND;
+constexpr uint32_t kLeaseRenewRetryTimes = 4;
 
 uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
 {
     return value < kMinNodeDeadTimeoutS ? kMinNodeDeadTimeoutS : value;
+}
+
+uint32_t MaxHeartbeatIntervalMs()
+{
+    uint64_t timeoutBasedLimit = static_cast<uint64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND / kLeaseRenewRetryTimes;
+    return static_cast<uint32_t>(std::min<uint64_t>(kMaxLeaseRenewIntervalMs, timeoutBasedLimit));
 }
 }  // namespace
 
@@ -86,6 +98,13 @@ void AdjustNodeTimeoutFlags()
     if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
         FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
     }
+    uint32_t maxHeartbeatIntervalMs = MaxHeartbeatIntervalMs();
+    if (static_cast<uint32_t>(FLAGS_heartbeat_interval_ms) > maxHeartbeatIntervalMs) {
+        LOG(WARNING) << "Adjust heartbeat_interval_ms from " << FLAGS_heartbeat_interval_ms << " to "
+                     << maxHeartbeatIntervalMs
+                     << " (must be no greater than min(60000, node_timeout_s * 1000 / 4))";
+        FLAGS_heartbeat_interval_ms = static_cast<int32_t>(maxHeartbeatIntervalMs);
+    }
 }
 
 bool ValidateWatermarkFlags()
@@ -111,9 +130,10 @@ bool WorkerValidateNodeDeadTimeoutS(const uint32_t value)
 
 bool WorkerValidateHeartbeatIntervalMs(const uint32_t value)
 {
-    if (value >= FLAGS_node_timeout_s * MS_PER_SECOND) {
-        LOG(ERROR)
-            << "The value of heartbeat_interval_ms must be a thousand times smaller than the value of node_timeout_s.";
+    uint32_t maxHeartbeatIntervalMs = MaxHeartbeatIntervalMs();
+    if (value > maxHeartbeatIntervalMs) {
+        LOG(ERROR) << "The value of heartbeat_interval_ms must be no greater than min(60000, "
+                   << "node_timeout_s * 1000 / 4). current max: " << maxHeartbeatIntervalMs;
         return false;
     }
     return true;

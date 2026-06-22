@@ -115,7 +115,7 @@
 
 DS_DEFINE_int32(oc_thread_num, 32, "Thread number of worker service");
 DS_DEFINE_validator(oc_thread_num, &Validator::ValidateThreadNum);
-DS_DEFINE_uint32(client_reconnect_wait_s, 10, "Client reconnect wait seconds, default is 10.");
+DS_DEFINE_uint32_dynamic(client_reconnect_wait_s, 10, "Client reconnect wait seconds, default is 10.");
 DS_DEFINE_validator(client_reconnect_wait_s, &Validator::ValidateUint32);
 DS_DEFINE_bool(enable_reconciliation, true, "Whether to enable reconciliation, default is true");
 DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,

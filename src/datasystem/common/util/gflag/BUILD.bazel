@@ -7,6 +7,8 @@ ds_cc_library(
     name = "common_util_gflag_header",
     hdrs = [
         "common_gflags.h",
+        "config_monitor_state.h",
+        "dynamic_config_updater.h",
         "flags.h",
     ],
     visibility = ["//visibility:public"],
@@ -28,15 +30,20 @@ ds_cc_library(
     srcs = [
         "common_gflag_define.cpp",
         "common_gflags_validate.cpp",
+        "config_monitor_state.cpp",
+        "dynamic_config_updater.cpp",
         "flags.cpp",
     ],
     visibility = ["//src/datasystem:__subpackages__"],
     deps = [
         ":common_util_gflag_header",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:operation_logger",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
         "//src/datasystem/common/util:validator",
+        "@nlohmann_json//:json",
         "@securec",
     ],
 )

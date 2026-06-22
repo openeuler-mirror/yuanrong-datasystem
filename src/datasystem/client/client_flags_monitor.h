@@ -46,12 +46,25 @@ public:
     void Start();
 
     /**
+     * @brief Whether the config file monitor thread is running.
+     * @return True if the monitor thread was started and is joinable.
+     */
+    bool IsMonitorThreadRunning() const;
+
+    /**
+     * @brief Get the Flags instance used by file monitor and UpdateConfig.
+     * @return Reference to internal Flags.
+     */
+    Flags &GetFlags();
+
+    /**
      * @brief Listen to file changes cyclically and process the changes.
      */
     void ListenConfigFile();
-    
+
 private:
     Flags flags_;
+    std::string configFilePath_;
     std::thread monitorThread_;
     std::atomic<bool> stop_;
     std::atomic<bool> isStarted_;

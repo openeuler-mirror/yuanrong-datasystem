@@ -601,6 +601,132 @@ bool FlagManager::WasFlagSpecified(const char *name) const
     return it->second.wasSpecified_;
 }
 
+bool FlagManager::IsModifiableFlag(const std::string &name) const
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = flagMap_.find(name);
+    if (it == flagMap_.end()) {
+        return false;
+    }
+    return it->second.modifiable_;
+}
+
+struct FlagManager::FlagValueSnapshot {
+    bool wasSpecified{false};
+    bool modified{false};
+    bool boolVal{false};
+    uint32_t uint32Val{0};
+    int32_t int32Val{0};
+    uint64_t uint64Val{0};
+    int64_t int64Val{0};
+    std::string stringVal;
+    double doubleVal{0.0};
+};
+
+bool FlagManager::readCurrentIntoSnapshot(const Flag &flag, FlagValueSnapshot &snapshot, const std::string &name,
+                                          std::string &errMsg) const
+{
+    snapshot.wasSpecified = flag.wasSpecified_;
+    snapshot.modified = flag.modified_;
+    switch (flag.type_) {
+        case FLAG_BOOL:
+            snapshot.boolVal = TREAT_VALUE_AS(bool, flag.currentVal_);
+            return true;
+        case FLAG_UINT32:
+            snapshot.uint32Val = TREAT_VALUE_AS(uint32_t, flag.currentVal_);
+            return true;
+        case FLAG_INT32:
+            snapshot.int32Val = TREAT_VALUE_AS(int32_t, flag.currentVal_);
+            return true;
+        case FLAG_UINT64:
+            snapshot.uint64Val = TREAT_VALUE_AS(uint64_t, flag.currentVal_);
+            return true;
+        case FLAG_INT64:
+            snapshot.int64Val = TREAT_VALUE_AS(int64_t, flag.currentVal_);
+            return true;
+        case FLAG_STRING:
+            snapshot.stringVal = TREAT_VALUE_AS(std::string, flag.currentVal_);
+            return true;
+        case FLAG_DOUBLE:
+            snapshot.doubleVal = TREAT_VALUE_AS(double, flag.currentVal_);
+            return true;
+        default:
+            errMsg = "flag '" + name + "' has unsupported type";
+            return false;
+    }
+}
+
+void FlagManager::writeSnapshotIntoFlag(Flag &flag, const FlagValueSnapshot &snapshot) const
+{
+    switch (flag.type_) {
+        case FLAG_BOOL:
+            TREAT_VALUE_AS(bool, flag.currentVal_) = snapshot.boolVal;
+            break;
+        case FLAG_UINT32:
+            TREAT_VALUE_AS(uint32_t, flag.currentVal_) = snapshot.uint32Val;
+            break;
+        case FLAG_INT32:
+            TREAT_VALUE_AS(int32_t, flag.currentVal_) = snapshot.int32Val;
+            break;
+        case FLAG_UINT64:
+            TREAT_VALUE_AS(uint64_t, flag.currentVal_) = snapshot.uint64Val;
+            break;
+        case FLAG_INT64:
+            TREAT_VALUE_AS(int64_t, flag.currentVal_) = snapshot.int64Val;
+            break;
+        case FLAG_STRING:
+            TREAT_VALUE_AS(std::string, flag.currentVal_) = snapshot.stringVal;
+            break;
+        case FLAG_DOUBLE:
+            TREAT_VALUE_AS(double, flag.currentVal_) = snapshot.doubleVal;
+            break;
+        default:
+            break;
+    }
+    flag.wasSpecified_ = snapshot.wasSpecified;
+    flag.modified_ = snapshot.modified;
+}
+
+bool FlagManager::tryAssignWithRollback(Flag &flag, const std::string &newVal, std::string &errMsg)
+{
+    FlagValueSnapshot snapshot;
+    if (!readCurrentIntoSnapshot(flag, snapshot, flag.name_, errMsg)) {
+        return false;
+    }
+    if (!flag.Assign(newVal, errMsg)) {
+        return false;
+    }
+    writeSnapshotIntoFlag(flag, snapshot);
+    return true;
+}
+
+bool FlagManager::ValidateChange(const std::string &name, const std::string &newVal, std::string &errMsg)
+{
+    std::lock_guard<std::mutex> l(mutex_);
+    auto it = flagMap_.find(name);
+    if (it == flagMap_.end()) {
+        errMsg = "flag '" + name + "' not found!";
+        return false;
+    }
+    auto &flag = it->second;
+    if (!flag.modifiable_) {
+        errMsg = "flag '" + name + "' not modifiable";
+        return false;
+    }
+    return tryAssignWithRollback(flag, newVal, errMsg);
+}
+
+void FlagManager::GetModifiableFlagNames(std::vector<std::string> &out) const
+{
+    out.clear();
+    std::lock_guard<std::mutex> l(mutex_);
+    for (const auto &entry : flagMap_) {
+        if (entry.second.modifiable_) {
+            out.emplace_back(entry.first);
+        }
+    }
+}
+
 void FlagManager::SetVersionString(const std::string &version)
 {
     version_ = version;
@@ -612,9 +738,9 @@ void FlagManager::SetUsageMessage(const std::string &description)
 }
 
 void FlagManager::RegisterFlag(const std::string &name, FlagType type, const std::string &meaning,
-                               const std::string &filename, void *currentVal, void *defaultVal)
+                               const std::string &filename, void *currentVal, void *defaultVal, bool modifiable)
 {
-    Flag flag(type, name, meaning, filename, currentVal, defaultVal);
+    Flag flag(type, name, meaning, filename, currentVal, defaultVal, modifiable);
     std::lock_guard<std::mutex> l(mutex_);
     auto pair = flagMap_.emplace(name, flag);
     if (!pair.second) {

@@ -53,6 +53,7 @@
 #include "datasystem/worker/cluster_manager/cluster_node.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/worker_update_flag_check.h"
 
 DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_string(etcd_address);
@@ -228,8 +229,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
         FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s, K_INVALID,
         "The value of node_dead_timeout_s must be greater than the value of node_timeout_s.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        (FLAGS_node_timeout_s * MS_PER_SECOND) > uint32_t(FLAGS_heartbeat_interval_ms), K_INVALID,
-        "The value of node_timeout_s must be one thousandth greater than the value of heartbeat_interval_ms.");
+        WorkerValidateHeartbeatIntervalMs(static_cast<uint32_t>(FLAGS_heartbeat_interval_ms)), K_INVALID,
+        "invalid heartbeat_interval_ms.");
 
     // 2. Get prefix, otherwise the later background thread will have data race on these strings.
     RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(ETCD_RING_PREFIX, ringPrefix_));

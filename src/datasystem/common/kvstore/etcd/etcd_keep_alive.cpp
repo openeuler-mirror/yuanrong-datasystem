@@ -33,7 +33,7 @@ DS_DEFINE_string(etcd_target_name_override, "",
                  "The configuration value should be consistent with the DNS content of the Subject Alternate Names of "
                  "the TLS certificate.");
 DS_DECLARE_uint32(node_timeout_s);
-DS_DEFINE_int32(heartbeat_interval_ms, 1000,
+DS_DEFINE_int32_dynamic(heartbeat_interval_ms, 1000,
                 "The time interval of each heartbeat between worker and master. Timeout must larger than 0.");
 DS_DEFINE_validator(heartbeat_interval_ms, &Validator::ValidateInt32);
 DS_DEFINE_string(etcd_ca, "", "The path of encrypted root etcd certificate, default is none.");
@@ -317,10 +317,6 @@ int64_t EtcdKeepAlive::GetLeaseExpiredMs()
 int64_t EtcdKeepAlive::GetLeaseRenewIntervalMs()
 {
     INJECT_POINT("GetLeaseRenewIntervalMs", [](int64_t time) { return time; });
-    const uint32_t maxIntervalS = 60;
-    const uint32_t retryTimes = 4;
-    int64_t leaseRenewInterval =
-        std::min(maxIntervalS * kMillisecsPerSecond_, FLAGS_node_timeout_s * kMillisecsPerSecond_ / retryTimes);
-    return leaseRenewInterval;
+    return static_cast<int64_t>(FLAGS_heartbeat_interval_ms);
 }
 }  // namespace datasystem

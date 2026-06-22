@@ -91,9 +91,10 @@ bool RegisterValidator(void *flag, void *func)
 }
 
 FlagRegisterHelper::FlagRegisterHelper(const std::string &name, FlagType type, const std::string &meaning,
-                                       const std::string &filename, void *currentVal, void *defaultVal)
+                                       const std::string &filename, void *currentVal, void *defaultVal,
+                                       bool modifiable)
 {
-    FlagManager::GetInstance()->RegisterFlag(name, type, meaning, filename, currentVal, defaultVal);
+    FlagManager::GetInstance()->RegisterFlag(name, type, meaning, filename, currentVal, defaultVal, modifiable);
 }
 
 /**

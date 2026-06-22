@@ -19,6 +19,7 @@ set(UTIL_SRCS
         numa_util.cpp
         deadlock_util.cpp
         hash_algorithm.cpp
+        ../rpc/zmq/zmq_message.cpp
         thread_local.cpp
         sensitive_value.cpp
         ssl_authorization.cpp
@@ -31,6 +32,7 @@ set(UTIL_LIBS
         ${ZLIB_LIBRARIES}
         ${SECUREC_LIBRARY}
         ${OPENSSL_LIBRARIES}
+        ${ZeroMQ_LIBRARY}
         re2::re2
         common_log
         common_inject

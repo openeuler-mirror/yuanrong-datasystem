@@ -1,0 +1,15 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "dynamic_config_st_test",
+    srcs = ["dynamic_config_st_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/client:client_flags_monitor",
+        "//src/datasystem/common/flags:ds_flags",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)

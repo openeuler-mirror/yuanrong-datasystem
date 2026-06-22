@@ -36,6 +36,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_sampler.h"
@@ -72,6 +73,8 @@ void ResetLoggingForTest()
     auto *logging = Logging::GetInstance();
     WriteLock lock(&logging->mux_);
     if (logging->IsLoggingInitialized()) {
+        OperationLogger::Instance().LogOperationStop();
+        OperationLogger::Instance().Shutdown();
         logging->logManager_->Stop();
         LogSampler::Instance().Shutdown();
 
@@ -931,6 +934,19 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
     ASSERT_TRUE(warningFound);
     ASSERT_TRUE(errorFound);
     (void)unsetenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str());
+}
+
+TEST_F(LoggingTest, OperationRotatedLogFilesCompressedByLogManager)
+{
+    FLAGS_log_filename = "op_roll_test";
+    FLAGS_log_compress = true;
+    DS_EXPECT_OK(CreateTextFile("op_roll_test_operation.20260101120000.log", 1024));
+    bool compressed = false;
+    DS_ASSERT_OK(LogManager::DoLogFileCompress(compressed));
+    EXPECT_TRUE(compressed);
+    const std::string gzPath = FLAGS_log_dir + "/op_roll_test_operation.20260101120000.log.gz";
+    EXPECT_TRUE(FileExist(gzPath));
+    (void)DeleteFile(gzPath);
 }
 
 TEST_F(LoggingTest, TestLogName)

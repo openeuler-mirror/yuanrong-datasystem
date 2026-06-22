@@ -38,7 +38,9 @@ using namespace datasystem::worker;
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
+DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_uint32(add_node_wait_time_s);
+DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_bool(auto_del_dead_node);
 
@@ -835,6 +837,7 @@ TEST_F(HashRingTest, RemoveInitNode)
     FLAGS_add_node_wait_time_s = 0;
     FLAGS_node_timeout_s = 2;       // 2s
     FLAGS_node_dead_timeout_s = 3;  // 3s
+    FLAGS_heartbeat_interval_ms = 500;
     FLAGS_auto_del_dead_node = true;
 
     std::string hashRingJsonStr = R"({

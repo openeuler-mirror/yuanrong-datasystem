@@ -29,10 +29,12 @@
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/failure_handler.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/gflag/dynamic_config_updater.h"
 #include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -62,7 +64,7 @@ DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_int32(logfile_mode);
 
 #ifdef WITH_TESTS
-DS_DEFINE_string(inject_actions, "", "Set inject action when worker start for ut.");
+DS_DEFINE_string_dynamic(inject_actions, "", "Set inject action when worker start for ut.");
 #endif
 
 extern "C" {
@@ -215,6 +217,7 @@ Status Worker::ShutDown()
         RETURN_IF_NOT_OK(worker_->Shutdown());
         worker_.reset();
     }
+    runtimeFlags_ = nullptr;
     return Status::OK();
 }
 
@@ -242,8 +245,22 @@ object_cache::WorkerOCServiceImpl *Worker::GetWorkerOCService()
     return worker_->GetWorkerOCService();
 }
 
+Status Worker::UpdateConfig(const std::string &configJson)
+{
+    if (runtimeFlags_ == nullptr) {
+        return Status(StatusCode::K_RUNTIME_ERROR, "UpdateConfig: worker not initialized");
+    }
+    if (!FLAGS_monitor_config_file.empty()) {
+        return Status(StatusCode::K_INVALID,
+                      "UpdateConfig: monitor_config_file must be empty when using UpdateConfig API");
+    }
+    DynamicConfigUpdater updater(*runtimeFlags_);
+    return updater.ApplyJson(configJson, "UpdateConfig");
+}
+
 Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const bool isEmbeddedClient)
 {
+    runtimeFlags_ = &flags;
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
 
@@ -281,6 +298,7 @@ Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const 
     LOG_IF_ERROR(Uri::NormalizePathWithUserHomeDir(FLAGS_monitor_config_file, "", ""),
                  FormatString("Failed to normalize the path (%s) with user home directory", FLAGS_monitor_config_file));
     LOG(INFO) << "Worker start success";
+    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
 
     return Status::OK();
 }

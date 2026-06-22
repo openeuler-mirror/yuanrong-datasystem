@@ -79,12 +79,23 @@ public:
      */
     object_cache::WorkerOCServiceImpl *GetWorkerOCService();
 
+    /**
+     * @brief Apply runtime JSON config updates to modifiable worker flags.
+     * @param[in] configJson JSON object mapping flag names to string values.
+     * @return Status::OK() on success; error status otherwise.
+     * @note Requires Init/InitEmbeddedWorker to have completed. The caller-owned Flags passed to Init must
+     *       outlive this Worker instance; UpdateConfig is only valid between Init and ShutDown.
+     */
+    Status UpdateConfig(const std::string &configJson);
+
 private:
     Status InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const bool isEmbeddedClient);
 
     Worker() = default;
 
     std::unique_ptr<WorkerOCServer> worker_{ nullptr };
+    /** Non-owning pointer to caller Flags; valid only between InitWorker and ShutDown. */
+    Flags *runtimeFlags_{ nullptr };
 };
 }  // namespace worker
 

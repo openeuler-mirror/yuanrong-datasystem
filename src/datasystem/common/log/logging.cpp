@@ -34,6 +34,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -65,13 +66,14 @@ constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
 constexpr int DEFAULT_STDERRTHRESHOLD = LogSeverity::ERROR;  // By default, errors always log to stderr.
 constexpr int HIGHEST_STDERRTHRESHOLD = LogSeverity::FATAL;  // The errors log won't print to stderr.
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;  // Maximum allowed by spdlog's rotating_file_sink.
+constexpr uint32_t DEFAULT_LOG_ASYNC_THREAD_COUNT = 2;
 
 DS_DEFINE_bool(log_async, DEFAULT_LOG_ASYNC_FLAG, "Enable asynchronous writing to log files.");
-DS_DEFINE_uint32(
+DS_DEFINE_uint32_dynamic(
     max_log_file_num, DEFAULT_MAX_LOG_FILE_NUM,
     "Maximum number of log files to retain per severity level. And every log file size is limited by max_log_size."
     "If set to 0, the log num is not limited.");
-DS_DEFINE_bool(log_compress, DEFAULT_LOG_COMPRESS,
+DS_DEFINE_bool_dynamic(log_compress, DEFAULT_LOG_COMPRESS,
                "Compress old log files in .gz format. This parameter takes effect only when "
                "the size of the generated log is greater than max log size.");
 DS_DEFINE_uint32(log_retention_day, DEFAULT_LOG_RETENTION_DAY,
@@ -89,7 +91,7 @@ DS_DEFINE_bool(alsologtostderr, GetBoolFromEnv("GOOGLE_ALSOLOGTOSTDERR", false),
 DS_DEFINE_uint32(stderrthreshold, 2,
                  "log messages at or above this level are copied to stderr in "
                  "addition to logfiles.  This flag obsoletes --alsologtostderr.");
-DS_DEFINE_int32(minloglevel, 0, "Messages logged at a lower level than this don't actually get logged anywhere.");
+DS_DEFINE_int32_dynamic(minloglevel, 0, "Messages below this level are not logged.");
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
@@ -97,11 +99,11 @@ DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
 DS_DEFINE_bool(enable_perf_trace_log, DEFAULT_ENABLE_PERF_TRACE_LOG,
                "Enable perf log output, When true always output perf related log.");
 
-DS_DEFINE_double(request_sample_rate, 1.0,
+DS_DEFINE_double_dynamic(request_sample_rate, 1.0,
                  "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");
-DS_DEFINE_double(access_sample_rate, 1.0,
+DS_DEFINE_double_dynamic(access_sample_rate, 1.0,
                  "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled.");
-DS_DEFINE_double(diagnostic_sample_rate, 1.0,
+DS_DEFINE_double_dynamic(diagnostic_sample_rate, 1.0,
                   "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled.");
 
 DS_DECLARE_bool(log_monitor);
@@ -194,24 +196,27 @@ bool Logging::InitLogSampler()
     return true;
 }
 
-bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
-{
-    if (!CreateLogDir()) {
-        return false;
-    }
+namespace {
 
-    if (FLAGS_log_filename.empty()) {
-        // if flag log_filename is empty, it may be caused by two reasons as follows:
-        // - 1. flags is not initialized yet, google::ProgramInvocationShortName() is 'UNKNOWN'.
-        // - 2. flag log_filename is empty, we just set it as google::ProgramInvocationShortName().
-        std::string programName = ProgramInvocationShortName();
-        CHECK_STRNE(programName.c_str(), "UNKNOWN") << ": must initialize flags before logging";
-        FLAGS_log_filename = std::move(programName);
+void EnsureLogFilename()
+{
+    if (!FLAGS_log_filename.empty()) {
+        return;
     }
-    std::vector<std::string> fileNamePatterns = { (FLAGS_log_filename + ".INFO").c_str() };
+    // if flag log_filename is empty, it may be caused by two reasons as follows:
+    // - 1. flags is not initialized yet, google::ProgramInvocationShortName() is 'UNKNOWN'.
+    // - 2. flag log_filename is empty, we just set it as google::ProgramInvocationShortName().
+    std::string programName = ProgramInvocationShortName();
+    CHECK_STRNE(programName.c_str(), "UNKNOWN") << ": must initialize flags before logging";
+    FLAGS_log_filename = std::move(programName);
+}
+
+LogParam BuildLoggerParam(uint32_t maxLogSize)
+{
+    std::vector<std::string> fileNamePatterns = { FLAGS_log_filename + ".INFO" };
     if (!FLAGS_log_only_write_info_file) {
-        fileNamePatterns.emplace_back((FLAGS_log_filename + ".WARNING").c_str());
-        fileNamePatterns.emplace_back((FLAGS_log_filename + ".ERROR").c_str());
+        fileNamePatterns.emplace_back(FLAGS_log_filename + ".WARNING");
+        fileNamePatterns.emplace_back(FLAGS_log_filename + ".ERROR");
     }
     LogParam loggerParam;
     loggerParam.fileNamePatterns = fileNamePatterns;
@@ -220,48 +225,55 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     loggerParam.stderrLogLevel = GetLogSeverityName(FLAGS_stderrthreshold);
     loggerParam.logLevel = GetLogSeverityName(FLAGS_minloglevel);
     loggerParam.logAsync = FLAGS_log_async;
-    loggerParam.maxSize = MaxLogSize();
+    loggerParam.maxSize = maxLogSize;
     // Disable spdlog's auto-deletion of old log files, only use its file splitting (by size/time).
     // Log rotation is managed externally by the log manager.
-    loggerParam.maxFiles = HIGHEST_SPDLOG_MAX_FILE_NUM;  // Set max log file limit to spdlog's MaxFiles.
+    loggerParam.maxFiles = HIGHEST_SPDLOG_MAX_FILE_NUM;
+    return loggerParam;
+}
 
-    // Create LoggerProvider
-    GlobalLogParam globalLogParam;
+std::shared_ptr<ds_spdlog::logger> SetupLoggerProvider(const LogParam &loggerParam, GlobalLogParam &globalLogParam)
+{
     globalLogParam.logBufSecs = FLAGS_logbufsecs;
     globalLogParam.maxAsyncQueueSize = FLAGS_log_async_queue_size;
-    globalLogParam.asyncThreadCount = 2;  // 2 thread
+    globalLogParam.asyncThreadCount = DEFAULT_LOG_ASYNC_THREAD_COUNT;
     auto lp = std::make_shared<LoggerProvider>(globalLogParam);
-
-    // Set LoggerProvider to ensure global singleton
     Provider::Instance().SetLoggerProvider(lp);
+    return lp->InitDsLogger(loggerParam);
+}
 
-    auto logger = lp->InitDsLogger(loggerParam);
+}  // namespace
+
+bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
+{
+    if (!CreateLogDir()) {
+        return false;
+    }
+    EnsureLogFilename();
+    const LogParam loggerParam = BuildLoggerParam(MaxLogSize());
+    GlobalLogParam globalLogParam;
+    auto logger = SetupLoggerProvider(loggerParam, globalLogParam);
     if (logger == nullptr) {
         return false;
     }
-
     if (!InitLogSampler()) {
         return false;
     }
-
     if (loggerParam.logAsync) {
         LOG(INFO) << "Async logging buffer duration: " << globalLogParam.logBufSecs << " s";
     }
-
-    // Start log manager.
     logManager_ = std::make_unique<LogManager>(logProcessInterval);
     auto status = logManager_->Start();
     if (status.IsError()) {
         LOG(ERROR) << "Failed to start log manager:" << status.ToString() << std::endl;
         return false;
     }
-
     accessRecorderManagerInstance_ = std::make_unique<AccessRecorderManager>();
     auto rc = accessRecorderManagerInstance_->Init(isClient_, isEmbeddedClient_);
     if (rc.IsError()) {
         return false;
     }
-
+    (void)OperationLogger::Instance().Init(isClient_ ? "client" : "worker");
     return true;
 }
 
@@ -271,6 +283,8 @@ void Logging::ShutdownLoggingWrapper()
     if (!IsLoggingInitialized()) {
         return;
     }
+
+    OperationLogger::Instance().Shutdown();
 
     // Stop log manager.
     logManager_->Stop();

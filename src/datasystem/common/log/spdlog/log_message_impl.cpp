@@ -35,7 +35,7 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/trace.h"
 
-DS_DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this.");
+DS_DEFINE_int32_dynamic(v, 0, "Show all VLOG(m) messages for m <= this.");
 DS_DECLARE_string(cluster_name);
 
 namespace datasystem {

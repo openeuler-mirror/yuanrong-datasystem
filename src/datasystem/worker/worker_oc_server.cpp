@@ -86,7 +86,7 @@
 
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
-DS_DEFINE_uint32(add_node_wait_time_s, 60, "Time to wait for the first node that wants to join a working hash ring.");
+DS_DEFINE_uint32_dynamic(add_node_wait_time_s, 60, "Wait time (s) for the first node joining a working hash ring.");
 DS_DECLARE_bool(auto_del_dead_node);
 DS_DEFINE_bool(enable_p2p_transfer, false, "Heterogeneous object transfer protocol Enables p2ptransfer");
 #ifdef WITH_TESTS
@@ -140,7 +140,7 @@ DS_DECLARE_string(metastore_address);
 DS_DEFINE_bool(start_metastore_service, false,
                "Start metastore service on master worker to replace external etcd server for cluster worker "
                "metadata storage, default is false.");
-DS_DEFINE_bool(async_delete, false, "Master notify workers to delete objects asynchronously.");
+DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
 DS_DECLARE_uint32(node_timeout_s);
 DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
@@ -164,7 +164,7 @@ DS_DEFINE_validator(sc_encrypt_secret_key, &Validator::ValidateScEncryptSecretKe
 DS_DEFINE_int32(max_rpc_session_num, 2048,
                 "Maximum number of sessions that can be cached, must be within [512, 10'000]");
 DS_DEFINE_validator(max_rpc_session_num, &Validator::ValidateMaxRpcSessionNum);
-DS_DEFINE_bool(enable_lossless_data_exit_mode, false,
+DS_DEFINE_bool_dynamic(enable_lossless_data_exit_mode, false,
                "Decide whether to migrate data to other nodes or not when current node exits, default is false.");
 DS_DEFINE_bool(shared_memory_populate, false,
                "Avoiding page faults during copying improves runtime performance but may result in longer worker "

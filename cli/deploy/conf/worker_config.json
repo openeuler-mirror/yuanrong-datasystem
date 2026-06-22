@@ -706,5 +706,13 @@
     "remote_h2d_hccs_buffer_pool": {
         "value": "4:8",
         "description": "HIXL buffer-pool spec for HCCS RH2D, format \"<count>:<size>\" (both positive). Only used when remote_h2d_link_type=HCCS."
+    },
+    "urma_failover_success_rate_ratio": {
+        "value": "0.5",
+        "description": "Client-side URMA data-plane success-rate ratio threshold for worker failover. If the window success rate is below this ratio, the client tries to switch worker. 0.0 disables URMA failover."
+    },
+    "urma_failover_min_sample_count": {
+        "value": "5",
+        "description": "Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation."
     }
 }

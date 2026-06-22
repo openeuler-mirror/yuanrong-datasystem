@@ -69,14 +69,33 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "operation_logger",
+    srcs = ["operation_logger.cpp"],
+    hdrs = ["operation_logger.h"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+    ],
+)
+
 # Full logging implementation (excludes failure_handler which has separate absl deps)
 ds_cc_library(
     name = "common_log",
-    srcs = glob(["*.cpp"], exclude = ["failure_handler.cpp", "log_sampler.cpp", "log_sampler_proto.cpp"]),
-    hdrs = glob(["*.h", "*.def"], exclude = ["failure_handler.h"]),
+    srcs = glob(["*.cpp"], exclude = [
+        "failure_handler.cpp",
+        "log_sampler.cpp",
+        "log_sampler_proto.cpp",
+        "operation_logger.cpp",
+    ]),
+    hdrs = glob(["*.h", "*.def"], exclude = [
+        "failure_handler.h",
+        "operation_logger.h",
+    ]),
     linkopts = ["-pthread"],
     deps = [
         ":common_log_header",
+        ":operation_logger",
         ":log_base",
         ":log_sampler",
         "//src/datasystem/common:common_constants",

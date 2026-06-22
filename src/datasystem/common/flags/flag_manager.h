@@ -40,7 +40,7 @@ void ReportError(const char *format, ...);
 class Flag {
 public:
     Flag(FlagType type, const std::string &name, const std::string meaning, const std::string &filename, void *curr,
-         void *def)
+         void *def, bool modifiable = false)
         : type_(type),
           name_(name),
           meaning_(meaning),
@@ -48,6 +48,7 @@ public:
           currentVal_(curr),
           defaultVal_(def),
           modified_(false),
+          modifiable_(modifiable),
           validator_(nullptr)
     {
     }
@@ -189,6 +190,9 @@ private:
     // Indicate flag value is modified or not.
     bool modified_;
 
+    // Indicate flag can be modified at runtime via dynamic config.
+    bool modifiable_;
+
     // Indicate flag value was explicitly specified.
     bool wasSpecified_ = false;
 
@@ -253,7 +257,7 @@ public:
      * @param[in] defaultVal Flag default value memory address.
      */
     void RegisterFlag(const std::string &name, FlagType type, const std::string &meaning, const std::string &filename,
-                      void *currentVal, void *defaultVal);
+                      void *currentVal, void *defaultVal, bool modifiable = false);
 
     /**
      * @brief Register flag validator function before main() execute.
@@ -291,6 +295,28 @@ public:
      * @return True if the flag exists and was explicitly set.
      */
     bool WasFlagSpecified(const char *name) const;
+
+    /**
+     * @brief Check whether a flag is marked modifiable at registration time.
+     * @param[in] name Flag name.
+     * @return True if the flag exists and is modifiable.
+     */
+    bool IsModifiableFlag(const std::string &name) const;
+
+    /**
+     * @brief Dry-run validation for a proposed flag value change.
+     * @param[in] name Flag name.
+     * @param[in] newVal Proposed new value string.
+     * @param[out] errMsg Error message if validation failed.
+     * @return True if the change would be accepted.
+     */
+    bool ValidateChange(const std::string &name, const std::string &newVal, std::string &errMsg);
+
+    /**
+     * @brief Collect names of all modifiable flags.
+     * @param[out] out Modifiable flag names.
+     */
+    void GetModifiableFlagNames(std::vector<std::string> &out) const;
 
     /**
      * @brief Set version.
@@ -349,6 +375,15 @@ private:
      * @return Ture if need to report error.
      */
     bool CheckAndReportErrors(std::string &errMsg) const;
+
+    struct FlagValueSnapshot;
+
+    bool readCurrentIntoSnapshot(const Flag &flag, FlagValueSnapshot &snapshot, const std::string &name,
+                                 std::string &errMsg) const;
+
+    void writeSnapshotIntoFlag(Flag &flag, const FlagValueSnapshot &snapshot) const;
+
+    bool tryAssignWithRollback(Flag &flag, const std::string &newVal, std::string &errMsg);
 
     std::map<std::string, Flag> flagMap_;
 

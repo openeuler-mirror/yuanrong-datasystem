@@ -54,10 +54,10 @@ DS_DEFINE_string(spill_directory, "",
                  "The path and file name prefix of the spilling, empty means spill disabled. The path length must less "
                  "than 4095 characters. If spill_type is local_disk, this para must be set.");
 DS_DEFINE_validator(spill_directory, &Validator::ValidatePathString);
-DS_DEFINE_uint64(spill_size_limit, 0,
+DS_DEFINE_uint64_dynamic(spill_size_limit, 0,
                  "Maximum amount of spilled data that can be stored in the spill directory. If spill is enable and "
                  "spill_size_limit is 0, spill_size_limit will be set to 95% of the spill directory.");
-DS_DEFINE_uint64(
+DS_DEFINE_uint64_dynamic(
     spill_file_max_size_mb, 200,
     "The size limit of single spill file, spilling objects which lager than that value with one object per "
     "file. If there are some big objects, you can increase this value to avoid run out of inodes quickly. "
@@ -67,7 +67,7 @@ DS_DEFINE_uint32(
     spill_thread_num, 8,
     "It represents the maximum parallelism of writing files, more threads will consume more CPU and I/O resources.");
 DS_DEFINE_validator(spill_thread_num, &Validator::ValidateThreadNum);
-DS_DEFINE_uint64(
+DS_DEFINE_uint64_dynamic(
     spill_file_open_limit, 512,
     "The maximum number of open file descriptors about spill. If opened file exceed this value, some files "
     "will be temporarily closed to prevent exceeding the maximum system limit. You need reduce this value if "

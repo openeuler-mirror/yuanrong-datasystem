@@ -22,14 +22,15 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
-#include <numeric>
 #include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
 
-#include "datasystem/common/log/log.h"
+#include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/log/operation_logger.h"
 
 #include <securec.h>
 #include "datasystem/common/inject/inject_point.h"
@@ -140,6 +141,9 @@ Status Flags::EraseInfo(int argc, char **argv)
 
 void Flags::MonitorConfigFile(const std::string &configFilePath)
 {
+    if (configFilePath.empty()) {
+        return;
+    }
     std::chrono::time_point<clock> nowTime = clock::now();
     uint64_t elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(nowTime - preConfigCheckTime_).count();
     if (elapsed >= TRIGGER_CONFIG_CHECK_NANO_INTERVAL) {
@@ -155,6 +159,7 @@ void Flags::StartConfigFileHandle(const std::string &configFilePath,
     bool fileExists = false;
     auto rc = CheckFileExists(&fileExists, configFilePath);
     if (!fileExists) {
+        LOG(WARNING) << FormatString("Monitor config file does not exist: %s", configFilePath);
         return;
     }
     // Check whether the configfile has been modified.
@@ -170,7 +175,7 @@ void Flags::StartConfigFileHandle(const std::string &configFilePath,
     lastModifiedTime_ = modifiedTime;
     std::unordered_map<std::string, std::string> flagMap = ProcessFlagFile(configFilePath);
     // Update the gflag parameter.
-    UpdateFlagParameter(flagMap);
+    LOG_IF_ERROR(UpdateFlagParameter(flagMap), "UpdateFlagParameter failed");
 }
 
 std::unordered_map<std::string, std::string> Flags::ProcessFlagFile(const std::string &configFilePath)
@@ -294,13 +299,9 @@ bool Flags::SplitArgument(const char *flagCommand, std::pair<std::string, std::s
 
 bool Flags::ValidateFlagName(const std::string &flagName)
 {
-    auto i = flagNameTrustList_.find(flagName);
-    if (i == flagNameTrustList_.end()) {
-        std::string s =
-            std::accumulate(std::begin(flagNameTrustList_), std::end(flagNameTrustList_), std::string{},
-                            [](const std::string &a, const std::string &b) { return a.empty() ? b : a + ',' + b; });
-        LOG(ERROR) << FormatString(
-            "Invalid flag parameter:%s. Only the flag parameter in the following list can be modified:%s", flagName, s);
+    if (!FlagManager::GetInstance()->IsModifiableFlag(flagName)) {
+        LOG(ERROR) << FormatString("Invalid flag parameter:%s. Flag is not dynamically modifiable.", flagName);
+        OperationLogger::Instance().LogConfigFailed(flagName, "not modifiable");
         return false;
     }
     return true;
@@ -389,49 +390,86 @@ bool Flags::CommitSamplerFlagsTransaction(
     return true;
 }
 
-void Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
+Status Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
 {
     static const std::unordered_set<std::string> samplerFlagNames = {
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
     };
     bool hasSamplerFlags = false;
+    std::unordered_map<std::string, std::string> prevVals;
     for (const auto &kv : flagMap) {
         if (samplerFlagNames.count(kv.first)) {
             hasSamplerFlags = true;
-            break;
+            continue;
+        }
+        if (!IsToHandle(flagMap, kv.first)) {
+            continue;
+        }
+        std::string prevVal;
+        if (GetCommandLineOption(kv.first.c_str(), prevVal)) {
+            prevVals[kv.first] = prevVal;
         }
     }
-    if (hasSamplerFlags) {
-        ValidateAndCommitSamplerFlags(flagMap);
-    }
     for (const auto &kv : flagMap) {
-        if (!samplerFlagNames.count(kv.first)) {
-            UpdateSingleFlag(flagMap, kv.first, kv.second);
+        if (samplerFlagNames.count(kv.first)) {
+            continue;
+        }
+        auto status = UpdateSingleFlag(flagMap, kv.first, kv.second);
+        if (status.IsError()) {
+            RollbackFlagValues(prevVals);
+            return status;
+        }
+    }
+    if (hasSamplerFlags && !ValidateAndCommitSamplerFlags(flagMap)) {
+        RollbackFlagValues(prevVals);
+        RETURN_STATUS(StatusCode::K_INVALID, "failed to update sampler flags");
+    }
+    return Status::OK();
+}
+
+void Flags::RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals)
+{
+    for (const auto &kv : prevVals) {
+        std::string errMsg;
+        if (!SetCommandLineOption(kv.first.c_str(), kv.second, errMsg)) {
+            LOG(ERROR) << FormatString("failed to rollback flag %s: %s", kv.first, errMsg);
         }
     }
 }
 
-void Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
-                             const std::string &flagName, const std::string &newVal)
+Status Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
+                               const std::string &flagName, const std::string &newVal)
 {
     if (!IsToHandle(flagMap, flagName)) {
-        return;
+        return Status::OK();
     }
     std::string currVal;
     bool getResult = GetCommandLineOption(flagName.c_str(), currVal);
     if (!getResult) {
-        return;
+        return Status::OK();
     }
     if (currVal == newVal) {
-        return;
+        return Status::OK();
     }
     if (ValidateSpecial(flagName, newVal)) {
-        return;
+        std::string handledVal;
+        if (GetCommandLineOption(flagName.c_str(), handledVal) && handledVal != currVal) {
+            OperationLogger::Instance().LogConfigChanged(flagName, currVal, handledVal);
+            LOG(INFO) << FormatString("The flag parameter is successfully changed: %s=%s --> %s", flagName,
+                                      currVal, handledVal);
+            return Status::OK();
+        }
+        const std::string errMsg = FormatString("failed to update flag %s: special validation rejected value %s",
+                                                flagName, newVal);
+        LOG(ERROR) << errMsg;
+        OperationLogger::Instance().LogConfigFailed(flagName, errMsg);
+        RETURN_STATUS(StatusCode::K_INVALID, errMsg);
     }
     std::string errMsg;
     if (!SetCommandLineOption(flagName.c_str(), newVal, errMsg)) {
         LOG(ERROR) << errMsg;
-        return;
+        OperationLogger::Instance().LogConfigFailed(flagName, errMsg);
+        RETURN_STATUS(StatusCode::K_INVALID, errMsg);
     }
 #ifdef WITH_TESTS
     if (flagName == "inject_actions") {
@@ -439,8 +477,10 @@ void Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string> 
         LOG_IF_ERROR(inject::SetByString(newVal), "set inject actions failed");
     }
 #endif
+    OperationLogger::Instance().LogConfigChanged(flagName, currVal, newVal);
     LOG(INFO) << FormatString("The flag parameter is successfully changed: %s=%s --> %s", flagName, currVal,
                               newVal);
+    return Status::OK();
 }
 
 void Flags::TrimSpace(std::string &value)
@@ -460,6 +500,43 @@ void Flags::SetValidateSpecial(const std::function<bool(const std::string &, con
 bool Flags::ValidateSpecial(const std::string &flagName, const std::string &newVal)
 {
     return validateSpecial_ && validateSpecial_(flagName, newVal);
+}
+
+bool Flags::ValidateSpecialConstraint(const std::unordered_map<std::string, std::string> &flagMap,
+                                      const std::string &flagName, const std::string &newVal,
+                                      std::string &errMsg)
+{
+    static const std::unordered_set<std::string> samplerFlagNames = {
+        "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
+    };
+    if (samplerFlagNames.count(flagName) > 0) {
+        return true;
+    }
+    if (!IsToHandle(flagMap, flagName)) {
+        return true;
+    }
+    std::string currVal;
+    if (!GetCommandLineOption(flagName.c_str(), currVal)) {
+        return true;
+    }
+    if (currVal == newVal) {
+        return true;
+    }
+    if (!ValidateSpecial(flagName, newVal)) {
+        return true;
+    }
+    std::string handledVal;
+    if (GetCommandLineOption(flagName.c_str(), handledVal) && handledVal != currVal) {
+        std::string revertErr;
+        if (!SetCommandLineOption(flagName.c_str(), currVal.c_str(), revertErr)) {
+            errMsg = FormatString("failed to revert flag %s after special validation dry-run: %s", flagName,
+                                  revertErr);
+            return false;
+        }
+        return true;
+    }
+    errMsg = FormatString("special validation rejected value %s", newVal);
+    return false;
 }
 
 }  // namespace datasystem
