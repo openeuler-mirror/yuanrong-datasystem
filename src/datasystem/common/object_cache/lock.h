@@ -84,6 +84,19 @@ public:
     virtual void UnRLatch() = 0;
 
     /**
+     * @brief Whether this lock implementation actually enforces latch semantics.
+     *
+     * Default true. Returns false for placeholder implementations (e.g. DisabledLock
+     * installed when oc_metadata_header is off) where the shm layout has no lock
+     * frame. SDK-internal Get-and-copy paths use this to skip latch acquisition
+     * while still presenting K_NOT_SUPPORTED to explicit Buffer::RLatch() callers.
+     */
+    virtual bool IsSupported() const
+    {
+        return true;
+    }
+
+    /**
      * @brief Sleep to wait when cannot acquire the lock.
      * @param[in] pointer Store futex value which is used to indicate the lock.
      * @param[in] val When *pointer == val, go to sleep.
@@ -235,6 +248,24 @@ public:
 private:
     uint32_t localFlag_ = 0;
     uint32_t *lockFlag_{ nullptr };
+};
+
+class DisabledLock : public Lock {
+public:
+    DisabledLock() = default;
+    ~DisabledLock() override = default;
+    Status WLatch(uint64_t) override
+    {
+        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: oc_metadata_header is disabled.");
+    }
+    Status RLatch(uint64_t) override
+    {
+        return Status(StatusCode::K_NOT_SUPPORTED, "Shm latch unavailable: oc_metadata_header is disabled.");
+    }
+    bool TryRLatch() override { return false; }
+    void UnWLatch() override {}
+    void UnRLatch() override {}
+    bool IsSupported() const override { return false; }
 };
 
 class ShmLock : public Lock {

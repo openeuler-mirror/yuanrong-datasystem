@@ -125,6 +125,28 @@ public:
     /// \return Status of the result.
     Status InvalidateBuffer();
 
+    /// \brief SDK-internal helper used by Get-and-copy paths (KV/Object SDK,
+    ///         language bindings) to read a buffer's contents while honoring
+    ///         the metadata-header configuration.
+    ///
+    /// Acquires the read latch when the underlying lock is supported, invokes
+    /// `copyFn`, then releases the latch. When the buffer was created with the
+    /// metadata header disabled (DisabledLock — `oc_metadata_header=false`),
+    /// the shm layout has no lock frame and the read latch is not required for
+    /// safe reads, so `copyFn` is invoked without latching. All other latch
+    /// errors are surfaced to the caller.
+    ///
+    /// The public Buffer::RLatch() entry point is intentionally unaffected and
+    /// still returns K_NOT_SUPPORTED for DisabledLock — explicit user calls keep
+    /// their original semantics. This helper is the single place where SDK and
+    /// binding code should consolidate the "read shm payload into a value"
+    /// pattern, so future changes to lock-availability semantics live in one
+    /// spot rather than scattered across every Get implementation.
+    ///
+    /// \param[in] copyFn The callback that reads from the buffer.
+    /// \return K_OK on success; latch error code or `copyFn` error on failure.
+    Status CopyDataWithRLatch(const std::function<Status()> &copyFn);
+
     /// \brief Getter function for remote host info.
     ///
     /// \return The remote host info for RemoteH2D purpose.

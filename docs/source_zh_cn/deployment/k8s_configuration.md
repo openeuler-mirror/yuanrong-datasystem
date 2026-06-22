@@ -440,6 +440,7 @@ global:
 | global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
 | global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
 | global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
+| global.performance.enableOcMetadataHeader | bool | `true` | 是否开启对象缓存元数据头，设置为false将不能使用shm latch/可见性 |
 
 ### AK/SK相关配置
 

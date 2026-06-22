@@ -152,6 +152,7 @@ ds_cc_test(
         "//src/datasystem/common/util:wait_post",
         "//src/datasystem/common/util/queue:common_util_queue",
         "//src/datasystem/common/util/queue:queue",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//tests/ut:ut_common",
     ],
 )
@@ -196,6 +197,7 @@ ds_cc_test(
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//tests/ut:ut_common",
     ],
 )

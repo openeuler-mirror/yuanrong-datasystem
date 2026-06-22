@@ -104,17 +104,20 @@ Status GetKeyNativeImpl(JNIEnv *env, jlong handle, jstring keyJO, jint timeoutMs
     access.ObjectKeyOwned(key).TimeoutMs(timeoutMs);
     std::vector<Optional<Buffer>> buffers;
     RETURN_IF_NOT_OK((*client)->Get({ key }, timeoutMs, buffers));
-    RETURN_IF_NOT_OK(buffers[0]->RLatch());
-    heapBuffer = ToHeapBuffer(env, reinterpret_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
-    RETURN_IF_NOT_OK(buffers[0]->UnRLatch());
-    if (env->ExceptionOccurred()) {
-        std::string msg =
-            "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_get__JLjava_lang_String_2 "
-            "function to call ToHeapBuffer()";
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, msg);
-    } else {
-        totalSize += buffers[0]->GetSize();
-    }
+    // Use the SDK-internal helper so the copy still works when the buffer was
+    // returned with oc_metadata_header disabled (DisabledLock → no latch needed).
+    RETURN_IF_NOT_OK(buffers[0]->CopyDataWithRLatch([&] {
+        heapBuffer =
+            ToHeapBuffer(env, reinterpret_cast<const char *>(buffers[0]->ImmutableData()), buffers[0]->GetSize());
+        if (env->ExceptionOccurred()) {
+            std::string msg =
+                "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_get__JLjava_lang_String_2 "
+                "function to call ToHeapBuffer()";
+            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, msg);
+        }
+        return Status::OK();
+    }));
+    totalSize += buffers[0]->GetSize();
     return Status::OK();
 }
 
@@ -136,23 +139,21 @@ Status GetKeysNativeImpl(JNIEnv *env, jlong handle, jobject keysJO, jint timeout
         jobject byteBuffer = NULL;
         for (auto &buffer : buffers) {
             if (buffer) {
-                Status latchRc = buffer->RLatch();
-                if (!latchRc.IsOk()) {
-                    rc = latchRc;
-                    break;
-                }
-                byteBuffer = ToHeapBuffer(env,
-                    reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-                Status unlatchRc = buffer->UnRLatch();
-                if (!unlatchRc.IsOk()) {
-                    rc = unlatchRc;
-                    break;
-                }
-                if (env->ExceptionOccurred()) {
-                    std::string msg =
-                        "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_getKeysNative "
-                        "function to call ToHeapBuffer()";
-                    rc = Status(StatusCode::K_RUNTIME_ERROR, msg);
+                // Use the SDK-internal helper so the copy still works when the
+                // buffer was returned with oc_metadata_header disabled.
+                Status copyRc = buffer->CopyDataWithRLatch([&] {
+                    byteBuffer = ToHeapBuffer(env, reinterpret_cast<const char *>(buffer->ImmutableData()),
+                                              buffer->GetSize());
+                    if (env->ExceptionOccurred()) {
+                        std::string msg =
+                            "Exception Occurs when Java_org_yuanrong_datasystem_statecache_StateClient_getKeysNative "
+                            "function to call ToHeapBuffer()";
+                        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, msg);
+                    }
+                    return Status::OK();
+                });
+                if (!copyRc.IsOk()) {
+                    rc = copyRc;
                     break;
                 }
                 totalSize += buffer->GetSize();

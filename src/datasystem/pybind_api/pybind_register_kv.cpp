@@ -431,18 +431,20 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                         vals.append(py::none());
                         continue;
                     }
-                    Status status = buffer->RLatch();
+                    // Use the SDK-internal helper so the copy still works when the buffer was
+                    // returned with oc_metadata_header disabled (DisabledLock → no latch
+                    // needed); other latch errors still surface as None.
+                    std::string tmpData;
+                    Buffer *buf = &(*buffer);
+                    Status status = buf->CopyDataWithRLatch([&tmpData, buf] {
+                        tmpData.assign(reinterpret_cast<const char *>(buf->ImmutableData()), buf->GetSize());
+                        return Status::OK();
+                    });
                     if (status.IsOk()) {
-                        py::bytes tmp(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-                        uint64_t tmpSize = buffer->GetSize();
-                        status = buffer->UnRLatch();
-                        if (status.IsOk()) {
-                            totalSize += tmpSize;
-                            vals.append(std::move(tmp));
-                        }
-                    }
-                    if (status.IsError()) {
-                        LOG(ERROR) << "RLatch failed:" << status.ToString();
+                        totalSize += tmpData.size();
+                        vals.append(py::bytes(tmpData));
+                    } else {
+                        LOG(ERROR) << "CopyDataWithRLatch failed:" << status.ToString();
                         vals.append(py::none());
                     }
                 }

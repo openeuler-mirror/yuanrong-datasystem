@@ -80,8 +80,13 @@ Status Buffer::Init()
         latch_ = std::make_shared<object_cache::CommonLock>();
     } else {
         isShm_ = true;
-        auto *lockFrame = reinterpret_cast<uint32_t *>(bufferInfo_->pointer);
-        latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize, clientImpl->GetLockId());
+        if (bufferInfo_->metadataSize == 0) {
+            latch_ = std::make_shared<object_cache::DisabledLock>();
+        } else {
+            auto *lockFrame = reinterpret_cast<uint32_t *>(bufferInfo_->pointer);
+            latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize,
+                                                             clientImpl->GetLockId());
+        }
     }
 #ifdef WITH_TESTS
     INJECT_POINT("buffer.init");
@@ -342,6 +347,39 @@ Status Buffer::UnWLatch()
     return Status::OK();
 }
 
+Status Buffer::CopyDataWithRLatch(const std::function<Status()> &copyFn)
+{
+    if (copyFn == nullptr) {
+        RETURN_STATUS(StatusCode::K_INVALID, "CopyDataWithRLatch: copy callback is null.");
+    }
+    if (latch_ == nullptr) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "CopyDataWithRLatch: buffer is not initialized.");
+    }
+
+    // When the buffer was created with oc_metadata_header disabled, the shm layout
+    // has no lock frame and read latching is a no-op; we still need the same
+    // CheckDeprecated/CheckVisible preconditions that Buffer::RLatch() enforces so
+    // that callers do not read stale or deprecated buffers.
+    const bool latchSupported = latch_->IsSupported();
+    if (!latchSupported) {
+        RETURN_IF_NOT_OK(CheckDeprecated());
+        RETURN_IF_NOT_OK(CheckVisible());
+    } else {
+        RETURN_IF_NOT_OK(RLatch());
+    }
+
+    Status copyStatus = copyFn();
+
+    if (latchSupported) {
+        Status unlatchStatus = UnRLatch();
+        if (copyStatus.IsError()) {
+            return copyStatus;
+        }
+        return unlatchStatus;
+    }
+    return copyStatus;
+}
+
 void *Buffer::MutableData()
 {
     if (bufferInfo_->pointer == nullptr && bufferInfo_->ubUrmaDataInfo != nullptr) {
@@ -405,22 +443,34 @@ Status Buffer::CheckDeprecated()
 
 uint8_t *Buffer::GetVisiblePointer()
 {
+    if (bufferInfo_ == nullptr || bufferInfo_->metadataSize == 0) {
+        return nullptr;
+    }
     return static_cast<uint8_t *>(MutableData()) - sizeof(uint8_t);
 }
 
 void Buffer::SetVisibility(bool visible)
 {
+    if (!isShm_ || bufferInfo_ == nullptr || bufferInfo_->metadataSize == 0) {
+        return;
+    }
     uint8_t val = visible ? 0 : 1;
     uint8_t *pointer = GetVisiblePointer();
+    if (pointer == nullptr) {
+        return;
+    }
     *pointer = val;
 }
 
 Status Buffer::CheckVisible()
 {
-    if (!isShm_) {
+    if (!isShm_ || bufferInfo_ == nullptr || bufferInfo_->metadataSize == 0) {
         return Status::OK();
     }
     uint8_t *val = GetVisiblePointer();
+    if (val == nullptr) {
+        return Status::OK();
+    }
     if (*val != 0) {
         RETURN_STATUS(K_RUNTIME_ERROR, "Buffer publish/seal failed, unable to visit");
     }
