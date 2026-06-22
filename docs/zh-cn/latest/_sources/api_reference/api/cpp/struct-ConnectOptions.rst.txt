@@ -18,9 +18,9 @@ ConnectOptions
 
         数据系统 Worker 的主机 IP 端口号。
 
-    .. cpp:member:: int32_t connectTimeoutMs = 60 * 1000;
+    .. cpp:member:: int32_t connectTimeoutMs = 9 * 1000;
 
-        客户端连接超时时间，单位为毫秒。默认值：60'000, 数值约束>=500。
+        客户端连接超时时间，单位为毫秒。默认值：9'000, 数值约束>=500。
 
     .. cpp:member:: int32_t requestTimeoutMs;
 

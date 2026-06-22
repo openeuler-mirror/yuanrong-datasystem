@@ -1,14 +1,14 @@
 yr.datasystem.kv_client.KVClient
 ================================
 
-.. py:class:: yr.datasystem.kv_client.KVClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_exclusive_connection=False)
+.. py:class:: yr.datasystem.kv_client.KVClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_exclusive_connection=False)
 
     KV缓存客户端。
 
     参数：
         - **host** (str) - 数据系统Worker的主机IP地址。
         - **port** (int) - 数据系统Worker的服务端口号。
-        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``60000`` 。
+        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
         - **client_public_key** (str) - 用于curve认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于curve认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于curve认证的服务端公钥。默认值： ``""`` 。
@@ -53,7 +53,7 @@ yr.datasystem.kv_client.KVClient
        * - :doc:`delete <yr.datasystem.kv_client.KVClient.delete>`
          - 删除指定的键值对。
        * - :doc:`generate_key <yr.datasystem.kv_client.KVClient.generate_key>`
-         - 生成一个带数据系统 Worker UUID 的 key。
+         - 生成唯一的键。
        * - :doc:`exist <yr.datasystem.kv_client.KVClient.exist>`
          - 查看 key 在数据系统中是否存在。
        * - :doc:`expire <yr.datasystem.kv_client.KVClient.expire>`

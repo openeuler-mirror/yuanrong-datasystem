@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
@@ -589,21 +590,20 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><a class="reference internal" href="#spill">Spill相关配置</a></p></li>
 <li><p><a class="reference internal" href="#id6">日志与可观测相关配置</a></p></li>
 <li><p><a class="reference internal" href="#id7">二级缓存相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id8">多集群相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id9">元数据相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id10">可靠性相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id11">优雅退出相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id12">性能相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id8">元数据相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id9">可靠性相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id10">优雅退出相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id11">性能相关配置</a></p></li>
 <li><p><a class="reference internal" href="#ak-sk">AK/SK相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id13">Kubernetes亲和性相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id14">挂载路径相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id15">混合部署相关配置</a></p></li>
-<li><p><a class="reference internal" href="#id16">Kubernetes精细化控制配置</a></p></li>
+<li><p><a class="reference internal" href="#id12">Kubernetes亲和性相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id13">挂载路径相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id14">混合部署相关配置</a></p></li>
+<li><p><a class="reference internal" href="#id15">Kubernetes精细化控制配置</a></p></li>
 </ul>
 </li>
-<li><p><a class="reference internal" href="#id17">约束</a></p>
+<li><p><a class="reference internal" href="#id16">约束</a></p>
 <ul>
-<li><p><a class="reference internal" href="#id18">共享内存生命周期相关约束</a></p></li>
+<li><p><a class="reference internal" href="#id17">共享内存生命周期相关约束</a></p></li>
 </ul>
 </li>
 </ul>
@@ -708,7 +708,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p>/home/uds</p></td>
 <td><p>Unix Domain Socket目录，用于启用共享内存免拷贝能力</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="#id9">global.metadata.rocksdbStoreDir</a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="#id8">global.metadata.rocksdbStoreDir</a></p></td>
 <td><p>/home/sn/datasystem/rocksdb</p></td>
 <td><p>元数据持久化目录</p></td>
 </tr>
@@ -1124,7 +1124,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </li>
 <li><p><strong>样例2</strong>：</p>
-<p>Spill目录为 “/opt/spill/yr_datasystem_spill”，需要使用宿主机的SSD盘提升Spill性能（宿主机的SSD路径假设为：“/data/ssd”），大小同样为10GB。这种场景下需要配合<a class="reference internal" href="#id14">挂载路径相关配置</a>一起使用。</p>
+<p>Spill目录为 “/opt/spill/yr_datasystem_spill”，需要使用宿主机的SSD盘提升Spill性能（宿主机的SSD路径假设为：“/data/ssd”），大小同样为10GB。这种场景下需要配合<a class="reference internal" href="#id13">挂载路径相关配置</a>一起使用。</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">spill</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">spillDirectory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;/opt/spill/yr_datasystem_spill&quot;</span>
@@ -1487,54 +1487,7 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </div>
 </section>
 <section id="id8">
-<h3>多集群相关配置<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
-<p>注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：<a class="reference internal" href="../FAQ/FAQ.html"><span class="std std-doc">FAQ</span></a></p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>配置项</p></th>
-<th class="head"><p>类型</p></th>
-<th class="head"><p>默认值</p></th>
-<th class="head"><p>描述</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>global.clusterName</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;AZ1&quot;</span></code></p></td>
-<td><p>可用区的名称</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.crossAz.otherClusterNames</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>指定其他可用区的名称，如果需要指定多个可用区通过’,’进行分隔</p></td>
-</tr>
-<tr class="row-even"><td><p>global.crossAz.crossAzGetDataFromWorker</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则将直接从二级缓存中检索数据</p></td>
-</tr>
-<tr class="row-odd"><td><p>global.crossAz.crossAzGetMetaFromWorker</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否从其他可用区的datasystem-worker获取元数据，如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则从本地可用区获取元数据</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><strong>样例</strong>：</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">clusterName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;az1&quot;</span>
-
-<span class="w">  </span><span class="nt">crossAz</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">otherClusterNames</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;az2,az3,az4&quot;</span>
-<span class="w">    </span><span class="nt">crossAzGetDataFromWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">    </span><span class="nt">crossAzGetMetaFromWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-</pre></div>
-</div>
-</section>
-<section id="id9">
-<h3>元数据相关配置<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<h3>元数据相关配置<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1548,7 +1501,7 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 <tr class="row-even"><td><p>global.metadata.enableMetaReplica</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否开启元数据多副本功能</p></td>
+<td><p>已废弃的兼容参数，当前配置值会被忽略</p></td>
 </tr>
 <tr class="row-odd"><td><p>global.metadata.rocksdbStoreDir</p></td>
 <td><p>string</p></td>
@@ -1579,8 +1532,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </table>
 </div>
 </section>
-<section id="id10">
-<h3>可靠性相关配置<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id9">
+<h3>可靠性相关配置<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1655,8 +1608,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </table>
 </div>
 </section>
-<section id="id11">
-<h3>优雅退出相关配置<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>优雅退出相关配置<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1701,8 +1654,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </table>
 </div>
 </section>
-<section id="id12">
-<h3>性能相关配置<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>性能相关配置<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1898,8 +1851,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </table>
 </div>
 </section>
-<section id="id13">
-<h3>Kubernetes亲和性相关配置<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>Kubernetes亲和性相关配置<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1929,8 +1882,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </table>
 </div>
 </section>
-<section id="id14">
-<h3>挂载路径相关配置<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<section id="id13">
+<h3>挂载路径相关配置<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
 <p>挂载路径相关配置一般与<a class="reference internal" href="#spill">Spill相关配置</a>相配合使用。</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -1967,8 +1920,8 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </section>
-<section id="id15">
-<h3>混合部署相关配置<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<section id="id14">
+<h3>混合部署相关配置<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2030,14 +1983,14 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </section>
+<section id="id15">
+<h3>Kubernetes精细化控制配置<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+</section>
+</section>
 <section id="id16">
-<h3>Kubernetes精细化控制配置<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
-</section>
-</section>
+<h2>约束<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h2>
 <section id="id17">
-<h2>约束<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h2>
-<section id="id18">
-<h3>共享内存生命周期相关约束<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<h3>共享内存生命周期相关约束<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
 <p>在 Kubernetes 部署场景下，Client 与 Worker 之间通过共享内存进行本地零拷贝访问时，需要额外关注共享内存生命周期对 Pod 内存计量的影响。</p>
 <p>当 Client 仍持有某段共享内存的本地映射时，即使对应的旧 Worker 进程已经退出，这段共享内存也不会被内核立即回收。如果此时马上重启 Worker，新 Worker 在启动阶段会重新申请配置的共享内存；对于开启 UB 或开启共享内存大页的场景，这部分共享内存会在部署 Worker 时被实际申请。此时，旧 Worker 遗留但尚未释放的共享内存与新 Worker 新申请的共享内存会同时计入 Pod 内存使用量，可能导致 Pod 触发 OOM，进而使新 Worker 被 Kubernetes 杀死。</p>
 <p>该约束在以下场景中更容易触发：</p>
@@ -2167,20 +2120,19 @@ Distributed Disk</label><div class="sd-tab-content docutils">
 <li><a class="reference internal" href="#spill">Spill相关配置</a></li>
 <li><a class="reference internal" href="#id6">日志与可观测相关配置</a></li>
 <li><a class="reference internal" href="#id7">二级缓存相关配置</a></li>
-<li><a class="reference internal" href="#id8">多集群相关配置</a></li>
-<li><a class="reference internal" href="#id9">元数据相关配置</a></li>
-<li><a class="reference internal" href="#id10">可靠性相关配置</a></li>
-<li><a class="reference internal" href="#id11">优雅退出相关配置</a></li>
-<li><a class="reference internal" href="#id12">性能相关配置</a></li>
+<li><a class="reference internal" href="#id8">元数据相关配置</a></li>
+<li><a class="reference internal" href="#id9">可靠性相关配置</a></li>
+<li><a class="reference internal" href="#id10">优雅退出相关配置</a></li>
+<li><a class="reference internal" href="#id11">性能相关配置</a></li>
 <li><a class="reference internal" href="#ak-sk">AK/SK相关配置</a></li>
-<li><a class="reference internal" href="#id13">Kubernetes亲和性相关配置</a></li>
-<li><a class="reference internal" href="#id14">挂载路径相关配置</a></li>
-<li><a class="reference internal" href="#id15">混合部署相关配置</a></li>
-<li><a class="reference internal" href="#id16">Kubernetes精细化控制配置</a></li>
+<li><a class="reference internal" href="#id12">Kubernetes亲和性相关配置</a></li>
+<li><a class="reference internal" href="#id13">挂载路径相关配置</a></li>
+<li><a class="reference internal" href="#id14">混合部署相关配置</a></li>
+<li><a class="reference internal" href="#id15">Kubernetes精细化控制配置</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id17">约束</a><ul>
-<li><a class="reference internal" href="#id18">共享内存生命周期相关约束</a></li>
+<li><a class="reference internal" href="#id16">约束</a><ul>
+<li><a class="reference internal" href="#id17">共享内存生命周期相关约束</a></li>
 </ul>
 </li>
 </ul>

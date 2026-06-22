@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="StreamClient" href="StreamClient.html"><link rel="prev" title="C++" href="index.html">
+<link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="KVClientConfig" href="KVClientConfig.html"><link rel="prev" title="C++" href="index.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
     <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 current has-children"><a class="reference internal" href="index.html">C++</a><input aria-label="Toggle navigation of C++" checked="" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l4 current current-page"><a class="current reference internal" href="#">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ObjectClient.html">ObjectClient</a></li>
@@ -610,8 +611,31 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient4InitEv">
 <span id="_CPPv3N8KVClient4InitEv"></span><span id="_CPPv2N8KVClient4InitEv"></span><span id="KVClient::Init"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient4InitEv" title="Link to this definition">¶</a><br /></dt>
-<dd><p>建立与数据系统 Worker 之间的连接并完成初始化。</p>
+<dd><p>建立与数据系统 Worker 之间的连接并完成初始化。
+语义上等价于传入未通过 Builder 设置任何字段的空 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a>，
+并调用 <a class="reference internal" href="#_CPPv4N8KVClient4InitEv" title="KVClient::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">Init(const</span> <span class="pre">KVClientConfig</span> <span class="pre">&amp;clientConfig)</span></code></a>。
+进程内首次 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 会固化该空配置快照；若此后再以显式配置调用 <code class="docutils literal notranslate"><span class="pre">Init</span></code>，
+新配置不会覆盖已生效设置。配置优先级与后续 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 行为详见
+<a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 章节。</p>
 <dl class="simple">
+<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示初始化成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient4InitERK14KVClientConfig">
+<span id="_CPPv3N8KVClient4InitERK14KVClientConfig"></span><span id="_CPPv2N8KVClient4InitERK14KVClientConfig"></span><span id="KVClient::Init__KVClientConfigCR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><span class="n"><span class="pre">KVClientConfig</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">clientConfig</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient4InitERK14KVClientConfig" title="Link to this definition">¶</a><br /></dt>
+<dd><p>使用显式客户端配置建立与数据系统 Worker 之间的连接并完成初始化。
+配置项通过 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 的 Builder 设置；仅在进程内**首次**
+<code class="docutils literal notranslate"><span class="pre">Init</span></code> 时按优先级链生效并固化快照，后续 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 传入不同配置时返回
+<code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 但不覆盖已固化配置。详见 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 章节
+中的「配置生效规则」。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>clientConfig</strong> - 客户端初始化配置，详见 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 章节。</p></li>
+</ul>
+</dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示初始化成功，否则返回其他错误码。</p>
 </dd>
 </dl>
@@ -985,13 +1009,13 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient11GenerateKeyERKNSt6stringE">
 <span id="_CPPv3N8KVClient11GenerateKeyERKNSt6stringE"></span><span id="_CPPv2N8KVClient11GenerateKeyERKNSt6stringE"></span><span id="KVClient::GenerateKey__ssCR"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GenerateKey</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">prefixKey</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="s"><span class="pre">&quot;&quot;</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient11GenerateKeyERKNSt6stringE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>生成带有 Worker ID 的键。</p>
+<dd><p>生成键。prefixKey为空时生成随机唯一键；prefixKey非空时返回prefixKey本身。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>prefixKey</strong> - 用户指定的键前缀。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回带有 Worker ID 的键，如果生成失败返回空字符串。</p>
+<dt>返回：</dt><dd><p>返回生成的键，如果生成失败返回空字符串。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -999,11 +1023,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE">
 <span id="_CPPv3N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE"></span><span id="_CPPv2N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE"></span><span id="KVClient::GenerateKey__ssCR.ssR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GenerateKey</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">prefixKey</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">key</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>生成带有 Worker ID 的键。</p>
+<dd><p>生成键。prefixKey为空时生成随机唯一键；prefixKey非空时返回prefixKey本身。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>prefixKey</strong> - 用户指定的键前缀。</p></li>
-<li><p><strong>key</strong> - 传出参数，返回带有 Worker ID 的键，如果生成失败返回空字符串。</p></li>
+<li><p><strong>key</strong> - 传出参数，返回生成的键，如果生成失败返回空字符串。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示成功，否则返回其他错误码。</p>
@@ -1096,12 +1120,12 @@ document.addEventListener('DOMContentLoaded', function() {
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="StreamClient.html">
+          <a class="next-page" href="KVClientConfig.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">StreamClient</div>
+                <div class="title">KVClientConfig</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -1151,6 +1175,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N8KVClient8KVClientERK14ConnectOptions"><code class="docutils literal notranslate"><span class="pre">KVClient::KVClient()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClientD0Ev"><code class="docutils literal notranslate"><span class="pre">KVClient::~KVClient()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient4InitEv"><code class="docutils literal notranslate"><span class="pre">KVClient::Init()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N8KVClient4InitERK14KVClientConfig"><code class="docutils literal notranslate"><span class="pre">KVClient::Init()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient8ShutDownEv"><code class="docutils literal notranslate"><span class="pre">KVClient::ShutDown()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient6CreateERKNSt6stringE8uint64_tRK8SetParamRNSt10shared_ptrI6BufferEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Create()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3SetERKNSt10shared_ptrI6BufferEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Set()</span></code></a></li>

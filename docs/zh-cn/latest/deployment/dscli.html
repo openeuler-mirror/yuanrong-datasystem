@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
@@ -1860,7 +1861,8 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 | log_monitor_exporter | string | <code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code> | 指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下 |
 | log_monitor_interval_ms | int | <code class="docutils literal notranslate"><span class="pre">10000</span></code> | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | <code class="docutils literal notranslate"><span class="pre">0</span></code> | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
-| logfile_mode | int | <code class="docutils literal notranslate"><span class="pre">416</span></code> | 设置日志文件模式/权限，值为八进制数 |</p></li>
+| logfile_mode | int | <code class="docutils literal notranslate"><span class="pre">416</span></code> | 设置日志文件模式/权限，值为八进制数 |
+| enable_perf_trace_log | bool | <code class="docutils literal notranslate"><span class="pre">false</span></code> | 是否打开性能trace日志 |</p></li>
 </ul>
 </div></blockquote>
 </section>
@@ -1961,39 +1963,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </div>
 </section>
 <section id="id21">
-<h4>多集群相关配置<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
-<p>注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：<a class="reference internal" href="../FAQ/FAQ.html"><span class="std std-doc">FAQ</span></a></p>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>配置项</p></th>
-<th class="head"><p>类型</p></th>
-<th class="head"><p>默认值</p></th>
-<th class="head"><p>描述</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>other_cluster_names</p></td>
-<td><p>string</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
-<td><p>指定其他可用区的名称，如果需要指定多个可用区通过’,’进行分隔</p></td>
-</tr>
-<tr class="row-odd"><td><p>cross_cluster_get_data_from_worker</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
-<td><p>是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则将直接从二级缓存中检索数据</p></td>
-</tr>
-<tr class="row-even"><td><p>cross_cluster_get_meta_from_worker</p></td>
-<td><p>bool</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>是否从其他可用区的datasystem-worker获取元数据，如果为 <code class="docutils literal notranslate"><span class="pre">false</span></code>，则从本地可用区获取元数据</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="id22">
-<h4>元数据相关配置<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
+<h4>元数据相关配置<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2027,7 +1997,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>enable_meta_replica</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
-<td><p>控制是否启用多个元数据副本</p></td>
+<td><p>已废弃的兼容参数，当前配置值会被忽略</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_metadata_recovery</p></td>
 <td><p>bool</p></td>
@@ -2038,8 +2008,8 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </table>
 </div>
 </section>
-<section id="id23">
-<h4>可靠性相关配置<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
+<section id="id22">
+<h4>可靠性相关配置<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2104,8 +2074,8 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </table>
 </div>
 </section>
-<section id="id24">
-<h4>优雅退出相关配置<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
+<section id="id23">
+<h4>优雅退出相关配置<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2140,8 +2110,8 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </table>
 </div>
 </section>
-<section id="id25">
-<h4>性能相关配置<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h4>
+<section id="id24">
+<h4>性能相关配置<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h4>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -2229,7 +2199,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 </tr>
 <tr class="row-odd"><td><p>urma_max_write_size_mb</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">2</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 <td><p>URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048]</p></td>
 </tr>
 <tr class="row-even"><td><p>urma_register_whole_arena</p></td>
@@ -2431,11 +2401,10 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <li><a class="reference internal" href="#spill">Spill相关配置</a></li>
 <li><a class="reference internal" href="#id19">日志与可观测相关配置</a></li>
 <li><a class="reference internal" href="#id20">二级缓存相关配置</a></li>
-<li><a class="reference internal" href="#id21">多集群相关配置</a></li>
-<li><a class="reference internal" href="#id22">元数据相关配置</a></li>
-<li><a class="reference internal" href="#id23">可靠性相关配置</a></li>
-<li><a class="reference internal" href="#id24">优雅退出相关配置</a></li>
-<li><a class="reference internal" href="#id25">性能相关配置</a></li>
+<li><a class="reference internal" href="#id21">元数据相关配置</a></li>
+<li><a class="reference internal" href="#id22">可靠性相关配置</a></li>
+<li><a class="reference internal" href="#id23">优雅退出相关配置</a></li>
+<li><a class="reference internal" href="#id24">性能相关配置</a></li>
 <li><a class="reference internal" href="#ak-sk">AK/SK相关配置</a></li>
 </ul>
 </li>

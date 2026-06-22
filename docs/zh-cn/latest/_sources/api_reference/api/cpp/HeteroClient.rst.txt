@@ -222,7 +222,7 @@ HeteroClient
 
     .. cpp:function:: Status GenerateKey(const std::string &prefix, std::string &key)
 
-        生成一个唯一的key，提供给其他接口设置数据使用。
+        生成key，提供给其他接口设置数据使用。prefix为空时生成随机唯一key；prefix非空时返回prefix本身。
         
         参数：
             - **prefix** - 传入参数， 指定返回生成的key的前缀。
