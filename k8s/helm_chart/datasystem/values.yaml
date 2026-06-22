@@ -640,9 +640,6 @@ global:
   # Used to control how many Pods can be in an unavailable state during a rolling update.
   maxUnavailable: "100%"
 
-  # Maximum duration of the rolling upgrade, default value is 1800 seconds.
-  rollingUpdateTimeoutS: 1800
-
   # Security Configuration
   security:
     # The encrypted secret key for stream cache. The key length is up to 1024 bytes and must be 32 bytes after decryption.

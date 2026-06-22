@@ -566,5 +566,4 @@ global:
 | global.annotations | object | `{}` | Kubernetes 元注解 |
 | global.enableNonPreemptive | bool | `false` | 配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass |
 | global.fsGid | string | `"1002"` | fsGroup配置。容器的所有进程也是附加组ID的一部分 |
-| global.rollingUpdateTimeoutS | int | `1800` | 滚动升级的最大持续时间，默认值为1800秒 |
 | global.security.scEncryptSecretKey | string | `1800` | 流缓存的加密密钥，密钥长度最多为1024字节，解密后必须为32字节 |
