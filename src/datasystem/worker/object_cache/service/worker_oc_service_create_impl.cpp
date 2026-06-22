@@ -41,10 +41,11 @@ namespace object_cache {
 static const uint64_t CREATE_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
-WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
+                                                     ClusterManager *clusterManager,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
 {
@@ -59,18 +60,19 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_CREATE);
     access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     VLOG(1) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
-        req.object_key(), req.data_size());
+                            req.object_key(), req.data_size());
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });
     if (remainingTimeMs <= 0) {
-        Status rc =  Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+        Status rc = Status(
+            StatusCode::K_RPC_DEADLINE_EXCEEDED,
             FormatString("The create request process time has exceeded the request timeout time (remaining: %lld ms)",
-            remainingTimeMs));
+                         remainingTimeMs));
         access.Result(rc).Record();
         return rc;
     }
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         Status rc(StatusCode::K_NOT_READY, __LINE__, __FILE__, "ETCD cluster manager is not provided.");
         access.Result(rc).Record();
         return rc;
@@ -96,8 +98,8 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
 }
 
 Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const ClientKey &clientId,
-                                             const std::string &rawObjectKey, size_t dataSize,
-                                             int64_t requestTimeoutMs, CreateRspPb &resp, CacheType cacheType)
+                                             const std::string &rawObjectKey, size_t dataSize, int64_t requestTimeoutMs,
+                                             CreateRspPb &resp, CacheType cacheType)
 {
     auto objectKey = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, rawObjectKey);
     // Check whether the object is sealed.
@@ -129,9 +131,8 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
 #ifdef USE_URMA
     // Fill urma_info for UB Put path (Create+MemoryCopy+Publish)
     if (!ClientShmEnabled(clientId) && IsUrmaEnabled()) {
-        RETURN_IF_NOT_OK(
-            FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metadataSize, resp,
-                                shmUnit->GetNumaId()));
+        RETURN_IF_NOT_OK(FillRequestUrmaInfo(localAddress_, shmUnit->GetPointer(), shmUnit->GetOffset(), metadataSize,
+                                             resp, shmUnit->GetNumaId()));
     }
 #endif
 
@@ -282,7 +283,8 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
 {
     PerfPoint pointAll(PerfKey::WORKER_MULTI_CREATE_TOTAL);
     PerfPoint point(PerfKey::WORKER_MULTI_CREATE_INPUT_CHECK);
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
+                             "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_key_size()), StatusCode::K_INVALID,

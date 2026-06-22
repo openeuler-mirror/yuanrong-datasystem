@@ -191,7 +191,7 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {
-    BINEXPECT_CALL((Status(EtcdClusterManager::*)(const HostPort &, bool)) & EtcdClusterManager::CheckConnection,
+    BINEXPECT_CALL((Status(ClusterManager::*)(const HostPort &, bool)) & ClusterManager::CheckConnection,
                    (_, _))
         .WillRepeatedly(Return(Status::OK()));
 

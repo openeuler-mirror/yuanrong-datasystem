@@ -3,13 +3,13 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
-    name = "etcd_cluster_manager_test",
-    srcs = ["etcd_cluster_manager_test.cpp"],
+    name = "cluster_manager_test",
+    srcs = ["cluster_manager_test.cpp"],
     tags = ["manual"],
     deps = [
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/cluster_manager:cluster_manager",
         "//tests/st:st_common",
     ],
 )
@@ -45,7 +45,7 @@ ds_cc_test(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:wait_post",
         "//src/datasystem/worker:worker_cli",
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager",
+        "//src/datasystem/worker/cluster_manager:cluster_manager",
         "//src/datasystem/worker/hash_ring:hash_ring",
         "//tests/st:st_common",
     ],

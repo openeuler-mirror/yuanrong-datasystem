@@ -11,8 +11,8 @@
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp`
 - Primary source-of-truth files:
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.h`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.h`
   - `src/datasystem/worker/cluster_manager/cluster_node.h`
   - `src/datasystem/worker/cluster_manager/worker_health_check.cpp`
   - `src/datasystem/worker/cluster_event_type.h`
@@ -56,7 +56,7 @@
 ## Architecture Overview
 
 - High-level structure:
-  - `EtcdClusterManager` owns worker membership tables, event queue, background threads, hash-ring pointer, and route helpers.
+  - `ClusterManager` owns worker membership tables, event queue, background threads, hash-ring pointer, and route helpers.
   - `ClusterNode` stores membership event timestamp, lifecycle tag, and local state.
   - `worker_health_check` owns a process-global health flag and optional probe file.
   - `cluster_event_type.h` and `hash_ring_event.h` provide event-bus contracts to neighboring modules.
@@ -75,9 +75,9 @@
 
 | Component | Responsibility | Key files | Notes |
 | --- | --- | --- | --- |
-| `EtcdClusterManager` | lifecycle coordinator, event dispatch, route lookup | `etcd_cluster_manager.*` | central integration point |
+| `ClusterManager` | lifecycle coordinator, event dispatch, route lookup | `cluster_manager.*` | central integration point |
 | `ClusterNode` | local membership state wrapper | `cluster_node.h` | `ACTIVE`, `TIMEOUT`, `FAILED` plus ETCD lifecycle tag |
-| event priority queue | decouple ETCD watch thread from heavy handlers | `etcd_cluster_manager.h/.cpp` | ring priority > cluster priority |
+| event priority queue | decouple ETCD watch thread from heavy handlers | `cluster_manager.h/.cpp` | ring priority > cluster priority |
 | node utility thread | event handling, demotion, hash-ring progress, sync | `StartNodeUtilThread` | overloaded loop |
 | orphan monitor | cleanup nodes missing from hash ring/ETCD | `StartOrphanNodeMonitorThread` | per-orphan ETCD get |
 | fake node repair | synthesize add/delete for ring workers absent from node table | `CompleteNodeTableWithFakeNode` | repairs full-cluster restart gaps |
@@ -108,9 +108,9 @@
 ### Initialization
 
 1. `WorkerOCServer` validates ETCD/Metastore address and initializes `EtcdStore`.
-2. It constructs `EtcdClusterManager` before initializing services because services need route and lifecycle hooks.
+2. It constructs `ClusterManager` before initializing services because services need route and lifecycle hooks.
 3. `ClusterInfo` is loaded from ETCD/Metastore when backend health passes, otherwise from RocksDB and peer reconciliation.
-4. `EtcdClusterManager::Init` starts background threads before hash-ring initialization.
+4. `ClusterManager::Init` starts background threads before hash-ring initialization.
 5. Startup cluster nodes are converted into queued fake PUT events so normal event handlers build local state.
 6. Watches start from the startup revision.
 7. Hash ring initializes from ETCD or degraded snapshot.
@@ -242,10 +242,10 @@ Failure-sensitive steps:
   - fake-node completion logs;
   - reconciliation and health-file logs.
 - Debug hooks:
-  - `EtcdClusterManager.HandleNodeAdditionEvent.delay`
-  - `EtcdClusterManager.CheckWaitNodeTableComplete.*`
-  - `EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation`
-  - `EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere`
+  - `ClusterManager.HandleNodeAdditionEvent.delay`
+  - `ClusterManager.CheckWaitNodeTableComplete.*`
+  - `ClusterManager.IfNeedTriggerReconciliation.noreconciliation`
+  - `ClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere`
   - `WorkerOCServiceImpl.Reconciliation.*`
   - `worker.RunKeepAliveTask`
 - How to tell the module is healthy:
@@ -284,7 +284,7 @@ Failure-sensitive steps:
   - `src/datasystem/worker/cluster_manager/CMakeLists.txt`
   - `src/datasystem/worker/cluster_manager/BUILD.bazel`
 - Representative tests:
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
   - `tests/st/client/kv_cache/kv_client_scale_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
 - Manual verification:

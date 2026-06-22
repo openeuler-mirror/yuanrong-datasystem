@@ -136,12 +136,17 @@ Status ClientWorkerSCServiceImpl::CreateProducer(
     CreateProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
 
-    auto recorder = std::make_shared<StreamAccessRecorder>(
-        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CREATE_PRODUCER));
-    recorder->StreamName(req.stream_name()).ProducerId(req.producer_id()).PageSize(req.page_size())
-        .MaxStreamSize(req.max_stream_size()).AutoCleanup(req.auto_cleanup())
-        .RetainForNumConsumers(req.retain_num_consumer()).EncryptStream(req.encrypt_stream())
-        .ReserveSize(req.reserve_size()).StreamMode(req.stream_mode());
+    auto recorder =
+        std::make_shared<StreamAccessRecorder>(AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CREATE_PRODUCER));
+    recorder->StreamName(req.stream_name())
+        .ProducerId(req.producer_id())
+        .PageSize(req.page_size())
+        .MaxStreamSize(req.max_stream_size())
+        .AutoCleanup(req.auto_cleanup())
+        .RetainForNumConsumers(req.retain_num_consumer())
+        .EncryptStream(req.encrypt_stream())
+        .ReserveSize(req.reserve_size())
+        .StreamMode(req.stream_mode());
     auto rc = CreateProducerInternal(req, recorder, serverApi);
     return rc;
 }
@@ -173,8 +178,10 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
         CheckErrorReturn(rc, rsp, FormatString("[S:%s] CreateProducerImpl failed with rc ", namespaceUri), serverApi);
         recorder->Result(rc);
         if (rc.IsOk()) {
-            recorder->SenderProducerNo(rsp.sender_producer_no()).EnableDataVerification(rsp.enable_data_verification())
-                .StreamNo(rsp.stream_no()).SharedPageSize(rsp.shared_page_size())
+            recorder->SenderProducerNo(rsp.sender_producer_no())
+                .EnableDataVerification(rsp.enable_data_verification())
+                .StreamNo(rsp.stream_no())
+                .SharedPageSize(rsp.shared_page_size())
                 .EnableSharedPage(rsp.enable_shared_page());
         }
         recorder->Record();
@@ -187,7 +194,7 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
 Status ClientWorkerSCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
 {
     std::string dbName;
-    RETURN_IF_NOT_OK(etcdCM_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
+    RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
     g_MetaRocksDbName = dbName;
     return Status::OK();
 }
@@ -296,7 +303,7 @@ Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespac
     if (firstProducer) {
         LOG(INFO) << FormatString("[%s, S:%s, P:%s] First CreateProducer request sending to master.", LogPrefix(),
                                   namespaceUri, producerId);
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, etcdCM_);
+        auto api = workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_);
         CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "Get WorkerMasterApi failed of " + namespaceUri);
         // Only first producer sends CreateProducer request, so use local address as producer id
         Status rc = CreateProducerHandleSend(api, namespaceUri, streamFields);
@@ -354,8 +361,8 @@ Status ClientWorkerSCServiceImpl::CloseProducer(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<StreamAccessRecorder>(
-        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_PRODUCER));
+    auto recorder =
+        std::make_shared<StreamAccessRecorder>(AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_PRODUCER));
     recorder->StreamName(req.stream_name()).ProducerId(req.producer_id()).ClientId(req.client_id());
     auto rc = CloseProducerInternal(req, recorder, serverApi);
     return rc;
@@ -478,7 +485,7 @@ Status ClientWorkerSCServiceImpl::CloseProducerImpl(const std::string &producerI
     bool lastProducer = (streamMgr->GetLocalProducerCount() == 1);
     // We only need to inform master of producer close on last local producer
     if (notifyMaster && lastProducer) {
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, etcdCM_);
+        auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_);
         if (api != nullptr) {
             std::list<std::string> streamList;
             streamList.emplace_back(streamName);
@@ -588,7 +595,7 @@ Status ClientWorkerSCServiceImpl::SendBatchedCloseProducerReq(std::set<std::stri
             // We only send a CloseProducer Request on last producer close
             VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[S:%s] Sending close producer to master. Attempt: %d",
                                                       streamName, numRetries);
-            auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, etcdCM_);
+            auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_);
             if (api != nullptr) {
                 // force close is true
                 std::list<std::string> streamList;
@@ -648,8 +655,8 @@ Status ClientWorkerSCServiceImpl::Subscribe(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     SubscribeReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<StreamAccessRecorder>(
-        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_SUBSCRIBE));
+    auto recorder =
+        std::make_shared<StreamAccessRecorder>(AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_SUBSCRIBE));
     recorder->StreamName(req.stream_name()).ConsumerId(req.consumer_id()).ClientId(req.client_id());
     auto rc = SubscribeInternal(req, recorder, serverApi);
     return rc;
@@ -710,7 +717,7 @@ Status ClientWorkerSCServiceImpl::SubscribeHandleSend(std::shared_ptr<StreamMana
 {
     auto subscribeFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, etcdCM_, api),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
                                          "Getting master api failed. stream name = " + streamName);
         masterAddress = api->Address();
         master::SubscribeReqPb masterReq;
@@ -840,10 +847,12 @@ Status ClientWorkerSCServiceImpl::CloseConsumer(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseConsumerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
-    auto recorder = std::make_shared<StreamAccessRecorder>(
-        AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_CONSUMER));
-    recorder->StreamName(req.stream_name()).ConsumerId(req.consumer_id())
-        .SubscriptionName(req.subscription_name()).ClientId(req.client_id());
+    auto recorder =
+        std::make_shared<StreamAccessRecorder>(AccessRecorder::Stream(AccessRecorderKey::DS_POSIX_CLOSE_CONSUMER));
+    recorder->StreamName(req.stream_name())
+        .ConsumerId(req.consumer_id())
+        .SubscriptionName(req.subscription_name())
+        .ClientId(req.client_id());
     auto rc = CloseConsumerInternal(req, recorder, serverApi);
     return rc;
 }
@@ -916,8 +925,9 @@ Status ClientWorkerSCServiceImpl::CloseConsumerImpl(const std::string &consumerI
         auto closeConsumerFn = [&] {
             // We don't care about lastAckCursor change when close consumer, so we set it as 0.
             std::shared_ptr<WorkerMasterSCApi> api;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, etcdCM_, api),
-                                             "Getting master api failed. stream name = " + streamName);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
+                "Getting master api failed. stream name = " + streamName);
             masterAddr = api->Address();
             master::CloseConsumerReqPb req;
             auto &consumerMetaPb = *req.mutable_consumer_meta();
@@ -1190,7 +1200,7 @@ Status ClientWorkerSCServiceImpl::DeleteStreamHandleSend(const std::string &stre
 {
     auto deleteFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, etcdCM_, api),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
                                          "Getting master api failed. stream name = " + streamName);
         master::DeleteStreamReqPb masterReq;
         masterReq.set_stream_name(streamName);
@@ -1229,8 +1239,9 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
                               localWorkerAddress_.ToString(), namespaceUri);
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, etcdCM_, api),
-                                         "Getting master api failed. stream name = " + namespaceUri);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_, api),
+            "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
         masterReq.set_redirect(true);
@@ -1269,8 +1280,9 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalN
                               localWorkerAddress_.ToString(), namespaceUri);
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, etcdCM_, api),
-                                         "Getting master api failed. stream name = " + namespaceUri);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_, api),
+            "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
         masterReq.set_redirect(true);
@@ -1634,7 +1646,7 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
 {
     if (!masterAddr.empty()) {
         MetaAddrInfo metaAddrInfo;
-        auto rc = etcdCM_->GetMetaAddress(streamName, metaAddrInfo);
+        auto rc = clusterManager_->GetMetaAddress(streamName, metaAddrInfo);
         if (rc.IsError()) {
             LOG(ERROR) << rc.ToString();
             return false;
@@ -1642,13 +1654,13 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
         auto masterAddress = metaAddrInfo.GetAddressAndSaveDbName();
         return masterAddress.ToString() == masterAddr;
     }
-    return etcdCM_->IsInRange(hashRanges, streamName);
+    return clusterManager_->IsInRange(hashRanges, streamName);
 }
 
 Status ClientWorkerSCServiceImpl::CheckConnection(const std::string &streamName)
 {
     auto func = [&] {
-        Status status = etcdCM_->CheckConnection(streamName);
+        Status status = clusterManager_->CheckConnection(streamName);
         if (status.IsError()) {
             std::stringstream ss;
             ss << "Worker disconnected from master, error msg: " << status.ToString();
@@ -2549,8 +2561,8 @@ Status MemAllocRequestList<W, R>::MarkMemAllocFinish(const std::string &streamNa
 
 template <typename W, typename R>
 Status MemAllocRequestList<W, R>::GetOrCreate(ClientWorkerSCServiceImpl *scSvc,
-                                            std::shared_ptr<BlockedCreateRequest<W, R>> inblockedReq,
-                                            std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
+                                              std::shared_ptr<BlockedCreateRequest<W, R>> inblockedReq,
+                                              std::shared_ptr<BlockedCreateRequest<W, R>> &outblockedReq)
 {
     {
         std::shared_lock<std::shared_timed_mutex> lock(blockedListMutex_);

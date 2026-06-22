@@ -35,7 +35,7 @@
 - What problem this module solves:
   - stable project-local access to ETCD v3 APIs plus an optional in-process compatible backend.
 - Who or what depends on this module:
-  - `EtcdClusterManager`, `HashRing`, object-cache metadata managers, stream-cache metadata managers, replica/slot recovery paths, CLI tools, and ETCD failure tests.
+  - `ClusterManager`, `HashRing`, object-cache metadata managers, stream-cache metadata managers, replica/slot recovery paths, CLI tools, and ETCD failure tests.
 
 ## Goals
 
@@ -181,7 +181,7 @@ Failure-sensitive steps:
 
 ## External Interaction And Dependency Analysis
 
-- `EtcdClusterManager`:
+- `ClusterManager`:
   - depends on cluster-table watches, ring watches, keepalive, node state updates, and backend writability.
   - failure impact: missed DELETE or duplicate fake DELETE can change passive scale-down timing.
 - `HashRing`:
@@ -276,7 +276,7 @@ Failure-sensitive steps:
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
 - Manual verification:
   - inspect key prefixes after `CreateTable`;
   - confirm cluster-table Put carries a nonzero lease;

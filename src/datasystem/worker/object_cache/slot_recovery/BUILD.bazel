@@ -39,7 +39,7 @@ ds_cc_library(
         "//src/datasystem/protos:slot_recovery_cc_proto",
         "//src/datasystem/worker:cluster_event_type",
         "//src/datasystem/worker:worker_master_api_manager_base",
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
     ],

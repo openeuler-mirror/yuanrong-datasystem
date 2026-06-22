@@ -91,7 +91,7 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .etcdCM = nullptr,
+            .clusterManager = nullptr,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
@@ -281,9 +281,9 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
 {
     LOG(INFO) << "Test query objects meta meets rpc error";
-    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(EtcdClusterManager::*)(
+    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(ClusterManager::*)(
                        const std::unordered_set<std::string> &))
-                       & EtcdClusterManager::GroupObjKeysByMasterHostPort,
+                       & ClusterManager::GroupObjKeysByMasterHostPort,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort));
@@ -375,9 +375,9 @@ Status MigrateDataServiceTest::PureQueryMeta(const std::shared_ptr<worker::Worke
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterBasicFunction)
 {
     LOG(INFO) << "Test query meta from master basic function";
-    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(EtcdClusterManager::*)(
+    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(ClusterManager::*)(
                        const std::unordered_set<std::string> &))
-                       & EtcdClusterManager::GroupObjKeysByMasterHostPort,
+                       & ClusterManager::GroupObjKeysByMasterHostPort,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2));
@@ -560,7 +560,7 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .etcdCM = nullptr,
+            .clusterManager = nullptr,
         };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);

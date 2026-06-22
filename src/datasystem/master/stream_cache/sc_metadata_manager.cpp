@@ -59,7 +59,7 @@ bool EnableSCService()
 }  // namespace
 
 SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                     std::shared_ptr<RpcSessionManager> rpcSessionManager, EtcdClusterManager *cm,
+                                     std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm,
                                      RocksStore *rocksStore, const std::string &dbName)
     : MetadataRedirectHelper(cm),
       masterAddress_(masterHostPort),
@@ -115,8 +115,8 @@ Status SCMetadataManager::Init()
     RETURN_IF_EXCEPTION_OCCURS(asyncReconciliationPool_ =
                                    std::make_unique<ThreadPool>(0, THREAD_POOL_SIZE, "MScAsyncReconcilation", false));
 
-    notifyWorkerManager_ =
-        std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, akSkManager_, rpcSessionManager_, etcdCM_, this);
+    notifyWorkerManager_ = std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, akSkManager_, rpcSessionManager_,
+                                                                   clusterManager_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     RETURN_IF_NOT_OK(LoadMeta());
     CheckNewNodeMetaEvent::GetInstance().AddSubscriber(eventName_, [this](const HostPort &eventNodeKey) {
@@ -130,9 +130,8 @@ Status SCMetadataManager::Init()
     ClearWorkerMeta::GetInstance().AddSubscriber(
         eventName_, [this](const HostPort &eventNodeKey) { return ClearWorkerMetadata(eventNodeKey); });
     HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const worker::HashRange &extraRanges) {
-            return RecoverMetadataOfFaultyWorker(extraRanges);
-        });
+        eventName_,
+        [this](const worker::HashRange &extraRanges) { return RecoverMetadataOfFaultyWorker(extraRanges); });
     LOG(INFO) << FormatString("[%s] Initialize success", LogPrefix());
     return Status::OK();
 }
@@ -154,9 +153,7 @@ void SCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &
                                       std::vector<std::string> &streamNames, bool *exitEarly)
 {
     int timeoutSec = 300;
-    INJECT_POINT("SCMetadataManager.GetMetasMatch.timeout", [&timeoutSec] (int timeout) {
-        timeoutSec = timeout;
-    });
+    INJECT_POINT("SCMetadataManager.GetMetasMatch.timeout", [&timeoutSec](int timeout) { timeoutSec = timeout; });
     WriteLockHelper wlocker(DEFER_LOCK_ARGS(metaDictMutex_));
     if (!wlocker.TryLock(timeoutSec)) {
         LOG(WARNING) << "[GetMetasMatch] Failed to acquire lock within " << timeoutSec
@@ -179,7 +176,7 @@ void SCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &
 
 Status SCMetadataManager::SaveMigrationMetadata(const MigrateSCMetadataReqPb &req, MigrateSCMetadataRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_->CheckReceiveMigrateInfo(), K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(clusterManager_->CheckReceiveMigrateInfo(), K_NOT_READY,
                              "wait and retry, worker don't receive addnode info");
     LOG(INFO) << "Recv migrate metadata msg. source:" << req.source_addr()
               << ", stream count:" << req.stream_metas().size();
@@ -218,7 +215,7 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
     // clang-format off
     CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
         streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-        akSkManager_, rpcSessionManager_, etcdCM_, notifyWorkerManager_.get())),
+        akSkManager_, rpcSessionManager_, clusterManager_, notifyWorkerManager_.get())),
         StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
     // clang-format on
     TbbMetaHashmap::accessor accessor;
@@ -683,7 +680,7 @@ Status SCMetadataManager::CreateOrGetStreamMetadata(const std::string &streamNam
         }
         accessor->second =
             std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(), akSkManager_,
-                                             rpcSessionManager_, etcdCM_, notifyWorkerManager_.get());
+                                             rpcSessionManager_, clusterManager_, notifyWorkerManager_.get());
         if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 accessor->second->InitStreamMetrics(),
@@ -726,7 +723,7 @@ Status SCMetadataManager::LoadMeta()
         // clang-format off
         CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
             streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-            akSkManager_, rpcSessionManager_, etcdCM_, notifyWorkerManager_.get())),
+            akSkManager_, rpcSessionManager_, clusterManager_, notifyWorkerManager_.get())),
             StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
         // clang-format on
         TbbMetaHashmap::accessor accessor;
@@ -918,7 +915,7 @@ Status SCMetadataManager::UpdateMetadata(std::vector<GetStreamMetadataRspPb> &me
     WriteLockHelper wlocker(LOCK_ARGS(metaDictMutex_));
     for (const auto &streamMetadata : streamMetaManagerDict_) {
         const auto &streamName = streamMetadata.first;
-        if ((hashRanges.empty() || etcdCM_->IsInRange(hashRanges, streamName))
+        if ((hashRanges.empty() || clusterManager_->IsInRange(hashRanges, streamName))
             && std::find(receivedStreams.begin(), receivedStreams.end(), streamName) == receivedStreams.end()) {
             auto rc = streamMetadata.second->ClearWorkerMetadata(workerAddr, false, false);
             LOG_IF_ERROR_EXCEPT(rc,
@@ -1014,7 +1011,7 @@ Status SCMetadataManager::RecoverMetadataOfFaultyWorker(const worker::HashRange 
     LOG(INFO) << "Start RecoverMetadataOfFaultyWorker by ranges";
     auto func = [this](const worker::HashRange &extraRanges) {
         std::vector<HostPort> nodeAddrs;
-        RETURN_IF_NOT_OK(etcdCM_->GetNodeAddrListFromEtcd(nodeAddrs));
+        RETURN_IF_NOT_OK(clusterManager_->GetNodeAddrListFromEtcd(nodeAddrs));
         RETURN_IF_NOT_OK(CheckMetadata(nodeAddrs, extraRanges));
         return Status::OK();
     };
@@ -1025,10 +1022,10 @@ Status SCMetadataManager::RecoverMetadataOfFaultyWorker(const worker::HashRange 
 
 Status SCMetadataManager::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    auto rc = etcdCM_->CheckConnection(workerHostPort);
+    auto rc = clusterManager_->CheckConnection(workerHostPort);
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL,
                                 FormatString("The Worker %s is abnormal.", workerHostPort.ToString()));

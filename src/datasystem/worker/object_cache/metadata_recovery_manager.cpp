@@ -103,13 +103,13 @@ Status SaveRecoveredContentToMemory(const ObjectMetaPb &meta, const std::shared_
 }  // namespace
 
 MetaDataRecoveryManager::MetaDataRecoveryManager(
-    const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM,
+    const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterManager *clusterManager,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
     uint64_t metadataSize, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
     const std::shared_ptr<ThreadPool> &memCpyThreadPool)
     : localAddress_(localAddress),
       objectTable_(objectTable),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       workerMasterApiManager_(workerMasterApiManager),
       metadataSize_(metadataSize),
       evictionManager_(evictionManager),
@@ -125,8 +125,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     if (objectKeys.empty()) {
         return summary;
     }
-    if (etcdCM_ == nullptr) {
-        summary.status = Status(K_RUNTIME_ERROR, "etcdCM is null");
+    if (clusterManager_ == nullptr) {
+        summary.status = Status(K_RUNTIME_ERROR, "clusterManager is null");
         summary.failedIds = objectKeys;
         return summary;
     }
@@ -183,8 +183,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     if (metas.empty()) {
         return summary;
     }
-    if (etcdCM_ == nullptr || workerMasterApiManager_ == nullptr) {
-        summary.status = etcdCM_ == nullptr ? Status(K_RUNTIME_ERROR, "etcdCM is null")
+    if (clusterManager_ == nullptr || workerMasterApiManager_ == nullptr) {
+        summary.status = clusterManager_ == nullptr ? Status(K_RUNTIME_ERROR, "clusterManager is null")
                                             : Status(K_RUNTIME_ERROR, "workerMasterApiManager is null");
         appendFailedMetas();
         return summary;
@@ -197,7 +197,7 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
         return summary;
     }
 
-    auto groupedByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto groupedByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     std::vector<const GroupItem *> groupedByMasterKeys;
     groupedByMasterKeys.reserve(groupedByMaster.size());
     for (const auto &item : groupedByMaster) {
@@ -231,12 +231,12 @@ MetaDataRecoveryManager::GroupedByMaster MetaDataRecoveryManager::BuildGroupedBy
     const std::vector<std::string> &objectKeys, const std::string &stanbyAddr) const
 {
     if (stanbyAddr.empty()) {
-        return etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+        return clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     }
     MetaAddrInfo info;
     HostPort masterAddr;
     masterAddr.ParseString(stanbyAddr);
-    info.SetDbName(etcdCM_->GetWorkerIdByWorkerAddr(stanbyAddr));
+    info.SetDbName(clusterManager_->GetWorkerIdByWorkerAddr(stanbyAddr));
     info.SetAddress(masterAddr);
     return { { info, { objectKeys.begin(), objectKeys.end() } } };
 }
@@ -355,7 +355,7 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
                                                 std::string stanbyMasterAddr)
 {
     RETURN_OK_IF_TRUE(metas.empty());
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "clusterManager is null");
     CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR, "workerMasterApiManager is null");
     LOG(INFO) << "recovery meta from slot preload begin";
 
@@ -385,11 +385,11 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
         MetaAddrInfo info;
         HostPort masterAddr;
         masterAddr.ParseString(stanbyMasterAddr);
-        info.SetDbName(etcdCM_->GetWorkerIdByWorkerAddr(stanbyMasterAddr));
+        info.SetDbName(clusterManager_->GetWorkerIdByWorkerAddr(stanbyMasterAddr));
         info.SetAddress(masterAddr);
         groupedKeysByMaster[info] = { objectKeys.begin(), objectKeys.end() };
     } else {
-        groupedKeysByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+        groupedKeysByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     }
 
     std::unordered_map<MetaAddrInfo, std::vector<ObjectMetaPb>> groupedMetasByMaster;
@@ -520,7 +520,7 @@ void MetaDataRecoveryManager::SendRecoverBatch(const MetaAddrInfo &metaAddrInfo,
     if (req.metas_size() == 0) {
         return;
     }
-    Status rc = etcdCM_->CheckConnection(addr);
+    Status rc = clusterManager_->CheckConnection(addr);
     if (rc.IsError()) {
         result.failedIds.insert(result.failedIds.end(), batchObjectKeys.begin(), batchObjectKeys.end());
         result.status = rc;

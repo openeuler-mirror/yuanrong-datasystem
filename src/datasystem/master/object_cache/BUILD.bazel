@@ -159,7 +159,7 @@ ds_cc_library(
         "//src/datasystem/protos:master_heartbeat_cc_proto",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/hash_ring",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
         "@tbb",

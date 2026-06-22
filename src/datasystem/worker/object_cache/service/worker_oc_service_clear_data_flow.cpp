@@ -106,7 +106,7 @@ void HandleGroupObjKeysByMasterErrors(const std::optional<std::unordered_map<std
 }
 
 std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
-    EtcdClusterManager *etcdCM,
+    ClusterManager *clusterManager,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
     const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys,
     std::unordered_set<std::string> &failedIds)
@@ -117,7 +117,7 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
         LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();
         return nullptr;
     }
-    auto rc = etcdCM->CheckConnection(masterAddr);
+    auto rc = clusterManager->CheckConnection(masterAddr);
     if (rc.IsError()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(ERROR) << "CheckConnection before ClearObject failed, status: " << rc.ToString();
@@ -136,14 +136,14 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc, std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc,
-    MetaDataRecoveryManager *metadataRecoveryManager, EtcdClusterManager *etcdCM, std::string localAddress)
+    MetaDataRecoveryManager *metadataRecoveryManager, ClusterManager *clusterManager, std::string localAddress)
     : objectTable_(std::move(objectTable)),
       globalRefTable_(std::move(globalRefTable)),
       workerMasterApiManager_(std::move(workerMasterApiManager)),
       gRefProc_(std::move(gRefProc)),
       deleteProc_(std::move(deleteProc)),
       metadataRecoveryManager_(metadataRecoveryManager),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       localAddress_(std::move(localAddress))
 {
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
@@ -265,7 +265,7 @@ Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req
         return Status::OK();
     }
     LOG(INFO) << selectionRequest.ToString();
-    MetadataRecoverySelector selector(objectTable_, etcdCM_);
+    MetadataRecoverySelector selector(objectTable_, clusterManager_);
     return selector.Select(selectionRequest, matchObjIds);
 }
 
@@ -353,7 +353,7 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMasterId;
     std::optional<std::unordered_map<std::string, Status>> errInfos;
     errInfos.emplace();
-    etcdCM_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMasterId, errInfos);
+    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMasterId, errInfos);
     HandleGroupObjKeysByMasterErrors(errInfos, failedIds);
 
     for (auto &item : objKeysGrpByMasterId) {
@@ -362,7 +362,7 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
             continue;
         }
         auto workerMasterApi =
-            GetWorkerMasterApiForClear(etcdCM_, workerMasterApiManager_, item.first, item.second, failedIds);
+            GetWorkerMasterApiForClear(clusterManager_, workerMasterApiManager_, item.first, item.second, failedIds);
         if (workerMasterApi == nullptr) {
             continue;
         }

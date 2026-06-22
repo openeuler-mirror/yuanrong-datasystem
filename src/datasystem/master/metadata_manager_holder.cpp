@@ -54,15 +54,15 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     etcdStore_ = param.etcdStore;
     persistenceApi_ = param.persistenceApi;
     masterAddress_ = param.masterAddress;
-    etcdCM_ = param.etcdCM;
+    clusterManager_ = param.clusterManager;
     masterWorkerService_ = param.masterWorkerService;
     workerWorkerService_ = param.workerWorkerService;
     rpcSessionManager_ = param.rpcSessionManager;
     isOcEnabled_ = param.isOcEnabled;
     isScEnabled_ = param.isScEnabled;
 
-    bool isNewNode = etcdCM_ == nullptr ? true : etcdCM_->IsNewNode();
-    bool isCentralized = etcdCM_ == nullptr ? false : etcdCM_->IsCentralized();
+    bool isNewNode = clusterManager_ == nullptr ? true : clusterManager_->IsNewNode();
+    bool isCentralized = clusterManager_ == nullptr ? false : clusterManager_->IsCentralized();
     if (isNewNode && !isCentralized) {
         isNewNode_ = true;
         LOG(INFO) << "Newly-added node, remove local metadata store if it exists.";
@@ -87,7 +87,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, Rocks
     if (isOcEnabled_) {
         auto oc =
             std::make_shared<master::OCMetadataManager>(akSkManager_, objectRocksStore, etcdStore_, persistenceApi_,
-                                                        masterAddress_.ToString(), etcdCM_, dbName, isNewNode_);
+                                                        masterAddress_.ToString(), clusterManager_, dbName, isNewNode_);
         LOG(INFO) << "Start init OCMetadataManager for " << dbName;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
@@ -96,8 +96,8 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, Rocks
     }
 
     if (isScEnabled_) {
-        auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_, etcdCM_,
-                                                              streamRocksStore, dbName);
+        auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_,
+                                                              clusterManager_, streamRocksStore, dbName);
         LOG(INFO) << "Start init SCMetadataManager for " << dbName;
         timer.Reset();
         RETURN_IF_NOT_OK(sc->Init());

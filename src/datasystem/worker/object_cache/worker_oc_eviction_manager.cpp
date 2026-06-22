@@ -47,7 +47,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
@@ -182,8 +182,8 @@ void WorkerOcEvictionManager::EvictionTraceAggregator::Flush(Action action, Acti
     summary.lastLogTimeMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
 }
 
-const std::unordered_map<WorkerOcEvictionManager::Action, WorkerOcEvictionManager::ActionSummary>
-    &WorkerOcEvictionManager::EvictionTraceAggregator::GetSummaries() const
+const std::unordered_map<WorkerOcEvictionManager::Action, WorkerOcEvictionManager::ActionSummary> &
+WorkerOcEvictionManager::EvictionTraceAggregator::GetSummaries() const
 {
     return summaries_;
 }
@@ -203,8 +203,8 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
 {
     RETURN_IF_EXCEPTION_OCCURS(memEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(MEM_EVICT_THREAD_NUM, 0, "MemEvictionThread"));
-    RETURN_IF_EXCEPTION_OCCURS(primaryEndLifeThreadPool_ = std::make_unique<ThreadPool>(
-                                   PRIMARY_END_LIFE_THREAD_NUM, 0, "PrimaryEndLifeThread"));
+    RETURN_IF_EXCEPTION_OCCURS(primaryEndLifeThreadPool_ = std::make_unique<ThreadPool>(PRIMARY_END_LIFE_THREAD_NUM, 0,
+                                                                                        "PrimaryEndLifeThread"));
     RETURN_IF_EXCEPTION_OCCURS(spillEvictTaskThreadPool_ =
                                    std::make_unique<ThreadPool>(SPILL_EVICT_THREAD_NUM, 0, "SpillEvictionThread"));
     RETURN_IF_EXCEPTION_OCCURS(masterTaskThreadPool_ =
@@ -263,7 +263,7 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
 {
     RETURN_OK_IF_TRUE(objectKeyVersions.empty());
     VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. Object count: " << objectKeyVersions.size();
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
     EvictDeletedObjects failedObjects;
@@ -280,7 +280,7 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
     for (const auto &item : objectKeyVersions) {
         objectKeys.emplace_back(item.first);
     }
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
                            [&objKeysGrpByMaster](const std::string &objectKey) {
                                for (auto &item : objKeysGrpByMaster) {
@@ -558,7 +558,7 @@ Status WorkerOcEvictionManager::MigrateData(const std::string &taskId,
         maxRetryCount = cnt;
         return Status::OK();
     });
-    DataMigrator migrator(MigrateType::SPILL, etcdCM_, localAddress_, akSkManager_, objectTable_, taskId,
+    DataMigrator migrator(MigrateType::SPILL, clusterManager_, localAddress_, akSkManager_, objectTable_, taskId,
                           maxRetryCount);
     migrator.Init();
     Status rc = migrator.Migrate(objectKeys, migrateObjects);
@@ -683,8 +683,8 @@ Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectK
     }
     Status rc = EnqueuePrimaryEndLifeTask(task);
     if (rc.IsError()) {
-        LOG(WARNING) << "[ObjectKey " << objectKey << "] Enqueue primary end-life task failed, " <<
-            rc.ToString() << ".";
+        LOG(WARNING) << "[ObjectKey " << objectKey << "] Enqueue primary end-life task failed, " << rc.ToString()
+                     << ".";
         ClearPrimaryEndLifePending(task);
     }
     return rc;
@@ -802,7 +802,7 @@ std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
 {
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         LOG(ERROR) << "ETCD cluster manager is not provided for primary end-life eviction.";
         ReaddPrimaryEndLifeTasks(tasks);
         return;
@@ -817,12 +817,12 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
     }
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupedKeys;
     std::optional<std::unordered_map<std::string, Status>> errInfos(std::in_place);
-    etcdCM_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, groupedKeys, errInfos);
+    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, groupedKeys, errInfos);
 
     std::unordered_set<std::string> routeFailedKeys;
     for (const auto &item : *errInfos) {
-        LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.",
-                                     item.first, item.second.ToString());
+        LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.", item.first,
+                                     item.second.ToString());
         routeFailedKeys.emplace(item.first);
     }
     std::vector<PrimaryEndLifeTask> failedTasks;
@@ -858,9 +858,8 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr,
                                                                std::vector<PrimaryEndLifeTask> tasks)
 {
-    std::sort(tasks.begin(), tasks.end(), [](const auto &lhs, const auto &rhs) {
-        return lhs.objectKey < rhs.objectKey;
-    });
+    std::sort(tasks.begin(), tasks.end(),
+              [](const auto &lhs, const auto &rhs) { return lhs.objectKey < rhs.objectKey; });
     std::vector<PrimaryEndLifeCandidate> candidates;
     std::vector<PrimaryEndLifeTask> skippedTasks;
     LOG_IF_ERROR(PreparePrimaryEndLifeCandidates(tasks, candidates, skippedTasks),
@@ -902,9 +901,9 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
     }
 }
 
-Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(
-    const std::vector<PrimaryEndLifeTask> &tasks, std::vector<PrimaryEndLifeCandidate> &candidates,
-    std::vector<PrimaryEndLifeTask> &skippedTasks)
+Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeTask> &tasks,
+                                                                std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                                std::vector<PrimaryEndLifeTask> &skippedTasks)
 {
     std::unordered_map<int, uint64_t> selectedSizeByCache;
     const size_t candidateBegin = candidates.size();
@@ -1095,8 +1094,7 @@ uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseSize(const SafeObjType
     return dataSize > max - metaSize ? max : dataSize + metaSize;
 }
 
-void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(
-    const std::vector<PrimaryEndLifeCandidate> &candidates)
+void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeCandidate> &candidates)
 {
     for (const auto &candidate : candidates) {
         candidate.entry->WUnlock();
@@ -1329,11 +1327,12 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     const auto &objectKey = objectKV.GetObjKey();
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject start. ObjectKey: " << objectKey;
     // Get Master address from objectKey
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
     MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->GetMetaAddress(objectKey, metaAddrInfo), "Get metadata address failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetMetaAddress(objectKey, metaAddrInfo),
+                                     "Get metadata address failed.");
 
     auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddressAndSaveDbName(),
                                                                               localAddress_, akSkManager_, masterOc_);

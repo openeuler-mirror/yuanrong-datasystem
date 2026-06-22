@@ -22,7 +22,7 @@
 
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
 
 namespace datasystem {
@@ -30,8 +30,8 @@ namespace object_cache {
 
 class SpillNodeSelector : public SelectionStrategy {
 public:
-    SpillNodeSelector(EtcdClusterManager *etcdCM, HostPort &localAddress)
-        : etcdCM_(etcdCM), localAddress_(localAddress)
+    SpillNodeSelector(ClusterManager *clusterManager, HostPort &localAddress)
+        : clusterManager_(clusterManager), localAddress_(localAddress)
     {
         excludedNodes_.insert(localAddress_.ToString());
     }
@@ -72,7 +72,7 @@ public:
     }
 
 private:
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     HostPort &localAddress_;
     std::unordered_set<std::string> excludedNodes_;
 };

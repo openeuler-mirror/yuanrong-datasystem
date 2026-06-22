@@ -172,12 +172,12 @@ public:
     Status GetMasterUuid(const std::string &objKey, std::string &masterUuid);
 
     /**
-     * @brief Called when etcd event is about /datasystem/ring
-     * @param[in] event etcd event
-     * @param[in] prefix prefix of event
+     * @brief Called when cluster-store event is about /datasystem/ring.
+     * @param[in] event Cluster-store event.
+     * @param[in] prefix Prefix of event.
      * @return Status
      */
-    Status HandleRingEvent(const mvccpb::Event &event, const std::string &prefix);
+    Status HandleRingEvent(const ClusterStoreEvent &event, const std::string &prefix);
 
     /**
      * @brief Update the hash ring according to newSerializedRingInfo.

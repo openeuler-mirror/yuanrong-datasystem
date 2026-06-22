@@ -31,7 +31,7 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-class EtcdClusterManager;
+class ClusterManager;
 namespace master {
 class MasterServiceImpl final : public MasterService {
 public:
@@ -54,15 +54,15 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to etcd cluster manager
+     * @param[in] cm The pointer to cluster manager
      */
-    void SetClusterManager(EtcdClusterManager *cm)
+    void SetClusterManager(ClusterManager *cm)
     {
-        etcdCM_ = cm;
+        clusterManager_ = cm;
     }
 
 private:
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 }  // namespace master

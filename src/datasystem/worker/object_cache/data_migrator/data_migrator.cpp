@@ -37,10 +37,10 @@ std::shared_ptr<SelectionStrategy> DataMigrator::GetStrategyByType()
 {
     switch (type_) {
         case MigrateType::SPILL:
-            return std::make_shared<SpillNodeSelector>(etcdCM_, localAddress_);
+            return std::make_shared<SpillNodeSelector>(clusterManager_, localAddress_);
         case MigrateType::SCALE_DOWN:
         default:
-            return std::make_shared<ScaleDownNodeSelector>(etcdCM_, localAddress_);
+            return std::make_shared<ScaleDownNodeSelector>(clusterManager_, localAddress_);
     }
 }
 
@@ -101,7 +101,7 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
 
     PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
         objKeysGrpByMaster.clear();
         MetaAddrInfo info;
@@ -109,7 +109,7 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
         return Status::OK();
     });
     std::string standbyWorker;
-    (void)etcdCM_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
+    (void)clusterManager_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
         auto workerAddr = addr.GetAddress();
         if (workerAddr == localAddress_ && !standbyWorker.empty()) {
@@ -205,7 +205,7 @@ Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &object
     LOG(INFO) << FormatString("[MigrateL2Cache] Grouped into %zu slots", objectsBySlot.size());
 
     std::string standbyWorker;
-    (void)etcdCM_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
+    (void)clusterManager_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
 
     std::vector<SlotMigrateFuture> futures;
     std::unordered_map<uint32_t, int> sameNodeRetryCounts;
@@ -240,7 +240,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
 {
     for (const auto &[slot, objs] : objectsBySlot) {
         HostPort currentTarget;
-        auto status = etcdCM_->GetMasterAddr(objs[0], currentTarget);
+        auto status = clusterManager_->GetMasterAddr(objs[0], currentTarget);
         if (status.IsError() || currentTarget == localAddress_) {
             status = currentTarget.ParseString(standbyWorker);
             if (status.IsError()) {
@@ -249,7 +249,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
             }
         }
 
-        auto strategy = std::make_shared<ScaleDownNodeSelector>(etcdCM_, localAddress_);
+        auto strategy = std::make_shared<ScaleDownNodeSelector>(clusterManager_, localAddress_);
         LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, objs.size(),
                                   currentTarget.ToString());
         futures.emplace_back(slot, MigrateToTargetNode(objs, currentTarget, strategy, false, slot));
@@ -397,7 +397,7 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
 
-    RETURN_IF_NOT_OK(etcdCM_->CheckConnection(workerAddr));
+    RETURN_IF_NOT_OK(clusterManager_->CheckConnection(workerAddr));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
                                                            remoteWorkerStub),
                                      "[Migrate Data] Create remote worker api failed.");
@@ -408,14 +408,14 @@ Status DataMigrator::HandleFailedResult()
 {
     if (type_ == MigrateType::SCALE_DOWN) {
         RETURN_OK_IF_TRUE(taskId_.empty());
-        if (etcdCM_->CheckVoluntaryTaskExpired(taskId_)) {
+        if (clusterManager_->CheckVoluntaryTaskExpired(taskId_)) {
             RETURN_STATUS(
                 K_RUNTIME_ERROR,
                 FormatString(
                     "task id has expired, no need to excute voluntary scale down migrate data task, task id: %s",
                     taskId_));
         }
-        if (etcdCM_->CheckVoluntaryScaleDown()) {
+        if (clusterManager_->CheckVoluntaryScaleDown()) {
             RETURN_STATUS(
                 K_RUNTIME_ERROR,
                 FormatString("this node maybe failed or only one node left, no need to excute voluntary scale down "
@@ -423,7 +423,7 @@ Status DataMigrator::HandleFailedResult()
                              taskId_));
         }
     } else if (type_ == MigrateType::SPILL) {
-        if (etcdCM_->CheckLocalNodeIsExiting()) {
+        if (clusterManager_->CheckLocalNodeIsExiting()) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Local node is exiting, no need to execute migrate task"));
         }
     }

@@ -32,7 +32,7 @@
 #include "datasystem/protos/master_stream.pb.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -41,11 +41,11 @@ const size_t DELETE_STREAM_THREAD_NUM = 8;
 SCNotifyWorkerManager::SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                                              std::shared_ptr<AkSkManager> akSkManager,
                                              std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                                             EtcdClusterManager *cm, SCMetadataManager *scMetadataManager)
+                                             ClusterManager *cm, SCMetadataManager *scMetadataManager)
     : streamMetaStore_(std::move(streamMetaStore)),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      etcdCM_(cm),
+      clusterManager_(cm),
       scMetadataManager_(scMetadataManager)
 {
 }
@@ -587,10 +587,10 @@ Status SCNotifyWorkerManager::CheckWorkerStatus(const std::string &workerAddr)
     // If any error is given, change the rc to be K_WORKER_ABNORMAL
     HostPort workerHostPort;
     workerHostPort.ParseString(workerAddr);
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    return etcdCM_->CheckConnection(workerHostPort);
+    return clusterManager_->CheckConnection(workerHostPort);
 }
 
 Status SCNotifyWorkerManager::RecoverNotification()

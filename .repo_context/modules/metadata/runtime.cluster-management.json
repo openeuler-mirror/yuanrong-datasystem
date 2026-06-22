@@ -37,7 +37,7 @@
     "docs/source_zh_cn/design_document"
   ],
   "key_tests": [
-    "tests/st/worker/object_cache/etcd_cluster_manager_test.cpp",
+    "tests/st/worker/object_cache/cluster_manager_test.cpp",
     "tests/st/common/kvstore/etcd_store_test.cpp",
     "tests/st/common/kvstore/grpc_session_test.cpp",
     "tests/ut/common/kvstore/metastore_server_test.cpp",

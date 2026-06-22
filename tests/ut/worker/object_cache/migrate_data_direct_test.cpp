@@ -75,7 +75,7 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .etcdCM = nullptr,
+            .clusterManager = nullptr,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         auto rateController =

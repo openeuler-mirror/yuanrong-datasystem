@@ -25,18 +25,18 @@
 #include <unordered_map>
 #include <utility>
 
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 
 namespace datasystem {
 namespace object_cache {
 class DataMigrator {
 public:
-    DataMigrator(MigrateType type, EtcdClusterManager *etcdCM, HostPort &localAddress,
+    DataMigrator(MigrateType type, ClusterManager *clusterManager, HostPort &localAddress,
                  std::shared_ptr<AkSkManager> manager, std::shared_ptr<ObjectTable> objectTable,
                  const std::string &taskId = "", int maxRetryCount = -1)
         : type_(type),
-          etcdCM_(etcdCM),
+          clusterManager_(clusterManager),
           localAddress_(localAddress),
           akSkManager_(std::move(manager)),
           objectTable_(std::move(objectTable)),
@@ -270,7 +270,7 @@ private:
                                    std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
 
     MigrateType type_;
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     HostPort &localAddress_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;

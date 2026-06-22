@@ -29,7 +29,7 @@ namespace object_cache {
 
 class WorkerOcServiceGlobalReferenceImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                                        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
 
@@ -265,7 +265,7 @@ private:
         }
     }
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
 

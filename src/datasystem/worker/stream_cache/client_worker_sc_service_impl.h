@@ -451,11 +451,11 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to etcd cluster manager
+     * @param[in] cm The pointer to cluster manager
      */
-    void SetClusterManager(EtcdClusterManager *cm)
+    void SetClusterManager(ClusterManager *cm)
     {
-        etcdCM_ = cm;
+        clusterManager_ = cm;
     }
 
     /**
@@ -1001,7 +1001,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<ClientWorkerSCService_Stub>> remotePubStubs_;
     std::atomic<bool> interrupt_;
     std::future<void> autoAck_;
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 };
 
 template <>

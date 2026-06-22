@@ -45,7 +45,7 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 }
 
 Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                      EtcdClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
+                                      ClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);

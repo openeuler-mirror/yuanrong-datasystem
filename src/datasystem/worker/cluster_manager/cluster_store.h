@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Cluster metadata store abstraction used by EtcdClusterManager.
+ * Description: Cluster metadata store abstraction used by ClusterManager.
  */
 #ifndef DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_STORE_H
 #define DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_STORE_H
@@ -84,7 +84,6 @@ public:
     ~EtcdClusterStore() override = default;
 
     static ClusterStoreEvent FromEtcdEvent(const mvccpb::Event &event);
-    static mvccpb::Event ToEtcdEvent(const ClusterStoreEvent &event);
 
     Status GetAll(const std::string &tableName,
                   std::vector<std::pair<std::string, std::string>> &outKeyValues) override;

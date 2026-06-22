@@ -20,7 +20,7 @@
 - Related design docs:
   - `.repo_context/modules/runtime/cluster-manager/design.md`
 - Related tests or validation entrypoints:
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
   - `tests/st/client/kv_cache/kv_client_scale_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
 - Last verified against source:
@@ -40,7 +40,7 @@
 - Use when:
   - modifying `src/datasystem/worker/cluster_manager/*`;
   - changing `ClusterNode` states or `KeepAliveValue` lifecycle tags;
-  - changing worker startup/shutdown flow around `EtcdClusterManager`;
+  - changing worker startup/shutdown flow around `ClusterManager`;
   - changing object/stream metadata or slot recovery subscribers to cluster events;
   - changing route helpers that use hash ring or cluster-node readiness.
 - Do not use when:
@@ -61,8 +61,8 @@
   - `.repo_context/modules/runtime/hash-ring/README.md`
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
 - Required source files to inspect first:
-  - `etcd_cluster_manager.cpp`
-  - `etcd_cluster_manager.h`
+  - `cluster_manager.cpp`
+  - `cluster_manager.h`
   - `cluster_node.h`
   - `worker_health_check.cpp`
   - `cluster_event_type.h`
@@ -130,7 +130,7 @@
 - Fast checks:
   - targeted build for `cluster_manager` and `worker_health_check`.
 - Representative tests:
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
   - affected scale/restart/voluntary-scale tests in `tests/st/client/kv_cache/kv_client_scale_test.cpp`
 - Scenario checks:

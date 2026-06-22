@@ -101,7 +101,7 @@
 ## Main Dependencies
 
 - Upstream callers:
-  - `EtcdClusterManager` creates tables, starts watches, initializes keepalive, consumes worker events, and calls node state updates.
+  - `ClusterManager` creates tables, starts watches, initializes keepalive, consumes worker events, and calls node state updates.
   - `HashRing` reads/writes `/datasystem/ring` through CAS and responds to ring watch events.
   - object-cache metadata modules store metadata/location/global-cache records under ETCD metadata prefixes.
   - CLI and tests use ETCD store helpers for inspection and fault scenarios.
@@ -217,7 +217,7 @@ Important nuance:
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
 
 ## Review And Bugfix Notes
 

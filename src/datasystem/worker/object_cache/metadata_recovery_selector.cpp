@@ -50,8 +50,8 @@ std::string MetadataRecoverySelector::SelectionRequest::ToString() const
 }
 
 MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable,
-                                                   EtcdClusterManager *etcdCM)
-    : objectTable_(objectTable), etcdCM_(etcdCM)
+                                                   ClusterManager *clusterManager)
+    : objectTable_(objectTable), clusterManager_(clusterManager)
 {
 }
 
@@ -68,9 +68,9 @@ MetadataRecoverySelector::SelectionRequest MetadataRecoverySelector::BuildSelect
 
 Status MetadataRecoverySelector::BuildMatchFunc(const SelectionRequest &request, MatchFunc &matchFunc) const
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "etcdCM is null");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "clusterManager is null");
     matchFunc = [this, ranges = request.ranges](const std::string &objKey) {
-        return etcdCM_->IsInRange(ranges, objKey);
+        return clusterManager_->IsInRange(ranges, objKey);
     };
     return Status::OK();
 }

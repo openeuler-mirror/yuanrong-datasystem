@@ -25,7 +25,7 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
@@ -33,7 +33,7 @@ namespace object_cache {
 
 class WorkerOcServiceExpireImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                               std::shared_ptr<AkSkManager> akSkManager);
 
     /**
@@ -58,7 +58,7 @@ private:
                             std::vector<std::string> &absentObj, std::unordered_set<std::string> &objExpireFailed,
                             ExpireRspPb &rsp);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> batchExpireThreadPool_{ nullptr };
 

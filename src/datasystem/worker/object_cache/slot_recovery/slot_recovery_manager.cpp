@@ -374,12 +374,12 @@ SlotRecoveryManager::~SlotRecoveryManager()
 }
 
 Status SlotRecoveryManager::Init(
-    const HostPort &localAddress, EtcdClusterManager *etcdCM, std::shared_ptr<PersistenceApi> persistApi,
+    const HostPort &localAddress, ClusterManager *clusterManager, std::shared_ptr<PersistenceApi> persistApi,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
     datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager)
 {
     localAddress_ = localAddress;
-    etcdCM_ = etcdCM;
+    clusterManager_ = clusterManager;
     persistenceApi_ = std::move(persistApi);
     workerMasterApiManager_ = std::move(apiManager);
     metadataRecoveryManager_ = metadataRecoveryManager;
@@ -416,10 +416,10 @@ void SlotRecoveryManager::Shutdown()
 
 std::vector<std::string> SlotRecoveryManager::GetStableActiveWorkers() const
 {
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         return {};
     }
-    const auto &workers = etcdCM_->GetActiveWorkersInHashRing();
+    const auto &workers = clusterManager_->GetActiveWorkersInHashRing();
     return { workers.begin(), workers.end() };
 }
 

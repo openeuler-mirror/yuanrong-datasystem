@@ -67,15 +67,15 @@ struct ClusterInfo {
  * @brief This class registers with an etcd server and provides node state tracking. It executes event handling
  * resulting from topology/state changes within the cluster when notified by the etcd service.
  */
-class EtcdClusterManager {
+class ClusterManager {
 public:
     /**
      * @brief Constructor
      */
-    EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore,
-                       std::shared_ptr<AkSkManager> akSkManager = nullptr, const int pqSize = 5000);
+    ClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore,
+                   std::shared_ptr<AkSkManager> akSkManager = nullptr, const int pqSize = 5000);
 
-    ~EtcdClusterManager();
+    ~ClusterManager();
 
     /**
      * @brief Initialized the cluster management. Contacts etcd server to estasblish lease and initial topology.
@@ -343,7 +343,7 @@ public:
             std::optional<Status> rc;
             rc.emplace();
             INJECT_POINT_NO_RETURN(
-                "EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere");
+                "ClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere");
             FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
             auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
             con.emplace_back(objectKey);
@@ -604,7 +604,7 @@ protected:
     using Hash2MetaInfoType = std::pair<std::map<HashPosition, std::pair<Range, MetaAddrInfo>>, int64_t>;
 
     /**
-     * @brief Private nested class to represent a node in the cluster. EtcdClusterManager will maintain a container
+     * @brief Private nested class to represent a node in the cluster. ClusterManager will maintain a container
      * of these ClusterNodes.
      */
     class ClusterNode;
@@ -902,8 +902,7 @@ protected:
     void ModifyObjKeysGrpByMasterByCheckConnection(std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
                                                    std::optional<std::unordered_map<std::string, Status>> &errInfos)
     {
-        static const auto checkConnectionFunc = [](EtcdClusterManager *ptr,
-                                                   const MetaAddrInfo &metaAddrInfo) -> Status {
+        static const auto checkConnectionFunc = [](ClusterManager *ptr, const MetaAddrInfo &metaAddrInfo) -> Status {
             const auto &masterAddr = metaAddrInfo.GetAddress();
             return ptr->CheckConnection(masterAddr);
         };

@@ -300,7 +300,7 @@ Failure-sensitive steps:
    fallback 在重新取得对象写锁后处理 none-L2-evict 对象。
 2. 这两个 fallback 路径直接调用 `DeleteNoneL2CacheEvictableObject`，不经过 memory eviction 主 loop 的
    `EvictObject` primary lane 提交。
-3. 该函数通过 `EtcdClusterManager` 查询 object key 的 metadata master 地址。
+3. 该函数通过 `ClusterManager` 查询 object key 的 metadata master 地址。
 4. worker 创建 `WorkerMasterOCApi` 并同步调用 `DeleteAllCopyMeta`。
 5. 该同步 fallback 请求携带 `object_keys`、本地 worker address 和 `redirect=true`；primary end-life
    lane 使用 `ids_with_version`，但该 fallback 仍保留历史 `object_keys` 形态。

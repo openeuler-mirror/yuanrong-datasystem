@@ -70,7 +70,7 @@ ds_cc_library(
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/protos:utils_cc_proto",
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/hash_ring:hash_ring_event",
         "@com_google_protobuf//:protoc_lib",
         "@tbb",

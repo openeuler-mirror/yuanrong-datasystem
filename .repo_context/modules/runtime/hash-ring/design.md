@@ -32,7 +32,7 @@
 - What problem this module solves:
   - distributed-master metadata routing and topology change coordination across worker startup, scale-up, scale-down, failure, and restart.
 - Who or what depends on this module:
-  - `EtcdClusterManager`, object-cache and stream-cache metadata managers, local `MetadataManagerHolder`, worker object-cache service, and client redirect behavior.
+  - `ClusterManager`, object-cache and stream-cache metadata managers, local `MetadataManagerHolder`, worker object-cache service, and client redirect behavior.
 
 ## Goals
 
@@ -47,7 +47,7 @@
 - It does not implement the ETCD client, watch transport, or lease keepalive layer.
 - It does not own object/stream metadata migration internals; it only publishes event callbacks.
 - It does not provide a sharded topology store; current implementation uses one hot ring key.
-- It does not independently validate cluster liveness; failed workers come from `EtcdClusterManager`.
+- It does not independently validate cluster liveness; failed workers come from `ClusterManager`.
 
 ## Architecture Overview
 
@@ -127,7 +127,7 @@ Failure-sensitive steps:
 
 ### Passive Failed-Node Removal
 
-1. `EtcdClusterManager` classifies workers as failed based on cluster-table keepalive state.
+1. `ClusterManager` classifies workers as failed based on cluster-table keepalive state.
 2. `HashRing::RemoveWorkers` runs only if `EnableAutoDelDeadNode()` is true.
 3. Process workers are chosen from related workers so not every worker writes the same deletion.
 4. The selected process worker CAS-adds `del_node_info`.
@@ -168,7 +168,7 @@ Failure-sensitive steps:
 - ETCD store:
   - hot path for initialization, add, remove, voluntary scale-down, task completion, self-healing, and update-map cleanup.
   - failure impact: workers may keep stale local maps, restoration waits for health checks, and CAS loops can retry.
-- `EtcdClusterManager`:
+- `ClusterManager`:
   - supplies watch events, failed-worker sets, DB primary location queries, and route fallback.
   - failure impact: ring may not receive enough evidence to add/delete workers.
 - Metadata managers:

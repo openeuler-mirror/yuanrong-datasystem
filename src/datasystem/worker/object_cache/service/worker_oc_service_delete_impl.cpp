@@ -41,18 +41,18 @@ constexpr size_t PERSISTENCE_DELETE_POOL_MAX_THREAD_NUM = 4;
 constexpr char PERSISTENCE_DELETE_POOL_NAME[] = "PersistDelete";
 }  // namespace
 
-WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
+                                                     ClusterManager *clusterManager,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
                                                      std::shared_ptr<WorkerOcServiceGetImpl> getProc)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress),
       getProc_(std::move(getProc))
 {
-    persistenceDeleteThreadPool_ = std::make_unique<ThreadPool>(PERSISTENCE_DELETE_POOL_MIN_THREAD_NUM,
-                                                                PERSISTENCE_DELETE_POOL_MAX_THREAD_NUM,
-                                                                PERSISTENCE_DELETE_POOL_NAME);
+    persistenceDeleteThreadPool_ = std::make_unique<ThreadPool>(
+        PERSISTENCE_DELETE_POOL_MIN_THREAD_NUM, PERSISTENCE_DELETE_POOL_MAX_THREAD_NUM, PERSISTENCE_DELETE_POOL_NAME);
 }
 
 Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
@@ -99,7 +99,7 @@ Status WorkerOcServiceDeleteImpl::DeleteCopyNotification(const DeleteObjectReqPb
     }
     if (failCount > 0) {
         LOG(ERROR) << FormatString("Delete copy notification, failed count: %d, total count: %d, lastError: %s",
-            failCount, req.object_keys_size(), lastErr.ToString());
+                                   failCount, req.object_keys_size(), lastErr.ToString());
     }
     rsp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     rsp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
@@ -266,7 +266,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMasterId;
     std::optional<std::unordered_map<std::string, Status>> errInfos;
     errInfos.emplace();
-    etcdCM_->GroupObjKeysByMasterHostPortWithStatus(needDeleteObjectKey, objKeysGrpByMasterId, errInfos);
+    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(needDeleteObjectKey, objKeysGrpByMasterId, errInfos);
 
     for (const auto &kv : *errInfos) {
         // If objectKey don't belong to any master, just ignore it.

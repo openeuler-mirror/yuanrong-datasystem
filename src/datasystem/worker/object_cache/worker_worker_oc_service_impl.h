@@ -22,7 +22,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
@@ -39,7 +39,7 @@ public:
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
                               std::shared_ptr<AkSkManager> akSkManager, EtcdStore *etcdStore,
-                              EtcdClusterManager *etcdCm);
+                              ClusterManager *clusterManager);
 
     ~WorkerWorkerOCServiceImpl() override;
 
@@ -313,7 +313,7 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;  // pointer to EtcdStore
-    EtcdClusterManager *etcdCm_;
+    ClusterManager *clusterManager_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };
 }  // namespace object_cache

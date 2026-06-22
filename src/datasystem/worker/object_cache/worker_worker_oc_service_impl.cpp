@@ -123,11 +123,11 @@ Status GetRemoteAddressFromBatchGetReq(const BatchGetObjectRemoteReqPb &req, Hos
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
-    EtcdStore *etcdStore, EtcdClusterManager *etcdCm)
+    EtcdStore *etcdStore, ClusterManager *clusterManager)
     : ocClientWorkerSvc_(std::move(clientSvc)),
       akSkManager_(std::move(akSkManager)),
       etcdStore_(etcdStore),
-      etcdCm_(etcdCm)
+      clusterManager_(clusterManager)
 {
 }
 
@@ -679,8 +679,8 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     bool isEtcdAvailable = etcdStore_->Writable().IsOk();
     rsp.set_etcd_available(isEtcdAvailable);
-    RETURN_RUNTIME_ERROR_IF_NULL(etcdCm_);
-    *rsp.mutable_hash_ring() = etcdCm_->GetHashRing()->GetHashRingPb();
+    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
+    *rsp.mutable_hash_ring() = clusterManager_->GetHashRing()->GetHashRingPb();
     LOG_IF(INFO, isEtcdAvailable) << "Etcd is available";
     return Status::OK();
 }
@@ -716,8 +716,8 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
     auto rc = CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
     if (rc.IsError() && rc.GetCode() == K_URMA_NEED_CONNECT) {
         std::string remoteWorkerId = "UNKNOWN";
-        if (etcdCm_ != nullptr) {
-            auto workerId = etcdCm_->GetWorkerIdByWorkerAddr(requestAddress.ToString());
+        if (clusterManager_ != nullptr) {
+            auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(requestAddress.ToString());
             if (!workerId.empty()) {
                 remoteWorkerId = workerId;
             }

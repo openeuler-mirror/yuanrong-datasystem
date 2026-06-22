@@ -45,11 +45,11 @@ NodeSelector::~NodeSelector()
     Shutdown();
 }
 
-void NodeSelector::Init(const std::string &localAddress, EtcdClusterManager *etcdCM,
+void NodeSelector::Init(const std::string &localAddress, ClusterManager *clusterManager,
                         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager)
 {
-    if (!etcdCM || !apiManager) {
-        LOG(WARNING) << "The etcdCM_ or apiManager_ is empty, can not set running and start worker thread";
+    if (!clusterManager || !apiManager) {
+        LOG(WARNING) << "The clusterManager_ or apiManager_ is empty, can not set running and start worker thread";
         return;
     }
     if (running_.exchange(true)) {
@@ -57,7 +57,7 @@ void NodeSelector::Init(const std::string &localAddress, EtcdClusterManager *etc
         return;
     }
     localAddress_ = localAddress;
-    etcdCM_ = etcdCM;
+    clusterManager_ = clusterManager;
     apiManager_ = std::move(apiManager);
     running_.store(true);
 
@@ -83,7 +83,7 @@ void NodeSelector::Shutdown()
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
-    etcdCM_  = nullptr;
+    clusterManager_  = nullptr;
     apiManager_.reset();
     LOG(INFO) << "NodeSelector shutdown";
 }
@@ -91,7 +91,7 @@ void NodeSelector::Shutdown()
 Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNodes, const std::string &preferNode,
                                 size_t needSize, std::string &outNode)
 {
-    // 1. If rankList_ is empty, obtain Standby worker from EtcdClusterManager and return;
+    // 1. If rankList_ is empty, obtain Standby worker from ClusterManager and return;
     // 2. If the maximum remaining capacity in rankList_ is less than 1MB, return K_NO_SPACE;
     // 3. If the remaining capacity of the preferNode > needSize, select it;
     // 4. Randomly select the top n (5) nodes with available capacity > needSize, excluding nodes in excludedNodes;
@@ -150,7 +150,7 @@ Status NodeSelector::GetStandbyWorker(const std::unordered_set<std::string> &exc
     std::string worker = localAddress_;
     int maxCount = 5;
     for (int i = 0; i < maxCount; ++i) {
-        RETURN_IF_NOT_OK(etcdCM_->GetStandbyWorkerByAddr(worker, outNode));
+        RETURN_IF_NOT_OK(clusterManager_->GetStandbyWorkerByAddr(worker, outNode));
         if (outNode == localAddress_) {
             outNode.clear();
             RETURN_STATUS(K_NOT_FOUND, "Not found the stand by worker");
@@ -250,7 +250,7 @@ Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCAp
 {
     // get the master address info
     MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(etcdCM_->GetMetaAddress(RESOURCE_MONITOR_MASTER, metaAddrInfo));
+    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, metaAddrInfo));
     workerMasterApi = apiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddress());
     if (workerMasterApi == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "The worker master api is nullptr");
@@ -265,7 +265,7 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     master::WorkerStat *stat = req.mutable_stat();
     stat->set_address(localAddress_);
     stat->set_available_memory(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater());
-    stat->set_is_ready(!(etcdCM_->CheckLocalNodeIsExiting()));
+    stat->set_is_ready(!(clusterManager_->CheckLocalNodeIsExiting()));
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
         if (!token_->alive) {

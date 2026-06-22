@@ -35,7 +35,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/slot_recovery.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -140,13 +140,14 @@ public:
     /**
      * @brief Initialize the manager and subscribe to failed-worker notifications.
      * @param[in] localAddress Local worker address.
-     * @param[in] etcdCM Cluster manager used to query stable active/failed workers.
+     * @param[in] clusterManager Cluster manager used to query stable active/failed workers.
      * @param[in] persistApi Persistence API reserved for later recovery execution.
      * @param[in] apiManager Worker-master API manager reserved for later recovery execution.
      * @param[in] etcdStore EtcdStore pointer used to construct default slot-recovery store.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localAddress, EtcdClusterManager *etcdCM, std::shared_ptr<PersistenceApi> persistApi,
+    Status Init(const HostPort &localAddress, ClusterManager *clusterManager,
+                std::shared_ptr<PersistenceApi> persistApi,
                 std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
                 datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
 
@@ -436,7 +437,7 @@ private:
     Status FinalizeRecoveryMetadataPush(const RecoveryTaskPb &task, std::vector<ObjectMetaPb> &recoveredMetas);
 
     HostPort localAddress_;
-    EtcdClusterManager *etcdCM_;
+    ClusterManager *clusterManager_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_;
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };

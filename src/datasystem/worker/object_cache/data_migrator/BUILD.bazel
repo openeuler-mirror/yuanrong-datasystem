@@ -11,7 +11,7 @@ ds_cc_library(
         "data_migrator.h",
     ],
     deps = [
-        "//src/datasystem/worker/cluster_manager:etcd_cluster_manager_header",
+        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/object_cache/data_migrator/handler:migrate_data_handler",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:scale_down_node_selector",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:spill_node_selector",

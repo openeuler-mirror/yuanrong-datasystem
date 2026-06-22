@@ -1594,14 +1594,14 @@ TEST_F(KVClientVoluntaryScaleDownWorkerDfxTest, LEVEL1_TestVolunDownWorkersMaste
     VoluntaryScaleDownInject(0);
     sleep(2);                       // wait for 2s
     for (int i = 0; i <= 2; i++) {  // worker num is 2
-        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "EtcdClusterManager.checkConnection",
+        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "ClusterManager.checkConnection",
                                                "return(K_NOT_FOUND)"));
     }
     StartWorkerAndWaitReady({ 3 });
     sleep(2);  // wait for 2s
     VoluntaryScaleDownInject(2);
     for (int i = 0; i <= 2; i++) {  // worker num is 2
-        DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, i, "EtcdClusterManager.checkConnection"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(ClusterNodeType::WORKER, i, "ClusterManager.checkConnection"));
     }
     sleep(10);  // wait for 10s
 
@@ -2329,7 +2329,7 @@ TEST_F(VoluntaryScaleDownBySwitch, TestVoluntaryScaleDownNodeNotExistsInClusterT
     int timeoutSec = 20;
     std::string gflags =
         "-node_dead_timeout_s=5 -node_timeout_s=3 "
-        "-inject_actions=EtcdClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)";
+        "-inject_actions=ClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)";
     StartWorkerAndWaitReady({ 0, 1 }, timeoutSec, false, gflags);
     WaitAllNodesJoinIntoHashRing(2);  // worker count 2
 }
@@ -2592,7 +2592,7 @@ TEST_F(VoluntaryScaleDownUpgrade, LEVEL1_RestartRestoreScaleDown)
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
         { 0, 1 },
         " -inject_actions=test.start.notWait:call(0);"
-        "EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation:return(K_OK)"));
+        "ClusterManager.IfNeedTriggerReconciliation.noreconciliation:return(K_OK)"));
     SetWorkerHashInjection({ 0, 1 });
     GetWorkerUuids();
     GetHashOnWorker(workerNum_);

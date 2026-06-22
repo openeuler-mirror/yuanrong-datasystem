@@ -63,9 +63,9 @@ namespace master {
 class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
 }
-class EtcdClusterManager;
+class ClusterManager;
 namespace object_cache {
-using datasystem::EtcdClusterManager;
+using datasystem::ClusterManager;
 
 class WorkerOcEvictionManager : public std::enable_shared_from_this<WorkerOcEvictionManager> {
 public:
@@ -129,11 +129,11 @@ public:
 
     /**
      * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] etcdCM The cluster manager pointer to assign
+     * @param[in] clusterManager The cluster manager pointer to assign
      */
-    void SetClusterManager(EtcdClusterManager *etcdCM)
+    void SetClusterManager(ClusterManager *clusterManager)
     {
-        etcdCM_ = etcdCM;
+        clusterManager_ = clusterManager;
     }
 
     /**
@@ -606,7 +606,7 @@ private:
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;

@@ -30,7 +30,7 @@ namespace object_cache {
 
 class WorkerOcServiceCreateImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                               std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
     /**
      * @brief Create a new object, allocate memory and return the pointer. for shm use only.
@@ -91,7 +91,7 @@ private:
      */
     void CheckExistence(const MultiCreateReqPb &req, const std::string &tenantId, MultiCreateRspPb &resp);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::atomic<uint64_t> shmIdCounter{0};
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };

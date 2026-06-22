@@ -24,7 +24,7 @@
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 using namespace datasystem::worker;
 
@@ -35,11 +35,11 @@ DS_DECLARE_int32(minloglevel);
 
 namespace datasystem {
 namespace st {
-class EtcdClusterManagerTest : public ExternalClusterTest {
+class ClusterManagerTest : public ExternalClusterTest {
 protected:
-    EtcdClusterManagerTest() = default;
+    ClusterManagerTest() = default;
 
-    ~EtcdClusterManagerTest() = default;
+    ~ClusterManagerTest() = default;
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -86,18 +86,18 @@ protected:
             etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
             DS_ASSERT_OK(etcdStores_.back()->Init());
             clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-            etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+            clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
                                                                        nullptr, pqSize));
             ClusterInfo clusterInfo;
-            DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
-            DS_ASSERT_OK(etcdCMs_.back()->Init(clusterInfo));
-            etcdCMs_.back()->SetWorkerReady();
+            DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
+            DS_ASSERT_OK(clusterManagers_.back()->Init(clusterInfo));
+            clusterManagers_.back()->SetWorkerReady();
         }
     }
 
     void ShutDownAllClusterManagers()
     {
-        for (auto &a : etcdCMs_) {
+        for (auto &a : clusterManagers_) {
             a.reset();
         }
         for (auto &a : clusterStores_) {
@@ -111,18 +111,18 @@ protected:
     void InitClusterManagersInList(const std::vector<size_t> &idxs)
     {
         for (size_t i : idxs) {
-            if (i < etcdCMs_.size()) {
+            if (i < clusterManagers_.size()) {
                 HostPort addr;
                 addr.ParseString("127.0.0.1:" + std::to_string(i));
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
                 clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
-                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[i].get(),
+                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(),
                                                                    nullptr);
                 ClusterInfo clusterInfo;
-                DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
-                DS_ASSERT_OK(etcdCMs_[i]->Init(clusterInfo));
-                etcdCMs_[i]->SetWorkerReady();
+                DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
+                DS_ASSERT_OK(clusterManagers_[i]->Init(clusterInfo));
+                clusterManagers_[i]->SetWorkerReady();
             }
         }
     }
@@ -130,8 +130,8 @@ protected:
     void ShutDownRestartAllClusterManagers(const std::vector<size_t> &idxs)
     {
         for (size_t i : idxs) {
-            if (i < etcdCMs_.size()) {
-                etcdCMs_[i].reset();
+            if (i < clusterManagers_.size()) {
+                clusterManagers_[i].reset();
                 clusterStores_[i].reset();
                 etcdStores_[i].reset();
                 HostPort addr;
@@ -139,12 +139,12 @@ protected:
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
                 clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
-                etcdCMs_[i] = std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[i].get(),
+                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(),
                                                                    nullptr);
                 ClusterInfo clusterInfo;
-                DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
-                DS_ASSERT_OK(etcdCMs_[i]->Init(clusterInfo));
-                etcdCMs_[i]->SetWorkerReady();
+                DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
+                DS_ASSERT_OK(clusterManagers_[i]->Init(clusterInfo));
+                clusterManagers_[i]->SetWorkerReady();
             }
         }
     }
@@ -153,119 +153,119 @@ protected:
     std::vector<std::string> workerIds_;
     std::vector<std::unique_ptr<EtcdStore>> etcdStores_;
     std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
-    std::vector<std::unique_ptr<EtcdClusterManager>> etcdCMs_;
+    std::vector<std::unique_ptr<ClusterManager>> clusterManagers_;
 };
 
-TEST_F(EtcdClusterManagerTest, DISABLED_StartAllClusterManagers1)
+TEST_F(ClusterManagerTest, DISABLED_StartAllClusterManagers1)
 {
     FLAGS_minloglevel = 3;
     int workerNum = 50;
     int pqSize = 10;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum, pqSize);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     DS_ASSERT_OK(inject::Set("EtcdStore.LaunchKeepAliveThreads.shutdown", "call()"));
     DS_ASSERT_OK(inject::Set("EtcdStore.WatchRun.shutdown", "call()"));
     LOG(INFO) << "Start destructing cluster managers.";
-    etcdCMs_.clear();
+    clusterManagers_.clear();
 }
 
-TEST_F(EtcdClusterManagerTest, DISABLED_StartAllClusterManagers2)
+TEST_F(ClusterManagerTest, DISABLED_StartAllClusterManagers2)
 {
     FLAGS_minloglevel = 3;
     int workerNum = 100;
     int pqSize = 50;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum, pqSize);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     DS_ASSERT_OK(inject::Set("EtcdStore.LaunchKeepAliveThreads.shutdown", "call()"));
     DS_ASSERT_OK(inject::Set("EtcdStore.WatchRun.shutdown", "call()"));
     LOG(INFO) << "Start destructing cluster managers.";
-    etcdCMs_.clear();
+    clusterManagers_.clear();
 }
 
-TEST_F(EtcdClusterManagerTest, DISABLED_LEVEL1_StartAllClusterManagers3)
+TEST_F(ClusterManagerTest, DISABLED_LEVEL1_StartAllClusterManagers3)
 {
     FLAGS_minloglevel = 3;
     int workerNum = 100;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum);  // priority queue size == 2000 by default
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     LOG(INFO) << "Start destructing cluster managers.";
     ShutDownAllClusterManagers();
 }
 
-TEST_F(EtcdClusterManagerTest, RestartAllClusterManagers1)
+TEST_F(ClusterManagerTest, RestartAllClusterManagers1)
 {
     int workerNum = 10;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     // Shut down all nodes and then restart all nodes
     ShutDownAllClusterManagers();
     std::vector<size_t> idxs(workerNum);
     std::iota(idxs.begin(), idxs.end(), 0);
-    inject::Set("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    inject::Set("ClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
     InitClusterManagersInList(idxs);
-    for (auto &cm : etcdCMs_) {
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     ShutDownAllClusterManagers();
 }
 
-TEST_F(EtcdClusterManagerTest, RestartAllClusterManagers2)
+TEST_F(ClusterManagerTest, RestartAllClusterManagers2)
 {
     int workerNum = 10;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     // Shut down one node and then restart one node
     // Restart one and then shutdown the next one
     std::vector<size_t> idxs(workerNum);
     std::iota(idxs.begin(), idxs.end(), 0);
-    inject::Set("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
+    inject::Set("ClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
     ShutDownRestartAllClusterManagers(idxs);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     ShutDownAllClusterManagers();
 }
 
-TEST_F(EtcdClusterManagerTest, NoProgressEarlyTermination)
+TEST_F(ClusterManagerTest, NoProgressEarlyTermination)
 {
     int workerNum = 3;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     ShutDownAllClusterManagers();
     std::vector<size_t> restartIdxs = {0};
-    inject::Set("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(120)"));
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
+    inject::Set("ClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(120)"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
     InitClusterManagersInList(restartIdxs);
     auto startTime = std::chrono::steady_clock::now();
     for (size_t i : restartIdxs) {
-        DS_ASSERT_OK(etcdCMs_[i]->CheckWaitNodeTableComplete());
+        DS_ASSERT_OK(clusterManagers_[i]->CheckWaitNodeTableComplete());
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                        std::chrono::steady_clock::now() - startTime)
@@ -274,23 +274,23 @@ TEST_F(EtcdClusterManagerTest, NoProgressEarlyTermination)
     ShutDownAllClusterManagers();
 }
 
-TEST_F(EtcdClusterManagerTest, NoProgressEarlyTerminationOnlyForRestart)
+TEST_F(ClusterManagerTest, NoProgressEarlyTerminationOnlyForRestart)
 {
     int workerNum = 1;
     InitTestEtcdInstance();
     InitAllClusterManagers(workerNum);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
-    for (auto &cm : etcdCMs_) {
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.returnError", "call()"));
+    for (auto &cm : clusterManagers_) {
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", "call(2)"));
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)"));
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
-    ASSERT_EQ(inject::GetExecuteCount("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak", "call()"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", "call(2)"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
+    ASSERT_EQ(inject::GetExecuteCount("ClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
+    DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.noProgressBreak", "call()"));
 
-    DS_ASSERT_OK(etcdCMs_[0]->CheckWaitNodeTableComplete());
-    ASSERT_EQ(inject::GetExecuteCount("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
+    DS_ASSERT_OK(clusterManagers_[0]->CheckWaitNodeTableComplete());
+    ASSERT_EQ(inject::GetExecuteCount("ClusterManager.CheckWaitNodeTableComplete.noProgressBreak"), 0u);
     ShutDownAllClusterManagers();
 }
 }  // namespace st

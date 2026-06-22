@@ -40,12 +40,12 @@ public:
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] etcdCM The cluster manager pointer to assign.
+     * @param[in] clusterManager The cluster manager pointer to assign.
      * @param[in] memCpyThreadPool Used to copy data to memory.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddress The local worker address.
      */
-    WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                                std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
                                HostPort &localAddress);
 
@@ -164,7 +164,7 @@ private:
      */
     Status TryDeleteObjFromEvictionAndSpillFile(ObjectKV &objectKV, bool isInsert);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

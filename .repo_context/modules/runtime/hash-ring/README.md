@@ -5,7 +5,7 @@
 - Path(s):
   - `src/datasystem/worker/hash_ring`
   - `src/datasystem/protos/hash_ring.proto`
-  - cluster-manager integration in `src/datasystem/worker/cluster_manager/etcd_cluster_manager.*`
+  - cluster-manager integration in `src/datasystem/worker/cluster_manager/cluster_manager.*`
   - master/object-cache, stream-cache, and worker object-cache subscribers to `HashRingEvent`
 - Why this module exists:
   - maintain the distributed-master ownership map used to route object and stream metadata;
@@ -63,7 +63,7 @@
 - Public/internal C++ entrypoints:
   - `HashRing::InitWithEtcd()`
   - `HashRing::InitWithoutEtcd(const std::string &hashRing)`
-  - `HashRing::HandleRingEvent(const mvccpb::Event &, const std::string &prefix)`
+  - `HashRing::HandleRingEvent(const ClusterStoreEvent &, const std::string &prefix)`
   - `HashRing::UpdateRing(const std::string &, int64_t version, bool forceUpdate = false)`
   - `HashRing::InspectAndProcessPeriodically()`
   - `HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)`
@@ -84,8 +84,8 @@
 ## Main Dependencies
 
 - Upstream callers:
-  - `EtcdClusterManager` constructs `HashRing`, passes ring and cluster watch events, runs periodic inspection, and delegates routing APIs to it.
-  - worker shutdown / lossless exit paths call `EtcdClusterManager::VoluntaryScaleDown`, which delegates to `HashRing::VoluntaryScaleDown`.
+  - `ClusterManager` constructs `HashRing`, passes ring and cluster watch events, runs periodic inspection, and delegates routing APIs to it.
+  - worker shutdown / lossless exit paths call `ClusterManager::VoluntaryScaleDown`, which delegates to `HashRing::VoluntaryScaleDown`.
 - Downstream modules:
   - ETCD-compatible storage through `EtcdStore`.
   - object-cache and stream-cache metadata managers via `HashRingEvent::MigrateRanges`, `RecoverMetaRanges`,
@@ -99,7 +99,7 @@
 
 ### Hash Ring Initialization
 
-1. `EtcdClusterManager::Init` starts ETCD watches for ring and cluster tables, then calls `HashRing::InitWithEtcd` or `InitWithoutEtcd`.
+1. `ClusterManager::Init` starts ETCD watches for ring and cluster tables, then calls `HashRing::InitWithEtcd` or `InitWithoutEtcd`.
 2. `InitWithEtcd` initializes master address through `ETCD_MASTER_ADDRESS_TABLE` if `master_address` is empty.
 3. It reads an old ring snapshot from the selected backend address key and writes/updates `ETCD_RING_PREFIX` by CAS through `HashRing::InitRing`.
 4. `InitRing` detects restart vs first start by `workers[workerAddr_]` and inserts a new `INITIAL` worker when missing.
@@ -131,7 +131,7 @@ Important nuance:
 
 ### Passive Remove / Failed Node Scale Down
 
-1. `EtcdClusterManager` tracks failed workers from keepalive events and calls `HashRing::RemoveWorkers(GetFailedWorkers())`.
+1. `ClusterManager` tracks failed workers from keepalive events and calls `HashRing::RemoveWorkers(GetFailedWorkers())`.
 2. `RemoveWorker` first chooses a bounded set of process workers derived from related workers and `MAX_CANDIDATE_WORKER_NUM`; only those workers attempt to write `del_node_info`.
 3. The selected worker CAS-checks that local `ringInfo_` still matches ETCD, then uses `HashRingAllocator::RemoveNode`.
 4. `RemoveNode` transfers the failed node's ranges to the next available node and records recovery work under `del_node_info[failedWorker]`.
@@ -192,7 +192,7 @@ Important nuance:
 
 - `HashRingPb` is a single hot CAS key. Initial join, scale-up, passive scale-down, voluntary scale-down, rolling upgrade cleanup, and health-check self-healing all contend on `/datasystem/ring`.
 - The module uses both persisted ETCD state and in-memory derived state; correctness depends on watches, revision baselines, `MessageDifferencer`, and periodic repair staying aligned.
-- The state machine is spread across `HashRing::UpdateLocalState`, `InspectAndProcessPeriodically`, `HashRingAllocator`, `HashRingTaskExecutor`, `HashRingHealthCheck`, and `EtcdClusterManager`, which makes lifecycle reasoning hard.
+- The state machine is spread across `HashRing::UpdateLocalState`, `InspectAndProcessPeriodically`, `HashRingAllocator`, `HashRingTaskExecutor`, `HashRingHealthCheck`, and `ClusterManager`, which makes lifecycle reasoning hard.
 - The event bus hides strong cross-module dependencies. Hash ring code calls object/stream metadata migration, replica updates, cluster-node sync, and worker shutdown hooks without a typed ownership boundary.
 - Scale task records are stored inside the same protobuf as routing metadata. This couples routing reads to migration progress and makes partial failure cases difficult to reason about.
 - Self-healing can erase workers or pending task records when enabled. This is operationally useful, but it also means a repair policy can mutate the same authoritative ring state used for routing.

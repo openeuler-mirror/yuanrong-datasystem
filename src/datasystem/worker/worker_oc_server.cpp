@@ -75,7 +75,7 @@
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -279,7 +279,7 @@ WorkerOCServer::~WorkerOCServer()
     streamCacheWorkerWorkerSvc_.reset();
     streamCacheClientWorkerSvc_.reset();
     streamCacheMasterSvc_.reset();
-    etcdCM_.reset();
+    clusterManager_.reset();
     datasystem::memory::Allocator::Instance()->Shutdown();
 }
 
@@ -526,19 +526,19 @@ void WorkerOCServer::CreateMasterServices()
     LOG(INFO) << "Start create master services";
     // create MasterServiceImpl
     commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_, akSkManager_);
-    commonSvc_->SetClusterManager(etcdCM_.get());
+    commonSvc_->SetClusterManager(clusterManager_.get());
     if (EnableOCService()) {
         // create MasterOCServiceImpl
         objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(
             hostPort_, persistenceApi_, akSkManager_, metadataManagerHolder_.get(), resourceManager_.get());
-        objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
+        objCacheMasterSvc_->SetClusterManager(clusterManager_.get());
     }
     if (EnableSCService()) {
         // create MasterSCServiceImpl
         rpcSessionManager_ = std::make_shared<RpcSessionManager>();
         streamCacheMasterSvc_ =
             std::make_unique<MasterSCServiceImpl>(hostPort_, akSkManager_, metadataManagerHolder_.get());
-        streamCacheMasterSvc_->SetClusterManager(etcdCM_.get());
+        streamCacheMasterSvc_->SetClusterManager(clusterManager_.get());
     }
 }
 
@@ -547,12 +547,12 @@ void WorkerOCServer::CreateWorkerServices()
     using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
     LOG(INFO) << "Start create worker services";
 
-    // Some classes need back pointer to the etcdCM so that they can perform their own health checks or other
+    // Some classes need back pointer to the clusterManager so that they can perform their own health checks or other
     // cluster-related tasks.
     // create WorkerServiceImpl
     workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, masterAddr_, DFT_TIMEOUT_MULT, this, akSkManager_);
-    workerSvc_->SetWorkerUuid(etcdCM_->GetLocalWorkerUuid());
-    workerSvc_->SetClusterManager(etcdCM_.get());
+    workerSvc_->SetWorkerUuid(clusterManager_->GetLocalWorkerUuid());
+    workerSvc_->SetClusterManager(clusterManager_.get());
     auto objectTable = std::make_shared<ObjectTable>();
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(objectTable, hostPort_, masterAddr_,
                                                                                    objCacheMasterSvc_.get());
@@ -561,11 +561,11 @@ void WorkerOCServer::CreateWorkerServices()
         objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
             hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
             objCacheMasterSvc_.get());
-        objCacheClientWorkerSvc_->SetClusterManager(etcdCM_.get());
+        objCacheClientWorkerSvc_->SetClusterManager(clusterManager_.get());
         objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &taskId) {
             while (!checkAsyncTasksDone_.load()) {
                 CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                    !etcdCM_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
+                    !clusterManager_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
                     FormatString("task id %s has expired while waiting async tasks done", taskId));
                 std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
             }
@@ -573,7 +573,7 @@ void WorkerOCServer::CreateWorkerServices()
         });
         // create WorkerWorkerOCService
         objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
-            objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), etcdCM_.get());
+            objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), clusterManager_.get());
         // create MasterWorkerOCService
         objCacheWorkerMsSvc_ = std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(
             objCacheClientWorkerSvc_, akSkManager_);
@@ -586,7 +586,7 @@ void WorkerOCServer::CreateWorkerServices()
         // create ClientWorkerSCService
         streamCacheClientWorkerSvc_ = std::make_shared<stream_cache::ClientWorkerSCServiceImpl>(
             hostPort_, masterAddr_, streamCacheMasterSvc_.get(), akSkManager_, scAllocateManager);
-        streamCacheClientWorkerSvc_->SetClusterManager(etcdCM_.get());
+        streamCacheClientWorkerSvc_->SetClusterManager(clusterManager_.get());
         // create MasterWorkerSCServiceImpl
         streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
             hostPort_, masterAddr_, streamCacheClientWorkerSvc_.get(), akSkManager_);
@@ -599,7 +599,7 @@ void WorkerOCServer::CreateWorkerServices()
 void WorkerOCServer::CreateAllServices()
 {
     // In case of centralized master, create either master or worker services
-    if (etcdCM_->IsCurrentNodeMaster()) {
+    if (clusterManager_->IsCurrentNodeMaster()) {
         CreateMasterServices();
         CreateWorkerServices();
     } else {
@@ -607,7 +607,7 @@ void WorkerOCServer::CreateAllServices()
     }
 #ifdef WITH_TESTS
     // create StOCServiceImpl
-    utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), etcdCM_.get(),
+    utSvc_ = std::make_unique<st::StOCServiceImpl>(objCacheClientWorkerSvc_.get(), clusterManager_.get(),
                                                    metadataManagerHolder_.get(), akSkManager_);
 #endif
 }
@@ -619,7 +619,7 @@ Status WorkerOCServer::InitializeMasterServices(const ClusterInfo &clusterInfo)
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterSCService(), "InitMasterSCService failed");
 
     bool isRestart = false;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->IsRestart(isRestart), "Check IsRestart failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->IsRestart(isRestart), "Check IsRestart failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->InitLocalMetadataForStart(isRestart, clusterInfo),
                                      "InitLocalMetadataForStart failed");
     return Status::OK();
@@ -647,7 +647,7 @@ Status WorkerOCServer::InitializeWorkerServices()
     // To resolve this, some of the dependencies need to be assigned after all the dependent services are created.
     // The following function must be called after the services have been created.
     // Must be called after MasterOCServiceImpl initialization.
-    if (etcdCM_->IsCurrentNodeMaster()) {
+    if (clusterManager_->IsCurrentNodeMaster()) {
         EnableLocalBypass();
     }
     // Init the stream services and hook them up to the RPC server
@@ -661,7 +661,7 @@ Status WorkerOCServer::InitializeWorkerServices()
 Status WorkerOCServer::InitializeAllServices(const ClusterInfo &clusterInfo)
 {
     // In case of centralized master, initialize either master or worker services
-    if (etcdCM_->IsCurrentNodeMaster()) {
+    if (clusterManager_->IsCurrentNodeMaster()) {
         RETURN_IF_NOT_OK(InitializeMasterServices(clusterInfo));
         RETURN_IF_NOT_OK(InitializeWorkerServices());
     } else {
@@ -783,7 +783,7 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
 {
     CHECK_FAIL_RETURN_STATUS(FLAGS_enable_distributed_master, K_RUNTIME_ERROR,
                              "In the centralized master scenario, node restart lamely are not supported.");
-    RETURN_IF_NOT_OK(EtcdClusterManager::CreateEtcdStoreTable(etcdStore_.get()));
+    RETURN_IF_NOT_OK(ClusterManager::CreateEtcdStoreTable(etcdStore_.get()));
     clusterInfo.etcdAvailable = false;
     // Load all hash rings from rocksdb and construct localHashRingPb.
     HashRingPb localHashRingPb;
@@ -836,7 +836,7 @@ Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
                          "to start the worker, etcd must be normal.",
                          etcdRc.GetMsg()));
     } else {
-        RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        RETURN_IF_NOT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
     }
     return Status::OK();
 }
@@ -938,7 +938,8 @@ Status WorkerOCServer::Init()
     clusterManagerStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
+    clusterManager_ =
+        std::make_unique<ClusterManager>(hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 
@@ -950,7 +951,7 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK(ConstructClusterInfo(clusterInfo));
     LOG(INFO) << "The msg in cluster info: " << clusterInfo.ToString();
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->Init(clusterInfo), "etcd cluster manager init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo), "cluster manager init failed");
     LOG(INFO) << "etcd cluster management initialized.";
     if (masterAddr_.Empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterAddr_.ParseString(FLAGS_master_address),
@@ -980,7 +981,7 @@ Status WorkerOCServer::InitLivenessCheck()
         // start liveiness check.
         livenessCheck_ = std::make_unique<WorkerLivenessCheck>(this, FLAGS_liveness_check_path,
                                                                FLAGS_liveness_probe_timeout_s * secToMs, bindHostPort_,
-                                                               etcdCM_->GetLocalWorkerUuid(), akSkManager_);
+                                                               clusterManager_->GetLocalWorkerUuid(), akSkManager_);
         RETURN_IF_NOT_OK(livenessCheck_->Init());
     }
     return Status::OK();
@@ -990,12 +991,12 @@ Status WorkerOCServer::InitMetadataManagerHolder()
 {
     MetadataManagerHolderParam param;
     param.dbRootPath = FLAGS_rocksdb_store_dir;
-    param.currWorkerId = etcdCM_->GetLocalWorkerUuid();
+    param.currWorkerId = clusterManager_->GetLocalWorkerUuid();
     param.akSkManager = akSkManager_;
     param.etcdStore = etcdStore_.get();
     param.persistenceApi = persistenceApi_;
     param.masterAddress = hostPort_;
-    param.etcdCM = etcdCM_.get();
+    param.clusterManager = clusterManager_.get();
     param.masterWorkerService = objCacheWorkerMsSvc_.get();
     param.workerWorkerService = objCacheWorkerWkSvc_.get();
     param.rpcSessionManager = rpcSessionManager_;
@@ -1084,7 +1085,7 @@ void WorkerOCServer::RegisteringMasterCallbackFunc()
     });
 
     if (EnableOCService()) {
-        if (etcdCM_->IsCurrentNodeMaster()) {
+        if (clusterManager_->IsCurrentNodeMaster()) {
             // The usage of etcd asynchronous write task queue
             instance.RegisterCollectHandler(ResMetricName::ETCD_QUEUE, [this]() {
                 auto usage = objCacheMasterSvc_->GetETCDAsyncQueueUsage();
@@ -1533,12 +1534,12 @@ Status WorkerOCServer::ReadinessProbe()
 Status WorkerOCServer::Start()
 {
     // Start the heartbeat thread after the server bind and before it start.
-    etcdCM_->SetWorkerReady();
+    clusterManager_->SetWorkerReady();
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK(InitLivenessCheck());
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
-    if (etcdCM_->IsCurrentNodeMaster()) {
+    if (clusterManager_->IsCurrentNodeMaster()) {
         if (EnableSCService()) {
             RETURN_IF_NOT_OK_APPEND_MSG(streamCacheMasterSvc_->StartCheckMetadata(), "\nmaster Start failed.");
         }
@@ -1627,7 +1628,7 @@ void WorkerOCServer::WaitClientsExit()
 
 Status WorkerOCServer::PreShutDown()
 {
-    RETURN_OK_IF_TRUE(etcdCM_ == nullptr);
+    RETURN_OK_IF_TRUE(clusterManager_ == nullptr);
     INJECT_POINT("worker.PreShutDown.skip");
     bool scaleIn = IsScaleIn();
     bool waitFlag = false;
@@ -1651,8 +1652,8 @@ Status WorkerOCServer::PreShutDown()
         clientsExitChecker_->set_name("ClientsExitChecker");
         LOG(INFO) << "[Graceful exit] Begin to active reduction node.";
         RETURN_IF_NOT_OK(RetryUntilSuccessDuringGracefulExit([&] {
-            if (!etcdCM_->CheckVoluntaryScaleDown()) {
-                return etcdCM_->VoluntaryScaleDown();
+            if (!clusterManager_->CheckVoluntaryScaleDown()) {
+                return clusterManager_->VoluntaryScaleDown();
             }
             return Status::OK();
         }));
@@ -1664,12 +1665,13 @@ Status WorkerOCServer::PreShutDown()
             if (!scaleIn) {
                 return checkAsyncTasksDone_.load();
             }
-            return checkAsyncTasksDone_.load() && allClientsExited_.load() && etcdCM_->CheckVoluntaryScaleDown();
+            return checkAsyncTasksDone_.load() && allClientsExited_.load()
+                   && clusterManager_->CheckVoluntaryScaleDown();
         };
         while (!waitFlag) {
             if (scaleIn) {
                 const int logEveryN = 5;
-                auto isVoluntaryScaleDown = etcdCM_->CheckVoluntaryScaleDown();
+                auto isVoluntaryScaleDown = clusterManager_->CheckVoluntaryScaleDown();
                 waitFlag = checkAsyncTasksDone_ && allClientsExited_ && isVoluntaryScaleDown;
                 LOG_EVERY_N(INFO, logEveryN)
                     << "[Graceful exit] The progress of voluntary scaling down is as follows: "
@@ -1733,10 +1735,10 @@ Status WorkerOCServer::Shutdown()
         streamCacheMasterSvc_->Shutdown();
     }
 
-    if (etcdCM_) {
-        Status rc = etcdCM_->Shutdown();
+    if (clusterManager_) {
+        Status rc = clusterManager_->Shutdown();
         if (rc.IsError()) {
-            LOG(WARNING) << "Shutting down the EtcdClusterManager resulted in Status: " << rc.ToString();
+            LOG(WARNING) << "Shutting down the ClusterManager resulted in Status: " << rc.ToString();
         }
     }
     NotifyShutdownToEtcd();
@@ -1852,7 +1854,7 @@ void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 bool WorkerOCServer::IsAsyncTasksRunning()
 {
     // check etcd and persistence async task
-    if (etcdCM_->IsCurrentNodeMaster()) {
+    if (clusterManager_->IsCurrentNodeMaster()) {
         return (objCacheClientWorkerSvc_ != nullptr && objCacheClientWorkerSvc_->HaveAsyncTasksRunning())
                || (objCacheMasterSvc_ != nullptr && objCacheMasterSvc_->HaveAsyncMetaRequest())
                || (streamCacheClientWorkerSvc_ != nullptr && streamCacheClientWorkerSvc_->HaveTasksToProcess())

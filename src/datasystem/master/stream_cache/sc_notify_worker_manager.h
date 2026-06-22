@@ -34,7 +34,7 @@
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/protos/worker_stream.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -91,12 +91,12 @@ public:
      * @param[in] streamMetaStore The stream rocksdb store object.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
-     * @param[in] cm The etcd cluster manager instance.
+     * @param[in] cm The cluster manager instance.
      * @param[in] scMetadataManager The sc metadata manager instance.
      */
     SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                           std::shared_ptr<AkSkManager> akSkManager,
-                          std::shared_ptr<RpcSessionManager> rpcSessionManager, EtcdClusterManager *cm,
+                          std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm,
                           SCMetadataManager *scMetadataManager);
 
     ~SCNotifyWorkerManager();
@@ -386,7 +386,7 @@ private:
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     SCMetadataManager *scMetadataManager_;
 };
 }  // namespace master

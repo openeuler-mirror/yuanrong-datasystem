@@ -108,7 +108,7 @@ Status ScaleDownNodeSelector::SelectNode(const std::string &originAddr, const st
         outNode = preferNode;
         return Status::OK();
     }
-    Status status = etcdCM_->GetStandbyWorkerByAddr(originAddr, outNode);
+    Status status = clusterManager_->GetStandbyWorkerByAddr(originAddr, outNode);
     if (status.IsError()) {
         LOG(ERROR) << FormatString("[Migrate Data] Failed to get [%s]'s next addr: %s", originAddr, status.ToString());
         outNode = originAddr;

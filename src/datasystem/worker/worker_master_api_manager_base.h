@@ -24,7 +24,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace worker {
@@ -32,22 +32,23 @@ template <class ApiType>
 class WorkerMasterApiManagerBase {
 public:
     WorkerMasterApiManagerBase(HostPort &hostPort, std::shared_ptr<AkSkManager> manager)
-        : workerAddr_(hostPort), akSkManager_(manager){};
+        : workerAddr_(hostPort), akSkManager_(manager) {};
 
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
      * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] etcdCm The cluster manager pointer to assign.
+     * @param[in] clusterManager The cluster manager pointer to assign.
      * @param[out] api The WorkerMasterApi instance.
      * @return The status of this call.
      */
-    virtual Status GetWorkerMasterApi(const std::string &id, EtcdClusterManager *etcdCm, std::shared_ptr<ApiType> &api)
+    virtual Status GetWorkerMasterApi(const std::string &id, ClusterManager *clusterManager,
+                                      std::shared_ptr<ApiType> &api)
     {
-        CHECK_FAIL_RETURN_STATUS(etcdCm != nullptr, K_RUNTIME_ERROR,
-                                 "ETCD manager is empty, get WorkerMasterApi failed");
+        CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
+                                 "ClusterManager is empty, get WorkerMasterApi failed");
         MetaAddrInfo metaAddrInfo;
         Timer timer;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCm->GetMetaAddress(id, metaAddrInfo), "GetMetaAddress failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->GetMetaAddress(id, metaAddrInfo), "GetMetaAddress failed");
         workerOperationTimeCost.Append("Get master address", timer.ElapsedMilliSecond());
         auto masterHostAddress = metaAddrInfo.GetAddressAndSaveDbName();
 
@@ -58,13 +59,13 @@ public:
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
      * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] etcdCm The cluster manager pointer to assign.
+     * @param[in] clusterManager The cluster manager pointer to assign.
      * @return The WorkerMasterApi
      */
-    virtual std::shared_ptr<ApiType> GetWorkerMasterApi(const std::string &id, EtcdClusterManager *etcdCm)
+    virtual std::shared_ptr<ApiType> GetWorkerMasterApi(const std::string &id, ClusterManager *clusterManager)
     {
         std::shared_ptr<ApiType> api;
-        LOG_IF_ERROR(GetWorkerMasterApi(id, etcdCm, api), "GetWorkerMasterApi failed");
+        LOG_IF_ERROR(GetWorkerMasterApi(id, clusterManager, api), "GetWorkerMasterApi failed");
         return api;
     }
 
@@ -110,19 +111,20 @@ public:
     /**
      * @brief Get or Create a worker to Master api object for masterAddress.
      * @param[in] masterAddress The remote master ip address.
-     * @param[in] etcdCm The cluster manager pointer to assign.
+     * @param[in] clusterManager The cluster manager pointer to assign.
      * @param[out] api The WorkerMasterApi instance.
      * @return The status of this call.
      */
-    virtual Status GetWorkerMasterApiByAddr(const std::string &masterAddress, EtcdClusterManager *etcdCm,
+    virtual Status GetWorkerMasterApiByAddr(const std::string &masterAddress, ClusterManager *clusterManager,
                                             std::shared_ptr<ApiType> &api)
     {
-        CHECK_FAIL_RETURN_STATUS(etcdCm != nullptr, K_RUNTIME_ERROR,
-                                 "ETCD manager is empty, get WorkerMasterApi failed");
+        CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
+                                 "ClusterManager is empty, get WorkerMasterApi failed");
         HostPort destAddr;
         std::string dbName;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCm->GetPrimaryReplicaLocationByAddr(masterAddress, destAddr, dbName),
-                                         "GetPrimaryReplicaLocationByAddr failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            clusterManager->GetPrimaryReplicaLocationByAddr(masterAddress, destAddr, dbName),
+            "GetPrimaryReplicaLocationByAddr failed");
         return GetWorkerMasterApi(destAddr, api);
     }
 
