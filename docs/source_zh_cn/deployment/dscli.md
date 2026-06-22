@@ -784,9 +784,9 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 是 | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位） |
-| request_sample_rate | double | `1.0` | 是 | 请求日志采样率（0.0–1.0）。1.0=全量保留；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/PLOG 由 diagnostic_sample_rate 控制 |
-| access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 接口日志采样率（0.0–1.0）。1.0=全量保留 |
-| diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 诊断日志采样率（0.0–1.0）。控制请求级 ERROR/WARNING/PLOG 的补充采样（请求未 sampled-in 时）；1.0=全量保留；FATAL/CHECK 无条件保留不受此参数影响 |
+| request_sample_rate | double | `1.0` | 是 | 请求日志主采样率（[0.0–1.0]）。1.0=全量保留（所有请求采中→access/diagnostic也强制输出）；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/SLOW_LOG 由 diagnostic补采样率 控制 |
+| access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | access日志**补采样率**（[0.0–1.0]）。仅在请求未被request采中时生效；请求采中时access日志无条件输出。实际保留率=request采中率+(1−采中率)×此值，通常高于此值。1.0=未采中请求全量保留 |
+| diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | diagnostic日志**补采样率**（[0.0–1.0]）。仅在请求未sampled-in时生效，控制请求级 ERROR/WARNING/SLOW_LOG的补充采样；请求采中时diagnostic无条件输出。FATAL/CHECK无条件保留不受此参数影响。实际保留率=request采中率+(1−采中率)×此值。1.0=未采中请求全量保留 |
 | slow_log_process_slower_than | uint64 | `2000` | 是 | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
 | slow_log_rpc_slower_than | uint64 | `5000` | 是 | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
@@ -794,6 +794,9 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > - `access_sample_rate = min(1.0, request_sample_rate × 3)`
 > - `diagnostic_sample_rate = min(1.0, request_sample_rate × 4)`
 > 一旦 `access_sample_rate` 或 `diagnostic_sample_rate` 被显式设置，派生规则即失效，此后使用各自独立的值。显式设置 `1.0` 与默认 `1.0` 具有不同语义：前者阻止派生，后者允许派生。
+>
+> **补采样率与整体保留率的区别**：`access_sample_rate` 和 `diagnostic_sample_rate` 是补采样率，不是该类日志的整体保留率。
+> 例如 `request=0.5, access=0.3` 时，access实际保留率是 65%（50%采中强制输出 + 50%未采中×30%补采样），远高于 `access_sample_rate=0.3`。
 | log_only_write_info_file | bool | `true` | 否 | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志 |
 | json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志 |

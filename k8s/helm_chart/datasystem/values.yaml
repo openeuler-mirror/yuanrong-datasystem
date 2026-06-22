@@ -147,14 +147,18 @@ global:
     # Compress old log files in .gz format.
     # This parameter takes effect only when the size of the generated log is greater than max log size.
     logCompress: true
-    # Request log sample rate (0.0-1.0). Leave empty (null) to use default (1.0 = all logs pass).
+    # Request log sample rate per trace [0.0-1.0]. Leave empty (null) to use default (1.0 = all logs pass).
     # When ONLY this field is set, access and diagnostic rates are automatically derived
     # (access = request * 3, diagnostic = request * 4, capped at 1.0).
-    # IMPORTANT: Setting accessSampleRate or1.0 explicitly DISABLES derivation.
+    # IMPORTANT: Setting accessSampleRate or diagnosticSampleRate=1.0 explicitly DISABLES derivation.
     requestSampleRate:
-    # Access log sample rate.0.0-1.0). Leave EMPTY to derive from requestSampleRate, or set explicitly to override.
+    # Supplement access log sample rate [0.0-1.0]. Only applies when request is NOT sampled-in;
+    # request sampled-in always outputs access logs. Final retention can exceed this rate.
+    # Leave EMPTY to auto-derive from requestSampleRate, or set explicitly to override derivation.
     accessSampleRate:
-    # Diagnostic log sample rate.0.0-1.0). Leave EMPTY to derive from requestSampleRate, or set explicitly to override.
+    # Supplement diagnostic log sample rate [0.0-1.0]. Only applies when request is NOT sampled-in
+    # for ERROR/WARNING/SLOW_LOG; request sampled-in always outputs diagnostics. FATAL/CHECK always retained.
+    # Leave EMPTY to auto-derive from requestSampleRate, or set explicitly to override derivation.
     diagnosticSampleRate:
     # In-process processing latency threshold (microseconds) for slow-log and latencySummary.
     # Default 2000 (2ms). Accepts a positive integer (e.g. 1000 for 1ms). 0 means disabled.

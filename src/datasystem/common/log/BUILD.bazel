@@ -3,13 +3,15 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-# LogSampler header-only target (no circular deps - used by spdlog:ds_spdlog)
+# LogSampler header-only target. Depends on :log_base (a leaf target with no deps — no circular risk).
+# Used by spdlog:ds_spdlog.
 ds_cc_library(
     name = "log_sampler_header",
     hdrs = [
         "log_sampler.h",
     ],
     deps = [
+        ":log_base",
         "//src/datasystem/common/log/spdlog:ds_spdlog_header",
     ],
 )

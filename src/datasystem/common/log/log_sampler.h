@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/log/spdlog/log_param.h"
+#include "datasystem/common/log/trace.h"
 
 namespace datasystem {
 
@@ -115,6 +116,10 @@ public:
 private:
     LogSampler();
 
+    inline bool IsOutsideRequestTrace() const
+    {
+        return !Trace::Instance().IsRequestLogTrace();
+    }
     LogSampleKind ClassifyRuntime(LogSeverity severity, bool isPlog) const;
     const SampleRate &GetRate(const LogSampleConfig &config, LogSampleKind kind) const;
     bool BuildAndPublishSnapshot(const LogSampleUserConfig &userConfig);

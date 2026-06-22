@@ -100,12 +100,20 @@ DS_DEFINE_bool(enable_perf_trace_log, GetBoolFromEnv(PERF_TRACE_LOG_ENV.c_str(),
                "Enable perf log output, When true always output perf related log.");
 
 DS_DEFINE_double_dynamic(request_sample_rate, 1.0,
-                         "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");
+                         "Request log sample rate per trace [0.0-1.0]. "
+                         "1.0=all retained; sampled-in request also forces access/diagnostic output.");
 DS_DEFINE_double_dynamic(access_sample_rate, 1.0,
-                         "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled.");
-DS_DEFINE_double_dynamic(
-    diagnostic_sample_rate, 1.0,
-    "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled.");
+                         "Supplement access log sample rate [0.0-1.0]. "
+                         "Only applies when request is NOT sampled-in; "
+                         "request sampled-in always outputs access logs. "
+                         "Final retention can exceed this rate. "
+                         "1.0=not-sampled-in requests fully retained.");
+DS_DEFINE_double_dynamic(diagnostic_sample_rate, 1.0,
+                         "Supplement diagnostic log sample rate [0.0-1.0]. "
+                         "Only applies when request is NOT sampled-in for "
+                         "ERROR/WARNING/SLOW_LOG; request sampled-in always outputs "
+                         "diagnostics. FATAL/CHECK always retained. "
+                         "1.0=not-sampled-in requests fully retained.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(log_only_write_info_file);

@@ -121,13 +121,36 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 
 ### 工作原理
 
-- 三类独立采样率：`request_sample_rate`、`access_sample_rate`、`diagnostic_sample_rate`（各 0.0–1.0，默认 1.0=全量保留）
+- 三类采样率：`request_sample_rate`（请求主采样）、`access_sample_rate`（access 补采样）、`diagnostic_sample_rate`（diagnostic 补采样）（各 [0.0–1.0]，默认 1.0=全量保留）
 - 采样粒度是"请求（traceId）"，不是"单条日志"
 - 请求采样决策随 RPC 元数据传播（LogSampleState），跨 client/worker 保持同一 trace 的一致结果
-- request sampled-in 时，该请求的 INFO/VLOG/ERROR/WARNING/PLOG 都直接输出（请求日志完整性优先）
+- request sampled-in 时，该请求的 INFO/VLOG/ERROR/WARNING/SLOW_LOG 和 access 日志都直接输出（请求日志完整性优先）
 - request reject 只直接阻断 INFO/VLOG；diagnostic/access 不把 reject 当作直接丢弃条件，继续各自补采样
-- 仅 SDK 请求 trace 参与采样；后台线程日志不受本方案控制
+- 仅 SDK 请求 trace 参与采样；后台线程日志不受本方案控制，始终全量输出
 - 配置权威源：worker；client 通过 register/heartbeat 接收 worker 下发的 `LogSampleConfigPb`
+
+### 参数语义与 OR 规则
+
+三个参数不是完全独立的——`access_sample_rate` 和 `diagnostic_sample_rate` 是**补采样率**，仅在请求未被 `request_sample_rate` 采中时生效。请求一旦采中，该请求的所有 access 和 diagnostic 日志**无条件强制输出**。
+
+实际日志保留率公式：
+
+- **access 保留率** = `request_sample_rate` + (1 − `request_sample_rate`) × `access_sample_rate`
+- **diagnostic 保留率** = `request_sample_rate` + (1 − `request_sample_rate`) × `diagnostic_sample_rate`
+
+> **注意**：`access_sample_rate=0.3` 不是"30% 的 access 日志被保留"，而是"未被 request 采中的请求中，30% 的 access 日志作为补充被保留"。实际保留率通常高于此值。
+
+**配置示例与实际保留率对照**：
+
+| 配置 | request采中率 | access补采样率 | **access实际保留率** | diagnostic补采样率 | **diagnostic实际保留率** |
+|------|--------------|--------------|--------------------|--------------------|----------------------|
+| `request=0.5, access=0.3, diagnostic=0.4` | 50% | 30% | **65%** (0.5+0.5×0.3) | 40% | **70%** (0.5+0.5×0.4) |
+| `request=1.0, access=0.0, diagnostic=0.0` | 100% | 0% | **100%** (采中→强制输出) | 0% | **100%** (采中→强制输出) |
+| `request=0.0, access=0.5, diagnostic=0.5` | 0% | 50% | **50%** (全靠补采样) | 50% | **50%** (全靠补采样) |
+| 仅 `request=0.2`（派生） | 20% | 60%(3r派生) | **68%** (0.2+0.8×0.6) | 80%(4r派生) | **84%** (0.2+0.8×0.8) |
+| `request=0.5, access=0.0` | 50% | 0% | **50%** (仅采中请求输出) | 100%(4r派生) | **100%** (0.5+0.5×1.0) |
+
+> `request=1.0` 时无论 access/diagnostic 设多少，实际保留率都是 100%（所有请求采中→强制输出）。此时 `access=0.0` 仅影响 access log 中的 `logSampled` 标记，不影响日志输出。
 
 ### 派生规则（request-only derivation）
 

@@ -159,7 +159,9 @@ public:
     EmbeddedConfig &RequestSampleRate(double rate);
 
     /**
-     * @brief Access log sample rate for embedded worker.
+     * @brief Supplement access log sample rate for embedded worker.
+     * Only applies when request is NOT sampled-in; request sampled-in always outputs access logs.
+     * Final access retention can exceed this rate.
      * @param[in] rate Equivalent to flag access_sample_rate. Valid range [0.0, 1.0]. Default 1.0 (all retained).
      *
      * Effective behavior:
@@ -175,7 +177,7 @@ public:
      * @brief Diagnostic log sample rate for embedded worker.
      * @param[in] rate Equivalent to flag diagnostic_sample_rate. Valid range [0.0, 1.0]. Default 1.0 (all retained).
      *
-     * Controls request-level ERROR/WARNING/PLOG supplement sampling when request is not sampled-in.
+     * Controls request-level ERROR/WARNING/SLOW_LOG supplement sampling when request is not sampled-in.
      * FATAL/CHECK are always retained regardless of this rate.
      *
      * Effective behavior:

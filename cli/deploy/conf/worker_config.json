@@ -473,15 +473,15 @@
     },
     "request_sample_rate": {
         "value": "",
-        "description": "Request log sample rate (0.0-1.0). Empty means not configured, use worker built-in default 1.0."
+        "description": "Request log sample rate per trace [0.0-1.0]. 1.0=all retained; sampled-in request also forces access/diagnostic output. Empty means not configured, use worker built-in default 1.0."
     },
     "access_sample_rate": {
         "value": "",
-        "description": "Access log sample rate (0.0-1.0). Empty means not configured, auto-derive from request rate."
+        "description": "Supplement access log sample rate [0.0-1.0]. Only applies when request is NOT sampled-in; request sampled-in always outputs access logs. Final retention can exceed this rate. Empty means not configured, auto-derive from request rate."
     },
     "diagnostic_sample_rate": {
         "value": "",
-        "description": "Diagnostic log sample rate (0.0-1.0). Empty means not configured, auto-derive from request rate."
+        "description": "Supplement diagnostic log sample rate [0.0-1.0]. Only applies when request is NOT sampled-in for ERROR/WARNING/SLOW_LOG; request sampled-in always outputs diagnostics. FATAL/CHECK always retained. Empty means not configured, auto-derive from request rate."
     },
     "slow_log_process_slower_than": {
         "value": "2000",
