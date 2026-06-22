@@ -213,7 +213,9 @@ public:
             keys.emplace_back(key);
             values.emplace_back(vals[i]);
         }
-        DS_ASSERT_OK(client->MSetTx(keys, values, param));
+        std::vector<std::string> failedKeys;
+        DS_ASSERT_OK(client->MSet(keys, values, failedKeys, param));
+        ASSERT_TRUE(failedKeys.empty());
         int i = 0;
         for (const auto &key : keys) {
             std::string val;

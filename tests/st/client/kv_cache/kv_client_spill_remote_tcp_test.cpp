@@ -20,6 +20,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+#include <utility>
+
 #include "client/kv_cache/kv_client_common.h"
 #include "cluster/external_cluster.h"
 #include "common.h"
@@ -32,6 +36,10 @@ DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int kNodeSelectorMetaWaitTimeoutMs = 10 * 1000;
+constexpr int kNodeSelectorMetaPollIntervalMs = 200;
+}  // namespace
 
 class KVClientSpillRemoteTcpTest : public KVClientCommon {
 public:
@@ -228,55 +236,83 @@ TEST_F(KVClientSpillRemoteTcpTest, RemoteConcurrentSetGetDelDuringMigration)
 
 TEST_F(KVClientSpillRemoteTcpTest, NodeSelectorTest)
 {
+    HostPort worker0Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0Addr));
+    HostPort worker1Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Addr));
     HostPort worker2Addr;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr));  // worker index is 2
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr));
+    auto worker0 = worker0Addr.ToString();
+    auto worker1 = worker1Addr.ToString();
+    auto worker2 = worker2Addr.ToString();
 
-    // Create 9 objects on worker1, below high water mark but not enough for another 5MB object.
+    // Create 9 objects on worker1, below high water mark but close.
+    // This leaves worker1 with less space than one 5MB object after allocator alignment.
     const int objectNumWorker1 = 9;
     std::string value = GenRandomString(valueSize_);
     for (int i = 0; i < objectNumWorker1; ++i) {
         std::string key = "object1_" + std::to_string(i);
         DS_ASSERT_OK(client1_->Set(key, value));
     }
-    usleep(2000 * MS_PER_SECOND);  // sleep 2s to ensure workers report resource info
+    std::this_thread::sleep_for(std::chrono::seconds(2));  // wait for resource report double-buffer switch.
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.MigrateData.setMaxRetryCount", "call(1)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "DataMigrator.AllowLocalWorker", "call()"));
     // Create 10 objects on worker0 to trigger eviction
     const int objectNumWorker0 = 10;
     SetParam param{ .writeMode = WriteMode::WRITE_THROUGH_L2_CACHE };
-    std::string migrateKey = client_->Set(value, param);
+    std::vector<std::string> worker0Keys;
+    worker0Keys.reserve(objectNumWorker0);
+    auto key = client_->Set(value, param);
+    ASSERT_FALSE(key.empty());
+    worker0Keys.emplace_back(std::move(key));
     for (int i = 1; i < objectNumWorker0; ++i) {
-        client_->Set(value);
+        key = client_->Set(value);
+        ASSERT_FALSE(key.empty());
+        worker0Keys.emplace_back(std::move(key));
     }
-
-    // Check that spilled objects migrate to worker2 (more free memory)
+    // Check that at least one spilled object migrates to a remote worker.
     std::stringstream table;
     table << ETCD_META_TABLE_PREFIX << ETCD_HASH_SUFFIX << "/";
-    // Construct etcd key using hash-based routing (no worker UUID)
-    auto etcdKey = table.str() + master::Hash2Str(MurmurHash3_32(migrateKey)) + "/" + migrateKey;
 
-    datasystem::ObjectMetaPb meta;
-    const int retryTimes = 30;
-    const int retryIntervalMs = 200;
-    bool migrated = false;
-    Status lastRc;
-    for (int i = 0; i < retryTimes; ++i) {
+    auto getPrimaryAddress = [&table, this](const std::string &migrateKey, std::string &primaryAddress) -> Status {
+        auto etcdKey = table.str() + master::Hash2Str(MurmurHash3_32(migrateKey)) + "/" + migrateKey;
         RangeSearchResult res;
-        lastRc = db_->RawGet(etcdKey, res);
-        if (lastRc.IsError()) {
-            usleep(retryIntervalMs * MS_PER_SECOND);
-            continue;
+        RETURN_IF_NOT_OK(db_->RawGet(etcdKey, res));
+        datasystem::ObjectMetaPb meta;
+        CHECK_FAIL_RETURN_STATUS(meta.ParseFromString(res.value), K_RUNTIME_ERROR, "Failed to parse object meta");
+        primaryAddress = meta.primary_address();
+        return Status::OK();
+    };
+
+    std::string migratedPrimaryAddress;
+    Status lastMetaRc(StatusCode::K_NOT_FOUND, "No metadata has been read yet");
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(kNodeSelectorMetaWaitTimeoutMs);
+    do {
+        for (const auto &migrateKey : worker0Keys) {
+            std::string primaryAddress;
+            lastMetaRc = getPrimaryAddress(migrateKey, primaryAddress);
+            if (lastMetaRc.IsError()) {
+                continue;
+            }
+            ASSERT_TRUE(primaryAddress == worker0 || primaryAddress == worker1 || primaryAddress == worker2)
+                << "Unexpected primary address: " << primaryAddress;
+            if (primaryAddress != worker0) {
+                migratedPrimaryAddress = primaryAddress;
+                break;
+            }
         }
-        ASSERT_TRUE(meta.ParseFromString(res.value));
-        if (meta.primary_address() == worker2Addr.ToString()) {
-            migrated = true;
+        if (!migratedPrimaryAddress.empty() || std::chrono::steady_clock::now() >= deadline) {
             break;
         }
-        usleep(retryIntervalMs * MS_PER_SECOND);
-    }
-    DS_ASSERT_OK(lastRc);
-    ASSERT_TRUE(migrated) << meta.DebugString();
+        std::this_thread::sleep_for(std::chrono::milliseconds(kNodeSelectorMetaPollIntervalMs));
+    } while (true);
+
+    ASSERT_FALSE(migratedPrimaryAddress.empty())
+        << "No worker0 key migrated to a remote worker before timeout, last meta status: " << lastMetaRc.ToString();
+    ASSERT_TRUE(migratedPrimaryAddress == worker1 || migratedPrimaryAddress == worker2)
+        << "Unexpected migration target: " << migratedPrimaryAddress;
 }
 
 class KVClientSpillRemoteTcpDfxTest : public OCClientCommon {

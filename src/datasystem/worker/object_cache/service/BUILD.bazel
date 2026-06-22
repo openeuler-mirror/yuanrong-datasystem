@@ -385,7 +385,6 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:thread_pool",
-        "//src/datasystem/worker/object_cache:async_rollback_manager",
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",

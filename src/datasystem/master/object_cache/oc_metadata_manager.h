@@ -68,7 +68,6 @@ class WorkerWorkerOCServiceImpl;
 }
 
 namespace master {
-enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
     SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
         : reqId_(std::move(reqId)),
@@ -93,8 +92,6 @@ struct ObjectMeta {
     ObjectMetaPb meta;
     int64_t value = 0;
     std::unordered_map<ImmutableString, AckState> locations;
-    MULTI_SET_STATE multiSetState = MULTI_SET_STATE::IDLE;
-    int64_t multiSetTimestamp = 0;
 
     /**
      * @brief Check if the object is binary.
@@ -292,15 +289,7 @@ public:
                       const std::set<ImmutableString> &nestedObjectKeys, int64_t &version, bool &firstOne);
 
     /**
-     * @brief Create multi object meta info in cache and rocksdb transaction.
-     * @param[in] request The meta of object.
-     * @param[out] response The response to worker.
-     * @return Status of the call.
-     */
-    Status CreateMultiMetaTx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp);
-
-    /**
-     * @brief Create multi object meta info in cache and rocksdb not transaction.
+     * @brief Create multi object meta info in cache and rocksdb.
      * @param[in] request The meta of object.
      * @param[out] response The response to worker.
      * @return Status of the call.
@@ -401,7 +390,7 @@ public:
      * @param[in] version The version of meta.
      */
     void RollBackMultiMetaWhenCreateFailed(const std::vector<std::string> &rollBackIds, const std::string address,
-                                           uint64_t version = 0);
+                                           uint64_t version);
 
     /**
      * @brief Create multi meta in rocks db and etcd and update subscribe.
@@ -411,8 +400,6 @@ public:
      * @param[out] rsp The rpc response protobuf.
      * @return Status of the call
      */
-    Status PublishMultiMeta(const std::vector<std::string> &objectKeys, const std::string &address,
-                            ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Create multi meta.
@@ -428,14 +415,6 @@ public:
      * @return Status of the call;
      */
     Status GetPrimaryReplicaAddr(const std::string &masterAddr, HostPort &primaryAddr);
-
-    /**
-     * @brief Create multi meta phase two.
-     * @param[in] req The rpc request protobuf.
-     * @param[out] rsp The rpc response protobuf.
-     * @return Status of the call.
-     */
-    Status CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoReqPb &req, CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Remove object meta info of server in cache and rocksdb.
@@ -1289,17 +1268,6 @@ private:
      */
     Status CreateMetaFirstTime(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
                                const std::set<ImmutableString> &nestedObjectKeys, TbbMetaTable::accessor &accessor);
-
-    /**
-     * @brief Create pending meta entry for the first-time create meta rpc.
-     * @param[in] newMeta Metadata of object.
-     * @param[in] address Server address.
-     * @param[in] pendingTtl The ttl of pending.
-     * @param[out] firstOne if the object exist before.
-     * @return Status of call.
-     */
-    Status CreatePendingMeta(const ObjectMetaPb &newMeta, const std::string &address, int64_t pendingTtl,
-                             bool &firstOne);
 
     /**
      * @brief Update meta info in cache and rocksdb.

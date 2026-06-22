@@ -139,7 +139,7 @@ Status WorkerOcServiceCreateImpl::CreateImpl(const std::string &tenantId, const 
     return Status::OK();
 }
 
-Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb &req,
+Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb &req, const std::string &tenantId,
                                                           std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
                                                           std::vector<uint32_t> &shmIndexMapping)
 {
@@ -151,7 +151,8 @@ Status WorkerOcServiceCreateImpl::AggregateAllocateHelper(const MultiCreateReqPb
                 collector(req.data_size(i), req.data_size(i) + metaSz, i);
             }
         };
-    const auto &firstObjectKey = *req.object_key().begin();
+    const auto firstObjectKey =
+        TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, *req.object_key().begin());
     return AggregateAllocate(firstObjectKey, traversalHelper, evictionManager_, shmOwners, shmIndexMapping);
 }
 
@@ -162,7 +163,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
     int objectSize = req.object_key_size();
     std::vector<uint32_t> shmIndexMapping(req.object_key_size(), std::numeric_limits<uint32_t>::max());
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
-    AggregateAllocateHelper(req, shmOwners, shmIndexMapping);
+    RETURN_IF_NOT_OK(AggregateAllocateHelper(req, tenantId, shmOwners, shmIndexMapping));
     std::vector<CreateRspPb> subRsp(objectSize);
     std::vector<Status> results(objectSize);
 

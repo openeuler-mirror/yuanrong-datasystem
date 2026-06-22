@@ -321,8 +321,6 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
         return Status::OK();
     }
     RETURN_IF_NOT_OK(status);
-    CHECK_FAIL_RETURN_STATUS(!asyncRollbackManager_->IsObjectsInRollBack({ objectKey }), K_OC_KEY_ALREADY_EXIST,
-                             "The object is being rolled back.");
     int64_t elapsed = timer.ElapsedMilliSecond();
     Raii unlock([&entry]() { entry->WUnlock(); });
     ObjectKV objectKV(objectKey, *entry);

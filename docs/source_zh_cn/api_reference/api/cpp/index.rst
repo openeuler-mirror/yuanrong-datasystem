@@ -67,7 +67,7 @@ KV接口
     * - :cpp:func:`KVClient::MSet`
       - 键值对批量设置接口。
     * - :cpp:func:`KVClient::MSetTx`
-      - 事务性批量设置键值对接口。
+      - 已废弃 API，仅为兼容保留，调用固定返回 ``StatusCode::K_RUNTIME_ERROR``。
     * - :cpp:func:`KVClient::Get`
       - 获取键对应的数据。
     * - :cpp:func:`KVClient::Read`

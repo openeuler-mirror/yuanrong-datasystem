@@ -34,6 +34,10 @@ using datasystem::ConnectOptions;
 using datasystem::object_cache::ObjectClientImpl;
 using datasystem::object_cache::FullParam;
 namespace datasystem {
+namespace {
+constexpr char K_MSETTX_DEPRECATED_MSG[] = "MSetTx is a deprecated API and is no longer supported.";
+}  // namespace
+
 class StateValueBuffer;
 struct MemoryView {
     const uint8_t *ptr;
@@ -283,25 +287,14 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
         .def("MSetTx",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys, const std::vector<py::buffer> &vals,
                 WriteMode writeMode, uint32_t ttlSecond, ExistenceOpt existenceOpt) {
+                (void)client;
+                (void)keys;
+                (void)vals;
+                (void)writeMode;
+                (void)ttlSecond;
+                (void)existenceOpt;
                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-                std::vector<StringView> values;
-                MSetParam param{ .writeMode = writeMode, .ttlSecond = ttlSecond, .existence = existenceOpt };
-                uint64_t totalSize = 0;
-                for (const auto &val : vals) {
-                    py::buffer_info info(val.request());
-                    totalSize += info.size;
-                    StringView strView(reinterpret_cast<const char *>(info.ptr), info.size);
-                    values.emplace_back(strView);
-                }
-                auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
-                Status rc = client.MSet(keys, values, param);
-                access.ObjectKeysRef(keys)
-                    .WriteModeProvider([writeMode] { return static_cast<int>(writeMode); })
-                    .TtlSecondProvider([ttlSecond] { return ttlSecond; })
-                    .Result(rc)
-                    .DataSize(totalSize)
-                    .Record();
-                return rc;
+                return Status(K_RUNTIME_ERROR, K_MSETTX_DEPRECATED_MSG);
              })
         .def("MCreate",
              [](ObjectClientImpl &client, const std::vector<std::string> &keys,

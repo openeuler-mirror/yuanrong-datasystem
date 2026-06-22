@@ -31,7 +31,6 @@
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/util/thread_pool.h"
 
-#include "datasystem/worker/object_cache/async_rollback_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -80,7 +79,6 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager;
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager;
     std::shared_ptr<AsyncSendManager> asyncSendManager;
-    std::shared_ptr<AsyncRollbackManager> asyncRollbackManager;
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
     EtcdClusterManager *etcdCM;
@@ -413,8 +411,6 @@ protected:
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
 
     std::shared_ptr<AsyncSendManager> asyncSendManager_{ nullptr };
-
-    std::shared_ptr<AsyncRollbackManager> asyncRollbackManager_{ nullptr };
 
     size_t metadataSize_{ 0 };
 

@@ -58,7 +58,7 @@ struct MSetParam {
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;  // The default value of writeMode is WriteMode::NONE_L2_CACHE.
     uint32_t ttlSecond =
         0;  // The default value means the key will keep alive until you call Del api to delete the key.
-    ExistenceOpt existence;  // There is not default value, and MSetNx only support NX mode.
+    ExistenceOpt existence = ExistenceOpt::NONE;
     CacheType cacheType = CacheType::MEMORY;
 };
 
@@ -191,14 +191,15 @@ public:
     ///         K_RUNTIME_ERROR: client fd mmap failed
     Status MSet(const std::vector<std::shared_ptr<Buffer>> &buffers);
 
-    /// \brief Transactional multi-key set interface, it guarantees all the keys are either successfully created or
-    ///  none of them is created. The number of keys should be in the range of 1 to 8.
+    /// \brief Deprecated transactional multi-key set interface.
     ///
-    /// \param[in] keys The keys to be set. For performance reasons, only the validity of the first key is validated.
+    /// This API is kept only for SDK API compatibility and always returns K_RUNTIME_ERROR.
+    ///
+    /// \param[in] keys The keys to be set.
     /// \param[in] vals The values for the keys.
     /// \param[in] param The set parameters.
     ///
-    /// \return K_OK on success; the error code otherwise.
+    /// \return K_RUNTIME_ERROR because MSetTx is a deprecated API.
     Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                   const MSetParam &param = {});
 
@@ -392,7 +393,7 @@ public:
     Status UpdateAkSk(const std::string accessKey, SensitiveValue secretKey);
 
     /**
-     * @brief Invoke worker client to query the size of objectKeys (include the objectKeys of other AZ).
+     * @brief Invoke worker client to query the size of objectKeys.
      * @param[in] objectKeys The objectKeys need to query size.
      * @param[out] outSizes The size for the objectKeys in bytes.
      * @return K_OK on success; the error code otherwise.

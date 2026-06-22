@@ -240,58 +240,6 @@ TEST_F(OCClientAllocateDiskTest, MSetCacheTypeChange)
     ASSERT_EQ(val1, "qqqqqq");
 }
 
-TEST_F(OCClientAllocateDiskTest, MSetTxCacheTypeChange)
-{
-    std::shared_ptr<KVClient> client1;
-    InitTestKVClient(0, client1);
-
-    std::vector<std::string> keys, vals;
-    std::vector<StringView> values;
-
-    size_t maxElementSize = 20;
-    auto dataSize = 30;
-    GenerateKeyValues(keys, vals, maxElementSize, dataSize);
-    for (const auto &val : vals) {
-        values.emplace_back(val);
-    }
-
-    size_t index = 3;
-    SetParam param;
-    param.cacheType = CacheType::DISK;
-    DS_ASSERT_OK(client1->Set(keys[index], "qqqqqq", param));
-
-    MSetParam param1;
-    param1.cacheType = CacheType::MEMORY;
-    DS_ASSERT_NOT_OK(client1->MSetTx(keys, values, param1));
-
-    std::string val1;
-    DS_ASSERT_OK(client1->Get(keys[index], val1, 0));
-    ASSERT_EQ(val1, "qqqqqq");
-}
-
-TEST_F(OCClientAllocateDiskTest, MSetTx)
-{
-    std::shared_ptr<KVClient> client1;
-    InitTestKVClient(0, client1);
-
-    MSetParam param;
-    param.cacheType = CacheType::DISK;
-    param.existence = ExistenceOpt::NX;
-    uint32_t ttl = 3;
-    param.ttlSecond = ttl;
-    std::vector<std::string> keys, vals;
-    std::vector<StringView> values;
-
-    size_t maxElementSize = 8;
-    auto dataSize = 30;
-    GenerateKeyValues(keys, vals, maxElementSize, dataSize);
-    for (const auto &val : vals) {
-        values.emplace_back(val);
-    }
-
-    DS_ASSERT_OK(client1->MSetTx(keys, values, param));
-}
-
 TEST_F(OCClientAllocateDiskTest, LocalGet)
 {
     std::shared_ptr<ObjectClient> cliLocal;

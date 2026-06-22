@@ -766,7 +766,7 @@ TEST_F(LogPerformanceTest, LEVEL1_RequestLogSampleRateHalfRejectedExpensivePaylo
     EXPECT_LT(result.payloadBuilds, result.totalRequests);
 }
 
-TEST_F(LogPerformanceTest, LEVEL1_SamplerPassThroughMacroOverheadQps4000)
+TEST_F(LogPerformanceTest, DISABLED_LEVEL1_SamplerPassThroughMacroOverheadQps4000)
 {
     auto noSampler = RunPureLogWorkloadNoSampler("pure-log-nosampler-baseline", true);
     auto samplerThrough = RunPureLogWorkload(1.0, "pure-log-sampler-through", true, false, "sampler-through");

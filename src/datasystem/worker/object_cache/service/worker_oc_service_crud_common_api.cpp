@@ -106,7 +106,6 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       evictionManager_(initParam.evictionManager),
       workerDevOcManager_(initParam.workerDevOcManager),
       asyncSendManager_(initParam.asyncSendManager),
-      asyncRollbackManager_(initParam.asyncRollbackManager),
       metadataSize_(initParam.metadataSize),
       etcdCM_(initParam.etcdCM),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)

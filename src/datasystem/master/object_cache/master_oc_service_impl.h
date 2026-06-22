@@ -346,13 +346,6 @@ public:
     Status CreateMultiMeta(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp) override;
 
     /**
-     * @brief Create multi meta phase two.
-     * @param[in] req The rpc request protobuf.
-     * @param[out] rsp The rpc response protobuf.
-     */
-    Status CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoReqPb &req, CreateMultiMetaRspPb &rsp) override;
-
-    /**
      * @brief Put p2p metadata from master.
      * @param[in] req The rpc req protobuf.
      * @param[out] resp The rpc rsp protobuf.

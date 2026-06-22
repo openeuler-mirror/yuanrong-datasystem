@@ -497,69 +497,9 @@ class TestKVClientMethods(unittest.TestCase):
         val_list1 = [self.random_str(20) for _ in range(key_num)]
         write_mode = WriteMode.NONE_L2_CACHE
         existence_opt = ExistenceOpt.NX
-        with self.assertRaisesRegex(RuntimeError, r"The MSet doesn't support ntx_1"):
+        expected_msg = r"The MSet with NX existence option is not supported in distributed master mode"
+        with self.assertRaisesRegex(RuntimeError, expected_msg):
             client1.mset(key_list, val_list1, write_mode, 0, existence_opt)
-
-        self.assertEqual(client1.delete(key_list), [])
-
-    def test_mset_tx(self):
-        """
-        Feature: Test msettx values.
-        """
-        Context.set_trace_id("test_m_set_value")
-        client1 = KVClient(self.host, self.port)
-        client2 = KVClient(self.host, self.port)
-        client1.init()
-        client2.init()
-
-        key_num = 5
-        key_list = [self.random_str(15) for _ in range(key_num)]
-        val_list1 = [self.random_str(20) for _ in range(key_num)]
-        write_mode = WriteMode.NONE_L2_CACHE
-        existence_opt = ExistenceOpt.NX
-        client1.msettx(key_list, val_list1, write_mode, 0, existence_opt)
-        get_vals1 = client2.get(key_list, True)
-        self.assertListEqual(get_vals1, val_list1)
-
-        val_list2 = [self.random_str(20) for _ in range(key_num)]
-        with self.assertRaisesRegex(RuntimeError, r"already exists in local worker"):
-            client1.msettx(key_list, val_list2, write_mode, 0, existence_opt)
-
-        self.assertEqual(client1.delete(key_list), [])
-
-    def test_mset_tx_none_mode(self):
-        """
-        Feature: Test msettx none exist opt.
-        """
-        Context.set_trace_id("test_m_set_tx_value")
-        client1 = KVClient(self.host, self.port)
-        client1.init()
-
-        key_num = 5
-        key_list = [self.random_str(15) for _ in range(key_num)]
-        val_list1 = [self.random_str(20) for _ in range(key_num)]
-        write_mode = WriteMode.NONE_L2_CACHE
-        existence_opt = ExistenceOpt.NONE
-        with self.assertRaisesRegex(RuntimeError, r"The MSetTx only supports set not existence key now"):
-            client1.msettx(key_list, val_list1, write_mode, 0, existence_opt)
-
-        self.assertEqual(client1.delete(key_list), [])
-
-    def test_mset_tx_exceed_max_num(self):
-        """
-        Feature: Test msettx exceed max key num.
-        """
-        Context.set_trace_id("test_m_set_tx_value")
-        client1 = KVClient(self.host, self.port)
-        client1.init()
-
-        key_num = 10
-        key_list = [self.random_str(15) for _ in range(key_num)]
-        val_list1 = [self.random_str(20) for _ in range(key_num)]
-        write_mode = WriteMode.NONE_L2_CACHE
-        existence_opt = ExistenceOpt.NX
-        with self.assertRaisesRegex(RuntimeError, r"The maximum size of keys in single operation is 8"):
-            client1.msettx(key_list, val_list1, write_mode, 0, existence_opt)
 
         self.assertEqual(client1.delete(key_list), [])
 
@@ -734,22 +674,3 @@ class TestKVClientMethods(unittest.TestCase):
         
         # Clean up
         client.delete([key])
-
-    def test_msettx_with_write_back_l2_cache_evict(self):
-        """
-        Feature: Test msettx with WRITE_BACK_L2_CACHE_EVICT mode.
-        """
-        Context.set_trace_id("test_msettx_evict")
-        client = KVClient(self.host, self.port)
-        client.init()
-
-        key_num = 3
-        key_list = [self.random_str(15) for _ in range(key_num)]
-        val_list = [self.random_str(20) for _ in range(key_num)]
-        write_mode = WriteMode.WRITE_BACK_L2_CACHE_EVICT
-        existence_opt = ExistenceOpt.NX
-        client.msettx(key_list, val_list, write_mode, 0, existence_opt)
-        get_vals = client.get(key_list, True)
-        self.assertListEqual(get_vals, val_list)
-
-        self.assertEqual(client.delete(key_list), [])

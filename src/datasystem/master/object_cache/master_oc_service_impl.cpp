@@ -172,29 +172,6 @@ Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, Cre
     return status;
 }
 
-Status MasterOCServiceImpl::CreateMultiMetaPhaseTwo(const CreateMultiMetaPhaseTwoReqPb &req, CreateMultiMetaRspPb &rsp)
-{
-    INJECT_POINT("master.CreateMultiMetaPhaseTwo.begin");
-    masterOperationTimeCost.Clear();
-    Timer timer;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
-                                     "GetOcMetadataManager failed");
-
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
-    Status status = ocMetadataManager->CreateMultiMetaPhaseTwo(req, rsp);
-    if (status.IsError()) {
-        LOG(ERROR) << FormatString("CreateMultiMetaPhaseTwo objects failed with error: %s", status.ToString());
-    } else {
-        LOG(INFO) << "CreateMultiMetaPhaseTwo finished";
-    }
-    masterOperationTimeCost.Append("Total CreateMultiMetaPhaseTwo", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master CreateMultiMetaPhaseTwo %s", masterOperationTimeCost.GetInfo());
-    return status;
-}
-
 Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp)
 {
     masterOperationTimeCost.Clear();

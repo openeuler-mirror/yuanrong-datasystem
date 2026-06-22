@@ -65,15 +65,13 @@ message CreateMultiMetaReqPb {
   repeated ObjectBaseInfoPb metas = 1;
   string address = 2;
   int64 timeout = 3;
-  bool isTx = 4;
-  bool is_pre_commit = 5;
-  bool redirect = 6;
-  ConfigPb config = 7;
-  uint64 version = 8; // version control
+  bool redirect = 4;
+  ConfigPb config = 5;
+  uint64 version = 6; // version control
   // For the meaning of the value, see 'ObjectLifeState' enum class.
-  uint32 life_state = 9;
-  uint32 ttl_second = 10;
-  ExistenceOptPb existence = 11;
+  uint32 life_state = 7;
+  uint32 ttl_second = 8;
+  ExistenceOptPb existence = 9;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -89,19 +87,6 @@ message CreateMultiMetaRspPb {
   bool meta_is_moving = 5;
 }
 
-message CreateMultiMetaPhaseTwoReqPb {
-  repeated string object_keys = 1;
-  string address = 2;
-  uint32 write_mode = 3;
-  uint32 consistency_type = 4;
-  int64 timeout = 5;
-  bool redirect = 6;
-
-  // put to the end, the previous data is used to generate AK and SK signatures.
-  uint64 timestamp = 100;
-  string signature = 101;
-  string access_key = 102;
-}
 
 message RollbackMultiMetaReqPb {
   repeated string object_keys = 1;
@@ -774,7 +759,6 @@ service MasterOCService {
   rpc ReplacePrimary(ReplacePrimaryReqPb) returns (ReplacePrimaryRspPb) {}
   rpc PureQueryMeta(PureQueryMetaReqPb) returns (PureQueryMetaRspPb) {}
   rpc RollbackMultiMeta(RollbackMultiMetaReqPb) returns (RollbackMultiMetaRspPb) {}
-  rpc CreateMultiMetaPhaseTwo(CreateMultiMetaPhaseTwoReqPb) returns (CreateMultiMetaRspPb) {}
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
   rpc CheckObjectDataLocation(CheckObjectDataLocationReqPb) returns (CheckObjectDataLocationRspPb) {}

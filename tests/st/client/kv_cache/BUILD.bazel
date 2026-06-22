@@ -213,13 +213,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "kv_client_mset_scale_test",
-    srcs = ["kv_client_mset_scale_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS,
-)
-
-ds_cc_test(
     name = "kv_client_mset_test",
     srcs = ["kv_client_mset_test.cpp"],
     tags = ["manual"],

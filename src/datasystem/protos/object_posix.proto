@@ -134,12 +134,11 @@ message MultiPublishReqPb {
   uint32 write_mode = 4;
   uint32 consistency_type = 5;
   uint32 ttl_second = 6;
-  bool isTx = 7;
-  uint32 existence = 8;
-  string tenant_id = 9;
-  uint32 cache_type = 10;
-  bool is_replica = 11;
-  bool auto_release_memory_ref = 12 ;
+  uint32 existence = 7;
+  string tenant_id = 8;
+  uint32 cache_type = 9;
+  bool is_replica = 10;
+  bool auto_release_memory_ref = 11;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

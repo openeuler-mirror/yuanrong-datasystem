@@ -40,6 +40,10 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+namespace {
+constexpr char K_MSETTX_DEPRECATED_MSG[] = "MSetTx is a deprecated API and is no longer supported.";
+}  // namespace
+
 KVClient::KVClient(const ConnectOptions &connectOptions)
 {
     impl_ = std::make_unique<object_cache::ObjectClientImpl>(connectOptions);
@@ -243,21 +247,6 @@ Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretke
     return impl_->UpdateAkSk(accesskey, secretkey);
 }
 
-Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
-                           const MSetParam &param)
-{
-    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    PerfPoint point(PerfKey::KV_CLIENT_MSET_OBJECT);
-    auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_MSETNX);
-    Status rc = impl_->MSet(keys, vals, param);
-    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
-    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
-    access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
-        .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
-        .DataSize(vals.size()).Result(rc).Record();
-    return rc;
-}
-
 Status KVClient::MGetH2D(const std::vector<std::string> &keys,
                          const std::vector<std::pair<void *, size_t>> &devShmChunk,
                          std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs)
@@ -345,6 +334,16 @@ Status KVClient::MSet(const std::vector<std::string> &keys, const std::vector<St
         .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
         .TrackedTransportType().DataSize(vals.size()).Result(rc).Record();
     return rc;
+}
+
+Status KVClient::MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+                        const MSetParam &param)
+{
+    (void)keys;
+    (void)vals;
+    (void)param;
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    return { K_RUNTIME_ERROR, K_MSETTX_DEPRECATED_MSG };
 }
 
 Status KVClient::Get(const std::vector<std::string> &keys, std::vector<Optional<ReadOnlyBuffer>> &readOnlyBuffers,
