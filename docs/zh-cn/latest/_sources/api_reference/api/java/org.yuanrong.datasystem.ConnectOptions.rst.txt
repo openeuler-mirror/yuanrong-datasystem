@@ -23,7 +23,7 @@ ConnectOptions
      - Worker 服务的端口。
    * - connectTimeoutMs
      - int
-     - 与 Worker 建立连接的超时时间，默认值为 60000 毫秒（60秒）。
+     - 与 Worker 建立连接的超时时间，默认值为 9000 毫秒（9秒）。
    * - requestTimeoutMs
      - int
      - 请求超时时间，默认值为 0。

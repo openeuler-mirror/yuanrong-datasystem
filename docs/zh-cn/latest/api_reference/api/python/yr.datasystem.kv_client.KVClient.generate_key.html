@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/ObjectClient.html">ObjectClient</a></li>
@@ -580,7 +581,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <dd><p>生成唯一的键。</p>
 <dl>
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>prefix</strong> (str) - 前缀，当为空时自动生成前缀。</p></li>
+<li><p><strong>prefix</strong> (str) - 键前缀。为空时返回随机 UUID 键；非空时原样返回 prefix。</p></li>
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>唯一键。如果键生成失败，将返回空字符串。</p>
@@ -589,7 +590,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <span class="gp">&gt;&gt;&gt; </span><span class="n">client</span> <span class="o">=</span> <span class="n">KVClient</span><span class="p">(</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">,</span> <span class="mi">18482</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">client</span><span class="o">.</span><span class="n">init</span><span class="p">()</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">client</span><span class="o">.</span><span class="n">generate_key</span><span class="p">()</span>
-<span class="go">&#39;0a595240-5506-4c7c-b1f7-7abfb1eb4add;b053480f-75bf-41dd-8ce5-6f9ef58e9de4&#39;</span>
+<span class="go">&#39;0a595240-5506-4c7c-b1f7-7abfb1eb4add&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">client</span><span class="o">.</span><span class="n">generate_key</span><span class="p">(</span><span class="s1">&#39;my_key&#39;</span><span class="p">)</span>
+<span class="go">&#39;my_key&#39;</span>
 </pre></div>
 </div>
 </dd>

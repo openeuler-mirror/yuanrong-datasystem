@@ -126,7 +126,7 @@ Tensor接口
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.async_dev_delete <yr.datasystem.hetero_client.HeteroClient.async_dev_delete>`
      - 从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.generate_key <yr.datasystem.hetero_client.HeteroClient.generate_key>`
-     - 生成一个带数据系统 Worker UUID 的 key。
+     - 生成唯一的键。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.get_meta_info <yr.datasystem.hetero_client.HeteroClient.get_meta_info>`
      - 获取keys 对应的元数据信息。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.exist <yr.datasystem.hetero_client.HeteroClient.exist>`
@@ -165,7 +165,7 @@ KV接口
    * - :doc:`yr.datasystem.kv_client.KVClient.delete <yr.datasystem.kv_client.KVClient.delete>`
      - 初始化KV缓存客户端以连接到 Worker 。
    * - :doc:`yr.datasystem.kv_client.KVClient.generate_key <yr.datasystem.kv_client.KVClient.generate_key>`
-     - 生成一个带数据系统 Worker UUID 的 key。
+     - 生成唯一的键。
    * - :doc:`yr.datasystem.kv_client.KVClient.exist <yr.datasystem.kv_client.KVClient.exist>`
      - 查看 key 在数据系统中是否存在。
    * - :doc:`yr.datasystem.kv_client.KVClient.expire <yr.datasystem.kv_client.KVClient.expire>`
@@ -196,7 +196,7 @@ KV接口
    * - :doc:`yr.datasystem.object_client.ObjectClient.query_global_ref_num <yr.datasystem.object_client.ObjectClient.query_global_ref_num>`
      - 查询对象全局引用计数。
    * - :doc:`yr.datasystem.object_client.ObjectClient.generate_object_id <yr.datasystem.object_client.ObjectClient.generate_object_id>`
-     - 生成一个带数据系统Worker UUID的对象 key。
+     - 生成唯一的对象键。
 
   
 流缓存接口

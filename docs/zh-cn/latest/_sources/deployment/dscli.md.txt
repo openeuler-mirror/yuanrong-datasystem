@@ -796,6 +796,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | log_monitor_interval_ms | int | `10000` | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | logfile_mode | int | `416` | 设置日志文件模式/权限，值为八进制数 |
+| enable_perf_trace_log | bool | `false` | 是否打开性能trace日志 |
 
 #### 二级缓存相关配置
 
@@ -818,15 +819,6 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | distributed_disk_compact_interval_s | uint32 | `3600` | distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 `WITH_TESTS` 下最小值为 1 |
 | enable_cloud_service_token_rotation | bool | `false` | 启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS |
 
-#### 多集群相关配置
-注: 多集群模式为实验性质特性， 某些场景下可能会有问题，详见：[FAQ](../FAQ/FAQ.md)
-
-| 配置项 | 类型 | 默认值 | 描述 |
-|-----|------|---------|-------------|
-| other_cluster_names | string | `""` | 指定其他可用区的名称，如果需要指定多个可用区通过','进行分隔 |
-| cross_cluster_get_data_from_worker | bool | `true` | 是否优先尝试从其他可用区的datasystem-worker获取数据。如果为 `false`，则将直接从二级缓存中检索数据 |
-| cross_cluster_get_meta_from_worker | bool | `false` | 是否从其他可用区的datasystem-worker获取元数据，如果为 `false`，则从本地可用区获取元数据 |
-
 #### 元数据相关配置
 
 | 配置项 | 类型 | 默认值 | 描述 |
@@ -835,7 +827,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | rocksdb_background_threads | int | `16` | RocksDB的后台线程数，用于元数据的刷盘和压缩 |
 | rocksdb_max_open_file | int | `128` | RocksDB可使用的最大打开文件个数 |
 | rocksdb_write_mode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
-| enable_meta_replica | bool | `false` | 控制是否启用多个元数据副本 |
+| enable_meta_replica | bool | `false` | 已废弃的兼容参数，当前配置值会被忽略 |
 | enable_metadata_recovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
 
 #### 可靠性相关配置
@@ -881,7 +873,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| urma_max_write_size_mb | int | `2` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
+| urma_max_write_size_mb | int | `4` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
 | urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |

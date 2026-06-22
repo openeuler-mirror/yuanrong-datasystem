@@ -6,7 +6,7 @@ yr.datasystem.kv_client.KVClient.generate_key
     生成唯一的键。
 
     参数：
-        - **prefix** (str) - 前缀，当为空时自动生成前缀。
+        - **prefix** (str) - 键前缀。为空时返回随机 UUID 键；非空时原样返回 prefix。
 
     返回：
         唯一键。如果键生成失败，将返回空字符串。
@@ -16,4 +16,6 @@ yr.datasystem.kv_client.KVClient.generate_key
         >>> client = KVClient('127.0.0.1', 18482)
         >>> client.init()
         >>> client.generate_key()
-        '0a595240-5506-4c7c-b1f7-7abfb1eb4add;b053480f-75bf-41dd-8ce5-6f9ef58e9de4'
+        '0a595240-5506-4c7c-b1f7-7abfb1eb4add'
+        >>> client.generate_key('my_key')
+        'my_key'

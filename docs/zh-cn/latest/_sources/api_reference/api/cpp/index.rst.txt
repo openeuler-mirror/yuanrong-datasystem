@@ -7,6 +7,7 @@ C++
    :maxdepth: 1
 
    KVClient
+   KVClientConfig
    StreamClient
    HeteroClient
    ObjectClient
@@ -53,6 +54,8 @@ KV接口
       - 析构KV缓存客户端实例，析构过程中会自动断开与 Worker 的连接，释放客户端持有的资源。
     * - :cpp:func:`KVClient::Init`
       - 建立与数据系统 Worker 之间的连接并完成初始化。
+    * - :cpp:func:`KVClient::Init(const KVClientConfig &clientConfig) <Init>`
+      - 使用显式客户端配置完成初始化。
     * - :cpp:func:`KVClient::ShutDown`
       - 断开与数据系统 Worker 之间的连接。
     * - :cpp:func:`KVClient::Create`
@@ -72,7 +75,7 @@ KV接口
     * - :cpp:func:`KVClient::Del`
       - 删除指定键值对。
     * - :cpp:func:`KVClient::GenerateKey`
-      - 生成带有 Worker ID 的键。
+      - 生成键。
     * - :cpp:func:`KVClient::QuerySize`
       - 查询对象键的大小。
     * - :cpp:func:`KVClient::HealthCheck`
@@ -160,8 +163,6 @@ Object接口
       - 获取指定租户的object keys的大小和位置。
     * - :cpp:func:`ObjectClient::GenerateKey`
       - 生成一个唯一的key，提供给Put接口使用。。
-    * - :cpp:func:`ObjectClient::GetPrefix`
-      - 获取指定key的前缀。
     * - :cpp:func:`KVClient::HealthCheck`
       - 检查连接的 Worker 是否健康。
 

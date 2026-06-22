@@ -1,7 +1,7 @@
 yr.datasystem.DsClient
 ======================
 
-.. py:class:: yr.datasystem.DsClient(host, port, connect_timeout_ms=60000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: yr.datasystem.DsClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
 
     数据系统客户端。
 
@@ -14,7 +14,7 @@ yr.datasystem.DsClient
     参数：
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
         - **port** (int) - 数据系统 Worker 的端口号。
-        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``60000`` 。
+        - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。

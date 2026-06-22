@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 current has-children"><a class="reference internal" href="index.html">C++</a><input aria-label="Toggle navigation of C++" checked="" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l4"><a class="reference internal" href="KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4 current current-page"><a class="current reference internal" href="#">ObjectClient</a></li>
@@ -747,7 +748,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE">
 <span id="_CPPv3N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE"></span><span id="_CPPv2N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE"></span><span id="ObjectClient::GenerateKey__ssCR.ssR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GenerateKey</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">prefix</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">key</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>生成一个唯一的对象名称，提供给Put接口使用。</p>
+<dd><p>生成对象名称，提供给Put接口使用。prefix为空时生成随机唯一名称；prefix非空时返回prefix本身。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>prefix</strong> - 传入参数， 指定返回生成的对象名称的前缀。</p></li>
@@ -755,21 +756,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </dd>
 <dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示生成成功，否则返回其他错误码。</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE">
-<span id="_CPPv3N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE"></span><span id="_CPPv2N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE"></span><span id="ObjectClient::GetPrefix__ssCR.ssR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GetPrefix</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">key</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">prefix</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>获取指定对象名称的前缀。</p>
-<dl class="simple">
-<dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>key</strong> - 传入参数，需要获取前缀的对象名称。</p></li>
-<li><p><strong>prefix</strong> - 传出参数， 该对象名称的前缀。</p></li>
-</ul>
-</dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示获取成功，否则返回其他错误码。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -857,7 +843,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N12ObjectClient3GetERKNSt6vectorINSt6stringEEE7int32_tRNSt6vectorI8OptionalI6BufferEEE"><code class="docutils literal notranslate"><span class="pre">ObjectClient::Get()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N12ObjectClient14GetObjMetaInfoERKNSt6stringERKNSt6vectorINSt6stringEEERNSt6vectorI11ObjMetaInfoEE"><code class="docutils literal notranslate"><span class="pre">ObjectClient::GetObjMetaInfo()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N12ObjectClient11GenerateKeyERKNSt6stringERNSt6stringE"><code class="docutils literal notranslate"><span class="pre">ObjectClient::GenerateKey()</span></code></a></li>
-<li><a class="reference internal" href="#_CPPv4N12ObjectClient9GetPrefixERKNSt6stringERNSt6stringE"><code class="docutils literal notranslate"><span class="pre">ObjectClient::GetPrefix()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N12ObjectClient11HealthCheckEv"><code class="docutils literal notranslate"><span class="pre">ObjectClient::HealthCheck()</span></code></a></li>
 </ul>
 </li>
