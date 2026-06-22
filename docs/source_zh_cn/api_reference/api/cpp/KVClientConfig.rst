@@ -7,37 +7,37 @@ KVClientConfig
     :namespace: datasystem
 
     KV 客户端初始化配置。通过嵌套类 :cpp:class:`KVClientConfig::Builder` 构建，
-    并在 :cpp:func:`KVClient::Init(const KVClientConfig &clientConfig)` 中传入。
+    并在 ``KVClient::Init(const KVClientConfig &clientConfig)`` 中传入。
 
     本配置仅覆盖客户端日志、监控与 ZMQ 相关参数，不包含 :cpp:class:`ConnectOptions` 中的连接选项。
 
     **配置生效规则**
 
-    进程内**首次**调用任意 ``KVClient::Init``（含无参 ``Init()``）时，会将当前传入的
+    进程内 **首次** 调用任意 ``KVClient::Init``（含无参 ``Init()``）时，会将当前传入的
     :cpp:class:`KVClientConfig` 快照固化为进程级配置；此后同一进程内其他 ``KVClient`` 实例再调用
     ``Init`` 时会复用已固化的进程级配置，不会用后续传入配置覆盖已生效设置。
 
-    - **首次 Init 时，单个配置项的取值优先级**（仅适用于本类所管理的参数）：
+    - 首次 Init 时，单个配置项的取值优先级（仅适用于本类所管理的参数）：
 
-      1. :cpp:class:`KVClientConfig` 中通过 Builder **显式设置**的字段（最高）；
+      1. :cpp:class:`KVClientConfig` 中通过 Builder 显式设置的字段（最高）；
       2. 进程启动时命令行 flag（``argv``）中已设置的同名字段；
       3. 对应的环境变量；
       4. 代码内置默认值（最低）。
 
       若首次 ``Init`` 传入的配置未显式设置某字段，该字段按上述 2→3→4 顺序取值。
 
-    - **后续 Init 的行为**：仅检查后续传入配置中通过 Builder 显式设置的字段；未设置字段
+    - 后续 Init 的行为：仅检查后续传入配置中通过 Builder 显式设置的字段；未设置字段
       视为未指定，不会要求与已固化快照逐字段一致，也不会用于清空已生效配置。若显式传入
       字段与已固化快照存在差异（含新增字段、修改字段值），实现会记录错误日志，但 ``Init``
-      仍返回 ``StatusCode::K_OK``，且**不会**用新配置覆盖已生效的 flag 或日志设置。
+      仍返回 ``StatusCode::K_OK``，且 **不会** 用新配置覆盖已生效的 flag 或日志设置。
 
-    - **``Init()`` 与 ``Init(const KVClientConfig &)`` 的差异**：
+    - ``Init()`` 与 ``Init(const KVClientConfig &)`` 的差异：
 
       - ``Init()`` 等价于传入未调用任何 Builder setter 的空 :cpp:class:`KVClientConfig`。
       - 若进程内首次调用为 ``Init()``，显式配置快照为空；此后再调用 ``Init(config)`` 并传入
-        显式配置，该配置**不会**生效。若已先通过 ``Init(config)`` 固化了配置，后续 ``Init()``
+        显式配置，该配置 **不会** 生效。若已先通过 ``Init(config)`` 固化了配置，后续 ``Init()``
         或空配置不表示清空或覆盖原配置。
-      - 若需通过 Builder 指定参数，应确保进程内**第一次** ``Init`` 即传入目标配置。
+      - 若需通过 Builder 指定参数，应确保进程内第一次 ``Init`` 即传入目标配置。
 
     **公共函数**
 
