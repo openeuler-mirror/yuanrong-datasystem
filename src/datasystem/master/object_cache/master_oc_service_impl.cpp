@@ -27,6 +27,9 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/latency_phase.h"
+#include "datasystem/common/log/trace.h"
+
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/raii.h"
@@ -43,8 +46,8 @@ namespace datasystem {
 namespace master {
 static constexpr int ASYNC_MIN_THREAD_NUM = 1;
 static constexpr int ASYNC_MAX_THREAD_NUM = 4;
-static const uint64_t GET_MASTER_QUERY_META_SLOW_US = GetWorkerSlowUs();
-static const uint64_t SET_MASTER_LOCAL_SLOW_US = GetWorkerSlowUs();
+
+
 static constexpr double US_PER_MS = 1000.0;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
@@ -119,10 +122,15 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     INJECT_POINT("master.CreateMeta.begin");
     masterOperationTimeCost.Clear();
     Timer timer;
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     PerfPoint point(PerfKey::MASTER_CREATE_META);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_CREATE_META_START);
+    }
     const std::string localAddr = GetLocalAddr().ToString();
     LOG_FIRST_AND_EVERY_N(INFO, 1000) << FormatString("Processing CreateMetaReq, redirect: %d", req.redirect())
                                       << AppendSrcDstForLog(req.address(), localAddr);
@@ -133,6 +141,9 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
 
     // Call MetadataManager to create the object meta.
     Status status = ocMetadataManager->CreateMeta(req, rsp);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_CREATE_META_END);
+    }
     if (!status.IsOk()) {
         LOG(ERROR) << FormatString("[ObjectKey %s] Create object failed with error: %s", req.meta().object_key(),
                                    status.ToString());
@@ -141,10 +152,21 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     }
     point.Record();
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    if (ShouldPrintLatencySummary(totalUs, config)) {
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
+        MergeDownstreamPhases(result);
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit || hasDownstream) {
+            EncodePhaseProto(rsp, result);
+        }
+    }
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     masterOperationTimeCost.Append("Total CreateMeta", totalMs);
-    PLOG_IF_OR_VLOG(INFO, totalUs >= SET_MASTER_LOCAL_SLOW_US || status.IsError(), 1,
-                    FormatString("CreateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
+                        FormatString("CreateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
     return status;
 }
 
@@ -245,6 +267,11 @@ Status MasterOCServiceImpl::CreateMultiCopyMetaImpl(const CreateMultiCopyMetaReq
 Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &rsp, std::vector<RpcMessage> &payloads)
 {
     PerfPoint point(PerfKey::MASTER_QUERY_META);
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_QUERYMETA_START);
+    }
     masterOperationTimeCost.Clear();
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -257,12 +284,26 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     Status status;
     // Call MetadataManager to query object meta.
     status = ocMetadataManager->QueryMeta(req, rsp, payloads);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_QUERYMETA_END);
+    }
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    if (ShouldPrintLatencySummary(totalUs, config)) {
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
+        MergeDownstreamPhases(result);
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit || hasDownstream) {
+            EncodePhaseProto(rsp, result);
+        }
+    }
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     masterOperationTimeCost.Append("Total QueryMeta", totalMs);
-    PLOG_IF_OR_VLOG(INFO, totalUs >= GET_MASTER_QUERY_META_SLOW_US || status.IsError(), 1,
-                    FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
-                                 rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
+        FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
+                     rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo()));
     return Status::OK();
 }
 
@@ -315,6 +356,11 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
 {
     masterOperationTimeCost.Clear();
     Timer timer;
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_UPDATE_META_START);
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed in UpdateMeta");
     const std::string localAddr = GetLocalAddr().ToString();
     LOG(INFO) << FormatString("Processing UpdateMetaReq, redirect: %d", req.redirect())
@@ -328,16 +374,30 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
 
     // Call MetadataManager to update object meta.
     Status status = ocMetadataManager->UpdateMeta(req, rsp);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::META_UPDATE_META_END);
+    }
     if (!status.IsOk()) {
         LOG(ERROR) << "UpdateMeta failed with error: " << status.ToString();
     }
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    if (ShouldPrintLatencySummary(totalUs, config)) {
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
+        MergeDownstreamPhases(result);
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit || hasDownstream) {
+            EncodePhaseProto(rsp, result);
+        }
+    }
     VLOG(1) << FormatString("Master %s UpdateMeta rsp: %s", GetLocalAddr().ToString(), LogHelper::IgnoreSensitive(rsp));
     INJECT_POINT("master.update_meta_failure");
-    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     masterOperationTimeCost.Append("Total UpdateMeta", totalMs);
-    PLOG_IF_OR_VLOG(INFO, totalUs >= SET_MASTER_LOCAL_SLOW_US || status.IsError(), 1,
-                    FormatString("UpdateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
+                        FormatString("UpdateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
     return status;
 }
 

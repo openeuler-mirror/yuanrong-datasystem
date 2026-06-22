@@ -106,6 +106,8 @@ spec:
         {{- if not (kindIs "invalid" $.Values.global.log.diagnosticSampleRate) }}
         - -diagnostic_sample_rate=$(DIAGNOSTIC_SAMPLE_RATE)
         {{- end }}
+        - -slow_log_process_slower_than=$(SLOW_LOG_PROCESS_SLOWER_THAN)
+        - -slow_log_rpc_slower_than=$(SLOW_LOG_RPC_SLOWER_THAN)
         - -logfile_mode=416
         - -shared_memory_size_mb=$(SHARE_MEMORY_SIZE)
         - -sc_local_cache_memory_size_mb={{ $.Values.global.resources.datasystemWorker.scLocalCacheMemorySizeMb }}
@@ -369,6 +371,10 @@ spec:
           - name: DIAGNOSTIC_SAMPLE_RATE
             value: "{{ $.Values.global.log.diagnosticSampleRate }}"
           {{- end }}
+          - name: SLOW_LOG_PROCESS_SLOWER_THAN
+            value: "{{ $.Values.global.log.slowLogProcessSlowerThan }}"
+          - name: SLOW_LOG_RPC_SLOWER_THAN
+            value: "{{ $.Values.global.log.slowLogRpcSlowerThan }}"
           - name: CURVE_KEY_DIR
             value: {{ $.Values.global.rpc.curveKeyDir }}
           - name: ENABLE_CURVE_ZMQ

@@ -28,7 +28,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -57,7 +57,8 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 namespace {
-const uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = GetWorkerSlowUs();
+
+
 constexpr double US_PER_MS = 1000.0;
 
 void LogInflightRemoteGetRequestIfNeeded(const metrics::Gauge &inflightGauge)
@@ -575,6 +576,8 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
     if (IsRemoteH2DEnabled() && request != nullptr) {
         commId = std::make_shared<std::string>(request->GetClientCommUuid());
     }
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     for (int i = 0; iter != infos.end(); i++) {
         bool isFromL2 = false;
         auto metaIter = iter->queryMeta->mutable_meta();
@@ -608,7 +611,7 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_L2);
             Timer timer;
             bool ifWorkerConnected = checkConnectStatus.IsOk();
-            TryGetFromL2CacheWhenNotFoundInWorker(*metaIter, address, ifWorkerConnected, objectKV, subRc);
+            TryGetFromL2CacheWhenNotFoundInWorker(*metaIter, address, ifWorkerConnected, objectKV, subRc, traceEnabled);
             LOG(INFO) << "Query from L2 cache use " << timer.ElapsedMilliSecond()
                       << " millisecond, address: " << address << ", ifWorkerConnected: " << ifWorkerConnected;
             CheckAndReturnPullNotFoundForRetry(*metaIter, address, *entry, checkConnectStatus, subRc);
@@ -669,6 +672,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
 {
     bool isMigrateData = request == nullptr;
     const int64_t migrateDataTimeoutMs = 200;
+    auto traceConfig = GetServerLatencyTraceConfig();
     successIds.reserve(successIds.size() + infos.size());
     needRetryIds.reserve(needRetryIds.size() + infos.size());
     failedIds.reserve(failedIds.size() + infos.size());
@@ -747,8 +751,8 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
                 minRetryOnceRpcMs);
             const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
             const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-            PLOG_IF_OR_VLOG(
-                INFO, elapsedUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
+            SLOW_LOG_IF_OR_VLOG(
+                INFO, traceConfig.rpcSlowerThanUs > 0 && elapsedUs >= traceConfig.rpcSlowerThanUs, 1,
                 AppendSrcDstForLog(
                     FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
                                  IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),

@@ -106,6 +106,7 @@ AccessRecorder::AccessRecorder(AccessRecorderKey key)
         isRecord_ = true;
     } else {
         shouldRecord_ = LogSampler::Instance().ShouldRecordAccess(key);
+        Trace::Instance().SetAccessShouldRecord(shouldRecord_);
         if (shouldRecord_) {
             handleName_ = g_keyNames[static_cast<size_t>(key)];
             beg_ = clock::now();
@@ -567,11 +568,23 @@ ObjectAccessRecorder &ObjectAccessRecorder::AsyncElapsedUs(uint64_t asyncElapsed
     return *this;
 }
 
+ObjectAccessRecorder &ObjectAccessRecorder::LatencySummary(std::string summary)
+{
+    if (!core_.ShouldRecordInternal()) {
+        return *this;
+    }
+    state_.latencySummary = std::move(summary);
+    return *this;
+}
+
 void ObjectAccessRecorder::Record()
 {
     if (!core_.ShouldRecordInternal()) {
         core_.MarkRecorded();
         return;
+    }
+    if (state_.latencySummary.empty()) {
+        state_.latencySummary = Trace::Instance().ConsumeLatencySummary();
     }
     uint64_t elapsed = core_.ElapsedUs();
     RequestParam req;
@@ -589,6 +602,7 @@ void ObjectAccessRecorder::Record()
     state_.subTimeout.Fill(req.subTimeout);
     state_.timeout.Fill(req.timeout);
     state_.cacheType.Fill(req.cacheType);
+    req.latencySummary = state_.latencySummary;
     core_.WriteObject(state_.code, state_.dataSize.Resolve(), elapsed, req, state_.respMsg, state_.asyncElapsedUs);
     core_.MarkRecorded();
 }
@@ -1163,6 +1177,9 @@ std::string RequestParam::ToString() const
     }
     if (!transportType.empty()) {
         ret.append("transportType:").append(transportType).append(",");
+    }
+    if (!latencySummary.empty()) {
+        ret.append("latencySummary:").append(latencySummary).append(",");
     }
     if (ret.length() > 1) {
         ret.pop_back();

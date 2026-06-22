@@ -31,6 +31,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
@@ -844,8 +845,9 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     auto totalElapsedMs = static_cast<double>(totalElapsedUs) / US_TO_MS;
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
-    PLOG_IF_OR_VLOG(INFO, (totalElapsedMs >= URMA_LOG_LIMIT_MS || waitRc.IsError() || FLAGS_enable_perf_trace_log), 1,
-                    "[URMA_ELAPSED_TOTAL]: Time from before urma_post_jetty_send_wr to write completion cost "
+    auto config = GetServerLatencyTraceConfig();
+    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs, 1,
+                        "[URMA_ELAPSED_TOTAL]: Time from before urma_post_jetty_send_wr to write completion cost "
                         << totalElapsedMs << "ms, wait time: " << waitElapsedMs << "ms, request id:" << requestId
                         << ", src address:" << localUrmaInfo_.localAddress.ToString()
                         << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()

@@ -25,10 +25,12 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -50,8 +52,8 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
-static const uint64_t SET_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
-static const uint64_t SET_MASTER_RPC_SLOW_US = GetWorkerSlowUs();
+
+
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
@@ -107,7 +109,12 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, co
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
                                                           uint64_t &version)
 {
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     INJECT_POINT("worker.before_CreateMetadataToMaster");
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_CREATE_META_RPC_START);
+    }
     const auto &objectKey = objectKV.GetObjKey();
     const SafeObjType &safeObj = objectKV.GetObjEntry();
 
@@ -144,10 +151,8 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     Timer rpcTimer;
     Status rc = RedirectRetryWhenMetaMoving(metaReq, metaResp, workerMasterApi, func);
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
-    PLOG_IF_OR_VLOG(INFO, rpcUs >= SET_MASTER_RPC_SLOW_US || rc.IsError(), 1,
-                    AppendSrcDstForLog(FormatString("[Set] CreateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s",
-                                                    objectKey, rpcUs, rc.ToString()),
-                                       localAddress_.ToString(), workerMasterApi->GetHostPort()));
+    FinalizeMasterRpcLatency(LatencyTickKey::WORKER_CREATE_META_RPC_END, config, traceEnabled,
+                             metaResp, objectKey, rpcUs, rc, workerMasterApi, "CreateMeta");
     RETURN_IF_NOT_OK(rc);
     point.Record();
     version = metaResp.version();
@@ -157,6 +162,11 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
 Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
                                                           uint64_t &version)
 {
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_UPDATE_META_RPC_START);
+    }
     const auto &objectKey = objectKV.GetObjKey();
     const SafeObjType &safeObj = objectKV.GetObjEntry();
 
@@ -190,10 +200,8 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     Timer rpcTimer;
     Status rc = RedirectRetryWhenMetaMoving(metaReq, metaRsp, workerMasterApi, func);
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
-    PLOG_IF_OR_VLOG(INFO, rpcUs >= SET_MASTER_RPC_SLOW_US || rc.IsError(), 1,
-                    AppendSrcDstForLog(FormatString("[Set] UpdateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s",
-                                                    objectKey, rpcUs, rc.ToString()),
-                                       localAddress_.ToString(), workerMasterApi->GetHostPort()));
+    FinalizeMasterRpcLatency(LatencyTickKey::WORKER_UPDATE_META_RPC_END, config, traceEnabled,
+                             metaRsp, objectKey, rpcUs, rc, workerMasterApi, "UpdateMeta");
     RETURN_IF_NOT_OK(rc);
     version = metaRsp.version();
     return Status::OK();
@@ -426,6 +434,11 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
 {
     workerOperationTimeCost.Clear();
     Timer timer;
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_PUBLISH_START);
+    }
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_PUBLISH);
     access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     if (req.nested_keys_size() > 0) {
@@ -440,12 +453,29 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
         .Existence(req.existence())
         .CacheType(req.cache_type());
     Status rc = PublishImpl(req, resp, payloads);
-    access.Result(rc).Record();
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_PUBLISH_END);
+    }
     const auto totalPublishUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    if (ShouldPrintLatencySummary(totalPublishUs, config)) {
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
+        MergeDownstreamPhases(result);
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit) {
+            Trace::Instance().SetLatencySummary(FormatLatencySummary(result));
+        }
+        if (gateHit || hasDownstream) {
+            EncodePhaseProto(resp, result);
+        }
+    }
+    access.Result(rc).Record();
     const double totalPublishMs = static_cast<double>(totalPublishUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Publish", totalPublishMs);
-    PLOG_IF_OR_VLOG(INFO, totalPublishUs >= SET_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
-                    FormatString("Publish done, cost: %.3fms, %s", totalPublishMs, workerOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalPublishUs >= config.processSlowerThanUs, 1,
+        FormatString("Publish done, cost: %.3fms, %s", totalPublishMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

@@ -17,6 +17,8 @@ data:
     {{- if not (kindIs "invalid" .Values.global.log.diagnosticSampleRate) }}
     -diagnostic_sample_rate={{ .Values.global.log.diagnosticSampleRate }}
     {{- end }}
+    -slow_log_process_slower_than={{ .Values.global.log.slowLogProcessSlowerThan }}
+    -slow_log_rpc_slower_than={{ .Values.global.log.slowLogRpcSlowerThan }}
     -max_log_file_num={{ .Values.global.log.maxLogFileNum }}
     -arena_per_tenant={{ .Values.global.performance.arenaPerTenant }}
     -node_dead_timeout_s={{ .Values.global.reliability.nodeDeadTimeoutS }}

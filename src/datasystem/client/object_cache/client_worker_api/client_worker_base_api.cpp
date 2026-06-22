@@ -27,6 +27,8 @@
 #include <vector>
 
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
@@ -283,17 +285,26 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
 #endif
 
 Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
-                                            uint64_t length)
+                                            uint64_t length, bool traceEnabled)
 {
     (void)bufferInfo;
     (void)data;
     (void)length;
+    (void)traceEnabled;
 #ifdef USE_URMA
     {
         const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
         std::shared_ptr<UrmaManager::BufferHandle> bufHandle;
         uint64_t realSize = 0;
         RETURN_IF_NOT_OK(PrepareUbHandle(totalSize, bufHandle, realSize));
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_START);
+        }
+        Raii ubEndTick([traceEnabled] {
+            if (traceEnabled) {
+                Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);
+            }
+        });
         if (totalSize == realSize) {
             Status rc = SendBufferViaSingleUbWrite(bufferInfo, data, totalSize, bufHandle);
             RecordUrmaDataPlaneResult(rc.IsOk());

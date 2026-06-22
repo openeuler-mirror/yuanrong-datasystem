@@ -25,11 +25,7 @@
 #include <vector>
 
 #include "datasystem/common/log/access_recorder.h"
-#include "datasystem/common/flags/flags.h"
-#ifdef BUILD_PIPLN_H2D
-#include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
-#endif
-
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -51,7 +47,6 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
-const uint64_t CLIENT_WORKER_RPC_SLOW_US = GetClientSlowUs();
 
 namespace {
 bool IsUrmaFallbackPayload(const std::shared_ptr<ObjectBufferInfo> &bufferInfo)
@@ -106,9 +101,10 @@ void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &b
 void LogClientWorkerRpcDone(const char *operation, size_t count, const char *path, uint64_t elapsedUs,
                             const Status &status)
 {
-    PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || status.IsError(), 1,
-                    FormatString("[Client/WorkerRpc] %s done, count: %zu, path: %s, costUs: %zu, rc: %s", operation,
-                                 count, path, elapsedUs, status.ToString()));
+    auto rpcThresholdUs = GetClientLatencyTraceConfig().rpcSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && elapsedUs >= rpcThresholdUs, 1,
+        FormatString("[Client/WorkerRpc] %s done, count: %zu, path: %s, costUs: %zu, rc: %s", operation,
+                     count, path, elapsedUs, status.ToString()));
 }
 
 void FillCreateUrmaInfo(bool isUrmaEnabled, const CreateRspPb &rsp,
@@ -271,6 +267,8 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
         hostPort_.ToString());
@@ -304,7 +302,12 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     }
     LogClientWorkerRpcDone("Create", 1, IsUrmaEnabled() && rsp.has_urma_info() ? "UB" : "SHM",
                            static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+        std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+        MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+    }
     RETURN_IF_NOT_OK(status);
+
     INJECT_POINT("ClientWorkerApi.Create.MockTimeout");
     partPoint.Record();
 
@@ -447,6 +450,8 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                                   std::vector<RpcMessage> &payloads)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_GET_LATENCY);
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
     int64_t requestTimeoutMs = std::max<int64_t>(0, requestTimeoutMs_ - getParam.ubGetObjMetaElapsedMs);
     GetReqPb req;
@@ -472,7 +477,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
     Status status = RetryOnError(
         std::max<int32_t>(requestTimeoutMs, subTimeoutMs),
-        [this, &req, &rsp, &payloads, &getStatus](int32_t realRpcTimeout) {
+        [this, &req, &rsp, &payloads, &getStatus, &config](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
@@ -487,13 +492,14 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                 getStatus = WithRpcDiag(getStatus, "Get", hostPort_);
             }
             const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
-            PLOG_IF_OR_VLOG(INFO, elapsedUs >= CLIENT_WORKER_RPC_SLOW_US || getStatus.IsError(), 1,
-                            AppendSrcDstForLog(
-                                FormatString("[Client/WorkerRpc] Get done, rpc timeout: %d, path: %s, costUs: %zu, "
-                                             "rc: %s",
-                                             realRpcTimeout, req.has_urma_info() ? "UB" : "TCP", elapsedUs,
-                                             getStatus.ToString()),
-                                "", hostPort_.ToString()));
+            auto rpcThresholdUs = config.rpcSlowerThanUs;
+            SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && elapsedUs >= rpcThresholdUs, 1,
+                AppendSrcDstForLog(
+                    FormatString("[Client/WorkerRpc] Get done, rpc timeout: %d, path: %s, costUs: %zu, "
+                                 "rc: %s",
+                                 realRpcTimeout, req.has_urma_info() ? "UB" : "TCP", elapsedUs,
+                                 getStatus.ToString()),
+                    "", hostPort_.ToString()));
 
             INJECT_POINT("Get.RetryOnError.retry_on_error_after_func");
             RETURN_IF_NOT_OK(getStatus);
@@ -506,6 +512,10 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     RETURN_IF_NOT_OK(getStatus);
+    if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+        std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+        MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+    }
 #ifdef USE_URMA
     const bool hasUrmaGetAttempt = ubBufferHandle != nullptr && req.has_urma_info();
     if (hasUrmaGetAttempt) {
@@ -543,6 +553,8 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                                       int existence)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
     std::vector<MemView> payloads;
@@ -580,6 +592,10 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
         status = WithRpcDiag(status, "Publish", hostPort_);
     }
     LogClientWorkerRpcDone("Publish", 1, path, static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+        std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+        MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send Publish request error");
 
     if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
@@ -1308,6 +1324,8 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
 Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists,
                                     const bool queryL2Cache, const bool isLocal)
 {
+    auto config = GetClientLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     req.set_client_id(clientId_);
@@ -1337,6 +1355,10 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
         status = WithRpcDiag(status, "Exist", hostPort_);
     }
     LogClientWorkerRpcDone("Exist", keys.size(), "RPC", static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
+    if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+        std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+        MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+    }
     if (status.IsError()) {
         LOG(ERROR) << "Exist resp error, msg:" << status.ToString();
         return status;

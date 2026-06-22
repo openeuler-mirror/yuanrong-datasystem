@@ -33,10 +33,12 @@
   - read `trace-and-context.md`
 - If the question is about access/performance logs, operation keys, or outbound request recording:
   - read `access-recorder.md`
-- If the question is about Set/Get slow logs that must bypass request sampling:
-  - read `plog-slow-request-plan.md`
+- If the question is about `SLOW_LOG` request logs that must bypass request sampling:
+  - read `slow-log-request-plan.md`
 - If the question is about unified class-based random log sampling:
   - read `log-sampler-design.md`
+- If the question is about request-stage access-log latency summaries:
+  - read `request-stage-latency-trace-plan.md`
 - If the question is about the implemented Get slow-log change or validation result:
   - read `plog-slow-get-implementation-summary.md`
 - If the question is about startup, file rotation, compression, monitor flush, or crash log output:
@@ -66,10 +68,13 @@
   - thread-local trace model, trace ID generation, propagation, and cleanup behavior
 - `access-recorder.md`
   - access/performance recorder lifecycle, operation-key mapping, and exporter coupling
-- `plog-slow-request-plan.md`
-  - English PLOG slow Set/Get request design, first-pass thresholds, and production `v=0` constraints
+- `slow-log-request-plan.md`
+  - English `SLOW_LOG` request design, threshold source, macro rename target, and production `v=0` constraints
 - `log-sampler-design.md`
   - production design for class-based random sampling coefficients and strict hot-path performance constraints
+- `request-stage-latency-trace-plan.md`
+  - request business-stage latency ticks, access-log summaries, slow-log gates, and compact proto phases; first scope is
+    Get/Set/Create/Exist
 - `plog-slow-get-implementation-summary.md`
   - implementation scope, changed slow Get segments, remote validation commands, and remaining validation blocker
 - `log-lifecycle-and-rotation.md`

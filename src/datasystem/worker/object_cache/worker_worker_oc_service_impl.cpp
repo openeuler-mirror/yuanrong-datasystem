@@ -30,8 +30,9 @@
 #include "tbb/parallel_for.h"
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -61,7 +62,8 @@ namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
-const uint64_t GET_REMOTE_WORKER_LOCAL_SLOW_US = GetWorkerSlowUs();
+
+
 constexpr double US_PER_MS = 1000.0;
 
 bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
@@ -154,14 +156,20 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     GetObjectRemoteReqPb req;
     GetObjectRemoteRspPb rsp;
     std::vector<RpcMessage> payload;
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::DATA_REMOTEGET_START);
+    }
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
+    RETURN_IF_NOT_OK(CheckConnectionStable(req));
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
     // is different from the request
-    RETURN_IF_NOT_OK(CheckConnectionStable(req));
     RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
+    TryEncodeRemoteGetLatencySummary(config, traceEnabled, rsp);
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
@@ -179,11 +187,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(
-        INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
-        AppendSrcDstForLog(FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
-                                        req.object_key(), payload.size(), elapsedMs),
-                           GetRemoteAddressForLog(req), FLAGS_worker_address));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+                        AppendSrcDstForLog(
+                            FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
+                                         req.object_key(), payload.size(), elapsedMs),
+                            GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -754,7 +762,13 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::DATA_REMOTEGET_START);
+    }
     RETURN_IF_NOT_OK(BatchGetObjectRemoteImpl(req, rsp, payload));
+    TryEncodeRemoteGetLatencySummary(config, traceEnabled, rsp);
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
@@ -763,12 +777,12 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(INFO, elapsedUs >= GET_REMOTE_WORKER_LOCAL_SLOW_US, 1,
-                    AppendSrcDstForLog(
-                        FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
-                                     "remainingTime: %zu, cost: %.3fms",
-                                     req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
-                        callerAddress, FLAGS_worker_address));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+        AppendSrcDstForLog(
+            FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
+                         "remainingTime: %zu, cost: %.3fms",
+                         req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
+            callerAddress, FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }

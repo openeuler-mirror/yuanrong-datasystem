@@ -17,12 +17,14 @@
 #include "datasystem/common/log/trace.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include <securec.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -48,13 +50,6 @@ uint64_t FNV1aHash(const std::string &s)
 const int Trace::TRACEID_MAX_SIZE;
 const int Trace::TRACEID_PREFIX_SIZE;
 const int Trace::SHORT_UUID_SIZE;
-
-Trace &Trace::Instance()
-{
-    // thread_local object, which is used for multi-thread traceID isolation.
-    static thread_local Trace instance;
-    return instance;
-}
 
 void TraceGuard::Reset()
 {
@@ -179,6 +174,12 @@ TraceGuard Trace::SetTraceContext(const TraceContext &context, bool keep)
     TraceGuard traceGuard = SetTraceNewID(context.traceID, keep);
     SetRequestLogTrace(context.requestLogTrace);
     SetRequestSampleDecision(context.requestSampleDecisionValid, context.requestSampleDecisionAdmitted);
+    latencyTickCount_ = context.latencyTickCount;
+    latencyTickDroppedCount_ = context.latencyTickDroppedCount;
+    for (uint16_t i = 0; i < latencyTickCount_; ++i) {
+        latencyTicks_[i] = context.latencyTicks[i];
+    }
+    downstreamPhases_ = context.downstreamPhases;
     if (keep) {
         return TraceGuard(TraceGuardType::RESTORE_REQUEST_LOG_CONTEXT, oldRequestLogTrace,
                           oldRequestSampleDecisionValid, oldRequestSampleDecisionAdmitted);
@@ -193,6 +194,12 @@ TraceContext Trace::GetContext() const
     context.requestLogTrace = requestLogTrace_;
     context.requestSampleDecisionValid = requestSampleDecisionValid_;
     context.requestSampleDecisionAdmitted = requestSampleDecisionAdmitted_;
+    for (uint16_t i = 0; i < latencyTickCount_; ++i) {
+        context.latencyTicks[i] = latencyTicks_[i];
+    }
+    context.latencyTickCount = latencyTickCount_;
+    context.latencyTickDroppedCount = latencyTickDroppedCount_;
+    context.downstreamPhases = downstreamPhases_;
     return context;
 }
 
@@ -207,6 +214,65 @@ void Trace::Invalidate()
     cachedHash_ = 0;
     SetRequestLogTrace(false);
     SetRequestSampleDecision(false, false);
+    ClearLatencyTicks();
+    ClearLatencySummary();
+}
+
+void Trace::AddLatencyTick(LatencyTickKey key)
+{
+    if (latencyTickCount_ < LATENCY_TICK_MAX_NUM) {
+        latencyTicks_[latencyTickCount_].key = key;
+        latencyTicks_[latencyTickCount_].tick =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        latencyTickCount_++;
+    } else {
+        latencyTickDroppedCount_++;
+    }
+}
+
+void Trace::ClearLatencyTicks()
+{
+    latencyTickCount_ = 0;
+    latencyTickDroppedCount_ = 0;
+    ClearDownstreamPhases();
+}
+
+uint16_t Trace::GetLatencyTickCount() const
+{
+    return latencyTickCount_;
+}
+
+const LatencyTick *Trace::GetLatencyTicks() const
+{
+    return latencyTicks_;
+}
+
+uint16_t Trace::GetLatencyTickDroppedCount() const
+{
+    return latencyTickDroppedCount_;
+}
+
+void Trace::SetLatencySummary(std::string summary)
+{
+    latencySummary_ = std::move(summary);
+}
+
+std::string Trace::GetLatencySummary() const
+{
+    return latencySummary_;
+}
+
+void Trace::ClearLatencySummary()
+{
+    latencySummary_.clear();
+}
+
+std::string Trace::ConsumeLatencySummary()
+{
+    std::string summary = std::move(latencySummary_);
+    latencySummary_.clear();
+    return summary;
 }
 
 TraceGuard Trace::SetSubTraceID(const std::string &subTraceID)
@@ -234,5 +300,30 @@ void Trace::InvalidateSubTraceID()
     }
     subPosition_ = -1;
     cachedHash_ = FNV1aHash(traceID_);
+}
+
+void Trace::AddDownstreamPhase(LatencySummaryPhase phase, uint64_t durationUs)
+{
+    downstreamPhases_.Add(phase, durationUs);
+}
+
+void Trace::AddDownstreamTickDroppedCount(uint16_t count)
+{
+    downstreamPhases_.tickDroppedCount += count;
+}
+
+void Trace::AddDownstreamPhaseDroppedCount(uint16_t count)
+{
+    downstreamPhases_.phaseDroppedCount += count;
+}
+
+const DownstreamPhaseResult &Trace::GetDownstreamPhases() const
+{
+    return downstreamPhases_;
+}
+
+void Trace::ClearDownstreamPhases()
+{
+    downstreamPhases_.Clear();
 }
 }  // namespace datasystem

@@ -33,7 +33,9 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/parallel/parallel_for.h"
@@ -87,10 +89,8 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
-static const uint64_t GET_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
-static const uint64_t GET_QUERY_META_RPC_SLOW_US = GetWorkerSlowUs();
-static const uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = GetWorkerSlowUs();
-static const uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
+
+
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
@@ -119,6 +119,10 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     PerfPoint point(PerfKey::WORKER_GET_OBJECT);
     workerOperationTimeCost.Clear();
     Timer timer;
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetServerLatencyTraceConfig());
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_GET_START);
+    }
     auto request = std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET);
     INJECT_POINT("WorkerOCServiceImpl.Get.Retry",
                  [&serverApi]() { return serverApi->SendStatus(Status(K_TRY_AGAIN, "test get retry")); });
@@ -298,7 +302,9 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
                                     LogHelper::IgnoreSensitive(meta));
             Status rc;
             Timer endToEndTimer;
-            TryGetFromL2CacheWhenNotFoundInWorker(meta, address, true, objectKV, rc);
+            auto config = GetServerLatencyTraceConfig();
+            const bool traceEnabled = ShouldCollectLatencyTrace(config);
+            TryGetFromL2CacheWhenNotFoundInWorker(meta, address, true, objectKV, rc, traceEnabled);
             LOG(INFO) << FormatString("object(%s) get from l2 finish, size:%zu, use %f millisecond.", objectKey,
                                       (*safeEntry)->GetDataSize(), endToEndTimer.ElapsedMilliSecond());
             if (rc.IsError() || (*safeEntry)->GetShmUnit() == nullptr) {
@@ -317,6 +323,7 @@ Status WorkerOcServiceGetImpl::GetDataFromL2CacheForPrimaryCopy(const std::strin
 Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::shared_ptr<GetRequest> &request)
 {
     PerfPoint all(PerfKey::WORKER_PROCESS_GET_OBJECT);
+    auto config = GetServerLatencyTraceConfig();
     INJECT_POINT("worker.Get.asyncGetStart", [](int timeout) {
         reqTimeoutDuration.Init(timeout);
         return Status::OK();
@@ -328,11 +335,11 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     Timer localProcessingTimer;
     Status localRc = TryGetObjectFromLocal(request, remoteObjectKeys);
     const auto localProcessingUs = static_cast<uint64_t>(localProcessingTimer.ElapsedMicroSecond());
-    PLOG_IF_OR_VLOG(INFO, (localProcessingUs >= GET_LOCAL_PROCESSING_SLOW_US || FLAGS_enable_perf_trace_log), 1,
-                    FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
-                                 "costUs: %zu, rc: %s",
-                                 request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),
-                                 localProcessingUs, localRc.ToString()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && localProcessingUs >= config.processSlowerThanUs, 1,
+        FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
+                     "costUs: %zu, rc: %s",
+                     request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),
+                     localProcessingUs, localRc.ToString()));
     RETURN_IF_NOT_OK(localRc);
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
 
@@ -733,6 +740,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
                                                              std::set<ReadKey> &needRetryIds,
                                                              const std::shared_ptr<GetRequest> &request)
 {
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PerfPoint all(PerfKey::WORKER_PROCESS_NOT_EXISTS_ALL);
     PerfPoint point(PerfKey::WORKER_PROCESS_NOT_EXISTS_ADD_IN_REMOTE_GET);
     VLOG(1) << "Begin to process " << objectsNeedGetRemote.size() << " objects that doesn't exist in local: ["
@@ -767,8 +776,14 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     std::vector<master::QueryMetaInfoPb> &queryMetas = queryMetaResult.queryMetas;
     std::vector<RpcMessage> &payloads = queryMetaResult.payloads;
     const auto &absentObjectKeys = queryMetaResult.absentObjectKeysWithVersion;
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_START);
+    }
     Status result =
         QueryMetadataFromMaster(needRemoteGetObjects, subTimeout, queryMetaResult, !request->NoQueryL2Cache());
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_QUERYMETA_END);
+    }
     if (result.IsError()) {
         lastRc = result;
         // If we query meta from master meets RPC error, do not add these objects to failedIds,
@@ -798,9 +813,9 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
     const auto queryMetaUs = static_cast<uint64_t>(queryMetaTimer.ElapsedMicroSecond());
     const double queryMetaMs = static_cast<double>(queryMetaUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(INFO, queryMetaUs >= GET_QUERY_META_RPC_SLOW_US, 1,
-                    FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
-                                 objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && queryMetaUs >= config.rpcSlowerThanUs, 1,
+        FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
+                     objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -1174,6 +1189,11 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
 Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string &address, uint64_t dataSize,
                                                               ReadObjectKV &objectKV)
 {
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_REMOTEGET_START);
+    }
     CHECK_FAIL_RETURN_STATUS(address != localAddress_.ToString(), StatusCode::K_RUNTIME_ERROR,
                              "Remote getting from self address is invalid");
     auto version = objectKV.GetObjEntry()->GetCreateTime();
@@ -1273,14 +1293,21 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
 
     VLOG(1) << FormatString("Get object from remote worker end:[%s] --(%s)--> object:[%s]", requestId, address,
                             objectKV.GetObjKey());
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_REMOTEGET_END);
+    }
+    if (traceEnabled && rspPb.latency_phase_us_size() > 0) {
+        std::vector<uint32_t> phases(rspPb.latency_phase_us().begin(), rspPb.latency_phase_us().end());
+        MergeDecodedPhasesToTrace(phases, rspPb.latency_tick_dropped_count());
+    }
     rpcPoint.Record();
     const auto remoteGetUs = static_cast<uint64_t>(remoteGetTimer.ElapsedMicroSecond());
     const double remoteGetMs = static_cast<double>(remoteGetUs) / US_PER_MS;
-    PLOG_IF_OR_VLOG(INFO, remoteGetUs >= GET_REMOTE_WORKER_RPC_SLOW_US, 1,
-                    AppendSrcDstForLog(
-                        FormatString("Remote get success, objectKey: %s, path: %s, cost: %.3fms", objectKV.GetObjKey(),
-                                     IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
-                        localAddress_.ToString(), address));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && remoteGetUs >= config.rpcSlowerThanUs, 1,
+        AppendSrcDstForLog(
+            FormatString("Remote get success, objectKey: %s, path: %s, cost: %.3fms", objectKV.GetObjKey(),
+                         IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
+            localAddress_.ToString(), address));
     return Status::OK();
 }
 
@@ -1451,6 +1478,8 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
                                                        QueryMetadataFromMasterResult &result, bool queryEtcdMeta)
 {
     PerfPoint point(PerfKey::WORKER_QUERY_META_PRE);
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
     Status lastRc;
     std::vector<master::QueryMetaInfoPb> &queryMetas = result.queryMetas;
     std::vector<RpcMessage> &payloads = result.payloads;
@@ -1518,6 +1547,10 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             continue;
         }
         auto &rsp = res.rsp;
+        if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+            std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+            MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+        }
         RETURN_IF_NOT_OK(CorrectQueryMetaResponse(res.payloads, rsp, payloads));
         queryMetas.insert(queryMetas.end(), rsp.mutable_query_metas()->begin(), rsp.mutable_query_metas()->end());
         objectKeysNotExist.insert(rsp.not_exist_ids().begin(), rsp.not_exist_ids().end());
@@ -1930,6 +1963,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                                          ReadObjectKV &objectKV)
 {
     PerfPoint point(PerfKey::WORKER_PULL_REMOTE_DATA);
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetServerLatencyTraceConfig());
     SafeObjType &entry = objectKV.GetObjEntry();
     const std::string &objKey = meta.object_key();
 
@@ -1975,7 +2009,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
     // Step3: Try to get data from
     if (status.IsError()) {
         Timer timer;
-        TryGetFromL2CacheWhenNotFoundInWorker(meta, address, ifWorkerConnected, objectKV, status);
+        TryGetFromL2CacheWhenNotFoundInWorker(meta, address, ifWorkerConnected, objectKV, status, traceEnabled);
         LOG(INFO) << "Query from L2 cache use " << timer.ElapsedMilliSecond() << " millisecond, address: " << address
                   << ", ifWorkerConnected: " << ifWorkerConnected;
         CheckAndReturnPullNotFoundForRetry(meta, address, entry, checkConnectStatus, status);
@@ -1998,7 +2032,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
 
 void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectMetaPb &meta, const std::string &address,
                                                                    bool ifWorkerConnected, ObjectKV &objectKV,
-                                                                   Status &status)
+                                                                   Status &status, bool traceEnabled)
 {
     if (!FLAGS_enable_l2_cache_fallback) {
         status = Status(K_NOT_FOUND_IN_L2CACHE, status.GetMsg());
@@ -2012,10 +2046,16 @@ void WorkerOcServiceGetImpl::TryGetFromL2CacheWhenNotFoundInWorker(const ObjectM
     bool isQueryWithoutCopy = !address.empty() && !ifWorkerConnected;
     // No worker holds the object or got error when pulling from remote worker, pull object from persistence api.
     if (writeToL2Storage && IsSupportL2Storage(supportL2Storage_)) {
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_L2CACHE_READ_START);
+        }
         if (isQueryWithoutCopy) {
             status = GetObjectFromPersistenceAndDumpWithoutCopyMeta(objectKV);
         } else {
             status = GetObjectFromPersistenceAndDump(objectKV);
+        }
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_L2CACHE_READ_END);
         }
     }
 }
@@ -2602,6 +2642,11 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     workerOperationTimeCost.Clear();
     Timer timer;
     PerfPoint point(PerfKey::WORKER_EXIST_PRE_PROCESS);
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_START);
+    }
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXIST);
     access.ObjectKeysRef(req.object_keys());
     INJECT_POINT("Exist.Sleep");
@@ -2646,11 +2691,17 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     Status rc;
     if (!req.is_local() && !nonLocalKeys.empty()) {
         point.RecordAndReset(PerfKey::WORKER_EXIST_QUERY_MASTER);
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_START);
+        }
         QueryMetadataFromMasterResult queryResult;
         std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
         std::vector<RpcMessage> payloads;
         std::map<std::string, uint64_t> absentObjectKeys;
         rc = QueryMetadataFromMaster(nonLocalKeys, 0, queryResult, req.query_l2cache());
+        if (traceEnabled) {
+            Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_END);
+        }
         const auto localAddress = localAddress_.ToString();
         for (const auto &meta : queryMetas) {
             // Master skips returning the source worker as a remote address; a single local primary copy still exists.
@@ -2666,12 +2717,44 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         rsp.add_exists(existKeys.count(key));
     }
 
-    access.Result(rc).Record();
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_END);
+    }
     const auto totalExistUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    if (ShouldPrintLatencySummary(totalExistUs, config)) {
+        auto result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
+        auto &downstream = Trace::Instance().GetDownstreamPhases();
+        bool hasDownstream = downstream.count > 0;
+        if (hasDownstream) {
+            for (uint16_t di = 0; di < downstream.count; ++di) {
+                result.Add(downstream.entries[di].phase, downstream.entries[di].durationUs);
+            }
+            result.tickDroppedCount += downstream.tickDroppedCount;
+            result.phaseDroppedCount += downstream.phaseDroppedCount;
+        }
+        bool gateHit = CheckPhaseGate(result, config);
+        if (gateHit) {
+            Trace::Instance().SetLatencySummary(FormatLatencySummary(result));
+        }
+        bool shouldEncodeProto = gateHit || hasDownstream;
+        if (shouldEncodeProto) {
+            auto *phases = rsp.mutable_latency_phase_us();
+            for (uint16_t i = 0; i < result.count; ++i) {
+                phases->Add(static_cast<unsigned int>(result.entries[i].phase));
+                phases->Add(static_cast<unsigned int>(result.entries[i].durationUs));
+            }
+            if (result.droppedCount() > 0) {
+                rsp.set_latency_tick_dropped_count(static_cast<uint32_t>(result.droppedCount()));
+            }
+        }
+    }
+    access.Result(rc).Record();
     const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Exist", totalExistMs);
-    PLOG_IF_OR_VLOG(INFO, totalExistUs >= EXIST_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
-                    FormatString("Exist done, cost: %.3fms, %s", totalExistMs, workerOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalExistUs >= config.processSlowerThanUs, 1,
+        FormatString("Exist done, cost: %.3fms, %s", totalExistMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

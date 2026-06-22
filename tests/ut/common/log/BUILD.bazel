@@ -146,3 +146,23 @@ ds_cc_test(
         "@com_google_googletest//:gtest",
     ],
 )
+
+# Latency tick测试
+ds_cc_test(
+    name = "trace_tick_test",
+    srcs = ["trace_tick_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Latency phase测试
+ds_cc_test(
+    name = "latency_phase_test",
+    srcs = ["latency_phase_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/ut:ut_common",
+    ],
+)

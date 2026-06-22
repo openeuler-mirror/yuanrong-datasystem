@@ -201,11 +201,11 @@ TEST_F(LogMessageTest, ConditionalMacrosRespectMinLogLevel)
     int evaluations = 0;
     LOG_IF(INFO, true) << "suppressed LOG_IF info " << BuildSideEffectPayload(evaluations);
     LOG_IF(WARNING, true) << "suppressed LOG_IF warning " << BuildSideEffectPayload(evaluations);
-    PLOG_IF(INFO, true) << "suppressed PLOG_IF info " << BuildSideEffectPayload(evaluations);
-    PLOG_IF_OR_VLOG(INFO, true, 1,
-                    "suppressed PLOG_IF_OR_VLOG plog " << BuildSideEffectPayload(evaluations));
-    PLOG_IF_OR_VLOG(INFO, false, 1,
-                    "suppressed PLOG_IF_OR_VLOG vlog " << BuildSideEffectPayload(evaluations));
+    SLOW_LOG_IF(INFO, true) << "suppressed SLOW_LOG_IF info " << BuildSideEffectPayload(evaluations);
+    SLOW_LOG_IF_OR_VLOG(INFO, true, 1,
+                    "suppressed SLOW_LOG_IF_OR_VLOG slow_log " << BuildSideEffectPayload(evaluations));
+    SLOW_LOG_IF_OR_VLOG(INFO, false, 1,
+                    "suppressed SLOW_LOG_IF_OR_VLOG vlog " << BuildSideEffectPayload(evaluations));
 
     FLAGS_minloglevel = oldMinLogLevel;
     FLAGS_v = oldV;

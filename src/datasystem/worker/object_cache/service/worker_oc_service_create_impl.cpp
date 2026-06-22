@@ -29,6 +29,8 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/latency_phase.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
@@ -38,7 +40,8 @@ DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 
 namespace datasystem {
 namespace object_cache {
-static const uint64_t CREATE_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
+
+
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
@@ -57,6 +60,11 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     workerOperationTimeCost.Clear();
     Timer timer;
     PerfPoint point(PerfKey::WORKER_CREATE_OBJECT);
+    auto config = GetServerLatencyTraceConfig();
+    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_CREATE_START);
+    }
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_CREATE);
     access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     VLOG(1) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
@@ -65,8 +73,9 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });
     if (remainingTimeMs <= 0) {
-        Status rc = Status(
-            StatusCode::K_RPC_DEADLINE_EXCEEDED,
+        const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+        FinalizeWorkerLatencyTrace(LatencyTickKey::WORKER_CREATE_END, config, traceEnabled, totalUs, false, resp);
+        Status rc = Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
             FormatString("The create request process time has exceeded the request timeout time (remaining: %lld ms)",
                          remainingTimeMs));
         access.Result(rc).Record();
@@ -86,14 +95,15 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     }
     Status rc = CreateImpl(tenantId, ClientKey::Intern(req.client_id()), req.object_key(), req.data_size(),
                            req.request_timeout(), resp, static_cast<CacheType>(req.cache_type()));
+    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    FinalizeWorkerLatencyTrace(LatencyTickKey::WORKER_CREATE_END, config, traceEnabled, totalUs, true, resp);
     access.Result(rc).Record();
     point.Record();
-    const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     workerOperationTimeCost.Append("Total Create", totalMs);
     INJECT_POINT("worker.Create.end");
-    PLOG_IF_OR_VLOG(INFO, totalUs >= CREATE_LOCAL_PROCESSING_SLOW_US || rc.IsError(), 1,
-                    FormatString("Create done, cost: %.3fms, %s", totalMs, workerOperationTimeCost.GetInfo()));
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
+                        FormatString("Create done, cost: %.3fms, %s", totalMs, workerOperationTimeCost.GetInfo()));
     return rc;
 }
 

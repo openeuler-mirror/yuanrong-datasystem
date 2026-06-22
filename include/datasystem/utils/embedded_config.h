@@ -188,6 +188,21 @@ public:
     EmbeddedConfig &DiagnosticSampleRate(double rate);
 
     /**
+     * @brief In-process processing latency threshold for slow-log and latencySummary.
+     * "process" means total time minus sub-RPC time within the same process, not end-to-end.
+     * @param[in] us Positive integer in microseconds (e.g. 1000 for 1ms). 0 means disabled.
+     * @return Reference to self for chaining.
+     */
+    EmbeddedConfig &SlowLogProcessSlowerThan(uint64_t us);
+
+    /**
+     * @brief Cross-process RPC latency threshold for slow-log and latencySummary.
+     * @param[in] us Positive integer in microseconds (e.g. 2000 for 2ms). 0 means disabled.
+     * @return Reference to self for chaining.
+     */
+    EmbeddedConfig &SlowLogRpcSlowerThan(uint64_t us);
+
+    /**
      * @brief Directory for rocksdb metadata files.
      * @param[in] path Equivalent to flag rocksdb_store_dir.
      * @return Reference to self for chaining.
