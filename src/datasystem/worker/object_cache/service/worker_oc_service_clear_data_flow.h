@@ -33,7 +33,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
@@ -72,7 +72,7 @@ public:
      * @param[in] gRefProc Global-ref processor used to rebuild master refs.
      * @param[in] deleteProc Delete processor used to clear local object data.
      * @param[in] metadataRecoveryManager Metadata recovery manager used before local cleanup.
-     * @param[in] etcdCM Cluster manager used for metadata routing and connectivity checks.
+     * @param[in] clusterManager Cluster manager used for metadata routing and connectivity checks.
      * @param[in] localAddress Current worker address string.
      */
     WorkerOcServiceClearDataFlow(
@@ -81,7 +81,7 @@ public:
         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
         std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc,
         std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc, MetaDataRecoveryManager *metadataRecoveryManager,
-        EtcdClusterManager *etcdCM, std::string localAddress);
+        ClusterManager *clusterManager, std::string localAddress);
 
     /**
      * @brief Stop clear-data workflow and unsubscribe local clear-data event handlers.
@@ -238,7 +238,7 @@ private:
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc_{ nullptr };
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_{ nullptr };
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     std::string localAddress_;
     std::shared_ptr<ThreadPool> clearDataThreadPool_{ nullptr };
     std::shared_ptr<std::atomic_bool> exitFlag_{ nullptr };

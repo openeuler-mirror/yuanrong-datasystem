@@ -66,7 +66,7 @@ public:
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIdxRouteFrom, "HashRing.UpdateRing.sleep", "sleep(2000)"));
         DS_ASSERT_OK(cluster_->SetInjectAction(
             WORKER, workerIdxRouteFrom,
-            "EtcdClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere", "sleep(100)"));
+            "ClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere", "sleep(100)"));
         std::thread trd(funcNeedRedirect);
         StartWorkerAndWaitReady({ workerIdxScaleUp });
         trd.join();
@@ -568,9 +568,9 @@ TEST_F(STCScaleUpTest, LEVEL2_JoiningNodeNetworkRecoveryDuringScaleUp)
 
     sleep(5);  // scale up begin, and migrating
     DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "EtcdClusterManager.HandleFailedNodeToActive.sleep", "1*sleep(2)"));
+        cluster_->SetInjectAction(WORKER, 0, "ClusterManager.HandleFailedNodeToActive.sleep", "1*sleep(2)"));
     DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "EtcdClusterManager.HandleFailedNodeToActive.sleep", "1*sleep(2)"));
+        cluster_->SetInjectAction(WORKER, 1, "ClusterManager.HandleFailedNodeToActive.sleep", "1*sleep(2)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 2, "heartbeat.sleep", "1*sleep(5000)"));
     sleep(20);  // wait for migration finished.
 
@@ -1259,7 +1259,7 @@ TEST_F(STCScaleDownTest, ChangeCluster1)
 
     // start new cluster
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
-        { 0 }, { { 0, " -inject_actions=EtcdClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)" } }));
+        { 0 }, { { 0, " -inject_actions=ClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)" } }));
     WaitAllNodesJoinIntoHashRing(1);
 }
 
@@ -1290,7 +1290,7 @@ TEST_F(STCScaleDownTest, ChangeCluster2)
 
     // start new cluster
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
-        { 0 }, { { 0, " -inject_actions=EtcdClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)" } }));
+        { 0 }, { { 0, " -inject_actions=ClusterManager.CheckWaitNodeTableComplete.waitTime:call(2)" } }));
     WaitAllNodesJoinIntoHashRing(1);
 }
 
@@ -2697,7 +2697,7 @@ TEST_F(STCCentralMasterrScaleTest, RetryWhenEtcdWatchDelay)
     InitTestKVClient(worker0Index, client1);
     std::string exec = "10*call(" + worker2Addr + ")";
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdClusterManager.HandleNodeAdditionEvent.delay", exec));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "ClusterManager.HandleNodeAdditionEvent.delay", exec));
     StartWorkerAndWaitReady({ 2 });
     InitTestKVClient(worker2Index, client2);
     auto key = "qqqq";

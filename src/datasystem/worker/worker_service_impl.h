@@ -31,7 +31,7 @@
 #include "datasystem/protos/share_memory.service.rpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace worker {
@@ -120,11 +120,11 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to etcd cluster manager
+     * @param[in] cm The pointer to cluster manager
      */
-    void SetClusterManager(EtcdClusterManager *cm)
+    void SetClusterManager(ClusterManager *cm)
     {
-        etcdCM_ = cm;
+        clusterManager_ = cm;
     }
 
 private:
@@ -146,14 +146,14 @@ private:
     template <typename Protobuf>
     void SetAvailableWorkers(Protobuf &rsp)
     {
-        if (etcdCM_ == nullptr) {
+        if (clusterManager_ == nullptr) {
             LOG_FIRST_N(ERROR, 1) << "[Heartbeat] etcd manager is null, cannot get available workers";
             return;
         }
 
         constexpr uint32_t num = 3;
         std::vector<std::string> activeWorkers;
-        Status status = etcdCM_->GetActiveWorkers(num, activeWorkers);
+        Status status = clusterManager_->GetActiveWorkers(num, activeWorkers);
         if (status.IsError()) {
             const int logDuration = 30;
             LOG_EVERY_T(ERROR, logDuration) << "Get available workers failed: " << status.ToString();
@@ -173,7 +173,7 @@ private:
     uint32_t shmWorkerPort_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::string workerUuid_;
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.

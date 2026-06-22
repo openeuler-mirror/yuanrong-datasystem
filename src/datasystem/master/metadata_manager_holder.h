@@ -45,7 +45,7 @@ struct MetadataManagerHolderParam {
     EtcdStore *etcdStore;
     std::shared_ptr<PersistenceApi> persistenceApi;
     HostPort masterAddress;
-    EtcdClusterManager *etcdCM;
+    ClusterManager *clusterManager;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager;
@@ -110,7 +110,7 @@ protected:
     EtcdStore *etcdStore_ = nullptr;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     HostPort masterAddress_;
-    EtcdClusterManager *etcdCM_ = nullptr;
+    ClusterManager *clusterManager_ = nullptr;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService_ = nullptr;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService_ = nullptr;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_;

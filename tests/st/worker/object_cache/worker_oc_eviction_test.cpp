@@ -35,7 +35,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/object/buffer.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #define private public
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
@@ -376,10 +376,10 @@ protected:
         worker_ = std::make_unique<WorkerOCServiceImpl>(workerId, workerId, nullptr, nullptr, eviction_, nullptr,
                                                         etcdStore_.get());
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        cm_ = std::make_unique<EtcdClusterManager>(workerId, workerId, clusterStore_.get(), nullptr);
+        cm_ = std::make_unique<ClusterManager>(workerId, workerId, clusterStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
-        DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         DS_ASSERT_OK(cm_->Init(clusterInfo));
         cm_->SetWorkerReady();
     }
@@ -389,7 +389,7 @@ protected:
     HostPort worker0Addr_;
     HostPort worker2Addr_;
     std::unique_ptr<WorkerOCServiceImpl> worker_;
-    std::unique_ptr<EtcdClusterManager> cm_;
+    std::unique_ptr<ClusterManager> cm_;
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::shared_ptr<AkSkManager> akSkManager_;
@@ -620,9 +620,9 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEviction)
     Raii resetDistributedMaster([oldEnableDistributedMaster]() {
         FLAGS_enable_distributed_master = oldEnableDistributedMaster;
     });
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.checkConnection", "return(K_OK)"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
     Raii clearCheckConnection([]() {
-        (void)inject::Clear("EtcdClusterManager.checkConnection");
+        (void)inject::Clear("ClusterManager.checkConnection");
     });
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
@@ -670,9 +670,9 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEvictionWithUnroutabl
     Raii resetDistributedMaster([oldEnableDistributedMaster]() {
         FLAGS_enable_distributed_master = oldEnableDistributedMaster;
     });
-    DS_ASSERT_OK(inject::Set("EtcdClusterManager.checkConnection", "return(K_OK)"));
+    DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
     Raii clearCheckConnection([]() {
-        (void)inject::Clear("EtcdClusterManager.checkConnection");
+        (void)inject::Clear("ClusterManager.checkConnection");
     });
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);

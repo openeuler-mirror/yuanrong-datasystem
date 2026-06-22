@@ -215,7 +215,7 @@ Status WorkerServiceImpl::CheckClientVersion(const std::string &clientVersion)
 const std::string WorkerServiceImpl::GetStandbyWorker()
 {
     std::string standbyWorker;
-    Status rc = etcdCM_->GetStandbyWorker(standbyWorker);
+    Status rc = clusterManager_->GetStandbyWorker(standbyWorker);
     if (rc.IsError()) {
         VLOG(HEARTBEAT_LEVEL) << "Get standby worker failed: " << rc.ToString();
         return "";
@@ -230,7 +230,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
-    if (!IsHealthy() && (etcdCM_ != nullptr && etcdCM_->CheckLocalNodeIsExiting())) {
+    if (!IsHealthy() && (clusterManager_ != nullptr && clusterManager_->CheckLocalNodeIsExiting())) {
         LOG(WARNING) << "Register client failed because worker is exiting and unhealthy now";
         RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is exiting and unhealthy now!");
     }
@@ -370,8 +370,8 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     rsp.set_unhealthy(!IsHealthy());
     SetAvailableWorkers(rsp);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
-    if (etcdCM_ != nullptr) {
-        rsp.set_is_voluntary_scale_down(etcdCM_->CheckLocalNodeIsExiting());
+    if (clusterManager_ != nullptr) {
+        rsp.set_is_voluntary_scale_down(clusterManager_->CheckLocalNodeIsExiting());
     } else {
         const int logDuration = 30;
         LOG_EVERY_T(WARNING, logDuration) << "[Heartbeat] Etcd manager is null";

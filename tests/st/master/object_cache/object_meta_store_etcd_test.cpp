@@ -36,7 +36,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
@@ -104,10 +104,10 @@ public:
         worker_ = std::make_unique<object_cache::WorkerOCServiceImpl>(addr, addr, nullptr, nullptr, eviction_, nullptr,
                                                                       etcdStore_.get());
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        cm_ = std::make_unique<EtcdClusterManager>(addr, addr, clusterStore_.get(), nullptr);
+        cm_ = std::make_unique<ClusterManager>(addr, addr, clusterStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
-        DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         DS_ASSERT_OK(cm_->Init(clusterInfo));
         cm_->SetWorkerReady();
         cm_->CheckWaitNodeTableComplete();
@@ -175,7 +175,7 @@ protected:
     std::shared_ptr<EtcdStore> db_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<EtcdClusterStore> clusterStore_;
-    std::unique_ptr<EtcdClusterManager> cm_;
+    std::unique_ptr<ClusterManager> cm_;
     std::unique_ptr<object_cache::WorkerOCServiceImpl> worker_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> eviction_;
 };
@@ -287,7 +287,7 @@ TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestASyncPutUuidSuffixKeyToHashEtcd)
 
 TEST_F(ObjectMetaStoreEtcdTest, LEVEL1_TestRecoveryFromEtcd)
 {
-    datasystem::inject::Set("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
+    datasystem::inject::Set("ClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
     LOG(INFO) << "Test recovery keys ETCD.";
 
     auto verifyFunc = [](const std::vector<std::pair<std::string, std::string>> &orgKeys,

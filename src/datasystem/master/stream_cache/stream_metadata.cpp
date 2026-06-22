@@ -37,7 +37,7 @@ namespace datasystem {
 namespace master {
 StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &streamFields,
                                RocksStreamMetaStore *streamMetaStore, std::shared_ptr<AkSkManager> akSkManager,
-                               std::shared_ptr<RpcSessionManager> rpcSessionManager, EtcdClusterManager *etcdCM,
+                               std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *clusterManager,
                                SCNotifyWorkerManager *notifyWorkerManager)
     : streamName_(std::move(streamName)),
       streamFields_(streamFields),
@@ -46,7 +46,7 @@ StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &strea
       alive_(true),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       notifyWorkerManager_(notifyWorkerManager)
 {
 }
@@ -822,10 +822,10 @@ Status StreamMetadata::AutoCleanupIfNeededNotLocked(const HostPort &srcHost)
 
 Status StreamMetadata::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    auto rc = etcdCM_->CheckConnection(workerHostPort);
+    auto rc = clusterManager_->CheckConnection(workerHostPort);
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL, FormatString("The worker %s is abnormal, detail: %s",
                                                                 workerHostPort.ToString(), rc.GetMsg()));

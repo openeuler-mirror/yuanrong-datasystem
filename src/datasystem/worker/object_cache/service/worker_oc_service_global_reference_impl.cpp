@@ -36,11 +36,11 @@ namespace datasystem {
 namespace object_cache {
 
 WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
-    WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
     HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       globalRefTable_(std::move(globalRefTable)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
@@ -159,12 +159,12 @@ Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb 
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_RELEASEGREFS);
     access.RemoteClientId(req.remote_client_id());
     HostPort masterAddr;
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
-    RETURN_IF_NOT_OK(etcdCM_->GetMasterAddr(req.remote_client_id(), masterAddr));
+    RETURN_IF_NOT_OK(clusterManager_->GetMasterAddr(req.remote_client_id(), masterAddr));
     if (masterAddr != localAddress_) {
-        RETURN_IF_NOT_OK(etcdCM_->CheckConnection(masterAddr));
+        RETURN_IF_NOT_OK(clusterManager_->CheckConnection(masterAddr));
     }
     auto api = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
     CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
@@ -195,7 +195,7 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_QUERY_GLOBAL_REF_NUM);
     access.ObjectKeysRef(namespaceUris);
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(namespaceUris);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(namespaceUris);
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
@@ -327,12 +327,12 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                                                               std::vector<std::string> &failIncIds)
 {
     const std::string &remoteClientId = req.remote_client_id();
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(firstIncIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(firstIncIds);
     Status lastErr;
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentIncIds = item.second;
-        Status res = etcdCM_->CheckConnection(masterAddr);
+        Status res = clusterManager_->CheckConnection(masterAddr);
         if (res.IsError()) {
             LOG(ERROR) << FormatString("The master %s of [%s] cannot be connected: %s", masterAddr.ToString(),
                                        VectorToString(currentIncIds), res.ToString());
@@ -404,14 +404,14 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 {
     INJECT_POINT("worker.gdecrease");
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(finishDecIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(finishDecIds);
     Status status = Status::OK();
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentIncIds = item.second;
-        Status res = etcdCM_->CheckConnection(masterAddr);
+        Status res = clusterManager_->CheckConnection(masterAddr);
         master::GDecreaseReqPb req;
         *req.mutable_object_keys() = { currentIncIds.begin(), currentIncIds.end() };
         req.set_address(localAddress_.ToString());
@@ -487,7 +487,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
                                                                    std::vector<std::string> &failIncIds)
 {
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(firstIncIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(firstIncIds);
     // Send requests for each master
     Status lastErr;
     auto clientId = ClientKey::Intern(req.address());
@@ -495,7 +495,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> &currentFirstIncIds = item.second;
         std::vector<std::string> rpcFailedIds;
-        Status res = etcdCM_->CheckConnection(masterAddr);
+        Status res = clusterManager_->CheckConnection(masterAddr);
         if (res.IsError()) {
             LOG(ERROR) << FormatString("The master %s of [%s] cannot be connected: %s", masterAddr.ToString(),
                                        VectorToString(currentFirstIncIds), res.ToString());
@@ -631,7 +631,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
                                                                       std::vector<std::string> &failDecIds)
 {
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(finishDecIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(finishDecIds);
     Status status = Status::OK();
 
     // Send requests for each master
@@ -640,7 +640,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
         std::vector<std::string> &currentFinishDecIds = item.second;
         std::vector<std::string> rpcFailedIds;
         std::unordered_set<std::string> rpcUnAliveIds;
-        Status res = etcdCM_->CheckConnection(masterAddr);
+        Status res = clusterManager_->CheckConnection(masterAddr);
         if (res.IsError()) {
             rpcFailedIds = currentFinishDecIds;
         }
@@ -712,7 +712,7 @@ Status WorkerOcServiceGlobalReferenceImpl::IncNestedRef(const std::vector<std::s
 {
     // Send notifications to owner masters
     // Get map of objectKeys grouped by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {
@@ -739,7 +739,7 @@ Status WorkerOcServiceGlobalReferenceImpl::DecNestedRef(const std::vector<std::s
                                                         std::vector<std::string> &unAliveIds)
 {
     // Get map of objectKeys grouped by master
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {

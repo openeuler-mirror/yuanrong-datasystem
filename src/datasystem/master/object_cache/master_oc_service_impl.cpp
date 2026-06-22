@@ -71,11 +71,11 @@ void MasterOCServiceImpl::Shutdown()
 
 Status MasterOCServiceImpl::Init()
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(etcdCM_);
+    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
-    RETURN_IF_NOT_OK(
-        OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, etcdCM_, metadataManagerHolder_));
+    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, clusterManager_,
+                                                               metadataManagerHolder_));
     return Status::OK();
 }
 
@@ -456,8 +456,9 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
 
     // Iterate all workers concurrently.
     std::vector<HostPort> allWorkers;
-    RETURN_RUNTIME_ERROR_IF_NULL(etcdCM_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->GetClusterNodeAddresses(allWorkers), "etcdcm get cluster addrs failed");
+    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetClusterNodeAddresses(allWorkers),
+                                     "cluster manager get cluster addrs failed");
 
     std::unordered_set<std::string> reqObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
     std::vector<std::string> objectKeys = { reqObjectKeys.begin(), reqObjectKeys.end() };
@@ -650,9 +651,9 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     HostPort workerAddr;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerAddr.ParseString(req.hostport()), "workeradd parse failed");
     LOG(INFO) << "The master receives a reconciliation request from the worker on " << req.hostport() << ".";
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_INVALID, "No EtcdClusterManager is provided.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->IfNeedTriggerReconciliation(workerAddr, req.event_timestamp(), true),
-                                     "reconciliation failed");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_INVALID, "No ClusterManager is provided.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        clusterManager_->IfNeedTriggerReconciliation(workerAddr, req.event_timestamp(), true), "reconciliation failed");
     masterOperationTimeCost.Append("Total IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of master IfNeedTriggerReconciliation %s",
                               masterOperationTimeCost.GetInfo());

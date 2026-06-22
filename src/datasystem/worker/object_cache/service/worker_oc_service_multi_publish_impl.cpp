@@ -51,10 +51,10 @@ namespace object_cache {
 static constexpr int RETRY_INTERNAL_MS_META_MOVING = 200;
 static constexpr int THREAD_WAIT_TIME_MS = 10;
 WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
-    WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM, std::shared_ptr<ThreadPool> memCpyThreadPool,
+    WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager, std::shared_ptr<ThreadPool> memCpyThreadPool,
     std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
@@ -68,11 +68,12 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
     workerOperationTimeCost.Clear();
     Timer timer;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTIPUBLISH);
-    access.ObjectKeyProvider([&req]() -> std::string {
-        return req.object_info().empty() ? std::string() : req.object_info(0).object_key();
-    }).DataSizeProvider([&req]() -> uint64_t {
-        return req.object_info().empty() ? 0 : req.object_info(0).data_size();
-    });
+    access
+        .ObjectKeyProvider([&req]() -> std::string {
+            return req.object_info().empty() ? std::string() : req.object_info(0).object_key();
+        })
+        .DataSizeProvider(
+            [&req]() -> uint64_t { return req.object_info().empty() ? 0 : req.object_info(0).data_size(); });
     if (req.object_info().empty()) {
         Status rc(K_INVALID, __LINE__, __FILE__, "The list of object info is empty.");
         access.Result(rc).Record();
@@ -83,8 +84,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
     auto totalMs = timer.ElapsedMilliSecond();
     workerOperationTimeCost.Append("Total MultiPublish", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s",
-        totalMs, workerOperationTimeCost.GetInfo());
+    VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s", totalMs, workerOperationTimeCost.GetInfo());
     return status;
 }
 
@@ -368,7 +368,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     ObjGroupMap objGroup;
     std::optional<std::set<size_t>> targetIndexs;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
-    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, targetIndexs, objGroup, objKeysUndecidedMaster);
+    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, targetIndexs, objGroup, objKeysUndecidedMaster);
     // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
     // refuse to process all objects, which is very inefficient.
     CHECK_FAIL_RETURN_STATUS(
@@ -445,7 +445,6 @@ void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::vector<std::
     ConstructCreateReqCommon(*entries[0], pubReq, req);
 }
 
-
 void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
     const std::vector<uint64_t> &versions, uint32_t ttlSecond)
@@ -456,7 +455,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", keys[idx]);
             std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-                workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), etcdCM_);
+                workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), clusterManager_);
             master::RollbackMultiMetaReqPb req;
             master::RollbackMultiMetaRspPb resp;
             req.set_address(localAddress_.ToString());

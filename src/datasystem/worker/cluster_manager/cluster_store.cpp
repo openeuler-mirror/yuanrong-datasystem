@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Cluster metadata store abstraction used by EtcdClusterManager.
+ * Description: Cluster metadata store abstraction used by ClusterManager.
  */
 #include "datasystem/worker/cluster_manager/cluster_store.h"
 
@@ -47,19 +47,6 @@ ClusterStoreEvent EtcdClusterStore::FromEtcdEvent(const mvccpb::Event &event)
     clusterEvent.version = event.kv().version();
     clusterEvent.revision = event.kv().mod_revision();
     return clusterEvent;
-}
-
-mvccpb::Event EtcdClusterStore::ToEtcdEvent(const ClusterStoreEvent &event)
-{
-    mvccpb::Event etcdEvent;
-    etcdEvent.set_type(event.type == ClusterStoreEventType::DELETE ? mvccpb::Event_EventType_DELETE
-                                                                   : mvccpb::Event_EventType_PUT);
-    auto *kv = etcdEvent.mutable_kv();
-    kv->set_key(event.key);
-    kv->set_value(event.value);
-    kv->set_version(event.version);
-    kv->set_mod_revision(event.revision);
-    return etcdEvent;
 }
 
 Status EtcdClusterStore::GetAll(const std::string &tableName,

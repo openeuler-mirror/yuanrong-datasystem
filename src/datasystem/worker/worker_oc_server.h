@@ -42,7 +42,7 @@
 
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -560,7 +560,7 @@ private:
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
-    std::unique_ptr<datasystem::EtcdClusterManager> etcdCM_{ nullptr };
+    std::unique_ptr<datasystem::ClusterManager> clusterManager_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.
     WaitPost waitCond_;
     // Object cache rpc service for client request.

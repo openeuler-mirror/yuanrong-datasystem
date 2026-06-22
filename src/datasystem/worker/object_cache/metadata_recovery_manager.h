@@ -32,7 +32,7 @@
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -51,7 +51,7 @@ public:
     };
 
     MetaDataRecoveryManager(
-        const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM,
+        const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterManager *clusterManager,
         const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
         uint64_t metadataSize = 0, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager = nullptr,
         const std::shared_ptr<ThreadPool> &memCpyThreadPool = nullptr);
@@ -131,7 +131,7 @@ private:
 
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     uint64_t metadataSize_{ 0 };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_{ nullptr };

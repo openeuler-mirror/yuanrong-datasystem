@@ -478,12 +478,12 @@ public:
 
     /**
      * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] etcdCM The cluster manager pointer to assign
+     * @param[in] clusterManager The cluster manager pointer to assign
      */
-    void SetClusterManager(EtcdClusterManager *etcdCM)
+    void SetClusterManager(ClusterManager *clusterManager)
     {
-        etcdCM_ = etcdCM;
-        evictionManager_->SetClusterManager(etcdCM);
+        clusterManager_ = clusterManager;
+        evictionManager_->SetClusterManager(clusterManager);
     }
 
     /**
@@ -782,7 +782,7 @@ public:
      */
     bool MigrateDataStarted()
     {
-        return etcdCM_->IsDataMigrationStarted();
+        return clusterManager_->IsDataMigrationStarted();
     }
 
     /**
@@ -1037,7 +1037,7 @@ private:
                                       std::vector<std::string> &objectKeysNotInRsp);
 
     /**
-     * @brief Check whether the size of the node table in EtcdClusterManager equals to the number of running workers.
+     * @brief Check whether the size of the node table in ClusterManager equals to the number of running workers.
      * If not, wait until they are equal or time is out.
      * @return Status
      */
@@ -1115,7 +1115,7 @@ private:
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
     EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;

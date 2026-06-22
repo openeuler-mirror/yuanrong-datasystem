@@ -668,19 +668,18 @@ Status HashRing::GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWo
     return Status::OK();
 }
 
-Status HashRing::HandleRingEvent(const mvccpb::Event &event, const std::string &prefix)
+Status HashRing::HandleRingEvent(const ClusterStoreEvent &event, const std::string &prefix)
 {
-    if (event.type() == mvccpb::Event_EventType::Event_EventType_DELETE) {
+    if (event.type == ClusterStoreEventType::DELETE) {
         return Status::OK();
     }
 
     if (hashRingHealthCheck_ != nullptr) {
-        hashRingHealthCheck_->UpdateRing(event.kv().value(), event.kv().mod_revision());
+        hashRingHealthCheck_->UpdateRing(event.value, event.revision);
     }
 
-    if (event.kv().key() == (prefix + "/")) {
-        RETURN_IF_NOT_OK_APPEND_MSG(UpdateRing(event.kv().value(), event.kv().mod_revision()),
-                                    "UpdateRing failed when WatchKey");
+    if (event.key == (prefix + "/")) {
+        RETURN_IF_NOT_OK_APPEND_MSG(UpdateRing(event.value, event.revision), "UpdateRing failed when WatchKey");
     }
     return Status::OK();
 }

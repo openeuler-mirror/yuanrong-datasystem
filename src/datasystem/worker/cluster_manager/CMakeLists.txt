@@ -1,7 +1,7 @@
 
 set(CLUSTER_MANAGER_SRCS
         cluster_store.cpp
-        etcd_cluster_manager.cpp
+        cluster_manager.cpp
         )
 
 set(CLUSTER_MANAGER_DEPEND_LIBS

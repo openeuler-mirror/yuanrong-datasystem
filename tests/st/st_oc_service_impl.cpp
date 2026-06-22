@@ -67,7 +67,7 @@ Status StOCServiceImpl::GetCmNodeTable(const CmNodeTableReqPb &req, CmNodeTableR
     const int THREE = 3;
     const int NUM_TOKENS = 4;
 
-    const auto &tableStr = etcdCM_->ClusterNodeTableToString();
+    const auto &tableStr = clusterManager_->ClusterNodeTableToString();
     for (const std::string &nodeStr : tableStr) {
         std::vector<std::string> tokens;
         std::stringstream ss(nodeStr);

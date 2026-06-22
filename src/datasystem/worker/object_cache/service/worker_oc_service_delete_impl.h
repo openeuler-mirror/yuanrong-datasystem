@@ -31,7 +31,7 @@ namespace object_cache {
 
 class WorkerOcServiceDeleteImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                               std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
                               std::shared_ptr<WorkerOcServiceGetImpl> getProc);
 
@@ -118,7 +118,7 @@ private:
      */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

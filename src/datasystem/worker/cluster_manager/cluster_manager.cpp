@@ -17,7 +17,7 @@
 /**
  * Description: Defines the worker service processing main class.
  */
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 #include <algorithm>
 #include <chrono>
@@ -78,14 +78,14 @@ static const std::string FAKE_NODE_EVENT_VALUE = "0;start";
 static constexpr int TOTAL_WAIT_NODE_TABLE_TIME_SEC = 60;  // total time of waiting node table complete.
 static constexpr int WAIT_NODE_TABLE_INTERVAL_MS = 10;     // interval of waiting node table complete.
 static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;         // terminate wait early if no new nodes discovered.
-static const std::string ETCD_CLUSTER_SUBSCRIBER = "EtcdClusterManager";
+static const std::string ETCD_CLUSTER_SUBSCRIBER = "ClusterManager";
 
-EtcdClusterManager::ClusterNode::ClusterNode(const std::string &timeEpoch, const std::string &additionEventType)
+ClusterManager::ClusterNode::ClusterNode(const std::string &timeEpoch, const std::string &additionEventType)
     : timeEpoch_(timeEpoch), additionEventType_(additionEventType), state_(NodeState::ACTIVE)
 {
 }
 
-bool EtcdClusterManager::ClusterNode::DemoteTimedOutNode()
+bool ClusterManager::ClusterNode::DemoteTimedOutNode()
 {
     // Both FLAGS_node_dead_timeout_s and FLAGS_node_timeout_s time from when a node loses contact with ETCD.
     if (state_ == NodeState::TIMEOUT && FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
@@ -96,9 +96,8 @@ bool EtcdClusterManager::ClusterNode::DemoteTimedOutNode()
     return false;
 }
 
-EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
-                                       IClusterStore *clusterStore, std::shared_ptr<AkSkManager> akSkManager,
-                                       const int pqSize)
+ClusterManager::ClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
+                               IClusterStore *clusterStore, std::shared_ptr<AkSkManager> akSkManager, const int pqSize)
     : workerAddress_(workerAddress),
       masterAddress_(masterAddress),
       clusterStore_(clusterStore),
@@ -109,7 +108,7 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
     workerWaitPost_ = std::make_unique<WaitPost>();
 
     clusterStore_->SetCheckStoreStateWhenNetworkFailedHandler(
-        std::bind(&EtcdClusterManager::CheckEtcdStateWhenNetworkFailed, this));
+        std::bind(&ClusterManager::CheckEtcdStateWhenNetworkFailed, this));
 
     HashRingEvent::SyncClusterNodes::GetInstance().AddSubscriber(
         ETCD_CLUSTER_SUBSCRIBER,
@@ -134,16 +133,16 @@ EtcdClusterManager::EtcdClusterManager(const HostPort &workerAddress, const Host
         });
 }
 
-EtcdClusterManager::~EtcdClusterManager()
+ClusterManager::~ClusterManager()
 {
-    LOG(INFO) << "EtcdClusterManager exit";
+    LOG(INFO) << "ClusterManager exit";
     Status rc = Shutdown();
     if (rc.IsError()) {
         LOG(WARNING) << "Errors from shutdown during destructor. Error ignored: " << rc.ToString();
     }
 }
 
-Status EtcdClusterManager::Shutdown()
+Status ClusterManager::Shutdown()
 {
     HashRingEvent::SyncClusterNodes::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     HashRingEvent::GetFailedWorkers::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
@@ -170,12 +169,12 @@ Status EtcdClusterManager::Shutdown()
     return Status::OK();
 }
 
-void EtcdClusterManager::SetWorkerReady()
+void ClusterManager::SetWorkerReady()
 {
     workerWaitPost_->Set();
 }
 
-Status EtcdClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterInfo)
+Status ClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterInfo)
 {
     // Get existing active nodes
     LOG(INFO) << "Query etcd to identify nodes from local az success. Number of nodes: " << clusterInfo.workers.size();
@@ -192,17 +191,17 @@ Status EtcdClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterIn
     return Status::OK();
 }
 
-bool EtcdClusterManager::IsInRange(const worker::HashRange &ranges, const std::string &objKey)
+bool ClusterManager::IsInRange(const worker::HashRange &ranges, const std::string &objKey)
 {
     return hashRing_->IsInRange(ranges, objKey);
 }
 
-bool EtcdClusterManager::IsPreLeaving(const std::string &workerAddr)
+bool ClusterManager::IsPreLeaving(const std::string &workerAddr)
 {
     return hashRing_->IsPreLeaving(workerAddr);
 }
 
-Status EtcdClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs)
+Status ClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs)
 {
     std::vector<std::pair<std::string, std::string>> activeNodes;
     RETURN_IF_NOT_OK(clusterStore_->GetAll(ETCD_CLUSTER_TABLE, activeNodes));
@@ -216,9 +215,9 @@ Status EtcdClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAd
     return Status::OK();
 }
 
-Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
+Status ClusterManager::Init(const ClusterInfo &clusterInfo)
 {
-    LOG(INFO) << "Init etcd cluster manager.";
+    LOG(INFO) << "Init cluster manager.";
     auto traceId = Trace::Instance().GetTraceID();
     isEtcdAvailableWhenStart_ = clusterInfo.etcdAvailable;
     clusterStore_->SetEventHandler([this, traceId](ClusterStoreEvent &&event) {
@@ -276,8 +275,8 @@ Status EtcdClusterManager::Init(const ClusterInfo &clusterInfo)
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleFailedNodeToActive(const HostPort &eventNodeKey, ClusterNode *eventNode,
-                                                    ClusterNode *failedNode)
+Status ClusterManager::HandleFailedNodeToActive(const HostPort &eventNodeKey, ClusterNode *eventNode,
+                                                ClusterNode *failedNode)
 {
     if (eventNode->NodeWasRecovered() || eventNode->NodeWasDowngradeRestart()) {
         // The node was not restarted, so its a network recovery case of a node that did not actually crash
@@ -285,12 +284,12 @@ Status EtcdClusterManager::HandleFailedNodeToActive(const HostPort &eventNodeKey
     } else {
         RemoveDeadWorkerEvent::GetInstance().NotifyAll(eventNodeKey.ToString());
     }
-    INJECT_POINT("EtcdClusterManager.HandleFailedNodeToActive.sleep");
+    INJECT_POINT("ClusterManager.HandleFailedNodeToActive.sleep");
 
     return Status::OK();
 }
 
-Status EtcdClusterManager::AddNewNode(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode)
+Status ClusterManager::AddNewNode(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode)
 {
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     // If it restarted, call for reconciliation, in case of distributed master. For centralized master, the restarted
@@ -323,9 +322,9 @@ Status EtcdClusterManager::AddNewNode(const HostPort &eventNodeKey, std::unique_
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
-                                                   const std::unique_ptr<ClusterNode> &eventNode,
-                                                   ClusterNode *foundNode, bool &isTimeout)
+Status ClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
+                                               const std::unique_ptr<ClusterNode> &eventNode, ClusterNode *foundNode,
+                                               bool &isTimeout)
 {
     if (foundNode->IsFailed()) {
         // If ClusterNode was in the failed state and now restarted, send metadata to the master service of the node,
@@ -361,11 +360,11 @@ Status EtcdClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleNodeAdditionEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
-                                                   const std::string &azName)
+Status ClusterManager::HandleNodeAdditionEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
+                                               const std::string &azName)
 {
     (void)azName;
-    INJECT_POINT("EtcdClusterManager.HandleNodeAdditionEvent.delay", [eventNodeKey](std::string addr) {
+    INJECT_POINT("ClusterManager.HandleNodeAdditionEvent.delay", [eventNodeKey](std::string addr) {
         if (eventNodeKey.ToString() == addr) {
             sleep(10);  // sleep for 10 s for add node delay;
         }
@@ -422,8 +421,8 @@ Status EtcdClusterManager::HandleNodeAdditionEvent(const HostPort &eventNodeKey,
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
-                                                 const std::string &azName)
+Status ClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, std::unique_ptr<ClusterNode> eventNode,
+                                             const std::string &azName)
 {
     INJECT_POINT("HandleNodeRemoveEvent.delay");
     (void)azName;
@@ -461,8 +460,8 @@ Status EtcdClusterManager::HandleNodeRemoveEvent(const HostPort &eventNodeKey, s
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNodeKey, const ClusterNode *eventNode,
-                                                        ClusterNode *foundNode, TbbNodeTable::const_accessor &accessor)
+Status ClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNodeKey, const ClusterNode *eventNode,
+                                                    ClusterNode *foundNode, TbbNodeTable::const_accessor &accessor)
 {
     // If the voluntary scale down node still in the hash ring which means the node is removed because of network
     // failure or sudden crashing, then begin the passive scale down process.
@@ -496,9 +495,9 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
     return Status::OK();
 }
 
-void EtcdClusterManager::EnqueEvent(ClusterStoreEvent &&event)
+void ClusterManager::EnqueEvent(ClusterStoreEvent &&event)
 {
-    INJECT_POINT("EtcdClusterManager.EnqueEvent", [] { return; });
+    INJECT_POINT("ClusterManager.EnqueEvent", [] { return; });
     if (thread_ == nullptr) {
         LOG(INFO) << "The dequeue handle is nil, no need to enqueue event.";
         return;
@@ -511,7 +510,8 @@ void EtcdClusterManager::EnqueEvent(ClusterStoreEvent &&event)
     Status rc;
     const auto &key = event.key;
     Timer timer;
-    int maxEnqueueTimeMs = 100, logEveryN = 30;
+    const int maxEnqueueTimeMs = 100;
+    const int logEveryN = 30;
     if (key.find(ETCD_CLUSTER_TABLE) != std::string::npos) {
         rc = eventPq_->EmplaceBack(new CmEvent(std::move(event), PrefixType::CLUSTER));
     } else if (key.find(ETCD_RING_PREFIX) != std::string::npos) {
@@ -526,7 +526,7 @@ void EtcdClusterManager::EnqueEvent(ClusterStoreEvent &&event)
     }
 }
 
-Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
+Status ClusterManager::DequeEventCallHandler(bool &isHandleEvent)
 {
     // Flush the cache in case there is no events coming after hashring is ready.
     // In this case the call of FlushTmpClusterAdditionEvents() in `case PrefixType::CLUSTER` will not occur.
@@ -582,16 +582,12 @@ Status EtcdClusterManager::DequeEventCallHandler(bool &isHandleEvent)
     return Status::OK();
 }
 
-Status EtcdClusterManager::HandleRingEvent(const ClusterStoreEvent &event)
+Status ClusterManager::HandleRingEvent(const ClusterStoreEvent &event)
 {
-    if (event.type == ClusterStoreEventType::DELETE) {
-        return Status::OK();
-    }
-    auto etcdEvent = EtcdClusterStore::ToEtcdEvent(event);
-    return hashRing_->HandleRingEvent(etcdEvent, ringPrefix_);
+    return hashRing_->HandleRingEvent(event, ringPrefix_);
 }
 
-Status EtcdClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
+Status ClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
 {
     Status rc;
     std::string nodeHostPortStr = event.key;
@@ -630,8 +626,8 @@ Status EtcdClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
     return rc;
 }
 
-Status EtcdClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey, ClusterNode *recoverNode,
-                                                  ClusterNode *eventNode)
+Status ClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey, ClusterNode *recoverNode,
+                                              ClusterNode *eventNode)
 {
     LOG(INFO) << "Detected network recovery.";
     std::string nodeAddr = recoverNodeKey.ToString();
@@ -660,7 +656,7 @@ Status EtcdClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey
     return Status::OK();
 }
 
-Status EtcdClusterManager::CheckConnection(const std::string &objKey)
+Status ClusterManager::CheckConnection(const std::string &objKey)
 {
     MetaAddrInfo info;
     std::optional<RouteInfo> routeInfo;
@@ -668,10 +664,10 @@ Status EtcdClusterManager::CheckConnection(const std::string &objKey)
     return CheckConnection(info.GetAddress());
 }
 
-Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowNotFound)
+Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowNotFound)
 {
     Timer timer;
-    INJECT_POINT("EtcdClusterManager.checkConnection");
+    INJECT_POINT("ClusterManager.checkConnection");
     typename TbbNodeTable::const_accessor accessor;
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
@@ -693,12 +689,12 @@ Status EtcdClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowN
     return Status::OK();
 }
 
-bool EtcdClusterManager::CheckWorkerIsScaleDown(const std::string &workerAddr)
+bool ClusterManager::CheckWorkerIsScaleDown(const std::string &workerAddr)
 {
     return hashRing_->CheckWorkerIsScaleDown(workerAddr);
 }
 
-std::set<std::string> EtcdClusterManager::GetValidWorkersInHashRing() const
+std::set<std::string> ClusterManager::GetValidWorkersInHashRing() const
 {
     std::set<std::string> validWorkersInHashRing;
     const auto &validWorkersInLocalAz = hashRing_->GetValidWorkersInHashRing();
@@ -706,7 +702,7 @@ std::set<std::string> EtcdClusterManager::GetValidWorkersInHashRing() const
     return validWorkersInHashRing;
 }
 
-std::set<std::string> EtcdClusterManager::GetActiveWorkersInHashRing() const
+std::set<std::string> ClusterManager::GetActiveWorkersInHashRing() const
 {
     std::set<std::string> activeWorkers;
     const auto &activeWorkersInLocalAz = hashRing_->GetActiveWorkersInHashRing();
@@ -725,12 +721,12 @@ std::set<std::string> EtcdClusterManager::GetActiveWorkersInHashRing() const
     return activeWorkers;
 }
 
-bool EtcdClusterManager::CheckReceiveMigrateInfo()
+bool ClusterManager::CheckReceiveMigrateInfo()
 {
     return hashRing_->CheckReceiveMigrateInfo(workerAddress_.ToString());
 };
 
-void EtcdClusterManager::WaitWorkerReadyIfNeed()
+void ClusterManager::WaitWorkerReadyIfNeed()
 {
     if (!IsCurrentNodeMaster()) {
         // If it is not the master, there is no need to wait for the worker to be ready.
@@ -742,7 +738,7 @@ void EtcdClusterManager::WaitWorkerReadyIfNeed()
     LOG(INFO) << "Wait worker ready cost(ms): " << costTimeMs;
 }
 
-Status EtcdClusterManager::StartNodeUtilThread()
+Status ClusterManager::StartNodeUtilThread()
 {
     static const int CHECK_INTERVAL_MS = 100;
     auto traceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
@@ -752,7 +748,7 @@ Status EtcdClusterManager::StartNodeUtilThread()
         Status rc;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         WaitWorkerReadyIfNeed();
-        INJECT_POINT("EtcdClusterManager.DelayMessageDeque.test", [](int delayTime) { sleep(delayTime); });
+        INJECT_POINT("ClusterManager.DelayMessageDeque.test", [](int delayTime) { sleep(delayTime); });
         bool isHandleEvent;
         Timer timer;
         while (!exitFlag_) {
@@ -786,8 +782,8 @@ Status EtcdClusterManager::StartNodeUtilThread()
     return Status::OK();
 }
 
-void EtcdClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string, std::string> &orphanNodes,
-                                           std::set<std::pair<std::string, bool>> &toBeCleanNodes)
+void ClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string, std::string> &orphanNodes,
+                                       std::set<std::pair<std::string, bool>> &toBeCleanNodes)
 {
     static const int timeoutMs = 5000;
     for (const auto &[orphanNode, timeEpoch] : orphanNodes) {
@@ -843,7 +839,7 @@ void EtcdClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string,
     }
 }
 
-Status EtcdClusterManager::StartOrphanNodeMonitorThread()
+Status ClusterManager::StartOrphanNodeMonitorThread()
 {
     auto traceId = GetStringUuid().substr(0, SHORT_TRACEID_SIZE);
     LOG(INFO) << "Start orphan node monitor thread in cluster manager with traceId: " << traceId;
@@ -891,14 +887,14 @@ Status EtcdClusterManager::StartOrphanNodeMonitorThread()
     return Status::OK();
 }
 
-Status EtcdClusterManager::StartBackgroundThread()
+Status ClusterManager::StartBackgroundThread()
 {
     RETURN_IF_NOT_OK(StartNodeUtilThread());
     RETURN_IF_NOT_OK(StartOrphanNodeMonitorThread());
     return Status::OK();
 }
 
-void EtcdClusterManager::HandleFailedNode(const HostPort &addr)
+void ClusterManager::HandleFailedNode(const HostPort &addr)
 {
     if (!IsCurrentNodeMaster()) {
         return;
@@ -909,7 +905,7 @@ void EtcdClusterManager::HandleFailedNode(const HostPort &addr)
     LOG_IF_ERROR(StartClearWorkerMeta::GetInstance().NotifyAll(addr), "Failed to clear worker meta data.");
 }
 
-void EtcdClusterManager::NotifySlotRecovery(const std::vector<HostPort> &failedWorkers) const
+void ClusterManager::NotifySlotRecovery(const std::vector<HostPort> &failedWorkers) const
 {
     if (!IsCurrentNodeMaster() || failedWorkers.empty()) {
         return;
@@ -918,7 +914,7 @@ void EtcdClusterManager::NotifySlotRecovery(const std::vector<HostPort> &failedW
                  "Failed to notify slot recovery for failed workers.");
 }
 
-void EtcdClusterManager::DemoteTimedOutNodes()
+void ClusterManager::DemoteTimedOutNodes()
 {
     // tbb concurrent hash table does not support thread-safe iteration
     std::unique_lock<std::shared_timed_mutex> lock(mutex_, std::defer_lock);
@@ -943,7 +939,7 @@ void EtcdClusterManager::DemoteTimedOutNodes()
     LOG_IF(INFO, !failedNode.empty()) << "After demote timeout nodes: " << NodesToString();
 }
 
-std::unordered_set<std::string> EtcdClusterManager::GetFailedWorkers()
+std::unordered_set<std::string> ClusterManager::GetFailedWorkers()
 {
     std::unordered_set<std::string> failedWorkers;
     // tbb concurrent hash table does not support thread-safe iteration
@@ -968,7 +964,7 @@ std::unordered_set<std::string> EtcdClusterManager::GetFailedWorkers()
     return failedWorkers;
 }
 
-void EtcdClusterManager::SyncNodeTableWithHashRing(const std::set<std::string> &workersInRing)
+void ClusterManager::SyncNodeTableWithHashRing(const std::set<std::string> &workersInRing)
 {
     INJECT_POINT("SyncNodeTableWithHashRing", [] { return; });
     bool isNotify = false;
@@ -994,7 +990,7 @@ void EtcdClusterManager::SyncNodeTableWithHashRing(const std::set<std::string> &
 
 // we should delete the old resource of the not-exited workers to make sure the worker can re-join.
 // include the address in backend store and api in class member.
-void EtcdClusterManager::CleanupWorker(const std::string &workerAddr, bool isFailed)
+void ClusterManager::CleanupWorker(const std::string &workerAddr, bool isFailed)
 {
     HostPort addr;
     if (addr.ParseString(workerAddr).IsError()) {
@@ -1028,10 +1024,9 @@ void EtcdClusterManager::CleanupWorker(const std::string &workerAddr, bool isFai
     EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
 }
 
-Status EtcdClusterManager::IfNeedTriggerReconciliation(const HostPort &address, int64_t timestamp, bool sync,
-                                                       bool isDRst)
+Status ClusterManager::IfNeedTriggerReconciliation(const HostPort &address, int64_t timestamp, bool sync, bool isDRst)
 {
-    INJECT_POINT("EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation");
+    INJECT_POINT("ClusterManager.IfNeedTriggerReconciliation.noreconciliation");
     if (!isDRst) {
         // Clear worker metadata first in master
         RETURN_IF_NOT_OK(ClearWorkerMeta::GetInstance().NotifyAll(address));
@@ -1043,7 +1038,7 @@ Status EtcdClusterManager::IfNeedTriggerReconciliation(const HostPort &address, 
     return Status::OK();
 }
 
-std::string EtcdClusterManager::NodesToString()
+std::string ClusterManager::NodesToString()
 {
     int activeNum = 0;
     int timeoutNum = 0;
@@ -1072,7 +1067,7 @@ std::string EtcdClusterManager::NodesToString()
            + nodesStr;
 }
 
-Status EtcdClusterManager::GetClusterNodeAddresses(std::vector<HostPort> &nodeAddrs)
+Status ClusterManager::GetClusterNodeAddresses(std::vector<HostPort> &nodeAddrs)
 {
     // tbb concurrent hash table does not support thread-safe iteration
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);
@@ -1084,7 +1079,7 @@ Status EtcdClusterManager::GetClusterNodeAddresses(std::vector<HostPort> &nodeAd
     return Status::OK();
 }
 
-Status EtcdClusterManager::GetMasterAddr(const std::string &objKey, HostPort &masterAddr)
+Status ClusterManager::GetMasterAddr(const std::string &objKey, HostPort &masterAddr)
 {
     std::string dbName;
     RETURN_IF_NOT_OK(GetPrimaryReplicaLocationByObjectKey(objKey, masterAddr, dbName));
@@ -1092,26 +1087,26 @@ Status EtcdClusterManager::GetMasterAddr(const std::string &objKey, HostPort &ma
     return Status::OK();
 }
 
-worker::HashRange EtcdClusterManager::GetHashRangeNonBlock()
+worker::HashRange ClusterManager::GetHashRangeNonBlock()
 {
     return hashRing_->GetHashRangeNonBlock();
 }
 
-bool EtcdClusterManager::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
+bool ClusterManager::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
 {
     return hashRing_->NeedRedirect(objKey, masterAddr);
 }
 
-Status EtcdClusterManager::ProcessGetMetaAddressByHash(const std::string &objKey, std::string &dbName,
-                                                       HostPort &masterAddr, std::optional<RouteInfo> &routeInfo)
+Status ClusterManager::ProcessGetMetaAddressByHash(const std::string &objKey, std::string &dbName, HostPort &masterAddr,
+                                                   std::optional<RouteInfo> &routeInfo)
 {
     RETURN_IF_NOT_OK(hashRing_->GetPrimaryWorkerUuid(objKey, dbName, routeInfo));
     RETURN_IF_NOT_OK(hashRing_->GetWorkerAddrByUuidForMetadata(dbName, masterAddr));
     return Status::OK();
 }
 
-Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo,
-                                                            std::optional<RouteInfo> &routeInfo)
+Status ClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo,
+                                                        std::optional<RouteInfo> &routeInfo)
 {
     Timer timer;
     HostPort masterAddr;
@@ -1134,7 +1129,7 @@ Status EtcdClusterManager::GetMetaAddressNotCheckConnection(const std::string &o
     return Status::OK();
 }
 
-Status EtcdClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInfo &metaAddrInfo)
+Status ClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInfo &metaAddrInfo)
 {
     std::optional<RouteInfo> routeInfo;
     RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, metaAddrInfo, routeInfo));
@@ -1147,7 +1142,7 @@ Status EtcdClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInf
     return Status::OK();
 }
 
-void EtcdClusterManager::GetObjectKeysFromNotConnectedMaster(
+void ClusterManager::GetObjectKeysFromNotConnectedMaster(
     const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &metaAddrInfos,
     std::unordered_set<std::string> &objectKeys)
 {
@@ -1161,8 +1156,8 @@ void EtcdClusterManager::GetObjectKeysFromNotConnectedMaster(
     }
 }
 
-Status EtcdClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr,
-                                                                std::string &dbName)
+Status ClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr,
+                                                            std::string &dbName)
 {
     if (IsCentralized()) {
         if (FLAGS_master_address.empty()) {
@@ -1179,8 +1174,8 @@ Status EtcdClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::strin
     return rc;
 }
 
-Status EtcdClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &address, HostPort &masterAddr,
-                                                           std::string &dbName)
+Status ClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &address, HostPort &masterAddr,
+                                                       std::string &dbName)
 {
     constexpr int intervalMs = 100;
     auto realRetryTimeMs = reqTimeoutDuration.CalcRemainingTime();
@@ -1198,7 +1193,7 @@ Status EtcdClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &ad
     return hashRing_->GetWorkerAddrByUuidForMetadata(dbName, masterAddr);
 }
 
-Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std::vector<std::string> &dbNames)
+Status ClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std::vector<std::string> &dbNames)
 {
     if (IsCentralized()) {
         dbNames.emplace_back("");
@@ -1211,7 +1206,7 @@ Status EtcdClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std
     return Status::OK();
 }
 
-std::set<std::string> EtcdClusterManager::GetNodesInTable()
+std::set<std::string> ClusterManager::GetNodesInTable()
 {
     std::set<std::string> nodes;
     {
@@ -1223,7 +1218,7 @@ std::set<std::string> EtcdClusterManager::GetNodesInTable()
     return nodes;
 }
 
-void EtcdClusterManager::CompleteNodeTableWithFakeNode()
+void ClusterManager::CompleteNodeTableWithFakeNode()
 {
     // Assume that a cluster consists of nodeA, nodeB and nodeC. When the cluster restarts after node_timeout_s, the
     // ETCD_CLUSTER_TABLE in etcd will be empty and SetupInitialClusterNodes cannot get any value.
@@ -1243,7 +1238,7 @@ void EtcdClusterManager::CompleteNodeTableWithFakeNode()
     }
 }
 
-void EtcdClusterManager::CompleteNodeTableWithFakeNode(const std::string &lackNode)
+void ClusterManager::CompleteNodeTableWithFakeNode(const std::string &lackNode)
 {
     // Enqueue a fake event and let the background thread to handle it.
     LOG(INFO) << "Create fake add-and-remove event of node " << lackNode << " to priority queue.";
@@ -1259,7 +1254,7 @@ void EtcdClusterManager::CompleteNodeTableWithFakeNode(const std::string &lackNo
     }
 }
 
-Status EtcdClusterManager::WaitNodeJoinToTable()
+Status ClusterManager::WaitNodeJoinToTable()
 {
     using namespace std::chrono;
     std::vector<std::pair<std::string, std::string>> localAzValue;
@@ -1281,7 +1276,7 @@ Status EtcdClusterManager::WaitNodeJoinToTable()
     return Status::OK();
 }
 
-void EtcdClusterManager::ScheduledCheckCompleteNodeTableWithFakeNode()
+void ClusterManager::ScheduledCheckCompleteNodeTableWithFakeNode()
 {
     if (!IsHealthy() || IsCentralized() || !hashRing_->IsWorkable()) {
         return;
@@ -1306,7 +1301,7 @@ void EtcdClusterManager::ScheduledCheckCompleteNodeTableWithFakeNode()
     }
 }
 
-Status EtcdClusterManager::CheckWaitNodeTableComplete()
+Status ClusterManager::CheckWaitNodeTableComplete()
 {
     using namespace std::chrono;
     if (IsCentralized()) {
@@ -1319,7 +1314,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
     int tableSize = GetNodeTableSize();
     bool isRestart = false;
     RETURN_IF_NOT_OK(IsRestart(isRestart));
-    INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", [&hashWorkerNum](int injectWorkerNum) {
+    INJECT_POINT("ClusterManager.CheckWaitNodeTableComplete.hashWorkerNum", [&hashWorkerNum](int injectWorkerNum) {
         hashWorkerNum = injectWorkerNum;
         return Status::OK();
     });
@@ -1332,7 +1327,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
     if (rc.IsError() && firstInit && hashAddTime > TOTAL_WAIT_NODE_TABLE_TIME_SEC) {
         totalWaitTime = hashAddTime;
     }
-    INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", [&totalWaitTime](uint32_t injectWaitTime) {
+    INJECT_POINT("ClusterManager.CheckWaitNodeTableComplete.waitTime", [&totalWaitTime](uint32_t injectWaitTime) {
         totalWaitTime = injectWaitTime;
         return Status::OK();
     });
@@ -1358,7 +1353,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
             lastProgressTimeUs = GetSteadyClockTimeStampUs();
             lastTableSize = tableSize;
         }
-        INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressTimeout",
+        INJECT_POINT("ClusterManager.CheckWaitNodeTableComplete.noProgressTimeout",
                      [&lastProgressTimeUs](uint32_t injectSec) {
                          lastProgressTimeUs =
                              GetSteadyClockTimeStampUs()
@@ -1368,7 +1363,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
         if (isRestart
             && GetSteadyClockTimeStampUs() - lastProgressTimeUs
                    >= duration_cast<microseconds>(seconds(NO_PROGRESS_TIMEOUT_SEC)).count()) {
-            INJECT_POINT_NO_RETURN("EtcdClusterManager.CheckWaitNodeTableComplete.noProgressBreak");
+            INJECT_POINT_NO_RETURN("ClusterManager.CheckWaitNodeTableComplete.noProgressBreak");
             LOG(INFO) << "No progress in node table for " << NO_PROGRESS_TIMEOUT_SEC
                       << "s, terminating wait early. Current: " << tableSize << ", expected: " << hashWorkerNum;
             break;
@@ -1385,7 +1380,7 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
         CompleteNodeTableWithFakeNode();
     }
 
-    INJECT_POINT("EtcdClusterManager.CheckWaitNodeTableComplete.returnError", [tableSize, hashWorkerNum]() {
+    INJECT_POINT("ClusterManager.CheckWaitNodeTableComplete.returnError", [tableSize, hashWorkerNum]() {
         if (tableSize != hashWorkerNum) {
             RETURN_STATUS(K_NOT_READY, "size of table in cluster manager different from number of running workers.");
         }
@@ -1394,13 +1389,13 @@ Status EtcdClusterManager::CheckWaitNodeTableComplete()
     return Status::OK();
 }
 
-Status EtcdClusterManager::InformEtcdReconciliationDone()
+Status ClusterManager::InformEtcdReconciliationDone()
 {
     RETURN_IF_NOT_OK(clusterStore_->InformReconciliationDone(workerAddress_));
     return Status::OK();
 }
 
-std::vector<std::string> EtcdClusterManager::ClusterNodeTableToString()
+std::vector<std::string> ClusterManager::ClusterNodeTableToString()
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     std::vector<std::string> content;
@@ -1411,14 +1406,14 @@ std::vector<std::string> EtcdClusterManager::ClusterNodeTableToString()
     return content;
 }
 
-bool EtcdClusterManager::IfFindWorkerInTheClusterNode(HostPort &workerAddress)
+bool ClusterManager::IfFindWorkerInTheClusterNode(HostPort &workerAddress)
 {
     typename TbbNodeTable::const_accessor accessor;
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     return clusterNodeTable_.find(accessor, workerAddress);
 }
 
-bool EtcdClusterManager::CheckEtcdStateWhenNetworkFailed()
+bool ClusterManager::CheckEtcdStateWhenNetworkFailed()
 {
     if (akSkManager_ == nullptr) {
         LOG(ERROR) << "akskManager is nullptr";
@@ -1463,7 +1458,7 @@ bool EtcdClusterManager::CheckEtcdStateWhenNetworkFailed()
         if (rc.IsError()) {
             LOG(WARNING) << "Rpc write failed, with rc: " << rc.ToString();
             continue;
-        };
+        }
         api2Tag.emplace(remoteWorkerApi, tag);
     }
     bool etcdAvailable = false;
@@ -1479,25 +1474,25 @@ bool EtcdClusterManager::CheckEtcdStateWhenNetworkFailed()
     return etcdAvailable;
 }
 
-std::string EtcdClusterManager::GetWorkerIdByWorkerAddr(const std::string &address) const
+std::string ClusterManager::GetWorkerIdByWorkerAddr(const std::string &address) const
 {
     std::string workerId;
     LOG_IF_ERROR(hashRing_->GetUuidByWorkerAddr(address, workerId), "Cannot find workerid of " + address);
     return workerId;
 }
 
-std::string EtcdClusterManager::GetWorkerAddress() const
+std::string ClusterManager::GetWorkerAddress() const
 {
     return workerAddress_.ToString();
 }
 
-Status EtcdClusterManager::GetHashRingWorkerNum(int &workerNum) const
+Status ClusterManager::GetHashRingWorkerNum(int &workerNum) const
 {
     RETURN_IF_NOT_OK(hashRing_->GetHashRingWorkerNum(workerNum));
     return Status::OK();
 }
 
-Status EtcdClusterManager::CreateEtcdStoreTable(EtcdStore *etcdStore)
+Status ClusterManager::CreateEtcdStoreTable(EtcdStore *etcdStore)
 {
     RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX), K_DUPLICATED);
     RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)),
@@ -1506,15 +1501,15 @@ Status EtcdClusterManager::CreateEtcdStoreTable(EtcdStore *etcdStore)
     return Status::OK();
 }
 
-Status EtcdClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, ClusterInfo &clusterInfo)
+Status ClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, ClusterInfo &clusterInfo)
 {
     RETURN_IF_NOT_OK(CreateEtcdStoreTable(etcdStore));
     RETURN_IF_NOT_OK(etcdStore->GetAll(ETCD_CLUSTER_TABLE, clusterInfo.workers, clusterInfo.revision));
     return Status::OK();
 }
 
-bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                                               std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo)
+bool ClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                           std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo)
 {
     auto preReturnIfHitCache = [&](const MetaAddrInfo &dest) {
         metaAddrInfo = dest;
@@ -1568,9 +1563,9 @@ bool EtcdClusterManager::IfHitCacheWhenRouting(const std::string &objectKey, Has
     return false;
 }
 
-void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                                                       std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo,
-                                                       bool disableCache)
+void ClusterManager::ProcessNotHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                                   std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo,
+                                                   bool disableCache)
 {
     std::optional<RouteInfo> routeInfo;
     routeInfo.emplace();
@@ -1605,9 +1600,8 @@ void EtcdClusterManager::ProcessNotHitCacheWhenRouting(const std::string &object
         routeInfo->payload);
 }
 
-void EtcdClusterManager::FetchDestAddrFromAnywhere(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                                                   std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo,
-                                                   bool disableCache)
+void ClusterManager::FetchDestAddrFromAnywhere(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
+                                               std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo, bool disableCache)
 {
     if (disableCache) {
         ProcessNotHitCacheWhenRouting(objectKey, hash2MetaInfo, rc, metaAddrInfo, true);

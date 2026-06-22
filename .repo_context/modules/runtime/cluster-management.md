@@ -22,7 +22,7 @@
   - `docs/source_zh_cn/design_document/cluster_management.md`
   - `docs/source_zh_cn/deployment/deploy.md`
   - `src/datasystem/worker/cluster_manager/CMakeLists.txt`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring.cpp`
   - `src/datasystem/protos/coordinator.proto`
   - `src/datasystem/coordinator/coordinator_service_impl.h`
@@ -42,7 +42,7 @@
     - built-in Metastore
   - coordinator backend work has a P0 skeleton: `coordinator.proto`, common coordinator service proxy skeleton, and server/worker-side service skeletons exist, but worker runtime is not yet wired to a coordinator mode.
   - worker runtime enforces that at least one of `etcd_address` or `metastore_address` is configured.
-  - `cluster_manager` currently builds around `etcd_cluster_manager.cpp` plus worker health-check support.
+  - `cluster_manager` currently builds around `cluster_manager.cpp` plus worker health-check support.
   - hash-ring logic is a separate worker subdomain that coordinates distribution/routing-related state and interacts with the metadata backend.
   - `dscli` supports both single-node `start` and multi-node `up`, and `up` has explicit handling for Metastore head-node sequencing.
 - Pending verification:
@@ -58,7 +58,7 @@
   - persisted `HashRingPb`, initial token generation, add node, passive remove, voluntary scale-down, restart/rolling
     UUID restoration, and hash-ring health-check repair.
 - `modules/runtime/cluster-manager/README.md`
-  - `EtcdClusterManager`, cluster-node table, event priority queue, restart reconciliation, passive/voluntary
+  - `ClusterManager`, cluster-node table, event priority queue, restart reconciliation, passive/voluntary
     scale-down coordination, route lookup, and health probes.
 - `modules/runtime/cluster-management-dfx-matrix.md`
   - standalone DFX scenario matrix for scale-up, passive/voluntary scale-down, restart, ETCD crash/recovery,
@@ -76,7 +76,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h` defines the worker-side watch RPC service skeleton and inherits from generated `CoordinatorWatchService`.
   - `src/datasystem/common/coordinator/coordinator_service_proxy.h` defines the shared `ICoordinatorServiceProxy` interface and `CoordinatorServiceProxyImpl` skeleton for worker and tests.
   - `src/datasystem/common/coordinator` currently contains only the shared coordinator service proxy skeleton and key/value entry helpers for this phase.
-  - `src/datasystem/worker/cluster_manager/cluster_store.h` defines the worker-side cluster metadata store abstraction used by `EtcdClusterManager` and hash-ring code; `EtcdClusterStore` adapts the current `EtcdStore` backend into that abstraction.
+  - `src/datasystem/worker/cluster_manager/cluster_store.h` defines the worker-side cluster metadata store abstraction used by `ClusterManager` and hash-ring code; `EtcdClusterStore` adapts the current `EtcdStore` backend into that abstraction.
 - Current limitation:
   - this is not yet a supported runtime metadata mode; startup still constructs an `EtcdClusterStore` adapter over ETCD/Metastore until a coordinator-backed adapter is implemented.
 
@@ -118,13 +118,13 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 ## Worker Cluster Manager Notes
 
-- Verified from `etcd_cluster_manager.cpp`:
+- Verified from `cluster_manager.cpp`:
   - cluster manager owns worker-address keyed node state and subscribes to several hash-ring and cluster-related events
   - cross-cluster/cross-AZ read-ring and worker-access paths have been removed; routing is local-cluster only
-  - it now receives an `IClusterStore` instead of constructing an ETCD adapter internally; current worker startup passes an `EtcdClusterStore` adapter while keeping the `EtcdClusterManager` class name unchanged
+  - it now receives an `IClusterStore` instead of constructing an ETCD adapter internally; current worker startup passes an `EtcdClusterStore` adapter while keeping the `ClusterManager` class name unchanged
   - hash-ring and read-ring construction now use the same `IClusterStore` abstraction, so ETCD-specific KV/CAS/watch calls are localized behind the store adapter boundary for this phase
   - shutdown removes subscribers and stops background threads cleanly
-  - `EtcdClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
+  - `ClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
     `WaitWorkerReadyIfNeed()` before processing node utility events
 - Verified from `ServiceDiscovery`:
   - `ServiceDiscovery::GetAllWorkers()` obtains worker entries from `ETCD_CLUSTER_TABLE`, parses `KeepAliveValue`, and
@@ -147,9 +147,9 @@ Use this file as the cross-module map. Use the detailed package for source-level
 ### Startup
 
 1. `WorkerOCServer` validates `etcd_address` or `metastore_address`, initializes `EtcdStore`, and constructs
-   `EtcdClusterManager`.
+   `ClusterManager`.
 2. `ClusterInfo` is loaded from ETCD/Metastore, or from RocksDB and peer reconciliation when ETCD is down.
-3. `EtcdClusterManager::Init` starts background event processing, enqueues startup node events, starts watches, and
+3. `ClusterManager::Init` starts background event processing, enqueues startup node events, starts watches, and
    initializes `HashRing`.
 4. `EtcdStore::InitKeepAlive` writes the local worker row into `ETCD_CLUSTER_TABLE` with a lease.
 5. Worker object/stream services finish reconciliation, set the health probe, and move ETCD node state to `ready`.
@@ -175,7 +175,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
 ### Voluntary Scale Down
 
 1. Worker shutdown writes ETCD state `exiting`, drains clients and async work, then calls
-   `EtcdClusterManager::VoluntaryScaleDown`.
+   `ClusterManager::VoluntaryScaleDown`.
 2. Hash ring sets `need_scale_down`, moves metadata through `add_node_info`, migrates data, clears tokens/UUID maps, and
    notifies `BeforeVoluntaryExit`.
 3. Cluster-manager interprets the later DELETE for an `exiting` node as either successful voluntary exit or crash during
@@ -265,7 +265,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 - "Why can't a worker join or become ready?"
   - `worker_oc_server.cpp`
-  - `cluster_manager/etcd_cluster_manager.cpp`
+  - `cluster_manager/cluster_manager.cpp`
   - deployment config and `cli/start.py` or `cli/up.py`
 - "Why is routing or placement wrong after topology change?"
   - `hash_ring/hash_ring.cpp`

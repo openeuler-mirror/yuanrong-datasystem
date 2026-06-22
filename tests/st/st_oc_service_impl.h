@@ -29,10 +29,10 @@ namespace datasystem {
 namespace st {
 class StOCServiceImpl : public UtOCService {
 public:
-    explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc, EtcdClusterManager *etcdCM,
+    explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc, ClusterManager *clusterManager,
                              MetadataManagerHolder *metadataManagerHolder, std::shared_ptr<AkSkManager> akSkManager)
         : workerOc_(workerOc),
-          etcdCM_(etcdCM),
+          clusterManager_(clusterManager),
           metadataManagerHolder_(metadataManagerHolder),
           akSkManager_(std::move(akSkManager))
     {
@@ -71,7 +71,7 @@ public:
 
 private:
     object_cache::WorkerOCServiceImpl *workerOc_;
-    EtcdClusterManager *etcdCM_;
+    ClusterManager *clusterManager_;
     MetadataManagerHolder *metadataManagerHolder_;
     std::shared_ptr<AkSkManager> akSkManager_;
 };

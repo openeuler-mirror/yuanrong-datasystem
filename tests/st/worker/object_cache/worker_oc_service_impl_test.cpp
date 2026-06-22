@@ -39,7 +39,7 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #include "datasystem/common/flags/flags.h"
@@ -195,20 +195,20 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(addrs.first.ToString());
         etcdStore_->Init();
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        etcdCM_ = std::make_unique<EtcdClusterManager>(localAddress_, metaAddress, clusterStore_.get(), nullptr);
+        clusterManager_ = std::make_unique<ClusterManager>(localAddress_, metaAddress, clusterStore_.get(), nullptr);
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
         objCacheMasterSvc_ = std::make_unique<datasystem::master::MasterOCServiceImpl>(
             localAddress_, nullptr, akSkManager_, metadataManagerHolder_.get(), nullptr);
         workerOcServiceImpl = std::make_unique<datasystem::object_cache::WorkerOCServiceImpl>(
             localAddress_, metaAddress, objectTable, akSkManager_, evictionManager, nullptr, etcdStore_.get(),
             objCacheMasterSvc_.get());
-        workerOcServiceImpl->SetClusterManager(etcdCM_.get());
+        workerOcServiceImpl->SetClusterManager(clusterManager_.get());
         ASSERT_EQ(workerOcServiceImpl->Init(), Status::OK());
         ClusterInfo clusterInfo;
-        DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
-        ASSERT_EQ(etcdCM_->Init(clusterInfo), Status::OK());
+        DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        ASSERT_EQ(clusterManager_->Init(clusterInfo), Status::OK());
         SetHealthProbe();
-        etcdCM_->SetWorkerReady();
+        clusterManager_->SetWorkerReady();
 
         worker::ClientManager::Instance().Init();
         static const int WAIT_FOR_INIT_DONE_SEC = 7;
@@ -218,8 +218,8 @@ public:
     void TearDown() override
     {
         etcdStore_->Shutdown();
-        etcdCM_->Shutdown();
-        etcdCM_.reset();
+        clusterManager_->Shutdown();
+        clusterManager_.reset();
         ExternalClusterTest::TearDown();
         workerOcServiceImpl.reset();
     }
@@ -335,7 +335,7 @@ public:
 
     RandomData random_;
     std::unique_ptr<datasystem::object_cache::WorkerOCServiceImpl> workerOcServiceImpl;
-    std::unique_ptr<EtcdClusterManager> etcdCM_;
+    std::unique_ptr<ClusterManager> clusterManager_;
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::shared_ptr<datasystem::AkSkManager> akSkManager_;

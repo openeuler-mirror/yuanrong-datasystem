@@ -27,7 +27,7 @@
 
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
@@ -47,7 +47,7 @@ public:
 
     ~MetadataRecoverySelector() = default;
 
-    MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable, EtcdClusterManager *etcdCM);
+    MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable, ClusterManager *clusterManager);
 
     static SelectionRequest BuildSelectionRequest(const ClearDataReqPb &req, bool includeL2CacheIds);
 
@@ -59,7 +59,7 @@ public:
 
 private:
     std::shared_ptr<ObjectTable> objectTable_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem

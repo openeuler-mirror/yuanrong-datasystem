@@ -16,7 +16,7 @@
   - `src/datasystem/worker/worker_service_impl.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/worker/worker_cli.cpp`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `docs/source_zh_cn/design_document/cluster_management.md`
 
 ## Responsibilities
@@ -78,7 +78,7 @@
   - initialize logs and worker flags
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
-  - `WorkerOCServer::Start()` calls `etcdCM_->SetWorkerReady()` before `CommonServer::Start()`, then starts worker
+  - `WorkerOCServer::Start()` calls `clusterManager_->SetWorkerReady()` before `CommonServer::Start()`, then starts worker
     service tasks, runs `ReadinessProbe()`, and writes the configured ready-check file only after the worker RPC
     health check succeeds
   - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
@@ -105,7 +105,7 @@
 - Verified:
   - current docs and code support both ETCD and Metastore-based metadata paths.
   - `worker_oc_server.cpp` enforces that at least one of `etcd_address` or `metastore_address` is set.
-  - `cluster_manager` is currently built from `etcd_cluster_manager.cpp` plus worker health-check support.
+  - `cluster_manager` is currently built from `cluster_manager.cpp` plus worker health-check support.
 - Review caution:
   - cluster behavior is spread across flags, `WorkerOCServer`, `cluster_manager`, and hash-ring code, so config-only changes may still impact worker request routing and recovery behavior.
 

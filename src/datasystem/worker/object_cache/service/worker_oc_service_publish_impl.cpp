@@ -54,11 +54,12 @@ static const uint64_t SET_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
 static const uint64_t SET_MASTER_RPC_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
-WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
+                                                       ClusterManager *clusterManager,
                                                        std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
@@ -131,23 +132,22 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     PerfPoint point(PerfKey::WORKER_CREATE_META);
 
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, etcdCM_);
+        workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, CreateMetadataToMaster failed");
     std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
                                                                                           CreateMetaRspPb &metaResp) {
         VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
-                                        metaReq.address(), workerMasterApi->GetHostPort());
+                                      metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->CreateMeta(metaReq, metaResp);
     };
     Timer rpcTimer;
     Status rc = RedirectRetryWhenMetaMoving(metaReq, metaResp, workerMasterApi, func);
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
     PLOG_IF_OR_VLOG(INFO, rpcUs >= SET_MASTER_RPC_SLOW_US || rc.IsError(), 1,
-                    AppendSrcDstForLog(
-                        FormatString("[Set] CreateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s", objectKey,
-                                     rpcUs, rc.ToString()),
-                        localAddress_.ToString(), workerMasterApi->GetHostPort()));
+                    AppendSrcDstForLog(FormatString("[Set] CreateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s",
+                                                    objectKey, rpcUs, rc.ToString()),
+                                       localAddress_.ToString(), workerMasterApi->GetHostPort()));
     RETURN_IF_NOT_OK(rc);
     point.Record();
     version = metaResp.version();
@@ -178,23 +178,22 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     VLOG(1) << FormatString("Send Update metadata to master for object: %s, address: %s", objectKey,
                             localAddress_.ToString());
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, etcdCM_);
+        workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, UpdateMetadataToMaster failed");
     std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
                                                                                           UpdateMetaRspPb &metaRsp) {
         VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
-                                        metaReq.address(), workerMasterApi->GetHostPort());
+                                      metaReq.address(), workerMasterApi->GetHostPort());
         return workerMasterApi->UpdateMeta(metaReq, metaRsp);
     };
     Timer rpcTimer;
     Status rc = RedirectRetryWhenMetaMoving(metaReq, metaRsp, workerMasterApi, func);
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
     PLOG_IF_OR_VLOG(INFO, rpcUs >= SET_MASTER_RPC_SLOW_US || rc.IsError(), 1,
-                    AppendSrcDstForLog(
-                        FormatString("[Set] UpdateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s", objectKey,
-                                     rpcUs, rc.ToString()),
-                        localAddress_.ToString(), workerMasterApi->GetHostPort()));
+                    AppendSrcDstForLog(FormatString("[Set] UpdateMeta RPC done, objectKey: %s, costUs: %zu, rc: %s",
+                                                    objectKey, rpcUs, rc.ToString()),
+                                       localAddress_.ToString(), workerMasterApi->GetHostPort()));
     RETURN_IF_NOT_OK(rc);
     version = metaRsp.version();
     return Status::OK();
@@ -232,7 +231,7 @@ Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const 
             return Status(rc.GetCode(), FormatString("Create meta to master failed. detail: %s", rc.ToString()));
         }
         const std::unordered_set<StatusCode> passthroughError{
-            StatusCode::K_WORKER_TIMEOUT,   StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,
+            StatusCode::K_WORKER_TIMEOUT,    StatusCode::K_KVSTORE_ERROR, StatusCode::K_OC_KEY_ALREADY_EXIST,
             StatusCode::K_OC_ALREADY_SEALED, StatusCode::K_INVALID,       StatusCode::K_TRY_AGAIN
         };
         if (passthroughError.find(rc.GetCode()) == passthroughError.end()) {
@@ -252,7 +251,7 @@ Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV, Ob
     objectKV.GetObjEntry()->stateInfo.SetCacheInvalid(true);
     if (newLifeState == ObjectLifeState::OBJECT_SEALED) {
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(objectKey, etcdCM_);
+            workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "Hash master get failed, RollbackPublish failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState)),
@@ -268,7 +267,7 @@ Status WorkerOcServicePublishImpl::PublishObject(ObjectKV &objectKV, const Publi
     SafeObjType &safeObj = objectKV.GetObjEntry();
     auto oldLifeState = safeObj->GetLifeState();
     VLOG(1) << FormatString("Current life state: %d, next state: %d, ttl second: %u.", (int)oldLifeState,
-                              (int)params.lifeState, params.ttlSecond);
+                            (int)params.lifeState, params.ttlSecond);
     // Step 1: Verify and request to master, object may be expired due to network latency.
     RETURN_IF_NOT_OK(RequestingToMaster(objectKV, params));
 
@@ -325,10 +324,10 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     Raii unlock([&entry]() { entry->WUnlock(); });
     ObjectKV objectKV(objectKey, *entry);
     RETURN_IF_NOT_OK(PrepareForPublish(req, clientId, shmUnitId, objectKV));
-    constexpr double reserveGetLogThresholdMs = 0.1; // 100us
+    constexpr double reserveGetLogThresholdMs = 0.1;  // 100us
     if (elapsed > reserveGetLogThresholdMs) {
-        VLOG(1) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %lld ms.", req.client_id(),
-                                  objectKey, static_cast<long long>(elapsed));
+        VLOG(1) << FormatString("Client %s is putting the object %s, ReserveGetAndLock elapsed %lld ms.",
+                                req.client_id(), objectKey, static_cast<long long>(elapsed));
     }
 
     // Step 3: Request to master and save data (non-shm copy).
@@ -428,12 +427,9 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
     workerOperationTimeCost.Clear();
     Timer timer;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_PUBLISH);
-    access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); })
-        .DataSize(req.data_size());
+    access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     if (req.nested_keys_size() > 0) {
-        access.NestedKeyProvider([&req] {
-            return objectKeysToString(req.nested_keys());
-        });
+        access.NestedKeyProvider([&req] { return objectKeysToString(req.nested_keys()); });
     }
     access.Keep(req.keep())
         .WriteMode(req.write_mode())

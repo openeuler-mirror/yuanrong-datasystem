@@ -66,7 +66,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 
@@ -97,8 +97,8 @@ static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
 
 OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore,
                                      EtcdStore *etcdStore, std::shared_ptr<PersistenceApi> persistApi,
-                                     const std::string &masterAddress, EtcdClusterManager *cm,
-                                     const std::string &dbName, bool newNode)
+                                     const std::string &masterAddress, ClusterManager *cm, const std::string &dbName,
+                                     bool newNode)
     : MetadataRedirectHelper(cm),
       masterAddress_(masterAddress),
       akSkManager_(std::move(akSkManager)),
@@ -108,13 +108,13 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
 {
     bool isEnabled = FLAGS_rocksdb_write_mode != "none" || FLAGS_oc_io_from_l2cache_need_metadata;
     objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
-    if (etcdCM_ != nullptr && !etcdCM_->IsCentralized()) {
+    if (clusterManager_ != nullptr && !clusterManager_->IsCentralized()) {
         dbName_ = dbName;
     }
 }
 Status OCMetadataManager::Init()
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, K_RUNTIME_ERROR, "EtcdClusterManager must be inited firstly");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "ClusterManager must be inited firstly");
     RETURN_IF_NOT_OK(objectStore_->Init());
     if (newNode_) {
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
@@ -122,7 +122,7 @@ Status OCMetadataManager::Init()
     // let it skips recovery from etcd
     bool skipRecoveryFromEtcd = objectStore_->CheckHealth();
 
-    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, etcdCM_->IsCentralized());
+    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, clusterManager_->IsCentralized());
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
@@ -207,13 +207,9 @@ void OCMetadataManager::InitSubscribeEvent()
             return RecoverMasterAppRef(func, standbyWorker);
         });
     HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const worker::HashRange &extraRanges) {
-            return RecoverDataOfFaultyWorker(extraRanges);
-        });
+        eventName_, [this](const worker::HashRange &extraRanges) { return RecoverDataOfFaultyWorker(extraRanges); });
     HashRingEvent::RecoverAsyncTaskRanges::GetInstance().AddSubscriber(
-        eventName_, [this](const worker::HashRange &extraRanges) {
-            return RecoverAsyncTask(extraRanges);
-        });
+        eventName_, [this](const worker::HashRange &extraRanges) { return RecoverAsyncTask(extraRanges); });
     HashRingEvent::ClearDataWithoutMeta::GetInstance().AddSubscriber(
         eventName_, [this](const worker::HashRange &ranges, const std::string &workerAddr,
                            const worker::HashRange &halfCompletedRanges) {
@@ -298,7 +294,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || etcdCM_->IsCentralized()) {
+    if (objectStore_->IsRocksdbRunning() || clusterManager_->IsCentralized()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -326,7 +322,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || etcdCM_->IsCentralized()) {
+    if (objectStore_->IsRocksdbRunning() || clusterManager_->IsCentralized()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -479,14 +475,14 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
         for (const auto &nestedObjectKey : nestedObjectKeys) {
             std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
             MetaAddrInfo masterAddrInfo;
-            etcdCM_->GetMetaAddress(nestedObjectKey, masterAddrInfo);
+            clusterManager_->GetMetaAddress(nestedObjectKey, masterAddrInfo);
             INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
                 return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey);
             });
             // Check if object to add belongs to this master and then add locally.
             // if scale up and obj is hash to find master, need redirect will be true, if obj spilt with workerid,
             // masterAddrInfo is master addr.
-            if (masterAddrInfo == targetMetaAddrInfo && !etcdCM_->NeedRedirect(nestedObjectKey, masterAddr)) {
+            if (masterAddrInfo == targetMetaAddrInfo && !clusterManager_->NeedRedirect(nestedObjectKey, masterAddr)) {
                 RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey));
             } else {
                 VLOG(1) << "nested object meta is not in local address, objectkey:" << nestedObjectKey;
@@ -827,7 +823,7 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
                 version = accessor->second.meta.version();
             } else {
                 LOG(WARNING) << FormatString("[ObjectKey %s] Add location success but failed to query version",
-                    objectKey);
+                                             objectKey);
             }
         }
     }
@@ -946,9 +942,8 @@ Status OCMetadataManager::ProcessCopyMetaHelper(const std::string &address, cons
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty(), StatusCode::K_INVALID, "The objectKey can not be empty.");
     auto found = this->metaTable_.find(accessor, objectKey);
-    CHECK_FAIL_RETURN_STATUS(
-        found, StatusCode::K_NOT_FOUND,
-        FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
+    CHECK_FAIL_RETURN_STATUS(found, StatusCode::K_NOT_FOUND,
+                             FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(accessor->second.meta.config().data_format() == dataFormat, K_INVALID,
                                          FormatString("Invalid data format of objectKey(%s)", objectKey));
 
@@ -1152,8 +1147,7 @@ Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaRe
 {
     RETURN_OK_IF_TRUE(timeout == 0 || objectKeys.empty());
     LOG(INFO) << "Try to subscribe, sub_timeout: " << timeout;
-    auto subMeta =
-        std::make_shared<SubscribeMeta>(reqPb.request_id(), objectKeys, reqPb.address());
+    auto subMeta = std::make_shared<SubscribeMeta>(reqPb.request_id(), objectKeys, reqPb.address());
     TimerQueue::TimerImpl timer;
     auto traceID = Trace::Instance().GetTraceID();
     auto weakThis = weak_from_this();
@@ -1217,7 +1211,7 @@ bool OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std:
     INJECT_POINT("OCMetadataManager.IsPrimaryCopyWithCopy", []() { return false; });
     bool allCopyIsExitingNode = true;
     for (const auto &loc : meta.locations) {
-        if (loc.first != address && loc.second == AckState::ACK && !etcdCM_->IsPreLeaving(loc.first)) {
+        if (loc.first != address && loc.second == AckState::ACK && !clusterManager_->IsPreLeaving(loc.first)) {
             allCopyIsExitingNode = false;
             break;
         }
@@ -1238,7 +1232,7 @@ void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, co
                               address);
     std::unordered_set<std::string> needRemoveIds;
     for (const auto &objectKey : notRedirectObjectKeys) {
-        if (etcdCM_->CheckLocalNodeIsExiting()) {
+        if (clusterManager_->CheckLocalNodeIsExiting()) {
             LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, give up primary failed.", objectKey);
             response.add_failed_ids(objectKey);
             continue;
@@ -1271,7 +1265,7 @@ void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, co
         }
         bool foundCopy = false;
         for (const auto &addr : accessor->second.locations) {
-            if (addr.first != address && !etcdCM_->IsPreLeaving(addr.first)) {
+            if (addr.first != address && !clusterManager_->IsPreLeaving(addr.first)) {
                 workerForChangePrimaryIds[addr.first].insert(objectKey);
                 foundCopy = true;
                 break;
@@ -1345,7 +1339,7 @@ void OCMetadataManager::RetryForFailedIds(
             }
             bool success = false;
             for (const auto &addr : locations) {
-                if (addr.first == info.first || etcdCM_->IsPreLeaving(addr.first)) {
+                if (addr.first == info.first || clusterManager_->IsPreLeaving(addr.first)) {
                     continue;
                 }
                 std::unordered_set<std::string> successIds;
@@ -1377,7 +1371,7 @@ Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, cons
 {
     std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
     TbbMetaTable::accessor accessor;
-    if (etcdCM_->CheckLocalNodeIsExiting()) {
+    if (clusterManager_->CheckLocalNodeIsExiting()) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, change primary copy failed.", objectKey);
         return Status(StatusCode::K_TRY_AGAIN, "Try again");
     }
@@ -1413,9 +1407,9 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
     }
     uint64_t compareVersion;
     VLOG(1) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
-                              address);
+                            address);
     for (const auto &objectKey : notRedirectObjectKeys) {
-        if (etcdCM_->CheckLocalNodeIsExiting()) {
+        if (clusterManager_->CheckLocalNodeIsExiting()) {
             response.add_failed_ids(objectKey);
             LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, remove meta location failed.", objectKey);
             continue;
@@ -1559,7 +1553,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
         SetDeleteAllCopyMetaRspPb(deleteMediator.GetStatus(), deleteMediator.GetFailedObjs(), response);
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
         VLOG(1) << "DeleteAllCopyMeta send response to worker finished, object count: "
-                  << deleteMediator.GetObjKeys().size();
+                << deleteMediator.GetObjKeys().size();
     });
 }
 
@@ -1877,8 +1871,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
 
     if (delMediator.CheckIfExpired(objectKey, accessor->second.meta.version())) {
         VLOG(1) << FormatString("version outdated, request version: %lld, current version: %lld",
-                                delMediator.GetObjectVersionInRequest(objectKey),
-                                accessor->second.meta.version());
+                                delMediator.GetObjectVersionInRequest(objectKey), accessor->second.meta.version());
         delMediator.SetOutdatedObj(objectKey);
         return Status::OK();
     }
@@ -2042,7 +2035,7 @@ std::set<std::string> OCMetadataManager::GetValidWorkersInHashRing()
         workers.insert(worker);
         return workers;
     });
-    return etcdCM_->GetValidWorkersInHashRing();
+    return clusterManager_->GetValidWorkersInHashRing();
 }
 
 Status OCMetadataManager::RecoverObjectLocations(
@@ -2099,7 +2092,7 @@ std::string OCMetadataManager::SelectPrimaryCopyWhenScaleIn(
     const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("master.SelectPrimaryCopy", [this] { return masterAddress_; });
-    auto failedWorkers = etcdCM_->GetFailedWorkers();
+    auto failedWorkers = clusterManager_->GetFailedWorkers();
     // case 1: if old primary copy is alive, return old primary copy address
     if (failedWorkers.find(primaryAddress) == failedWorkers.end()) {
         return primaryAddress;
@@ -2158,8 +2151,8 @@ Status OCMetadataManager::HandleLoadMeta(
             InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_META_TABLE_PREFIX, objectKey);
         }
 
-        auto workers = etcdCM_->GetValidWorkersInHashRing();
-        if (etcdCM_->IsCentralized() || workers.find(metaCache.meta.primary_address()) != workers.end()) {
+        auto workers = clusterManager_->GetValidWorkersInHashRing();
+        if (clusterManager_->IsCentralized() || workers.find(metaCache.meta.primary_address()) != workers.end()) {
             if (metaCache.meta.primary_address().empty()) {
                 LOG(ERROR) << FormatString("[Obj: %s] primary address is empty", objectKey);
             } else {
@@ -2184,8 +2177,8 @@ Status OCMetadataManager::LoadMeta(bool isFromRocksdb, const worker::HashRange &
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> expireObjects;
     std::vector<std::pair<std::string, std::string>> metas;
 
-    RETURN_IF_NOT_OK(CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, extraRanges,
-                                                      metas));
+    RETURN_IF_NOT_OK(
+        CheckRocksdbStatusAndLoadL2Table(ETCD_META_TABLE_PREFIX, META_TABLE, isFromRocksdb, extraRanges, metas));
     std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> objLocMap;
     RETURN_IF_NOT_OK(LoadObjectLocations(isFromRocksdb, objLocMap));
     RETURN_IF_NOT_OK(HandleLoadMeta(metas, expireObjects, objLocMap, isFromRocksdb, extraRanges));
@@ -2255,8 +2248,8 @@ void OCMetadataManager::UpdateSubscribeCache(const std::string &objectKey, const
             uint64_t timeoutMs = subMeta->timer_->GetTimestamp() > TimerQueue::GetInstance()->CurrentTimeMs()
                                      ? subMeta->timer_->GetTimestamp() - TimerQueue::GetInstance()->CurrentTimeMs()
                                      : 0;
-            Status status = notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, subMeta->address_,
-                                                                      timeoutMs);
+            Status status =
+                notifyWorkerManager_->NotifySubscribeMeta(objectKey, objectMeta, subMeta->address_, timeoutMs);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("Notify subscribe of worker: %s for object: %s failed, status: %s.",
                                            subMeta->address_, objectKey, status.ToString());
@@ -2645,7 +2638,7 @@ Status OCMetadataManager::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncr
 Status OCMetadataManager::GetPrimaryReplicaAddr(const std::string &masterAddr, HostPort &primaryAddr)
 {
     std::string dbName;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCM_->GetPrimaryReplicaLocationByAddr(masterAddr, primaryAddr, dbName),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetPrimaryReplicaLocationByAddr(masterAddr, primaryAddr, dbName),
                                      "GetPrimaryReplicaAddr failed");
     g_MetaRocksDbName = dbName;
     return Status::OK();
@@ -2655,7 +2648,7 @@ Status OCMetadataManager::GIncreaseRemoteClientIdToMaster(const std::string &rem
 {
     bool checkRedirect = false;
     if (masterAddr.Empty()) {
-        RETURN_IF_NOT_OK(etcdCM_->GetMasterAddr(remoteClientId, masterAddr));
+        RETURN_IF_NOT_OK(clusterManager_->GetMasterAddr(remoteClientId, masterAddr));
         checkRedirect = true;
     }
     RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(masterAddr.ToString(), masterAddr));
@@ -2736,8 +2729,7 @@ Status OCMetadataManager::RecoverMasterAppRef(std::function<bool(const std::stri
     for (const auto &id : remoteClientIds) {
         if (matchFunc(id)) {
             if (standbyWorker.empty()) {
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GIncreaseRemoteClientIdToMaster(id),
-                                                 "Recover master app ref failed");
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(GIncreaseRemoteClientIdToMaster(id), "Recover master app ref failed");
                 continue;
             }
             HostPort addr;
@@ -2756,7 +2748,7 @@ bool OCMetadataManager::RedirectClientIdRef(const std::string &remoteClientId, b
         return false;
     }
     HostPort masterAddr;
-    bool redirect = etcdCM_->NeedRedirect(remoteClientId, masterAddr);
+    bool redirect = clusterManager_->NeedRedirect(remoteClientId, masterAddr);
     if (redirect) {
         newAddr = masterAddr.ToString();
         LOG(WARNING) << FormatString("ref need redirect, ClientId: %s, redirect address %s", remoteClientId, newAddr);
@@ -2772,7 +2764,7 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
         return;
     }
     HostPort masterAddr;
-    needRedirect = etcdCM_->NeedRedirect(objectKey, masterAddr);
+    needRedirect = clusterManager_->NeedRedirect(objectKey, masterAddr);
     if (!needRedirect) {
         return;
     }
@@ -3407,8 +3399,8 @@ void OCMetadataManager::MergeRecoveredMeta(const std::string &objectKey, const s
     if (oldPrimaryAddress.empty() || oldPrimaryAddress == workerAddr) {
         return;
     }
-    LOG(INFO) << FormatString("[ObjectKey %s] Remove previous primary location %s after recovery by %s.",
-                              objectKey, oldPrimaryAddress, workerAddr);
+    LOG(INFO) << FormatString("[ObjectKey %s] Remove previous primary location %s after recovery by %s.", objectKey,
+                              oldPrimaryAddress, workerAddr);
     (void)objectStore_->RemoveObjectLocation(objectKey, oldPrimaryAddress);
     (void)objectMeta.locations.erase(oldPrimaryAddress);
 }
@@ -3655,7 +3647,7 @@ bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &s
 
 Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_->CheckReceiveMigrateInfo(), K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(clusterManager_->CheckReceiveMigrateInfo(), K_RUNTIME_ERROR,
                              "wait and retry, worker don't receive addnode info");
     LOG(INFO) << "Recv migrate metadata msg. source:" << req.source_addr()
               << ", object count:" << req.object_metas().size();
@@ -3729,14 +3721,16 @@ Status OCMetadataManager::ClearDataWithoutMeta(const worker::HashRange &ranges, 
 {
     HostPort hostPort;
     RETURN_IF_NOT_OK(hostPort.ParseString(workerAddr));
-    if (etcdCM_->CheckConnection(hostPort).IsError()) {
+    if (clusterManager_->CheckConnection(hostPort).IsError()) {
         return Status::OK();
     }
     std::vector<std::string> objsMigrateFinished;
     if (!halfCompletedRanges.empty()) {
-        GetMetasMatch([this, &halfCompletedRanges](
-                          const std::string &objKey) { return etcdCM_->IsInRange(halfCompletedRanges, objKey); },
-                      objsMigrateFinished);
+        GetMetasMatch(
+            [this, &halfCompletedRanges](const std::string &objKey) {
+                return clusterManager_->IsInRange(halfCompletedRanges, objKey);
+            },
+            objsMigrateFinished);
     }
     return notifyWorkerManager_->ClearDataWithoutMeta(ranges, workerAddr, objsMigrateFinished);
 }
@@ -3744,7 +3738,7 @@ Status OCMetadataManager::ClearDataWithoutMeta(const worker::HashRange &ranges, 
 Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes)
 {
     MetaAddrInfo metaAddrInfo;
-    auto rc = etcdCM_->GetMetaAddress(P2P_DEFAULT_MASTER, metaAddrInfo);
+    auto rc = clusterManager_->GetMetaAddress(P2P_DEFAULT_MASTER, metaAddrInfo);
     // The master node managing heterogeneous metadata has voluntarily scaled down.
     if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
         return Status::OK();
@@ -3753,7 +3747,7 @@ Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<
     // If this node is the heterogeneous metadata master, clean up client metadata
     // associated with the scaled-in worker nodes
     auto devMasterAddr = metaAddrInfo.GetAddressAndSaveDbName().ToString();
-    auto localWorkerAddr = etcdCM_->GetWorkerAddress();
+    auto localWorkerAddr = clusterManager_->GetWorkerAddress();
     if (localWorkerAddr == devMasterAddr) {
         return masterDevOcManager_->ReleaseClientMetaForScaledInWorker(removeNodes);
     }
@@ -4112,9 +4106,8 @@ Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &ta
                                                            std::vector<std::pair<std::string, std::string>> &outMetas)
 {
     if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
-            "Load meta from etcd into memory failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
+                                         "Load meta from etcd into memory failed.");
         LOG(INFO) << "Load meta from etcd and try put to rocksdb, count:" << outMetas.size();
         for (const auto &iter : outMetas) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(rocksTable, iter.first, iter.second));
@@ -4125,9 +4118,8 @@ Status OCMetadataManager::CheckRocksdbStatusAndLoadL2Table(const std::string &ta
                                              "Load meta from rocksdb into memory failed.");
             LOG(INFO) << "Load meta from rocksdb, count:" << outMetas.size();
         } else {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
-                "Load meta from etcd into memory failed.");
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(tablePrefix, rocksTable, extraRanges, outMetas),
+                                             "Load meta from etcd into memory failed.");
             LOG(INFO) << "Load meta from etcd, count:" << outMetas.size();
         }
     }

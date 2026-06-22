@@ -37,9 +37,9 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "etcd_cluster_manager_header",
+    name = "cluster_manager_header",
     hdrs = [
-        "etcd_cluster_manager.h",
+        "cluster_manager.h",
     ],
     deps = [
         "//src/datasystem/common/ak_sk:ak_sk_manager",
@@ -65,13 +65,13 @@ ds_cc_library(
 
 # success
 ds_cc_library(
-    name = "etcd_cluster_manager",
+    name = "cluster_manager",
     srcs = [
-        "etcd_cluster_manager.cpp",
+        "cluster_manager.cpp",
     ],
     hdrs = [
         "cluster_node.h",
-        "etcd_cluster_manager.h",
+        "cluster_manager.h",
     ],
     deps = [
         "//include/datasystem/utils:utils_headers",

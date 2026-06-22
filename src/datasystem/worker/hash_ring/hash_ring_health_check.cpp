@@ -470,7 +470,7 @@ bool HashRingHealthCheck::CheckPassiveScaleDownNotStart(bool, HashRingPb &ring)
     }
     if (!workers.empty()) {
         LOG(ERROR) << "HashRingHealthCheck: worker [" << VectorToString(workers)
-                   << "] is ACTIVE in HashRingPb, but in fault state in EtcdClusterManager.";
+                   << "] is ACTIVE in HashRingPb, but in fault state in ClusterManager.";
     }
     return !workers.empty();
 }

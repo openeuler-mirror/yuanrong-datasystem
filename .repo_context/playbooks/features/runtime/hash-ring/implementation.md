@@ -11,7 +11,7 @@
 - Primary code paths:
   - `src/datasystem/worker/hash_ring`
   - `src/datasystem/protos/hash_ring.proto`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.*`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.*`
 - Related module docs:
   - `.repo_context/modules/runtime/hash-ring/README.md`
   - `.repo_context/modules/runtime/cluster-management.md`

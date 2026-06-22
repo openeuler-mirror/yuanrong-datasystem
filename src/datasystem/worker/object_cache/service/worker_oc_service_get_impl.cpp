@@ -93,13 +93,13 @@ static const uint64_t GET_REMOTE_WORKER_RPC_SLOW_US = GetWorkerSlowUs();
 static const uint64_t EXIST_LOCAL_PROCESSING_SLOW_US = GetWorkerSlowUs();
 static constexpr double US_PER_MS = 1000.0;
 
-WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                                                EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                                                std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       etcdStore_(etcdStore),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
@@ -571,7 +571,7 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
     while (!objKeys.empty() && retry < maxRetry) {
         if (reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
             LOG(WARNING) << "Stop retry delete unacked object meta due to exhausted timeout, remaining size: "
-                          << objKeys.size();
+                         << objKeys.size();
             break;
         }
         if (objKeys.size() == 1) {
@@ -1037,8 +1037,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
 
     std::string remoteWorkerId = "UNKNOWN";
-    if (etcdCM_ != nullptr) {
-        auto workerId = etcdCM_->GetWorkerIdByWorkerAddr(endPoint);
+    if (clusterManager_ != nullptr) {
+        auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(endPoint);
         if (!workerId.empty()) {
             remoteWorkerId = workerId;
         }
@@ -1460,7 +1460,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
-    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
+    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
     // 2. Send requests for each master
     std::vector<std::future<Status>> futures;
     futures.reserve(objKeysGrpByMaster.size());
@@ -1951,7 +1951,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                          FormatString("Parse object %s address %s failed", objKey, address));
         // Step1: Try to get data from local AZ's worker
         checkConnectStatus =
-            etcdCM_->CheckConnection(hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
+            clusterManager_->CheckConnection(hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
@@ -2126,7 +2126,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     VLOG(1) << FormatString("Send copy metadata to master req: %s", LogHelper::IgnoreSensitive(req));
     master::CreateCopyMetaRspPb rsp;
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, etcdCM_);
+        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, clusterManager_);
     if (workerMasterApi == nullptr) {
         LOG(ERROR) << "GetWorkerMasterApi failed, objectKey: " << task.GetParams().front().objectKey;
         DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
@@ -2163,7 +2163,7 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
         objectKeys.emplace_back(param.objectKey);
     }
     // grouped by master address
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> paramsGroupByAddress;
     paramsGroupByAddress.reserve(objKeysGrpByMaster.size());
     std::vector<UpdateLocationParam> params = task.ExtractParams();
@@ -2322,10 +2322,10 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
 Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version)
 {
     INJECT_POINT("worker.remove_location");
-    if (etcdCM_ == nullptr) {
+    if (clusterManager_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
-    auto api = workerMasterApiManager_->GetWorkerMasterApi(objectKey, etcdCM_);
+    auto api = workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
     CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
                              "Getting master api failed. object key: " + objectKey);
     RemoveMetaReqPb req;
@@ -2341,9 +2341,10 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
 
 Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPort &masterAddr) const
 {
-    CHECK_FAIL_RETURN_STATUS(etcdCM_ != nullptr, StatusCode::K_NOT_READY, "ETCD cluster manager is not provided.");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
+                             "ETCD cluster manager is not provided.");
     MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(etcdCM_->GetMetaAddress(objKey, metaAddrInfo));
+    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(objKey, metaAddrInfo));
     masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
     return Status::OK();
 }
@@ -2437,7 +2438,7 @@ void WorkerOcServiceGetImpl::FillGetObjMetaInfoRspPb(
         }
         meta->set_obj_size(it->second.object_size());
         for (auto &loc : it->second.object_locations()) {
-            meta->add_location_ids(etcdCM_->GetWorkerIdByWorkerAddr(loc));
+            meta->add_location_ids(clusterManager_->GetWorkerIdByWorkerAddr(loc));
         }
     }
 }
@@ -2505,7 +2506,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
 {
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysNotInHashRing;
-    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysNotInHashRing);
+    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysNotInHashRing);
     for (auto &[master, objs] : objKeysGrpByMaster) {
         HostPort workerAddr = master.GetAddressAndSaveDbName();
         master::GetObjectLocationsReqPb masterReq;
@@ -2702,7 +2703,7 @@ Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaI
         return Status::OK();
     }
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, etcdCM_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
     auto reqCopy = req;
     return workerMasterApi->GetMetaInfo(reqCopy, rsp);
 }
@@ -2848,8 +2849,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
         }
     }
     PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
-                                           migratedBytes);
+                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas, migratedBytes);
     return lastRc;
 }
 
@@ -2886,9 +2886,8 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             GroupQueryMeta(info, groupedQueryMetas);
             SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
         }
-        auto remoteGetRc =
-            ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas,
-                                               migratedBytes);
+        auto remoteGetRc = ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp,
+                                                              objectsNeedGetRemote, queryMetas, migratedBytes);
         if (remoteGetRc.IsError()) {
             LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
             lastRc = std::move(remoteGetRc);

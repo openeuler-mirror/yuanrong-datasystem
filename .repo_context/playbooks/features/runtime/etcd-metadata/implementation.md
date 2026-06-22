@@ -23,7 +23,7 @@
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
 - Last verified against source:
   - `2026-05-08`
 
@@ -133,7 +133,7 @@
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
 - Scenario checks:
   - CAS conflict on same key;
   - watch stream failure and compensation;

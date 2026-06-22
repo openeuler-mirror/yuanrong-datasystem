@@ -34,7 +34,7 @@
 #include "datasystem/master/stream_cache/stream_metadata.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -47,13 +47,13 @@ public:
      * @param[in] masterHostPort The master address.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
-     * @param[in] cm The etcd cluster manager instance.
+     * @param[in] cm The cluster manager instance.
      * @param[in] rocksStore The rocks store instance.
      * @param[in] dbName The db name.
      */
     SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                      std::shared_ptr<RpcSessionManager> rpcSessionManager, EtcdClusterManager *cm,
-                      RocksStore *rocksStore, const std::string &dbName);
+                      std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm, RocksStore *rocksStore,
+                      const std::string &dbName);
 
     /**
      * @brief Shutdown the sc metadata manager module.
@@ -62,9 +62,9 @@ public:
 
     /**
      * @brief WorkerOCServer uses the SetClusterManager method to directly pass the std::unique_ptr address of
-     * etcdCM_ to SCMetadataManager. If the etcdCM_ destructor releases the memory, a core dump occurs when the
-     * SCMetadataManager object that holds the pointer address operates the address. Therefore, the
-     * EtcdClusterManager needs to notify the SCMetadataManager before exiting.
+     * clusterManager_ to SCMetadataManager. If the clusterManager_ destructor releases the memory, a core dump occurs
+     * when the SCMetadataManager object that holds the pointer address operates the address. Therefore, the
+     * ClusterManager needs to notify the SCMetadataManager before exiting.
      */
     void SetClusterManagerToNullptr();
 

@@ -70,13 +70,14 @@ std::unordered_set<std::string> CollectRequestObjectKeys(const ObjInfoPbList &ob
 }
 }  // namespace
 
-WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam,
+                                                       ClusterManager *clusterManager,
                                                        std::shared_ptr<ThreadPool> memcpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager,
                                                        const std::string &localAddr,
                                                        std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      etcdCM_(etcdCM),
+      clusterManager_(clusterManager),
       memcpyThreadPool_(std::move(memcpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddr_(localAddr),
@@ -84,9 +85,8 @@ WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam 
 {
 }
 
-Status WorkerOcServiceMigrateImpl::PrepareMigrateData(
-    const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
-    std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
+Status WorkerOcServiceMigrateImpl::PrepareMigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
+                                                      std::unordered_map<std::string, std::shared_ptr<ShmUnit>> &units)
 {
     if (req.is_slot_migration()) {
         auto allocRc = BatchAllocateObjectGroupBySlot(req, units);
@@ -97,7 +97,7 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateData(
         }
         RETURN_IF_NOT_OK(allocRc);
     }
-    if (etcdCM_ != nullptr && etcdCM_->IsDataMigrationStarted()) {
+    if (clusterManager_ != nullptr && clusterManager_->IsDataMigrationStarted()) {
         auto failedIds = CollectRequestObjectKeys(req.objects());
         FillMigrateDataResponse(req, {}, failedIds, false, rsp);
         RETURN_STATUS(StatusCode::K_NOT_READY, "Data migration already in progress");
@@ -215,7 +215,7 @@ Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDi
     if (!IsMemoryAvailable(0, MigrateType::SPILL)) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_OUT_OF_MEMORY, "OOM");
     }
-    if (etcdCM_ != nullptr && etcdCM_->CheckLocalNodeIsExiting()) {
+    if (clusterManager_ != nullptr && clusterManager_->CheckLocalNodeIsExiting()) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_SCALE_DOWN, "Worker is exiting");
     }
     if (!IsUrmaEnabled()) {
@@ -263,10 +263,12 @@ Status WorkerOcServiceMigrateImpl::HandleMigrateDataDirectNoSpace(const MigrateD
     return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
 }
 
-void WorkerOcServiceMigrateImpl::ReplacePrimaryForMigrateDataDirect(
-    const MigrateDataDirectReqPb &req, PerfPoint &point, const LockedEntryMap &needModifyPrimary,
-    const ObjectInfoMap &needReadDataIds, std::unordered_set<std::string> &successIds,
-    std::unordered_set<std::string> &failedIds, ObjectInfoMap &needSendMasterIds, Status &status)
+void WorkerOcServiceMigrateImpl::ReplacePrimaryForMigrateDataDirect(const MigrateDataDirectReqPb &req, PerfPoint &point,
+                                                                    const LockedEntryMap &needModifyPrimary,
+                                                                    const ObjectInfoMap &needReadDataIds,
+                                                                    std::unordered_set<std::string> &successIds,
+                                                                    std::unordered_set<std::string> &failedIds,
+                                                                    ObjectInfoMap &needSendMasterIds, Status &status)
 {
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_REPLACE_PRIMARY);
     for (const auto &[objectKey, it] : needModifyPrimary) {
@@ -280,8 +282,7 @@ void WorkerOcServiceMigrateImpl::ReplacePrimaryForMigrateDataDirect(
     }
 }
 
-Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req,
-                                                         MigrateDataDirectRspPb &rsp)
+Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_LOCK);
     LockedEntryMap lockedEntries;
@@ -380,7 +381,7 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
                                                        QueryMetaMap &queryMetas,
                                                        std::unordered_set<std::string> &failedIds)
 {
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     Status lastRc;
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
     std::unordered_set<std::string> tmpFailedIds;
@@ -730,7 +731,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         (void)objectKeys.emplace(objectKey);
     }
 
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
     Status lastRc;
     RedirectMap needRedirectIds;
     for (auto &item : objKeysGrpByMaster) {
@@ -818,10 +819,10 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         uint64_t limitRate = rateController_->CalculateNewRate(req.worker_addr());
         rsp.set_limit_rate(limitRate);
     }
-    if (etcdCM_ != nullptr) {
-        if (etcdCM_->IsPreLeaving(localAddr_)) {
+    if (clusterManager_ != nullptr) {
+        if (clusterManager_->IsPreLeaving(localAddr_)) {
             rsp.set_scale_down_state(MigrateDataRspPb::NEED_SCALE_DOWN);
-        } else if (etcdCM_->IsDataMigrationStarted()) {
+        } else if (clusterManager_->IsDataMigrationStarted()) {
             rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
         } else {
             rsp.set_scale_down_state(MigrateDataRspPb::NONE);

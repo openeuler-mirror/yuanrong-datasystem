@@ -60,7 +60,7 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -233,7 +233,7 @@ public:
      */
     OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore, EtcdStore *etcdStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
-                      EtcdClusterManager *cm = nullptr, const std::string &dbName = "", bool newNode = false);
+                      ClusterManager *cm = nullptr, const std::string &dbName = "", bool newNode = false);
 
     ~OCMetadataManager();
 

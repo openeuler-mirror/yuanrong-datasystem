@@ -76,7 +76,7 @@
   - `runtime.worker-runtime`: worker 生命周期父模块，保留启动和服务面，不承载 eviction 状态机细节。
   - `infra.l2cache`: L2 backend 和持久化能力父模块；eviction 只消费 write mode/L2 状态，不拥有 backend 实现。
   - `infra.slot`: 分布式磁盘 slot 的持久格式和恢复；eviction 只通过 object 状态和 L2 可见性做决策。
-  - `runtime.hash-ring` / `runtime.cluster-manager`: 负责 worker 路由和扩缩容；eviction 通过 `EtcdClusterManager` 和 `NodeSelector` 获取 master 地址或远端迁移能力。
+  - `runtime.hash-ring` / `runtime.cluster-manager`: 负责 worker 路由和扩缩容；eviction 通过 `ClusterManager` 和 `NodeSelector` 获取 master 地址或远端迁移能力。
 - Why they stay inside the parent module or split out:
   - eviction 有独立线程、队列、水位、对象锁、RPC 和 spill 文件生命周期，因此从 worker runtime 拆成 sibling module。
   - L2、slot、hash ring 仍作为依赖模块记录，避免把 backend 持久格式和路由协议混入 eviction 文档。
@@ -119,7 +119,7 @@
   - `OCMetadataManager`
   - `ExpiredObjectManager`
   - `DataMigrator` and `NodeSelector`
-  - `EtcdClusterManager`
+  - `ClusterManager`
 - External dependencies:
   - worker-to-master RPC
   - local filesystem for spill

@@ -22,10 +22,10 @@
 #define DATASYSTEM_CLUSTER_NODE_H
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
-class EtcdClusterManager::ClusterNode {
+class ClusterManager::ClusterNode {
 public:
     /**
      * @brief Constructor

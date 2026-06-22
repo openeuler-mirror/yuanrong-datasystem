@@ -1478,7 +1478,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
 
-    cluster_->SetInjectAction(WORKER, 0, "EtcdClusterManager.IfNeedTriggerReconciliation.noreconciliation",
+    cluster_->SetInjectAction(WORKER, 0, "ClusterManager.IfNeedTriggerReconciliation.noreconciliation",
                               "return(K_OK)");
 
     // restart node1

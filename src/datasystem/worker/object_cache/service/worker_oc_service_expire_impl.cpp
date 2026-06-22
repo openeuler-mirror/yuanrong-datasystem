@@ -35,15 +35,16 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
-
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 
-WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam,
+                                                     ClusterManager *clusterManager,
                                                      std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerOcServiceCrudCommonApi(initParam), etcdCM_(etcdCM), akSkManager_(std::move(akSkManager))
-{ }
+    : WorkerOcServiceCrudCommonApi(initParam), clusterManager_(clusterManager), akSkManager_(std::move(akSkManager))
+{
+}
 
 Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
@@ -59,7 +60,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
 
     std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
     std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
-    etcdCM_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
+    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
 
     std::unordered_set<std::string> objKeysExpireFailed;
     std::vector<std::string> absentObjectKeys;
@@ -139,24 +140,23 @@ Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> obje
         master::ExpireReqPb redirectReq;
         master::ExpireRspPb redirectRsp;
         *redirectReq.mutable_object_keys() = { redirectInfo.change_meta_ids().begin(),
-                                                redirectInfo.change_meta_ids().end() };
+                                               redirectInfo.change_meta_ids().end() };
         redirectReq.set_ttl_second(ttlSeconds);
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
         auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                    "hash master get failed, ExpireFromMaster failed");
+                                 "hash master get failed, ExpireFromMaster failed");
         rc = redirectWorkerMasterApi->Expire(redirectReq, redirectRsp);
         if (rc.IsError()) {
-            LOG(WARNING) << "Expire meta from master[" << masterAddr.ToString()
-                            << "] failed, msg: " << rc.ToString();
+            LOG(WARNING) << "Expire meta from master[" << masterAddr.ToString() << "] failed, msg: " << rc.ToString();
             rsp.mutable_last_rc()->set_error_code(rc.GetCode());
             rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
             objExpireFailed.insert(redirectReq.object_keys().begin(), redirectReq.object_keys().end());
             continue;
         }
         absentObj.insert(absentObj.end(), redirectRsp.absent_object_keys().begin(),
-                            redirectRsp.absent_object_keys().end());
+                         redirectRsp.absent_object_keys().end());
         objExpireFailed.insert(redirectRsp.failed_object_keys().begin(), redirectRsp.failed_object_keys().end());
         *rsp.mutable_last_rc() = redirectRsp.last_rc();
     }

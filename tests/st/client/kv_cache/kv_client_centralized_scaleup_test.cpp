@@ -79,7 +79,7 @@ public:
     void InitCluster(bool withConcurrently = false)
     {
         if (withConcurrently) {
-            std::string flag = " -inject_actions=EtcdClusterManager.DelayMessageDeque.test:1*call(5)";
+            std::string flag = " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)";
             std::string oldFlag = externalCluster_->AddGFlagForWorkerStart(flag);
             DS_ASSERT_OK(externalCluster_->StartForkWorkerProcess());
             externalCluster_->SetGFlagForWorkerStart(oldFlag);
@@ -116,7 +116,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
     InitCluster();
 
     StartWorkerAndWaitReady(std::vector<uint32_t>{ 2 },
-                            " -inject_actions=EtcdClusterManager.DelayMessageDeque.test:1*call(5)");
+                            " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)");
     InitTestKVClient(2, client2_);  // Connect client to worker 2
     std::string getValue;
     DS_ASSERT_OK(client1_->Set("key2", "value2"));
@@ -126,7 +126,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
     DS_ASSERT_NOT_OK(client1_->Get("key2", getValue));
 
     StartWorkerAndWaitReady(std::vector<uint32_t>{ 3 },
-                            " -inject_actions=EtcdClusterManager.DelayMessageDeque.test:1*call(5)");
+                            " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)");
     InitTestKVClient(3, client3_);  // Connect client to worker 3
     DS_ASSERT_OK(client3_->Set("key3", "value3"));
     DS_ASSERT_OK(client0_->Get("key3", getValue));

@@ -30,7 +30,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/worker_cli.h"
 
@@ -144,7 +144,7 @@ protected:
     void TearDown() override
     {
         exit_ = true;
-        for (auto &cm : etcdCMs_) {
+        for (auto &cm : clusterManagers_) {
             if (cm) {
                 cm->Shutdown();
                 cm.reset();
@@ -176,18 +176,18 @@ protected:
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
         clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+        clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
                                                                    nullptr));
-        rings_.emplace_back(static_cast<TestHashRing *>(etcdCMs_.back()->GetHashRing()));
+        rings_.emplace_back(static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing()));
         ClusterInfo clusterInfo;
-        DS_EXPECT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
-        DS_EXPECT_OK(etcdCMs_.back()->Init(clusterInfo));
-        etcdCMs_.back()->SetWorkerReady();
-        return static_cast<TestHashRing *>(etcdCMs_.back()->GetHashRing());
+        DS_EXPECT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
+        DS_EXPECT_OK(clusterManagers_.back()->Init(clusterInfo));
+        clusterManagers_.back()->SetWorkerReady();
+        return static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing());
     }
     std::unique_ptr<EtcdStore> db_;
-    std::vector<std::unique_ptr<EtcdClusterManager>> etcdCMs_;  // just used for construction of hash rings.
-    std::vector<std::unique_ptr<EtcdStore>> etcdStores_;        // Each EtcdStore is used for each EtcdClusterManager.
+    std::vector<std::unique_ptr<ClusterManager>> clusterManagers_;  // just used for construction of hash rings.
+    std::vector<std::unique_ptr<EtcdStore>> etcdStores_;        // Each EtcdStore is used for each ClusterManager.
     std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     std::vector<std::future<Status>> futures_;
@@ -284,14 +284,14 @@ void HashRingTest::InitRing(uint32_t workerNum)
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
         clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-        etcdCMs_.emplace_back(std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_.back().get(),
+        clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
                                                                    nullptr));
-        rings_[i] = static_cast<TestHashRing *>(etcdCMs_.back()->GetHashRing());
+        rings_[i] = static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing());
         futures_.emplace_back(threadPool_->Submit([this, i]() {
             ClusterInfo clusterInfo;
-            RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdCMs_[i]->Init(clusterInfo), "etcd cm init failed.");
-            etcdCMs_[i]->SetWorkerReady();
+            RETURN_IF_NOT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManagers_[i]->Init(clusterInfo), "etcd cm init failed.");
+            clusterManagers_[i]->SetWorkerReady();
             while (!this->rings_[i]->IsRunning() && !this->exit_.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
             }
@@ -319,7 +319,7 @@ void HashRingTest::RestartRing(int workerIndex)
     CHECK_EQ(rings_.size(), workerIds_.size());
     LOG(INFO) << "Start to shutdown worker " << workerIds_[workerIndex];
     rings_[workerIndex] = nullptr;
-    etcdCMs_[workerIndex].reset();
+    clusterManagers_[workerIndex].reset();
     std::this_thread::sleep_for(std::chrono::seconds(1));
     LOG(INFO) << "Start to restart worker " << workerIds_[workerIndex];
     HostPort addr;
@@ -329,12 +329,12 @@ void HashRingTest::RestartRing(int workerIndex)
     etcdStores_[workerIndex] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
     etcdStores_[workerIndex]->Init();
     clusterStores_[workerIndex] = std::make_unique<EtcdClusterStore>(etcdStores_[workerIndex].get());
-    etcdCMs_.emplace(etcdCMs_.begin() + workerIndex,
-                     std::make_unique<EtcdClusterManager>(addr, addr, clusterStores_[workerIndex].get(),
+    clusterManagers_.emplace(clusterManagers_.begin() + workerIndex,
+                     std::make_unique<ClusterManager>(addr, addr, clusterStores_[workerIndex].get(),
                                                           nullptr));
-    const auto &cm = etcdCMs_[workerIndex];
+    const auto &cm = clusterManagers_[workerIndex];
     ClusterInfo clusterInfo;
-    DS_ASSERT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[workerIndex].get(), clusterInfo));
+    DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[workerIndex].get(), clusterInfo));
     DS_ASSERT_OK(cm->Init(clusterInfo));
     cm->SetWorkerReady();
     rings_[workerIndex] = static_cast<TestHashRing *>(cm->GetHashRing());
@@ -831,7 +831,7 @@ TEST_F(HashRingTest, StartScaleTaskNotExcuteMultipleTimes)
 TEST_F(HashRingTest, RemoveInitNode)
 {
     // init rings with a scale-down task
-    datasystem::inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
+    datasystem::inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
 
     InitTestEtcdInstance();
     FLAGS_add_node_wait_time_s = 0;
@@ -851,7 +851,7 @@ TEST_F(HashRingTest, RemoveInitNode)
 
     InitRing(1);
     CheckAllRunning();
-    etcdCMs_[0]->CheckWaitNodeTableComplete();
+    clusterManagers_[0]->CheckWaitNodeTableComplete();
 
     std::string expectRing = R"({
         "clusterHasInit": true,
@@ -866,7 +866,7 @@ TEST_F(HashRingTest, EtcdWatchGet)
 {
     TimerQueue::GetInstance()->Initialize();
     // init rings with a scale-down task
-    datasystem::inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
+    datasystem::inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
     datasystem::inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(100)");
     InitTestEtcdInstance();
     FLAGS_add_node_wait_time_s = 0;
@@ -905,7 +905,7 @@ TEST_F(HashRingTest, EtcdWatchGet)
     PutRingToEtcd(hashRingJsonStr);
     InitRing(1);
     CheckAllRunning();
-    etcdCMs_[0]->CheckWaitNodeTableComplete();
+    clusterManagers_[0]->CheckWaitNodeTableComplete();
     datasystem::inject::Set("EtcdWatch.StoreEvents.IgnoreEvent", "sleep(2000)");
     PutRingToEtcd(hashRingJsonStr1);
     PutRingToEtcd(hashRingJsonStr2);
@@ -922,7 +922,7 @@ TEST_F(HashRingTest, EtcdWatchGet)
 TEST_F(HashRingTest, CasRetry)
 {
     InitTestEtcdInstance();
-    datasystem::inject::Set("EtcdClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
+    datasystem::inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(2)");
     datasystem::inject::Set("hashring.finishaddnodeinfo", "sleep(3000)");
     datasystem::inject::Set("waitUntilHealth", "return()");
     std::string hashRingJsonStr = R"({
@@ -948,7 +948,7 @@ TEST_F(HashRingTest, CasRetry)
     PutRingToEtcd(hashRingJsonStr);
     InitRing(2);  // ring size is 2
     CheckAllRunning();
-    etcdCMs_[0]->CheckWaitNodeTableComplete();
+    clusterManagers_[0]->CheckWaitNodeTableComplete();
     PutRingToEtcd(hashRingJsonStr1);
     sleep(1);  // wait for 2s
     datasystem::inject::Set("SendRpc.Failed.isKeepAliveTimeoutHandler", "return(K_RETRY_IF_LEAVING)");

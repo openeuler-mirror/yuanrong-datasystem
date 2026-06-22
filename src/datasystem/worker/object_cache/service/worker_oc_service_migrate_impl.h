@@ -63,12 +63,12 @@ public:
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] etcdCM The cluster manager pointer to assign.
+     * @param[in] clusterManager The cluster manager pointer to assign.
      * @param[in] memcpyThreadPool Memory copy thread pool.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddr Local worker address.
      */
-    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM,
+    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
                                std::shared_ptr<ThreadPool> memcpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
                                const std::string &localAddr,
                                std::shared_ptr<MigrateDataRateController> rateController);
@@ -605,7 +605,7 @@ private:
                                             std::unordered_set<std::string> &failedIds,
                                             ObjectInfoMap &needSendMasterIds, Status &status);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };
 

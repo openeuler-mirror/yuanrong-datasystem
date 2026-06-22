@@ -81,7 +81,7 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<AsyncSendManager> asyncSendManager;
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
-    EtcdClusterManager *etcdCM;
+    ClusterManager *clusterManager;
 };
 
 class WorkerOcServiceCrudCommonApi {
@@ -415,7 +415,7 @@ protected:
     size_t metadataSize_{ 0 };
 
     L2StorageType supportL2Storage_;
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
 };

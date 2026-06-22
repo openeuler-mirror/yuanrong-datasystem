@@ -37,7 +37,7 @@
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/master/stream_cache/topology_manager.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics.h"
 
 namespace datasystem {
@@ -47,7 +47,7 @@ class StreamMetadata : public std::enable_shared_from_this<StreamMetadata> {
 public:
     StreamMetadata(std::string streamName, const StreamFields &streamFields, RocksStreamMetaStore *streamMetaStore,
                    std::shared_ptr<AkSkManager> akSkManager, std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                   EtcdClusterManager *etcdCM, SCNotifyWorkerManager *notifyWorkerManager);
+                   ClusterManager *clusterManager, SCNotifyWorkerManager *notifyWorkerManager);
 
     ~StreamMetadata();
 
@@ -508,7 +508,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     RetainDataState retainData_;
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     SCNotifyWorkerManager *notifyWorkerManager_{ nullptr };
     std::shared_ptr<SCStreamMetrics> scStreamMetrics_{ nullptr };
 };

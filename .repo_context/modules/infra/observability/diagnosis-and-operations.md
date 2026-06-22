@@ -25,7 +25,7 @@
   - `src/datasystem/common/metrics/res_metric_collector.cpp`
   - `src/datasystem/common/metrics/metrics_exporter.cpp`
   - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring.cpp`
   - `tests/README.md`
   - `build.sh`

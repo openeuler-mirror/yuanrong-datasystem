@@ -51,7 +51,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "gtest/gtest.h"
@@ -121,12 +121,12 @@ public:
         RETURN_IF_NOT_OK(etcdStore_->Init());
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        etcdCM_ = std::make_unique<EtcdClusterManager>(masterAddr_, masterAddr_, clusterStore_.get(),
+        clusterManager_ = std::make_unique<ClusterManager>(masterAddr_, masterAddr_, clusterStore_.get(),
                                                        nullptr);
         ClusterInfo clusterInfo;
-        RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
-        RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
-        workerUuid_ = etcdCM_->GetLocalWorkerUuid();
+        RETURN_IF_NOT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        RETURN_IF_NOT_OK(clusterManager_->Init(clusterInfo));
+        workerUuid_ = clusterManager_->GetLocalWorkerUuid();
         // create worker service;
         uint64_t sharedMemoryBytes = 64 * 1024ul * 1024ul;  // convert mb to bytes.
         RETURN_IF_NOT_OK(datasystem::memory::Allocator::Instance()->Init(sharedMemoryBytes));
@@ -144,7 +144,7 @@ public:
         param.akSkManager = akSkManager_;
         param.etcdStore = etcdStore_.get();
         param.persistenceApi = nullptr;
-        param.etcdCM = etcdCM_.get();
+        param.clusterManager = clusterManager_.get();
         param.masterAddress = masterAddr_;
         param.masterWorkerService = objCacheWorkerMsSvc_.get();
         param.workerWorkerService = nullptr;
@@ -153,13 +153,13 @@ public:
         param.isScEnabled = false;
         RETURN_IF_NOT_OK(metadataManagerHolder_->Init(param));
         RETURN_IF_NOT_OK(metadataManagerHolder_->EnsureLocalMetadataManager(param.currWorkerId));
-        etcdCM_->SetWorkerReady();
+        clusterManager_->SetWorkerReady();
         objCacheMasterSvc_ =
             std::make_unique<MasterOCServiceImpl>(masterAddr_, nullptr, akSkManager_, metadataManagerHolder_.get(), nullptr);
-        objCacheMasterSvc_->SetClusterManager(etcdCM_.get());
+        objCacheMasterSvc_->SetClusterManager(clusterManager_.get());
         RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
         RETURN_IF_NOT_OK(datasystem::inject::Set("master.cache_invalid_failed", "return(K_OK)"));
-        worker1OcServiceImpl_->SetClusterManager(etcdCM_.get());
+        worker1OcServiceImpl_->SetClusterManager(clusterManager_.get());
         RETURN_IF_NOT_OK(worker1OcServiceImpl_->Init());
         SetHealthProbe();
         return Status::OK();
@@ -217,7 +217,7 @@ public:
     {
         objCacheMasterSvc_->Shutdown();
         objCacheMasterSvc_.reset();
-        etcdCM_.reset();
+        clusterManager_.reset();
         etcdStore_.reset();
         objCacheWorkerMsSvc_.reset();
         ExternalClusterTest::TearDown();
@@ -230,7 +230,7 @@ public:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<EtcdClusterStore> clusterStore_;
-    std::unique_ptr<EtcdClusterManager> etcdCM_;
+    std::unique_ptr<ClusterManager> clusterManager_;
     std::string workerUuid_;
     RandomData random_;
     std::shared_ptr<datasystem::object_cache::MasterWorkerOCServiceImpl> objCacheWorkerMsSvc_;

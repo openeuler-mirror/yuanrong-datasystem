@@ -31,7 +31,7 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
@@ -48,7 +48,7 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdClusterManager *etcdCM, EtcdStore *etcdStore,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager, EtcdStore *etcdStore,
                            std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController);
@@ -952,7 +952,7 @@ private:
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
 
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
 

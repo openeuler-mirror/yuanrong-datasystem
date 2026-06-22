@@ -41,7 +41,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "gtest/gtest.h"
@@ -92,19 +92,19 @@ public:
         RETURN_IF_NOT_OK(etcdStore_->Init());
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        etcdCM_ = std::make_unique<EtcdClusterManager>(hostPort_, hostPort_, clusterStore_.get(),
+        clusterManager_ = std::make_unique<ClusterManager>(hostPort_, hostPort_, clusterStore_.get(),
                                                        nullptr);
         ClusterInfo clusterInfo;
-        RETURN_IF_NOT_OK(EtcdClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
-        RETURN_IF_NOT_OK(etcdCM_->Init(clusterInfo));
-        workerUuid_ = etcdCM_->GetLocalWorkerUuid();
+        RETURN_IF_NOT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
+        RETURN_IF_NOT_OK(clusterManager_->Init(clusterInfo));
+        workerUuid_ = clusterManager_->GetLocalWorkerUuid();
         MetadataManagerHolderParam param;
         param.dbRootPath = FLAGS_rocksdb_store_dir;
         param.currWorkerId = workerUuid_;
         param.akSkManager = akSkManager_;
         param.etcdStore = etcdStore_.get();
         param.persistenceApi = nullptr;
-        param.etcdCM = etcdCM_.get();
+        param.clusterManager = clusterManager_.get();
         param.masterAddress = hostPort_;
         param.masterWorkerService = nullptr;
         param.workerWorkerService = nullptr;
@@ -112,7 +112,7 @@ public:
         param.isScEnabled = false;
         RETURN_IF_NOT_OK(metadataManagerHolder_->Init(param));
         RETURN_IF_NOT_OK(metadataManagerHolder_->EnsureLocalMetadataManager(param.currWorkerId));
-        etcdCM_->SetWorkerReady();
+        clusterManager_->SetWorkerReady();
         return Status::OK();
     }
 
@@ -120,7 +120,7 @@ public:
     {
         InitInstanceBase();
         RETURN_IF_NOT_OK(
-            OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, etcdCM_.get(), metadataManagerHolder_.get()));
+            OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, clusterManager_.get(), metadataManagerHolder_.get()));
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, workerAddress_));
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
@@ -134,7 +134,7 @@ public:
     void TearDown() override
     {
         OCMigrateMetadataManager::Instance().Shutdown();
-        etcdCM_.reset();
+        clusterManager_.reset();
         etcdStore_.reset();
         ExternalClusterTest::TearDown();
     }
@@ -249,7 +249,7 @@ public:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<EtcdClusterStore> clusterStore_;
-    std::unique_ptr<EtcdClusterManager> etcdCM_;
+    std::unique_ptr<ClusterManager> clusterManager_;
     std::unique_ptr<MetadataManagerHolder> metadataManagerHolder_;
     std::string workerUuid_;
     std::vector<std::string> nestedKeys_;
@@ -471,7 +471,7 @@ public:
     void TearDown() override
     {
         OCMigrateMetadataManager::Instance().Shutdown();
-        etcdCM_.reset();
+        clusterManager_.reset();
         etcdStore_.reset();
         ExternalClusterTest::TearDown();
     }

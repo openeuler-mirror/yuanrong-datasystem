@@ -31,7 +31,7 @@
 #include "datasystem/master/stream_cache/stream_metadata.h"
 #include "datasystem/protos/master_stream.service.rpc.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 class MetadataManagerHolder;
@@ -172,11 +172,11 @@ public:
 
     /**
      * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] etcdCM The cluster manager pointer to assign
+     * @param[in] clusterManager The cluster manager pointer to assign
      */
-    void SetClusterManager(EtcdClusterManager *etcdCM)
+    void SetClusterManager(ClusterManager *clusterManager)
     {
-        etcdCM_ = etcdCM;
+        clusterManager_ = clusterManager;
     }
 
     /**
@@ -195,7 +195,7 @@ protected:
     std::string GetDbName();
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };  // back pointer to the cluster manager
+    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     MetadataManagerHolder *metadataManagerHolder_;
 };

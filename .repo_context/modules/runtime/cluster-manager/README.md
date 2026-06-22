@@ -13,8 +13,8 @@
   - feed hash-ring state machine progress and route metadata requests to the correct local worker;
   - bridge low-level ETCD events to higher-level metadata, slot-recovery, and worker API cleanup events.
 - Primary source files to verify against:
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
-  - `src/datasystem/worker/cluster_manager/etcd_cluster_manager.h`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
+  - `src/datasystem/worker/cluster_manager/cluster_manager.h`
   - `src/datasystem/worker/cluster_manager/cluster_node.h`
   - `src/datasystem/worker/cluster_manager/worker_health_check.cpp`
   - `src/datasystem/worker/cluster_event_type.h`
@@ -65,22 +65,22 @@
   - object-cache and stream-cache metadata managers own actual metadata recovery, reconciliation, and clearing.
   - local object-cache and stream-cache metadata are held by `MetadataManagerHolder`.
 - Why this stays its own module:
-  - `EtcdClusterManager` is not a pure wrapper around ETCD or hash ring; it is the runtime lifecycle coordinator that joins ETCD membership, hash-ring state, health probes, route lookup, and event-bus side effects.
+  - `ClusterManager` is not a pure wrapper around ETCD or hash ring; it is the runtime lifecycle coordinator that joins ETCD membership, hash-ring state, health probes, route lookup, and event-bus side effects.
 
 ## Key Entry Points
 
 - Static/startup entrypoints:
-  - `EtcdClusterManager::CreateEtcdStoreTable`
-  - `EtcdClusterManager::ConstructClusterInfoViaEtcd`
+  - `ClusterManager::CreateEtcdStoreTable`
+  - `ClusterManager::ConstructClusterInfoViaEtcd`
   - `WorkerOCServer::ConstructClusterInfo`
   - `WorkerOCServer::ConstructClusterInfoDuringEtcdCrash`
 - Runtime lifecycle entrypoints:
-  - `EtcdClusterManager::Init`
-  - `EtcdClusterManager::Shutdown`
-  - `EtcdClusterManager::SetWorkerReady`
-  - `EtcdClusterManager::CheckWaitNodeTableComplete`
-  - `EtcdClusterManager::InformEtcdReconciliationDone`
-  - `EtcdClusterManager::VoluntaryScaleDown`
+  - `ClusterManager::Init`
+  - `ClusterManager::Shutdown`
+  - `ClusterManager::SetWorkerReady`
+  - `ClusterManager::CheckWaitNodeTableComplete`
+  - `ClusterManager::InformEtcdReconciliationDone`
+  - `ClusterManager::VoluntaryScaleDown`
 - Event handling entrypoints:
   - `EnqueEvent`
   - `DequeEventCallHandler`
@@ -107,7 +107,7 @@
 ## Main Dependencies
 
 - Upstream callers:
-  - `WorkerOCServer` creates ETCD store, constructs `ClusterInfo`, initializes `EtcdClusterManager`, starts services, and invokes voluntary scale-down during shutdown.
+  - `WorkerOCServer` creates ETCD store, constructs `ClusterInfo`, initializes `ClusterManager`, starts services, and invokes voluntary scale-down during shutdown.
   - `WorkerOCServiceImpl` checks node table completeness, sets health, updates ETCD node state to `ready`, and informs reconciliation completion.
   - master/object/stream services use route helpers and subscribe to cluster events.
 - Downstream modules:
@@ -125,7 +125,7 @@
 
 1. `WorkerOCServer::ConstructClusterInfo` checks backend health, then calls `ConstructClusterInfoViaEtcd`.
 2. `ConstructClusterInfoViaEtcd` creates required tables and loads local workers and the ETCD revision.
-3. `EtcdClusterManager::Init` installs the ETCD event handler, validates timeout flags, and caches ring/cluster prefixes.
+3. `ClusterManager::Init` installs the ETCD event handler, validates timeout flags, and caches ring/cluster prefixes.
 4. It starts the node utility thread and orphan-node monitor before processing startup nodes.
 5. `SetupInitialClusterNodes` enqueues fake local PUT events for already known workers, except the local worker when ETCD is available.
 6. It starts watches for ring and cluster prefixes from the startup revision.
@@ -142,7 +142,7 @@ Important nuance:
 1. `WorkerOCServer::ConstructClusterInfo` falls back to `ConstructClusterInfoDuringEtcdCrash`.
 2. The worker loads hash-ring and cluster-table information from the local RocksDB-backed cluster store.
 3. It queries a bounded number of active local workers to reconcile cluster state.
-4. `EtcdClusterManager::Init` calls `HashRing::InitWithoutEtcd` with the local ring snapshot.
+4. `ClusterManager::Init` calls `HashRing::InitWithoutEtcd` with the local ring snapshot.
 5. Keepalive is still initialized with `isEtcdAvailableWhenStart=false`, which marks the local state as downgrade restart (`d_rst`).
 
 Important nuance:
@@ -193,7 +193,7 @@ Important nuance:
 
 1. `WorkerOCServer::PreShutDown` detects scale-in mode and starts client/async-task drain.
 2. It updates ETCD node state to `exiting` before waiting for local clients to leave.
-3. It calls `EtcdClusterManager::VoluntaryScaleDown`, which marks local `isLeaving_` and delegates to `HashRing::VoluntaryScaleDown`.
+3. It calls `ClusterManager::VoluntaryScaleDown`, which marks local `isLeaving_` and delegates to `HashRing::VoluntaryScaleDown`.
 4. Hash-ring migration moves metadata/data and eventually erases the worker from the ring.
 5. When a DELETE event arrives for a node whose last cluster state was `exiting`, `HandleExitingNodeRemoveEvent` distinguishes crash-during-leaving from successful voluntary exit.
 6. Successful voluntary exit clears primary-copy state, dead-worker APIs, worker metadata, and the cluster-node table entry.
@@ -230,10 +230,10 @@ Important nuance:
 
 - Build commands:
   - CMake: `cluster_manager` and `worker_health_check` static libraries.
-  - Bazel: `//src/datasystem/worker/cluster_manager:etcd_cluster_manager`
+  - Bazel: `//src/datasystem/worker/cluster_manager:cluster_manager`
   - Bazel: `//src/datasystem/worker/cluster_manager:worker_health_check`
 - Representative tests:
-  - `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
   - `tests/st/client/kv_cache/kv_client_scale_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
   - `tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp`
@@ -262,7 +262,7 @@ Important nuance:
 - Observability or debugging hooks:
   - `NodesToString`;
   - priority queue size logs in `EnqueEvent`;
-  - inject points beginning with `EtcdClusterManager.*`, `worker.RunKeepAliveTask`, `recover.*`, and `WorkerOCServiceImpl.Reconciliation.*`;
+  - inject points beginning with `ClusterManager.*`, `worker.RunKeepAliveTask`, `recover.*`, and `WorkerOCServiceImpl.Reconciliation.*`;
   - worker health file path from `health_check_path`.
 
 ## Current Design Weaknesses

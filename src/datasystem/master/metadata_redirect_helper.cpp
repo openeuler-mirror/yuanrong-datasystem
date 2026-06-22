@@ -28,7 +28,7 @@ MetadataRedirectHelper::~MetadataRedirectHelper()
 
 void MetadataRedirectHelper::Shutdown()
 {
-    etcdCM_ = nullptr;
+    clusterManager_ = nullptr;
 }
 
 void MetadataRedirectHelper::CheckNeedToRedirectOrNot(const std::string &id, bool &needRedirect,

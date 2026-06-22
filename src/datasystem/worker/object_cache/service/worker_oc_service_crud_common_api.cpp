@@ -107,7 +107,7 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       workerDevOcManager_(initParam.workerDevOcManager),
       asyncSendManager_(initParam.asyncSendManager),
       metadataSize_(initParam.metadataSize),
-      etcdCM_(initParam.etcdCM),
+      clusterManager_(initParam.clusterManager),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {
     supportL2Storage_ = GetCurrentStorageType();
@@ -322,7 +322,7 @@ Status WorkerOcServiceCrudCommonApi::BatchLockWithInsert(
 Status WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
 {
     std::string dbName;
-    RETURN_IF_NOT_OK(etcdCM_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
+    RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
     g_MetaRocksDbName = dbName;
     return Status::OK();
 }
@@ -368,7 +368,7 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
                                                redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
-        auto status = etcdCM_->CheckConnection(redirectMasterAddr);
+        auto status = clusterManager_->CheckConnection(redirectMasterAddr);
         if (status.IsError()) {
             LOG(WARNING) << "remove meta failed: " << status.ToString();
             failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
@@ -416,10 +416,10 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
         ++count;
         if (count >= objBatch) {
             // dest node failed or local node failed, stop remove.
-            if (etcdCM_->CheckVoluntaryScaleDown()) {
+            if (clusterManager_->CheckVoluntaryScaleDown()) {
                 break;
             }
-            auto status = etcdCM_->CheckConnection(objectKey);
+            auto status = clusterManager_->CheckConnection(objectKey);
             if (status.IsError()) {
                 LOG(WARNING) << "remove meta failed: " << status.ToString();
                 failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
@@ -477,7 +477,7 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
     std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
     std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
 {
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(objKeys);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objKeys);
     for (const auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> currentObjectKeysRemove = item.second;

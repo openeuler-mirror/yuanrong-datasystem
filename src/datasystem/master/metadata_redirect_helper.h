@@ -38,7 +38,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/utils.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 DS_DECLARE_bool(enable_redirect);
 
@@ -48,7 +48,7 @@ using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
 
 class MetadataRedirectHelper {
 public:
-    MetadataRedirectHelper(EtcdClusterManager *cm) : etcdCM_(cm)
+    MetadataRedirectHelper(ClusterManager *cm) : clusterManager_(cm)
     {
     }
 
@@ -211,7 +211,7 @@ protected:
     }
 
     TbbMigratingTable migratingItems_;
-    EtcdClusterManager *etcdCM_ = nullptr;
+    ClusterManager *clusterManager_ = nullptr;
 };
 }  // namespace master
 }  // namespace datasystem

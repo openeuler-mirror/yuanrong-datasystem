@@ -33,7 +33,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -296,11 +296,11 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to etcd cluster manager
+     * @param[in] cm The pointer to cluster manager
      */
-    void SetClusterManager(EtcdClusterManager *cm)
+    void SetClusterManager(ClusterManager *cm)
     {
-        etcdCM_ = cm;
+        clusterManager_ = cm;
     }
 
     /**
@@ -473,7 +473,7 @@ private:
     HostPort masterAddress_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;

@@ -29,7 +29,7 @@
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
@@ -47,10 +47,10 @@ public:
     /**
      * @brief Init NodeSelector.
      * @param[in] localAddress The worker local address.
-     * @param[in] etcdCM The pointer to etcd cluster manager.
+     * @param[in] clusterManager The pointer to cluster manager.
      * @param[in] apiManager The manager of worker master api.
      */
-    void Init(const std::string &localAddress, EtcdClusterManager *etcdCM,
+    void Init(const std::string &localAddress, ClusterManager *clusterManager,
               std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager);
 
     /**
@@ -148,7 +148,7 @@ private:
     void WorkerThread();
 
     std::string localAddress_;
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_{ nullptr };
 
     std::atomic<bool> running_;

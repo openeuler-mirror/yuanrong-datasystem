@@ -334,10 +334,10 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     }
     // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
     // master will only manage the replica through the location.
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(successIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(successIds);
     std::unordered_set<std::string> needSetDeleteObjectKeys;
     needSetDeleteObjectKeys.reserve(successIds.size());
-    etcdCM_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
+    clusterManager_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
     for (const auto &objectKey : needSetDeleteObjectKeys) {
         auto it = entries.find(ReadKey(objectKey));
         if (it != entries.end()) {
@@ -391,10 +391,10 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     }
     // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
     // master will only manage the replica through the location.
-    auto objKeysGrpByMaster = etcdCM_->GroupObjKeysByMasterHostPort(successIds);
+    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(successIds);
     std::unordered_set<std::string> needSetDeleteObjectKeys;
     needSetDeleteObjectKeys.reserve(successIds.size());
-    etcdCM_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
+    clusterManager_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
     for (const auto &objectKey : needSetDeleteObjectKeys) {
         auto it = entries.find(ReadKey(objectKey));
         if (it != entries.end()) {
@@ -696,7 +696,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             HostPort hostAddr;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
                                              FormatString("Parse object address %s failed", address));
-            checkConnectStatus = etcdCM_->CheckConnection(hostAddr);
+            checkConnectStatus = clusterManager_->CheckConnection(hostAddr);
             CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");

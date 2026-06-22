@@ -2340,7 +2340,7 @@ TEST_F(OCRemoteClientIdDfxTest, MasterTimeout)
     InitTestClient(1, client1, timeoutMs_);
 
     DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "EtcdClusterManager.checkConnection", "return(K_MASTER_TIMEOUT)"));
+        cluster_->SetInjectAction(WORKER, 1, "ClusterManager.checkConnection", "return(K_MASTER_TIMEOUT)"));
     {
         // fail if no success objects
         std::string objectKey = "obj";
@@ -2351,7 +2351,7 @@ TEST_F(OCRemoteClientIdDfxTest, MasterTimeout)
         EXPECT_TRUE(!failObjects.empty()) << VectorToString(failObjects);
     }
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "EtcdClusterManager.checkConnection",
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "ClusterManager.checkConnection",
                                            "1*return(K_MASTER_TIMEOUT)->1*return(K_OK)"));
     {
         // success if partly fail, and return the fail ids

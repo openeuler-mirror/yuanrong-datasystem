@@ -95,9 +95,9 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        etcdCM_ = new EtcdClusterManager(localAddr_, localAddr_, clusterStore_.get(), nullptr);
+        clusterManager_ = new ClusterManager(localAddr_, localAddr_, clusterStore_.get(), nullptr);
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
-        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_, apiManager_);
+        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), clusterManager_, apiManager_);
     }
 
     void MockHashRingGetStandbyWorkerByAddr(const std::queue<std::string> &queues)
@@ -187,7 +187,7 @@ private:
     HostPort localAddr_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<EtcdClusterStore> clusterStore_;
-    EtcdClusterManager *etcdCM_;
+    ClusterManager *clusterManager_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_ { nullptr };
 };
 
@@ -616,10 +616,10 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots) {
     EXPECT_EQ(rsp.stats_size(), 1);
 }
 
-class EtcdCmHelper : public EtcdClusterManager {
+class EtcdCmHelper : public ClusterManager {
 public:
     EtcdCmHelper(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore)
-        : EtcdClusterManager(workerAddress, masterAddress, clusterStore, nullptr)
+        : ClusterManager(workerAddress, masterAddress, clusterStore, nullptr)
     {
     }
 
@@ -662,9 +662,9 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
         clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        etcdCM_ = std::make_shared<EtcdCmHelper>(localAddr_, localAddr_, clusterStore_.get());
+        clusterManager_ = std::make_shared<EtcdCmHelper>(localAddr_, localAddr_, clusterStore_.get());
         apiManager_ = std::make_shared<datasystem::worker::WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
-        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), etcdCM_.get(), apiManager_);
+        NodeSelectorHelper::Instance().Init(localAddr_.ToString(), clusterManager_.get(), apiManager_);
     }
 
     void InsertWorker(HashRingPb &pb, const std::string &id, WorkerPb &&workerPb)
@@ -692,7 +692,7 @@ public:
         InsertWorker(ringPb, "127.0.0.1:1112", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
         InsertWorker(ringPb, "127.0.0.1:1113", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 3221225469 }));
         std::unique_ptr<worker::HashRing> ring = std::make_unique<worker::HashRing>("127.0.0.1:1111", clusterStore_.get());
-        etcdCM_->SetHashRing(ring, ringPb);
+        clusterManager_->SetHashRing(ring, ringPb);
     }
 
     void MockWorkerMigrateData(MigrateDataReqPb &outReq)
@@ -739,7 +739,7 @@ public:
 
 protected:
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::shared_ptr<EtcdCmHelper> etcdCM_;
+    std::shared_ptr<EtcdCmHelper> clusterManager_;
     HostPort localAddr_;
     std::shared_ptr<datasystem::worker::WorkerMasterOcApiManager> apiManager_;
     std::unique_ptr<EtcdStore> etcdStore_;
@@ -758,7 +758,7 @@ TEST_F(MigrateL2DataTest, MigrateL2Data)
 
     HostPort addr;
     DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
-    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_.get(), addr, akSkManager_, objectTable_, "");
     migrator.Init();
     MigrateDataReqPb req;
     MockWorkerMigrateData(req);
@@ -782,7 +782,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataSameNodeRetryMax)
 
     HostPort addr;
     DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
-    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_.get(), addr, akSkManager_, objectTable_, "");
     migrator.Init();
 
     BINEXPECT_CALL(&DataMigrator::ConnectAndCreateRemoteApi, (_, _))
@@ -842,7 +842,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataPartialSuccessThenNoSpaceKeepSameNode)
 
     HostPort addr;
     DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
-    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_.get(), addr, akSkManager_, objectTable_, "");
     migrator.Init();
 
     std::set<std::string> connectedAddrs;
@@ -908,7 +908,7 @@ TEST_F(MigrateL2DataTest, MigrateL2DataAllFailedThenRedirectRetry)
 
     HostPort addr;
     DS_ASSERT_OK(addr.ParseString("127.0.0.1:1111"));
-    DataMigrator migrator(MigrateType::SCALE_DOWN, etcdCM_.get(), addr, akSkManager_, objectTable_, "");
+    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_.get(), addr, akSkManager_, objectTable_, "");
     migrator.Init();
 
     std::set<std::string> connectedAddrs;

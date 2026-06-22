@@ -67,7 +67,7 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .etcdCM = nullptr,
+            .clusterManager = nullptr,
         };
         deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, nullptr, nullptr, localAddress_, nullptr);
         gRefProc_ =

@@ -22,7 +22,7 @@
 
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
 
 namespace datasystem {
@@ -55,8 +55,11 @@ public:
         FINAL
     };
 
-    ScaleDownNodeSelector(EtcdClusterManager *etcdCM, HostPort &localAddress)
-        : etcdCM_(etcdCM), localAddress_(localAddress), currentStage_(Stage::FIRST), currentDiskStage_(Stage::FIRST)
+    ScaleDownNodeSelector(ClusterManager *clusterManager, HostPort &localAddress)
+        : clusterManager_(clusterManager),
+          localAddress_(localAddress),
+          currentStage_(Stage::FIRST),
+          currentDiskStage_(Stage::FIRST)
     {
     }
 
@@ -109,7 +112,7 @@ private:
     std::unordered_set<std::string> visitedAddresses_;
     std::unordered_set<std::string> visitedAddressesForDisk_;
 
-    EtcdClusterManager *etcdCM_{ nullptr };
+    ClusterManager *clusterManager_{ nullptr };
     HostPort &localAddress_;
 
     Stage currentStage_;

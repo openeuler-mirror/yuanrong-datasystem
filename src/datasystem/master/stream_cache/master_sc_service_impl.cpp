@@ -35,7 +35,8 @@ namespace datasystem {
 namespace master {
 MasterSCServiceImpl::MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
                                          MetadataManagerHolder *metadataManagerHolder)
-    : MasterSCService(masterAddress), akSkManager_(std::move(akSkManager)),
+    : MasterSCService(masterAddress),
+      akSkManager_(std::move(akSkManager)),
       metadataManagerHolder_(metadataManagerHolder)
 {
 }
@@ -53,8 +54,8 @@ Status MasterSCServiceImpl::Init()
     size_t minThreads = std::min<size_t>(MIN_THREADS, FLAGS_master_sc_thread_num);
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ =
                                    std::make_unique<ThreadPool>(minThreads, FLAGS_master_sc_thread_num, "MScThreads"));
-    RETURN_IF_NOT_OK(
-        SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, etcdCM_, metadataManagerHolder_));
+    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, clusterManager_,
+                                                               metadataManagerHolder_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "MasterSCServiceImpl initialization success";
     return Status::OK();
 }
@@ -125,7 +126,7 @@ Status MasterSCServiceImpl::CloseProducerImpl(
     } else {
         infoMsg = FormatString("Number of producers: %d", req.producer_infos_size());
     }
-    LOG(INFO) << "Master receive close producer request: " << infoMsg<< " with timeout: "<<req.timeout();
+    LOG(INFO) << "Master receive close producer request: " << infoMsg << " with timeout: " << req.timeout();
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.CloseProducer");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
@@ -178,9 +179,9 @@ Status MasterSCServiceImpl::SubscribeImpl(
             Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->Subscribe(req, rsp);
-            CheckErrorReturn(
-                rc, rsp, FormatString("[S:%s] SubscribeImpl failed with rc",
-                req.consumer_meta().stream_name()), serverApi);
+            CheckErrorReturn(rc, rsp,
+                             FormatString("[S:%s] SubscribeImpl failed with rc", req.consumer_meta().stream_name()),
+                             serverApi);
         });
     } else {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(scMetadataManager->Subscribe(req, rsp), "Subscribe failed");
@@ -218,8 +219,9 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
             Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->CloseConsumer(req, rsp);
-            CheckErrorReturn(rc, rsp, FormatString("[S:%s] CloseConsumer failed with rc",
-                req.consumer_meta().stream_name()), serverApi);
+            CheckErrorReturn(rc, rsp,
+                             FormatString("[S:%s] CloseConsumer failed with rc", req.consumer_meta().stream_name()),
+                             serverApi);
         });
     } else {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(scMetadataManager->CloseConsumer(req, rsp), "CloseConsumer failed");
@@ -275,17 +277,17 @@ Status MasterSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &r
 Status MasterSCServiceImpl::StartCheckMetadata()
 {
     bool isRestart = false;
-    RETURN_IF_NOT_OK(etcdCM_->IsRestart(isRestart));
-    if (!isRestart || !etcdCM_->IsEtcdAvailableWhenStart()) {
+    RETURN_IF_NOT_OK(clusterManager_->IsRestart(isRestart));
+    if (!isRestart || !clusterManager_->IsEtcdAvailableWhenStart()) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(etcdCM_->CheckWaitNodeTableComplete());
+    RETURN_IF_NOT_OK(clusterManager_->CheckWaitNodeTableComplete());
     std::vector<HostPort> nodeAddrs;
     // Why does it get node list from etcd instead of cluster manager or hashring?
     // Because in case of centralized master, we have no hashring, and can get list from only etcd and cluster manager.
     // We want a complete list without absence of any running node. Since the list in cluster manager is from etcd,
     // getting list directly from etcd can avoid possible delay in rpc resulting in miss of nodes.
-    RETURN_IF_NOT_OK(etcdCM_->GetNodeAddrListFromEtcd(nodeAddrs));
+    RETURN_IF_NOT_OK(clusterManager_->GetNodeAddrListFromEtcd(nodeAddrs));
     const size_t maxThreadNum = 20;
     // Add a condition to forbid thread pool size creation with minThreadNum 0 to avoid cpp runtime exception.
     if (nodeAddrs.empty()) {

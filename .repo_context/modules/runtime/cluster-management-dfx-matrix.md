@@ -13,7 +13,7 @@ Covered scenario families:
 
 Source of truth:
 
-- `src/datasystem/worker/cluster_manager/etcd_cluster_manager.cpp`
+- `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
 - `src/datasystem/worker/cluster_manager/cluster_node.h`
 - `src/datasystem/worker/hash_ring/hash_ring.cpp`
 - `src/datasystem/worker/hash_ring/hash_ring_allocator.cpp`
@@ -31,11 +31,11 @@ Key tests and inject anchors:
 - `tests/st/client/kv_cache/kv_client_scale_test.cpp`
 - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
 - `tests/st/client/kv_cache/kv_client_hashring_healing_test.cpp`
-- `tests/st/worker/object_cache/etcd_cluster_manager_test.cpp`
+- `tests/st/worker/object_cache/cluster_manager_test.cpp`
 - inject points such as `worker.HashRing.TryAdd`, `SubmitScaleDownTask.skip`,
   `HashRing.NotReceiveUpdate`, `EtcdWatch.StoreEvents.IgnoreEvent`,
   `worker.RunKeepAliveTask`, `worker.KeepAlive.send`, and
-  `EtcdClusterManager.CheckWaitNodeTableComplete.*`
+  `ClusterManager.CheckWaitNodeTableComplete.*`
 
 ## Coverage Axes
 
@@ -116,7 +116,7 @@ Use these axes when adding or reviewing cases. A DFX claim is incomplete if it o
 | ID | Scenario / fault point | Primary path | State to inspect | Expected DFX behavior | Tests / hooks |
 | --- | --- | --- | --- | --- | --- |
 | RS-01 | Normal worker restart with ETCD available | keepalive `restart`; `HandleNodeAdditionEvent` | cluster node active/failed/timeout, event type `restart` | Master triggers reconciliation when current node is master; worker becomes ready after reconciliation or controlled give-up. | `RestartAllClusterManagers1`, `RestartAllClusterManagers2` |
-| RS-02 | Restart from failed state | `HandleNodeStateToActive` and `HandleFailedNodeToActive` | found node `FAILED`, event type `restart` or `recover` | Master sends local-failed-node and metadata recovery events; dead worker APIs are removed. | restart flows in `etcd_cluster_manager_test.cpp` |
+| RS-02 | Restart from failed state | `HandleNodeStateToActive` and `HandleFailedNodeToActive` | found node `FAILED`, event type `restart` or `recover` | Master sends local-failed-node and metadata recovery events; dead worker APIs are removed. | restart flows in `cluster_manager_test.cpp` |
 | RS-03 | Restart from timeout/network-recovery state | `ProcessNetworkRecovery` | found node `TIMEOUT`, event type `recover` or `d_rst` | Network recovery event runs; `hashRing_->RecoverMigrationTask` restores unfinished scale-up work for that node. | `LEVEL1_ClearWorkerWhenEtcdWorkerNetCrash`, keepalive tests |
 | RS-04 | Downgrade restart after ETCD unavailable at startup | keepalive state `d_rst` | `InitKeepAlive(..., isEtcdAvailableWhenStart=false)`, event type `d_rst` | Node is treated as downgrade restart; new-node metadata check runs after ETCD recovery. | `LEVEL1_TestRestartWorkerDuringEtcdCrash` |
 | RS-05 | Restart while scale-up or scale-down tasks are pending | `RestoreScalingTaskIfNeeded(true)` and task executor restore | non-empty `add_node_info` or `del_node_info` at startup | Worker restores scale-up and scale-down tasks after becoming healthy enough; restart restoration waits for health in task executor. | `LEVEL2_RestoreScaleDown`, `LEVEL2_StartWhenScalingDown` |

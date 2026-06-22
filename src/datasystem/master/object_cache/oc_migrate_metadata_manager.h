@@ -37,7 +37,7 @@
 #include "datasystem/master/object_cache/master_master_oc_api.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/etcd_cluster_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -75,7 +75,7 @@ public:
      * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager, EtcdClusterManager *cm,
+    Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager, ClusterManager *cm,
                 MetadataManagerHolder *metadataManagerHolder);
 
     /**
@@ -267,7 +267,7 @@ private:
 
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
-    EtcdClusterManager *cm_{ nullptr };
+    ClusterManager *cm_{ nullptr };
     std::unique_ptr<ThreadPool> threadPool_;
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed objectkeys>>>
     TbbFutureThreadTable futureThread_;
