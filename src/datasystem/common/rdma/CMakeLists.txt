@@ -25,6 +25,11 @@ if (BUILD_WITH_URMA)
     )
     list(APPEND URMA_DEPEND_LIBS dl)
     list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
+    list(APPEND URMA_DEPEND_LIBS string_ref)
+endif()
+
+if (BUILD_WITH_URMA OR BUILD_HETERO)
+    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
 endif()
 
 if (BUILD_HETERO)
@@ -32,7 +37,6 @@ if (BUILD_HETERO)
     if (BUILD_HETERO_GPU)
         list(APPEND URMA_DEPEND_LIBS common_cuda_device)
     endif()
-    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
     list(APPEND URMA_SRCS
         npu/remote_h2d_manager.cpp
         npu/roce_transport.cpp
