@@ -86,6 +86,14 @@ public:
      */
     static Status FetchLogWithPattern(std::vector<std::string> &files, bool isRolling = false);
 
+    /**
+     * @brief Collect log files for a given severity, with optional PID-less fallback.
+     * @param[in] severity Log severity index.
+     * @param[in/out] files Set of filenames matching the patterns.
+     * @return Status::OK() if success.
+     */
+    static Status CollectLogFilesForSeverity(int severity, std::vector<std::string> &files);
+
 private:
     struct FileUnit {
         FileUnit(std::string fileName, size_t size) : fileName_(std::move(fileName)), size_(size)

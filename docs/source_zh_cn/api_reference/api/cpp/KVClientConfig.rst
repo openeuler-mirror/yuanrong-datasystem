@@ -72,7 +72,7 @@ KVClientConfig
 
     .. cpp:function:: Builder &LogWithoutPid(bool enable)
 
-       设置客户端日志文件名是否不带 pid。
+       设置客户端日志文件名是否不带 pid。默认为 false，即日志文件名默认带 pid。
 
     .. cpp:function:: Builder &AccessLogName(const std::string &name)
 

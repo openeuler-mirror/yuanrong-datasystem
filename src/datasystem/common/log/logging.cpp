@@ -55,9 +55,10 @@ constexpr uint32_t DEFAULT_MAX_LOG_FILE_NUM = 5;
 constexpr uint32_t HIGHEST_MAX_LOG_SIZE = 4096;
 constexpr bool DEFAULT_ALSO_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_CLIENT_LOG_MONITOR = true;
-constexpr bool DEFAULT_CLIENT_LOG_WITHOUT_PID = true;
+constexpr bool DEFAULT_CLIENT_LOG_WITHOUT_PID = false;
 constexpr bool DEFAULT_LOG_ASYNC_FLAG = true;
-constexpr bool DEFAULT_LOG_COMPRESS = true;
+constexpr bool DEFAULT_LOG_COMPRESS = false;
+constexpr bool DEFAULT_CLIENT_LOG_COMPRESS = false;
 constexpr bool DEFAULT_LOG_ONLY_WRITE_INFO_FILE = true;
 constexpr bool DEFAULT_LOG_TO_STDERR = false;
 constexpr bool DEFAULT_ENABLE_PERF_TRACE_LOG = false;
@@ -312,8 +313,8 @@ void Logging::InitClientBasicConfig()
         FLAGS_max_log_file_num = GetUint32FromEnv(MAX_LOG_FILE_NUM_ENV.c_str(), DEFAULT_MAX_LOG_FILE_NUM);
     }
 
-    if (!WasCommandLineFlagSpecified("log_compress")) {
-        FLAGS_log_compress = GetBoolFromEnv(LOG_COMPRESS_ENV.c_str(), DEFAULT_LOG_COMPRESS);
+    if (FLAGS_log_compress == DEFAULT_LOG_COMPRESS) {
+        FLAGS_log_compress = GetBoolFromEnv(LOG_COMPRESS_ENV.c_str(), DEFAULT_CLIENT_LOG_COMPRESS);
     }
 
     if (!WasCommandLineFlagSpecified("v")) {
@@ -458,8 +459,7 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
         if (!FLAGS_log_filename.empty()) {
             clientLogName = FLAGS_log_filename;
         } else {
-            const std::string defaultClientLogName = GetClientLogName(logFilename, getpid());
-            clientLogName = defaultClientLogName;
+            clientLogName = GetClientLogName(logFilename, getpid());
 
             // Allow overriding client log filename via environment variable
             std::string logName = GetStringFromEnv(LOG_NAME_ENV.c_str(), "");
