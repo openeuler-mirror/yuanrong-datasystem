@@ -262,7 +262,6 @@ spec:
         - -stream_idle_time_s={{ $.Values.global.rpc.streamIdleTimes }}
         - -enable_distributed_master={{ $.Values.global.reliability.enableDistributedMaster }}
         - -enable_p2p_transfer={{ $.Values.global.performance.enableP2pTransfer }}
-        - -rolling_update_timeout_s={{ $.Values.global.rollingUpdateTimeoutS }}
         - -enable_worker_worker_batch_get={{ $.Values.global.performance.enableWorkerWorkerBatchGet }}
         - -enable_rdma={{ $.Values.global.performance.enableRdma }}
         - -rdma_register_whole_arena={{ $.Values.global.performance.rdmaRegisterWholeArena }}
