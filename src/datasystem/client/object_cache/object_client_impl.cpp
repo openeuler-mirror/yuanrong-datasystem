@@ -64,7 +64,9 @@
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
+#ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -1692,7 +1694,7 @@ static Status ImportSegAndReadHostMemory(std::vector<DeviceBlobList *> &devBlobL
 {
     (void)devBlobList;
     (void)existBufferList;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     // 1. Initialize communicator connection.
     // Note that client uses worker side root info as the key.
     PerfPoint point(PerfKey::CLIENT_IMPORT_SEG_AND_READ);

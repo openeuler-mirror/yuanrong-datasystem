@@ -24,7 +24,7 @@
 #ifdef USE_RDMA
 #include "datasystem/common/rdma/ucp_manager.h"
 #endif
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 
@@ -53,7 +53,7 @@ Status RegisterHostMemory(void *segAddress, const uint64_t &segSize)
 {
     (void)segAddress;
     (void)segSize;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     if (IsRemoteH2DEnabled() && FLAGS_urma_register_whole_arena && segAddress != nullptr) {
         RETURN_IF_NOT_OK(RemoteH2DManager::Instance().RegisterHostMemory(segAddress, segSize));
     }
@@ -76,7 +76,7 @@ bool IsFastTransportEnabled()
 
 bool IsRemoteH2DEnabled()
 {
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     return RemoteH2DManager::IsRemoteH2DEnabled();
 #else
     return false;

@@ -41,6 +41,7 @@ class AscendDeviceManagerTest : public CommonTest {
     {
         const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
         if (ascend_root == nullptr) {
+            setenv("DS_TEST_FORCE_ASCEND_DEVICE_MANAGER", "1", 1);
             BINEXPECT_CALL(&AclDeviceManager::Instance, ()).WillRepeatedly(Return(&managerMock_));
         } else {
             LOG(ERROR) << "7777 not AclDeviceManager::Instance MOCK";
@@ -48,6 +49,7 @@ class AscendDeviceManagerTest : public CommonTest {
     }
     void TearDown() override
     {
+        unsetenv("DS_TEST_FORCE_ASCEND_DEVICE_MANAGER");
     }
 
 public:

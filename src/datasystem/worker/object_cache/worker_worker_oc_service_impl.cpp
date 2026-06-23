@@ -37,7 +37,9 @@
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -365,7 +367,7 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
 Status WorkerWorkerOCServiceImpl::PrepareBatchRh2dContext(const GetObjectRemoteReqPb &req,
                                                           BatchRh2dContext &batchRh2dContext)
 {
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     if (!IsRemoteH2DEnabled() || req.comm_id().empty()) {
         return Status::OK();
     }
@@ -444,7 +446,7 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
     (void)rsp;
     (void)batchRootInfo;
     (void)batchRh2dContext;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     PerfPoint point(PerfKey::WORKER_REMOTE_GET_PREPARE_RH2D_HOST_INFO);
 
     int32_t devId = -1;

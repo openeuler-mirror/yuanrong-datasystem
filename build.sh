@@ -19,7 +19,7 @@ source /etc/profile.d/*.sh
 readonly USAGE="
 Usage: bash build.sh [-h] [-r] [-d] [-b cmake|bazel] [-c off/on/html] [-t off|build|run] [-s on|off] [-j <thread_num>]
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
-                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off] [-e on/off]
+                     [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off|gpu|npu|all] [-e on/off]
                      [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on] [-T on/off]
                      [-A on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
@@ -43,7 +43,13 @@ Options:
        at that specified location for search.
     -G Build Go sdk, choose from: on/off, default: off.
     -v Specified version.The default value is using 'cat ./VERSION'.
-    -X Compiles the code for heterogeneous objects. The options are on and off. The default value is 'on'.
+    -X Compiles the code for heterogeneous objects. Options: on, off, gpu, npu, all. The default value is 'on'.
+       GPU/all submodes are supported by CMake only; Bazel supports on/off/npu compatibility mode.
+       on   = default hetero (Ascend NPU, GPU off)
+       off  = disable hetero
+       gpu  = GPU only (CUDA), no Ascend required
+       npu  = NPU only (Ascend)
+       all  = both NPU and GPU
     -T Compiles the code for os pipeline h2d feature in kvclient. The options are on and off. The default value is 'off'.
 
     For communication layer
@@ -262,8 +268,39 @@ function main() {
       echo "${OPTARG}" > "${BASE_DIR}/VERSION"
       ;;
     X)
-      check_on_off "${OPTARG}" X
-      BUILD_HETERO="${OPTARG}"
+      BUILD_HETERO_MODE="${OPTARG}"
+      case "${OPTARG}" in
+        on)
+          BUILD_HETERO="on"
+          BUILD_HETERO_NPU="on"
+          BUILD_HETERO_GPU="off"
+          ;;
+        all)
+          BUILD_HETERO="on"
+          BUILD_HETERO_NPU="on"
+          BUILD_HETERO_GPU="on"
+          ;;
+        off)
+          BUILD_HETERO="off"
+          BUILD_HETERO_NPU="off"
+          BUILD_HETERO_GPU="off"
+          ;;
+        gpu)
+          BUILD_HETERO="on"
+          BUILD_HETERO_NPU="off"
+          BUILD_HETERO_GPU="on"
+          ;;
+        npu)
+          BUILD_HETERO="on"
+          BUILD_HETERO_NPU="on"
+          BUILD_HETERO_GPU="off"
+          ;;
+        *)
+          echo -e "Invalid value ${OPTARG} for option -X, choose from on/off/gpu/npu/all"
+          echo -e "${USAGE}"
+          exit 1
+          ;;
+      esac
       ;;
     T)
       check_on_off "${OPTARG}" T
@@ -303,18 +340,29 @@ function main() {
     exit 1
   fi
 
+  if [[ "${BUILD_SYSTEM}" == "bazel" && ( "${BUILD_HETERO_MODE}" == "gpu" || "${BUILD_HETERO_MODE}" == "all" ) ]]; then
+    go_die "ERROR: bazel mode does not support -X ${BUILD_HETERO_MODE}; use cmake or -X on/off/npu."
+  fi
+
   local start_time_s
   local end_time_s
   local sumTime
   start_time_s=$(date +%s)
-
   normalize_build_options
-
-  # Auto-detect Ascend environment for BUILD_HETERO
-  if is_on "${BUILD_HETERO}" && ! check_ascend_env; then
-    echo -e "-- [Warning] Ascend toolkit not found in the environment (checked: \$ASCEND_HOME_PATH, \$ASCEND_CUSTOM_PATH, /usr/local/Ascend/ascend-toolkit/latest). Setting -X to off. The build will not include Ascend capabilities."
-    BUILD_HETERO="off"
+  # Auto-detect Ascend environment only for the NPU backend.
+  if is_on "${BUILD_HETERO}" && is_on "${BUILD_HETERO_NPU}" && ! check_ascend_env; then
+    if is_on "${BUILD_HETERO_GPU}"; then
+      echo -e "-- [Warning] Ascend toolkit not found in the environment (checked: \$ASCEND_HOME_PATH, \$ASCEND_CUSTOM_PATH, /usr/local/Ascend/ascend-toolkit/latest). Disabling NPU backend and continuing with GPU backend."
+      BUILD_HETERO_NPU="off"
+    else
+      echo -e "-- [Warning] Ascend toolkit not found in the environment (checked: \$ASCEND_HOME_PATH, \$ASCEND_CUSTOM_PATH, /usr/local/Ascend/ascend-toolkit/latest). Cannot build NPU backend. Setting -X to off."
+      echo -e "-- To build only GPU (CUDA) support, use: bash build.sh -X gpu"
+      BUILD_HETERO="off"
+      BUILD_HETERO_NPU="off"
+      BUILD_HETERO_GPU="off"
+    fi
   fi
+
 
   echo -e "-- Build system: ${BUILD_SYSTEM}"
 

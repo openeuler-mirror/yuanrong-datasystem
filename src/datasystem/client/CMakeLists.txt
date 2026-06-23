@@ -60,7 +60,6 @@ list(APPEND CLIENT_DEPEND_LIBS
         worker_object_protos_client
         worker_stream_protos_client
         common_device
-        common_acl_device
         common_shared_memory
         client_mmap_static
         common_rdma
@@ -70,6 +69,10 @@ list(APPEND CLIENT_DEPEND_LIBS
         gRPC::grpc++
         common_etcd_client
         worker_transport_api)
+
+if (BUILD_HETERO_NPU)
+    list(APPEND CLIENT_DEPEND_LIBS common_acl_device)
+endif()
 
 if (BUILD_HETERO_GPU)
     list(APPEND CLIENT_DEPEND_LIBS common_cuda_device)

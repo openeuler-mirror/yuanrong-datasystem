@@ -19,14 +19,16 @@
 #include <chrono>
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
+#ifdef USE_NPU
+#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
+#endif
 
 namespace datasystem {
 Status GetClientCommUuid(std::string &commId)
 {
     (void)commId;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     if (IsRemoteH2DEnabled()) {
         RETURN_IF_NOT_OK(RemoteH2DManager::Instance().GetClientCommUuid(commId));
     }
@@ -39,7 +41,7 @@ Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std:
     (void)enableRemoteH2D;
     (void)devId;
     (void)localIp;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     RETURN_IF_NOT_OK(RemoteH2DManager::SetClientRemoteH2DConfig(enableRemoteH2D, devId, localIp));
 #endif
     return Status::OK();
@@ -48,7 +50,7 @@ Status SetClientRemoteH2DConfig(bool enableRemoteH2D, uint32_t devId, const std:
 Status SetRH2DLocalEndpointIp(const std::string &localIp)
 {
     (void)localIp;
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
     RETURN_IF_NOT_OK(RemoteH2DManager::SetRH2DLocalEndpointIp(localIp));
 #endif
     return Status::OK();

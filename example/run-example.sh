@@ -28,6 +28,7 @@ function get_var_from_cmake() {
 }
 ds_output_dir=$(get_var_from_cmake "INSTALL_DIR" "$config_file")
 run_hetero=$(get_var_from_cmake "BUILD_HETERO" "$config_file")
+run_hetero_npu=$(get_var_from_cmake "BUILD_HETERO_NPU" "$config_file")
 run_python=$(get_var_from_cmake "PACKAGE_PYTHON" "$config_file")
 run_java=$(get_var_from_cmake "PACKAGE_JAVA" "$config_file")
 
@@ -95,7 +96,7 @@ ${example_cpp_dir}/stream_client_example "127.0.0.1" "${worker_port}"
 ${example_cpp_dir}/datasystem_example "127.0.0.1" "${worker_port}"
 ${example_cpp_dir}/object_client_example "127.0.0.1" "${worker_port}" "1000" "false"
 ${example_cpp_dir}/kv_client_example "127.0.0.1" "${worker_port}"
-if [ "x$run_hetero" == "xon" ]; then
+if [ "x$run_hetero" == "xon" ] && [ "x$run_hetero_npu" == "xon" ]; then
     ${example_cpp_dir}/hetero_client_example "127.0.0.1" "${worker_port}"
 fi
 export LD_LIBRARY_PATH="${old_ld_path}"
@@ -105,7 +106,7 @@ if [ "x$run_python" == "xon" ]; then
     echo -e "---- Running python example..."
     python ${example_python_dir}/object_client_example.py --host "127.0.0.1" --port "${worker_port}"
     python ${example_python_dir}/kv_client_example.py --host "127.0.0.1" --port "${worker_port}"
-    if [ "x$run_hetero" == "xon" ]; then
+    if [ "x$run_hetero" == "xon" ] && [ "x$run_hetero_npu" == "xon" ]; then
         python ${example_python_dir}/hetero_client_example.py --host "127.0.0.1" --port "${worker_port}"
         python ${example_python_dir}/ds_tensor_client_example.py --host "127.0.0.1" --port "${worker_port}"
     fi

@@ -22,27 +22,64 @@ import random
 import time
 import unittest
 
+is_numpy_exist = True
 is_torch_exist = True
+is_acl_exist = True
+is_torch_npu_exist = True
 is_mindspore_exist = True
 is_tensor_client_exist = True
+is_hetero_backend = os.getenv("BUILD_HETERO", "off") == "on"
+is_npu_backend = is_hetero_backend and os.getenv("BUILD_HETERO_NPU", "off") == "on"
+is_gpu_backend = is_hetero_backend and os.getenv("BUILD_HETERO_GPU", "off") == "on"
+
+try:
+    import numpy as np
+except ImportError:
+    is_numpy_exist = False
+    np = None
+
+try:
+    import torch
+except ImportError:
+    is_torch_exist = False
+    torch = None
 
 try:
     import acl
-    import numpy as np
-    import torch
+except ImportError:
+    is_acl_exist = False
+    acl = None
+
+try:
     import torch_npu
 except ImportError:
-    is_torch_exist = False
+    is_torch_npu_exist = False
+    torch_npu = None
 
 try:
     import mindspore as ms
 except ImportError:
     is_mindspore_exist = False
+    ms = None
 
 try:
     from yr.datasystem import DsTensorClient, CopyRange
 except ImportError:
     is_tensor_client_exist = False
+
+is_npu_base_ready = (
+    is_npu_backend and is_numpy_exist and is_torch_exist and is_acl_exist and is_tensor_client_exist
+)
+is_npu_torch_test_ready = is_npu_base_ready and is_torch_npu_exist
+is_npu_mindspore_test_ready = is_npu_base_ready and is_mindspore_exist
+is_gpu_test_ready = (
+    is_gpu_backend
+    and is_torch_exist
+    and is_tensor_client_exist
+    and torch is not None
+    and torch.cuda.is_available()
+)
+is_tensor_client_backend_ready = is_npu_base_ready or is_gpu_test_ready
 
 logging.basicConfig(
     level=logging.INFO,
@@ -86,8 +123,23 @@ class TestDsTensorClient(unittest.TestCase):
         client.init()
         return client
 
+    @staticmethod
+    def make_cuda_tensors(device_id, key_num, shape=(1, 1024), dtype=None):
+        """
+        Features: Generate real CUDA tensors for GPU hetero tests.
+        """
+        device = torch.device(f"cuda:{device_id}")
+        torch.cuda.set_device(device)
+        if dtype is None:
+            dtype = torch.float16
+        send_tensors = [torch.rand(shape, dtype=dtype, device=device) for _ in range(key_num)]
+        recv_tensors = [torch.zeros(shape, dtype=dtype, device=device) for _ in range(key_num)]
+        return send_tensors, recv_tensors
+
     @classmethod
     def setUpClass(cls):
+        if not is_tensor_client_backend_ready:
+            raise unittest.SkipTest("DsTensorClient python tests require a ready NPU or GPU hetero backend")
         root_dir = os.path.dirname(os.path.abspath('..'))
         worker_env_path = os.path.join(root_dir, 'output', 'datasystem', 'service', 'worker_config.json')
         with open(worker_env_path, "r") as f:
@@ -95,8 +147,8 @@ class TestDsTensorClient(unittest.TestCase):
 
         work_address = config.get("worker_address", {})
         work_addr = work_address.get("value")
-        cls.host, cls.port = work_addr.split(":")
-        cls.port = int(cls.port)
+        cls.work_ip, cls.work_port = work_addr.split(":")
+        cls.work_port = int(cls.work_port)
 
     def run_send_kvcache(self, device_id, keys, send_tensors_cpu):
         """Function to run dev_send."""
@@ -131,7 +183,7 @@ class TestDsTensorClient(unittest.TestCase):
         self.batch_tensors_check(recv_tensors, expect_tensors)
         acl.finalize()
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_dev_recv_and_dev_send(self):
         """Test dev_send and dev_recv"""
         src_device_id, dest_device_id = 6, 7
@@ -149,7 +201,7 @@ class TestDsTensorClient(unittest.TestCase):
                 os.waitpid(child1, 0)
                 os.waitpid(child2, 0)
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_async_mset_d2h_and_async_mget_h2d(self):
         """Test async_mset_d2h and async_mget_h2d."""
         device_id = 0
@@ -183,7 +235,30 @@ class TestDsTensorClient(unittest.TestCase):
 
         self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_gpu_test_ready, "Run when GPU hetero dependency is exist")
+    def test_async_mset_d2h_and_async_mget_h2d_with_cuda_tensor(self):
+        """Test async_mset_d2h and async_mget_h2d with CUDA tensor."""
+        device_id = 0
+        client = self.init_test_tensor_client(device_id)
+        key_num = 2
+        keys = [self.random_str(10) for _ in range(key_num)]
+        swap_out_tensors, swap_in_tensors = self.make_cuda_tensors(device_id, key_num)
+
+        timeout_ms = 10 * 1000
+
+        mset_future = client.async_mset_d2h(keys, swap_out_tensors)
+        failed_keys = mset_future.get(timeout_ms)
+        self.assertEqual(len(failed_keys), 0)
+
+        mget_future = client.async_mget_h2d(keys, swap_in_tensors)
+        failed_keys = mget_future.get(timeout_ms)
+        self.assertEqual(len(failed_keys), 0)
+
+        client.delete(keys)
+
+        self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
+
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_mset_d2h_and_mget_h2d(self):
         """Test mset_d2h and mget_h2d device object."""
         device_id = 7
@@ -209,7 +284,23 @@ class TestDsTensorClient(unittest.TestCase):
 
         self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_gpu_test_ready, "Run when GPU hetero dependency is exist")
+    def test_mset_d2h_and_mget_h2d_with_cuda_tensor(self):
+        """Test mset_d2h and mget_h2d with CUDA tensor."""
+        device_id = 0
+        client = self.init_test_tensor_client(device_id)
+        key_num = 2
+        keys = [self.random_str(10) for _ in range(key_num)]
+        swap_out_tensors, swap_in_tensors = self.make_cuda_tensors(device_id, key_num)
+
+        client.mset_d2h(keys, swap_out_tensors)
+        client.mget_h2d(keys, swap_in_tensors)
+
+        client.delete(keys)
+
+        self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
+
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_mset_and_mget_with_mindspore_tensor(self):
         """Test mset and mget device object."""
         device_id = 7
@@ -231,7 +322,7 @@ class TestDsTensorClient(unittest.TestCase):
 
         self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_mset_and_dev_mget_with_mindspore_tensor(self):
         """Test dev_mset and dev_mget device object."""
         src_device_id, dest_device_id = 0, 1
@@ -304,7 +395,7 @@ class TestDsTensorClient(unittest.TestCase):
         self.batch_tensors_check(recv_tensors, expect_tensors)
         acl.finalize()
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_put_page_attn_layerwise_d2d_and_get_page_attn_layerwise_d2d(self):
         """Test put_page_attn_layerwise_d2d and get_page_attn_layerwise_d2d."""
         src_device_id, dest_device_id = 6, 7
@@ -323,7 +414,7 @@ class TestDsTensorClient(unittest.TestCase):
                 os.waitpid(child1, 0)
                 os.waitpid(child2, 0)
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_mset_page_attn_blockwise_d2h_and_mget_page_attn_blockwise_h2d(self):
         """Test mset_page_attn_blockwise_d2h and mget_page_attn_blockwise_h2d."""
         device_id = 7
@@ -358,7 +449,7 @@ class TestDsTensorClient(unittest.TestCase):
 
         self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_async_dev_delete(self):
         """Test async_dev_delete device object."""
         src_device_id, dest_device_id = 4, 5
@@ -399,7 +490,7 @@ class TestDsTensorClient(unittest.TestCase):
                 os.waitpid(child1, 0)
                 os.waitpid(child2, 0)
 
-    @unittest.skipUnless(is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_tensor_client_backend_ready, "Run when hetero backend dependency is exist")
     def test_invalid_input(self):
         """Test invalid input."""
         device_id = 0
@@ -407,7 +498,7 @@ class TestDsTensorClient(unittest.TestCase):
         with self.assertRaises(TypeError):
             client.dev_send("only_key", [])
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_tensor_is_not_contiguous(self):
         """Test non-contiguous tensor."""
         device_id = 7
@@ -422,7 +513,7 @@ class TestDsTensorClient(unittest.TestCase):
             client.dev_mset(["key"], [y])
         acl.finalize()
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_page_attn_layerwise_dbls(self):
         """Test page_attn_layerwise_dbls."""
         device_id = 7
@@ -440,7 +531,7 @@ class TestDsTensorClient(unittest.TestCase):
                 size = blob.get_size()
                 self.assertEqual(size, 24)
 
-    @unittest.skipUnless(is_torch_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
     def test_page_attn_blockwise_dbls(self):
         """Test page_attn_blockwise_dbls."""
         device_id = 7
@@ -458,7 +549,7 @@ class TestDsTensorClient(unittest.TestCase):
                 size = blob.get_size()
                 self.assertEqual(size, 24)
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_mget_single_tensor_about_different_rank(self):
         """Test dev_mget_single_tensor."""
         src_device_id, dest_device_id = 5, 6
@@ -501,7 +592,7 @@ class TestDsTensorClient(unittest.TestCase):
                 os.waitpid(child1, 0)
                 os.waitpid(child2, 0)
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_mget_into_tensor_in_same_rank(self):
         """Test dev_mget_into_tensor."""
         device_id = 5
@@ -537,7 +628,7 @@ class TestDsTensorClient(unittest.TestCase):
 
         acl.finalize()
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_d2d_dead_lock1(self):
         """Test the d2d deadlock."""
         local_rank_num = 8
@@ -579,7 +670,7 @@ class TestDsTensorClient(unittest.TestCase):
         for p in processes:
             p.join()
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_d2d_dead_lock2(self):
         """Test the d2d deadlock."""
         local_rank_num = 8
@@ -619,7 +710,7 @@ class TestDsTensorClient(unittest.TestCase):
         for p in processes:
             p.join()
 
-    @unittest.skipUnless(is_mindspore_exist and is_tensor_client_exist, "Run when dependency is exist")
+    @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_sub_timeout_ms_error(self):
         """
         Test dev_mget_into_tensor with sub_timeout_ms errors.

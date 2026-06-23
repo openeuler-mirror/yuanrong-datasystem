@@ -20,8 +20,10 @@
 
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/common/device/ascend/cann_types.h"
+#ifdef USE_NPU
 #include "datasystem/common/device/ascend/p2phccl_comm_wrapper.h"
 #include "datasystem/common/device/ascend/p2phccl_types.h"
+#endif
 #include "datasystem/common/device/comm_wrapper.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -110,7 +112,8 @@ Status CommFactory::GetOrCreateComm(P2PEventType eventType, int32_t localDeviceI
         return CreateCommCheckError(comm);
     }
 
-    if (enableP2Ptransfer) {
+    if (enableP2Ptransfer && DeviceManagerFactory::ProbeBackend() == DeviceBackend::NPU) {
+#ifdef USE_NPU
         comm = std::make_shared<P2PHcclCommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_,
                                                     resourceMgr_);
         acc->second = comm;
@@ -120,6 +123,9 @@ Status CommFactory::GetOrCreateComm(P2PEventType eventType, int32_t localDeviceI
         }
         CreateCommInRecv(localDeviceId, remoteClientId, remoteDeviceId, isSameNode, comm);
         return CreateCommCheckError(comm);
+#else
+        RETURN_STATUS(K_RUNTIME_ERROR, "P2P HCCL transfer requires NPU backend.");
+#endif
     }
     comm =
         std::make_shared<CommWrapper>(commKey, localDeviceId, remoteDeviceId, commThreadControl_, resourceMgr_);

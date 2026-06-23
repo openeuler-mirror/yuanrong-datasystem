@@ -553,16 +553,17 @@ public:
         globalSeq_++;
         EMap eventPair = GetFutureByEvent(event);
         tbb::concurrent_hash_map<void *, EMap>::accessor accessor;
-        LOG(INFO) << FormatString("DSAclrtRecordEvent stream:%p , size:%s ", stream,
-                                  streamEventMap_.begin()->second.size());
+        size_t streamEventSize = 0;
         if (streamEventMap_.find(accessor, stream)) {
+            if (eventPair.empty()) {
+                RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "mock event has no future");
+            }
             accessor->second.insert({ eventPair.begin()->first, eventPair.begin()->second });
+            streamEventSize = accessor->second.size();
         } else {
             RETURN_STATUS_LOG_ERROR(K_INVALID, "need Record new event");
         }
-        streamEventMap_.find(accessor, stream);
-        LOG(INFO) << FormatString("DSAclrtRecordEvent end stream:%p , size:%s ", stream,
-                                  streamEventMap_.begin()->second.size());
+        LOG(INFO) << FormatString("DSAclrtRecordEvent stream:%p , size:%zu ", stream, streamEventSize);
         return Status::OK();
     }
 

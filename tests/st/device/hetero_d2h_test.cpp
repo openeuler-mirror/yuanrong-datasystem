@@ -38,12 +38,7 @@ class HeteroD2HTest : public DevTestHelper {
 
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
-            DS_ASSERT_OK(datasystem::inject::Set("client.GetOrCreateHcclComm.setIsSameNode", "call(0)"));
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly(Return(&managerMock_));
-        }
+        UseAclMockIfNoDeviceBackend(true);
         ExternalClusterTest::SetUp();
     }
 
@@ -83,12 +78,7 @@ class HeteroD2HThroughTcpTest : public DevTestHelper {
 
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
-            DS_ASSERT_OK(datasystem::inject::Set("client.GetOrCreateHcclComm.setIsSameNode", "call(0)"));
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly(Return(&managerMock_));
-        }
+        UseAclMockIfNoDeviceBackend(true);
         ExternalClusterTest::SetUp();
     }
 
@@ -220,8 +210,7 @@ TEST_F(HeteroD2HTest, TestAllExist)
             for (auto &blobList : devSetBlobList) {
                 for (auto &blob : blobList.blobs) {
                     auto data = std::string(blob.size, 'c');
-                    DS_ASSERT_OK(
-                        AclDeviceManager::Instance()->MemCopyH2D(blob.pointer, blob.size, data.data(), blob.size));
+                    DS_ASSERT_OK(GetDefaultDeviceManager()->MemCopyH2D(blob.pointer, blob.size, data.data(), blob.size));
                 }
             }
 

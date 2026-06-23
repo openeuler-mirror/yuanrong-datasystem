@@ -25,6 +25,7 @@
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <wait.h>
 
 #include <securec.h>
@@ -1000,7 +1001,8 @@ Status ExternalCluster::StartForkWorkerProcess()
             }
         }
         close(pipeFd_[0]);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to start worker by fork process");
+        LOG_IF_ERROR(rc, "Failed to start worker by fork process");
+        _exit(rc.IsOk() ? EXIT_SUCCESS : EXIT_FAILURE);
     } else {
         close(pipeFd_[0]);
     }
@@ -1028,6 +1030,17 @@ Status ExternalCluster::FinishForkWorkerProcess()
         LOG(ERROR) << "Failed to set finish to forkWorker";
     }
     close(pipeFd_[1]);
+    int status = 0;
+    pid_t ret = 0;
+    do {
+        ret = waitpid(workerForkPid_, &status, 0);
+    } while (ret == -1 && errno == EINTR);
+    auto pid = workerForkPid_;
+    workerForkPid_ = -1;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(ret == pid, K_RUNTIME_ERROR,
+                                         FormatString("Wait fork worker process failed: %s", StrErr(errno)));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS, K_RUNTIME_ERROR,
+                                         FormatString("Fork worker process exited abnormally, status: %d", status));
     return Status::OK();
 }
 

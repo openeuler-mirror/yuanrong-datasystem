@@ -20,6 +20,8 @@ function generate_config() {
   [[ -f "${config_file}" ]] && rm -f "${config_file}"
   echo "set(INSTALL_DIR \"${INSTALL_DIR}\")" >> "${config_file}"
   echo "set(BUILD_HETERO \"${BUILD_HETERO}\")" >> "${config_file}"
+  echo "set(BUILD_HETERO_NPU \"${BUILD_HETERO_NPU}\")" >> "${config_file}"
+  echo "set(BUILD_HETERO_GPU \"${BUILD_HETERO_GPU}\")" >> "${config_file}"
   echo "set(BUILD_PIPLN_H2D \"${BUILD_PIPLN_H2D}\")" >> "${config_file}"
   echo "set(PACKAGE_PYTHON \"${PACKAGE_PYTHON}\")" >> "${config_file}"
 }
@@ -36,7 +38,8 @@ function strip_symbols() {
     type="$(file -b --mime-type ${file} | sed 's|/.*||')"
     local basename
     basename=$(basename "${file}")
-    if [[ ! -L "${file}" ]] && [[ ! -d "${file}" ]] && [[ "x${type}" != "xtext" ]] && [[ "x${basename}" != "xlibacl_plugin.so" ]]; then
+    if [[ ! -L "${file}" ]] && [[ ! -d "${file}" ]] && [[ "x${type}" != "xtext" ]] \
+      && [[ "x${basename}" != "xlibacl_plugin.so" ]] && [[ "x${basename}" != "xlibcuda_plugin.so" ]]; then
       echo "---- start to strip ${file}"
       objcopy --only-keep-debug "${file}" "${dest_dir}/${basename}.sym"
       objcopy --add-gnu-debuglink="${dest_dir}/${basename}.sym" "${file}"
@@ -73,6 +76,8 @@ function build_datasystem_cmake() {
     "-DTRANSFER_ENGINE_BUILD_THREAD_NUM:STRING=${TRANSFER_ENGINE_BUILD_THREAD_NUM}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
+    "-DBUILD_HETERO_NPU:BOOL=${BUILD_HETERO_NPU}"
+    "-DBUILD_HETERO_GPU:BOOL=${BUILD_HETERO_GPU}"
     "-DBUILD_PIPLN_H2D:BOOL=${BUILD_PIPLN_H2D}"
     "-DBUILD_GO_API:BOOL=${PACKAGE_GO}"
     "-DBUILD_JAVA_API:BOOL=${PACKAGE_JAVA}"
@@ -135,6 +140,12 @@ function build_datasystem_cmake() {
         cp "${IF_SYM_FILE}" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
       else
         echo "Notice: libacl_plugin.so.sym not found, skipping (Normal for GPU build)."
+      fi
+      CUDA_SYM_FILE="${BUILD_DIR}/src/datasystem/common/device/nvidia/plugin/libcuda_plugin.so.sym"
+      if [ -f "${CUDA_SYM_FILE}" ]; then
+        cp "${CUDA_SYM_FILE}" "${INSTALL_DIR}/datasystem/sdk/DATASYSTEM_SYM"
+      else
+        echo "Notice: libcuda_plugin.so.sym not found, skipping (Normal for NPU build)."
       fi
     fi
     if is_on "${PACKAGE_JAVA}"; then
@@ -281,6 +292,8 @@ function run_manual_ut() {
       if is_on "${BUILD_HETERO}"; then
         export BUILD_HETERO="on"
       fi
+      export BUILD_HETERO_NPU="${BUILD_HETERO_NPU}"
+      export BUILD_HETERO_GPU="${BUILD_HETERO_GPU}"
 
       cd "${INSTALL_DIR}"
       tar -zxf yr-datasystem-v$(cat "${BASE_DIR}/VERSION").tar.gz

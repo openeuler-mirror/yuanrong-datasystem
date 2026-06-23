@@ -176,7 +176,10 @@ python3 -m unittest
   - `ds_st_object_cache`: ST files under `**/object_cache`.
   - `ds_st_kv_cache`: ST files under `**/kv_cache`.
   - `ds_st_embedded_client`: `tests/st/embedded_client` plus cluster helper sources.
-  - `ds_device_llt`: device tests, with hetero GPU/NPU plugin copy steps when those builds are enabled.
+  - `ds_device_llt`: device tests; generic hetero ST sources prefer a real runtime backend when
+    `DeviceManagerFactory::ProbeBackend()` finds GPU or NPU, and fall back to `AclDeviceManagerMock` only when no
+    accelerator backend is detected. Ascend manager self-tests still force the Ascend/mock path when no usable Ascend
+    environment is present. Real hetero GPU/NPU builds still copy the matching plugin libraries when enabled.
   - helper tools: `curve_keygen` and `hashring_parser`.
 - Verified from `tests/perf/zmq/CMakeLists.txt`:
   - `zmq_perf_client`
@@ -194,7 +197,9 @@ python3 -m unittest
   - `test_kv_cache_client.py`
   - `test_sc_client.py`
   - `test_device_oc_client.py`
-  - `test_ds_tensor_client.py`
+  - `test_ds_tensor_client.py`: NPU-only tensor paths require `BUILD_HETERO_NPU=on` with ACL/torch_npu or MindSpore
+    dependencies; GPU tensor coverage requires `BUILD_HETERO_GPU=on`, PyTorch, and a usable CUDA device, then runs real
+    CUDA tensors through DsTensorClient D2H/H2D paths.
   - `prefetch_tests/test_multi_key_prefetch.py`
 - `scripts/build_cmake.sh` runs Python tests by:
   - extracting the packaged tarball under `output`;

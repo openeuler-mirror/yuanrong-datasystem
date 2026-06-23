@@ -15,7 +15,7 @@ set(URMA_DEPEND_LIBS
 set(RDMA_DEPEND_LIBS
     common_rdma_util)
 set(HCCS_EXTRA_LIBS)
-if (BUILD_WITH_URMA)
+if (BUILD_WITH_URMA) 
     list(APPEND URMA_SRCS
         urma_manager.cpp
         urma_async_event_handler.cpp
@@ -32,7 +32,11 @@ if (BUILD_WITH_URMA OR BUILD_HETERO)
     list(APPEND URMA_DEPEND_LIBS common_shared_memory)
 endif()
 
-if (BUILD_HETERO)
+if (BUILD_WITH_URMA OR BUILD_HETERO)
+    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
+endif()
+
+if (BUILD_HETERO AND BUILD_HETERO_NPU)
     list(APPEND URMA_DEPEND_LIBS common_acl_device)
     if (BUILD_HETERO_GPU)
         list(APPEND URMA_DEPEND_LIBS common_cuda_device)
@@ -50,6 +54,12 @@ if (BUILD_HETERO)
         message(WARNING "cann_hixl not found or HIXL version is lower than 8.5.2, HCCS transport will be disabled")
         set(HCCS_EXTRA_LIBS "")
     endif()
+endif()
+if (BUILD_HETERO)
+    if (BUILD_HETERO_GPU)
+        list(APPEND URMA_DEPEND_LIBS common_cuda_device)
+    endif()
+    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
 endif()
 
 if (BUILD_WITH_RDMA)

@@ -61,7 +61,8 @@
 | `bash build.sh -b cmake` | explicit CMake path | Dispatches to `scripts/build_cmake.sh`. |
 | `bash build.sh -i on` | incremental CMake build | Preserves `BUILD_DIR` and `INSTALL_DIR`; default is destructive clean. |
 | `bash build.sh -n on` | Ninja generator | Otherwise `Unix Makefiles`. |
-| `bash build.sh -X off` | disable hetero build | Useful when Ascend toolkit is absent; `build.sh` also auto-disables hetero when it cannot find Ascend. |
+| `bash build.sh -X off` | disable hetero build | Sets `BUILD_HETERO=off`, `BUILD_HETERO_NPU=off`, and `BUILD_HETERO_GPU=off`. |
+| `bash build.sh -X gpu/npu/all` | select hetero backend set | `gpu` enables CUDA without Ascend, `npu` enables Ascend only, and `all` enables both backends. |
 | `bash build.sh -P off` | disable Python SDK/wheel | Default is Python on. |
 | `bash build.sh -J on` | build Java API | Adds JNI and Maven jar packaging. |
 | `bash build.sh -G on` | build Go SDK | Adds C wrapper target and post-install Go package validation. |
@@ -114,14 +115,45 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | `-P on/off/path` | `BUILD_PYTHON_API` | `on` from script | Adds `pybind_api`, pybind11 dependency, and wheel packaging. |
 | `-J on` | `BUILD_JAVA_API` | `off` | Adds JNI source target and Maven jar packaging. |
 | `-G on` | `BUILD_GO_API` | `off` | Adds C API wrapper target and Go SDK install staging. |
-| `-X on/off` | `BUILD_HETERO` | `on` | Adds hetero compile definitions and device/plugin dependencies. |
-| internal CMake default | `BUILD_HETERO_NPU` | `on` | Enables Ascend/NPU backend when hetero is on. |
-| extra CMake option only | `BUILD_HETERO_GPU` | `off` | Enables CUDA/GPU backend when hetero is on. |
+| `-X on/off/gpu/npu/all` | `BUILD_HETERO` | `on` | Adds hetero compile definitions and device/plugin dependencies when on. |
+| `-X off/gpu/npu/all` plus default | `BUILD_HETERO_NPU` | `on` | Enables Ascend/NPU backend; `-X off` and `-X gpu` force it off. |
+| `-X off/gpu/npu/all` plus default | `BUILD_HETERO_GPU` | `off` | Enables CUDA/GPU backend; `-X gpu` and `-X all` force it on, `-X off` and `-X npu` force it off. |
 | `-T on` | `BUILD_PIPLN_H2D` | `off` | Temporarily ignored and forced back to `off`; Pipeline H2D currently remains disabled even when requested. |
 | `-M on` | `BUILD_WITH_URMA` | `off` | Adds URMA dependency and RDMA-related source. |
 | `-A on` | `BUILD_WITH_RDMA` | `off` | Adds UCX and rdma-core checks/source. |
 | `-s on/off` | `ENABLE_STRIP` | `on` | Controls install/package stripping and symbol sidecars. |
 | `-x on` | `SUPPORT_JEPROF` | `off` | Builds jemalloc with profiling support. |
+
+### GPU-Only Hetero Build Notes
+
+- Verified on `2026-06-15` from `build.sh`, top-level `CMakeLists.txt`, `src/datasystem/common/rdma/CMakeLists.txt`,
+  `src/datasystem/common/device/CMakeLists.txt`, `tests/st/CMakeLists.txt`, and client/worker Remote H2D call sites:
+  - `bash build.sh -X gpu ...` means `BUILD_HETERO=on`, `BUILD_HETERO_NPU=off`, and `BUILD_HETERO_GPU=on`.
+  - If Ascend environment detection fails while GPU is enabled, `build.sh` keeps hetero on and disables only NPU.
+  - CUDA/GPU hetero support is intended to compile without Ascend libraries when NPU-specific sources and include paths
+    stay behind `BUILD_HETERO_NPU` or `USE_NPU`.
+  - GPU-only test builds still compile `common_acl_device` and the `ds_device_llt` ACL mock coverage so the test surface
+    stays close to master; `common_acl_device` uses repository CANN type shims when `USE_NPU` is absent, while
+    `acl_plugin`, Ascend library discovery, HCCL library linkage, and transfer-engine integration remain gated by
+    `BUILD_HETERO_NPU`.
+  - Remote H2D currently remains NPU/Ascend-specific: its implementation is
+    `src/datasystem/common/rdma/npu/remote_h2d_manager.cpp`, its public header depends on Ascend/HCCL types, and
+    `IsRemoteH2DEnabled()` returns false when `USE_NPU` is absent.
+- Regression pattern:
+  - undefined references to `datasystem::RemoteH2DManager::*` from `libdatasystem.so` during GPU-only test/executable
+    links mean a source file compiled a Remote H2D call under broad `BUILD_HETERO` while
+    `remote_h2d_manager.cpp` was correctly omitted because `BUILD_HETERO_NPU=off`.
+  - The narrow fix is to guard direct Remote H2D includes and calls with `USE_NPU`, not to link the NPU implementation
+    back into GPU-only builds.
+- Local verification notes from the same investigation:
+  - `cmake --build build --target ds_device_llt -j 8` passed in a GPU-only build with `BUILD_HETERO=on`,
+    `BUILD_HETERO_GPU=on`, `BUILD_HETERO_NPU=off`, and `WITH_TESTS=on`; the target compiled ACL mock tests such as
+    `acl_resource_manager_fallback_test.cpp`, `ascend_device_manager_test.cpp`, and the broader device LLT sources.
+  - A full GPU-only test build linked `libdatasystem.so`, `dsbench_cpp`, `ds_device_llt`, `datasystem_worker`,
+    `ds_ut`, `ds_ut_object`, and ST binaries without `RemoteH2DManager` undefined references.
+  - If CMake selects a Python interpreter without `wheel` or SSL support, Python wheel packaging can fail after C++
+    build/link succeeds. In this workspace, passing `-P /usr` made CMake choose `/usr/bin/python3.12`, and
+    `cmake --install build` completed wheel packaging after deleting stale `build/python_api` staging files.
 
 ## Install And Package Outputs
 

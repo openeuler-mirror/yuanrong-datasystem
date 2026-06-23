@@ -45,7 +45,6 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/meta_transport.pb.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"

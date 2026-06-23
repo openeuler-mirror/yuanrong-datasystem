@@ -24,7 +24,6 @@
 #include <memory>
 
 #include "datasystem/common/object_cache/object_base.h"
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/allocator.h"

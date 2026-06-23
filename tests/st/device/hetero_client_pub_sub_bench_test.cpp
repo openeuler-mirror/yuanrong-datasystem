@@ -35,10 +35,7 @@ class HeteroClientPubSubBenchTest : public DevTestHelper {
 
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly(Return(&managerMock_));
-        }
+        UseAclMockIfNoDeviceBackend();
         deviceId_ = GetDeviceIdFromEnv("DS_TEST_DEVICE_ID", deviceId_);
         LOG(INFO) << "Set deviceId to " << deviceId_;
         std::random_device rd;

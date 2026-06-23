@@ -42,9 +42,6 @@
 #include "datasystem/utils/status.h"
 
 #include "datasystem/common/rdma/fast_transport_base.h"
-#ifdef BUILD_HETERO
-#include "datasystem/common/rdma/npu/remote_h2d_manager.h"
-#endif
 
 DS_DEFINE_bool(enable_fallocate, true,
                "Due to Kubernetes' (k8s) resource calculation policies, "

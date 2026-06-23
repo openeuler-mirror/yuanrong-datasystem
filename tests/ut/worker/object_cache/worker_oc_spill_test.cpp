@@ -18,6 +18,11 @@
  * Description: Test SpillRequestHandler and SpillFileManager.
  */
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
+
+#include <dirent.h>
+#include <limits.h>
+#include <unistd.h>
+
 #include "ut/common.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -36,6 +41,37 @@ using namespace datasystem::object_cache;
 
 namespace datasystem {
 namespace ut {
+namespace {
+bool IsFileOpenInCurrentProcess(const std::string &path)
+{
+    char expected[PATH_MAX] = { 0 };
+    if (realpath(path.c_str(), expected) == nullptr) {
+        return false;
+    }
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir == nullptr) {
+        return false;
+    }
+    auto closeDir = Raii([dir]() { (void)closedir(dir); });
+    struct dirent *entry = nullptr;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        std::string fdPath = std::string("/proc/self/fd/") + entry->d_name;
+        char target[PATH_MAX] = { 0 };
+        ssize_t len = readlink(fdPath.c_str(), target, sizeof(target) - 1);
+        if (len <= 0) {
+            continue;
+        }
+        target[len] = '\0';
+        if (std::string(target) == expected) {
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
 
 class SpillFileManagerTest : public CommonTest {
     void SetUp() override
@@ -256,10 +292,8 @@ TEST_F(SpillFileManagerTest, OpenFileLimitTest)
     std::string key2 = "key_2";
     DS_EXPECT_OK(fileMgr->Spill(key2, data.data(), data.size()));
 
-    auto cmd = "lsof " + fileMgr->GetObjectLocation(key0);
-    ASSERT_TRUE(system(cmd.c_str()) != 0);
-    cmd = "lsof " + fileMgr->GetObjectLocation(key2);
-    ASSERT_TRUE(system(cmd.c_str()) == 0);
+    ASSERT_FALSE(IsFileOpenInCurrentProcess(fileMgr->GetObjectLocation(key0)));
+    ASSERT_TRUE(IsFileOpenInCurrentProcess(fileMgr->GetObjectLocation(key2)));
 
     std::string out;
     out.resize(data.size());

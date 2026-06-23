@@ -56,7 +56,9 @@ using AllocateType = datasystem::memory::CacheType;
 
 namespace datasystem {
 using namespace acl;
+#ifdef USE_GPU
 using namespace cuda;
+#endif
 namespace st {
 
 class DevObjectHeteroTest : public DevTestHelper {
@@ -73,13 +75,7 @@ class DevObjectHeteroTest : public DevTestHelper {
 
     void SetUp() override
     {
-        const char *ascend_root = std::getenv("ASCEND_HOME_PATH");
-        if (ascend_root == nullptr) {
-            DS_ASSERT_OK(datasystem::inject::Set("NO_USE_FFTS", "call()"));
-            BINEXPECT_CALL(AclDeviceManager::Instance, ()).WillRepeatedly([]() {
-                return AclDeviceManagerMock::Instance();
-            });
-        }
+        UseAclMockIfNoDeviceBackend();
         deviceId_ = GetDeviceIdFromEnv("DS_TEST_DEVICE_ID", deviceId_);
         LOG(INFO) << "Set deviceId to " << deviceId_;
         std::random_device rd;

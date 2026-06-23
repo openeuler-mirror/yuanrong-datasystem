@@ -63,7 +63,7 @@ if is_on "${PACKAGE_PYTHON}"; then
   CMAKE_FILES_L0+=("pybind11.cmake")
 fi
 
-if is_on "${BUILD_HETERO}"; then
+if is_on "${BUILD_HETERO}" && is_on "${BUILD_HETERO_NPU}"; then
   CMAKE_FILES_L0+=("ascend.cmake")
 fi
 
