@@ -51,16 +51,25 @@ class GitCodeClient:
     def _paginate(self, path: str) -> list[dict[str, Any]]:
         page = 1
         items: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
 
         while True:
+            # GitCode files endpoint ignores per_page and returns a fixed small page
+            # (commonly 4). Use both empty-page and duplicate-detection to stop.
             query = urllib.parse.urlencode({"page": page, "per_page": 100})
             payload = self._request("GET", f"{path}?{query}")
             if not payload:
                 break
             if not isinstance(payload, list):
                 raise RuntimeError(f"Expected list response for {path}, got {type(payload)!r}")
-            items.extend(payload)
-            if len(payload) < 100:
+            new_count = 0
+            for entry in payload:
+                entry_path = str(entry.get("filename") or entry.get("path") or "")
+                if not entry_path or entry_path not in seen_paths:
+                    seen_paths.add(entry_path)
+                    items.append(entry)
+                    new_count += 1
+            if new_count == 0:
                 break
             page += 1
 

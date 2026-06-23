@@ -22,6 +22,7 @@
 #define DATASYSTEM_MASTER_OBJECT_CACHE_EXPIRED_OBJECT_MANAGER_H
 
 #include <atomic>
+#include <array>
 #include <map>
 #include <memory>
 #include <set>
@@ -127,12 +128,6 @@ public:
     Status InsertObject(const std::string &objectKey, uint64_t version, uint32_t ttlSecond, bool acceptZero = false);
 
     /**
-     * @brief Remove object that will be expired.
-     * @param[in] objectKey The object key.
-     */
-    void RemoveObjectIfExistUnlock(const std::string &objectKey);
-
-    /**
      * @brief Locking and remove object that will be expired.
      * @param[in] objectKey The object key.
      */
@@ -183,16 +178,37 @@ public:
     Status GetObjectRemainTimeAndRemove(const std::string &objectKey, uint32_t &remainTimeSecond);
 
 private:
+    // 64-way sharded lock + data: eliminates global mutex contention on CreateMeta hot path.
+    static constexpr size_t kExpiredShardCount = 64;
+    struct ExpiredShard {
+        std::mutex mutex;
+        std::multimap<uint64_t, ImmutableString> timedObj;
+        std::unordered_map<ImmutableString, std::multimap<uint64_t, ImmutableString>::iterator> obj2Timed;
+        std::unordered_map<ImmutableString, uint64_t> failedObjects;
+        std::set<ImmutableString> readyExpiredObjects;
+    };
+
     uint64_t CalcExpireTime(uint64_t version, uint64_t ttlSecond) const;
-    Status InsertObjectUnlock(const std::string &objectKey, uint64_t version, uint32_t ttlSecond);
+    Status InsertObjectUnlock(ExpiredShard &shard, const std::string &objectKey, uint64_t version,
+                              uint32_t ttlSecond);
+    void RemoveObjectIfExistUnlock(ExpiredShard &shard, const std::string &objectKey);
+    Status CheckObjectInAsyncDelete(const ExpiredShard &shard, const std::string &objectKey, StatusCode code);
+
+    std::unordered_map<std::string, uint64_t> CleanupShardsAfterDelete(
+        const std::unordered_map<std::string, bool>& requestObjectKeyMap,
+        const std::set<std::string>& failedIds,
+        const std::unordered_map<std::string, uint64_t>& expiredObjMap);
+
+    size_t GetShardIndex(const std::string &key) const
+    {
+        return std::hash<std::string>{}(key) % kExpiredShardCount;
+    }
 
     /**
      * @brief Delete the expired objects.
      * @param[in] objectKey The object key.
      * @return K_OK on success; the error code otherwise.
      */
-    Status CheckObjectInAsyncDelete(const std::string &objectKey, StatusCode code);
-
     const std::string masterAddress_;
     std::atomic<bool> interruptFlag_{ false };
     WaitPost cvLock_;
@@ -203,13 +219,9 @@ private:
     const uint32_t TIME_UNIT_CONVERSION = 1000;
     const uint32_t SCAN_INTERVAL_MS = 100;
 
-    mutable std::mutex mutex_;  // protect the following variables.
-    std::multimap<uint64_t, ImmutableString> timedObj_;
-    std::unordered_map<ImmutableString, std::multimap<uint64_t, ImmutableString>::iterator> obj2Timed_;
-    std::unordered_map<ImmutableString, uint64_t> failedObjects_;
+    std::array<ExpiredShard, kExpiredShardCount> shards_;
+
     std::unique_ptr<ThreadPool> threadPool_;
-    // Store the object key that have been erased from timedOjb_ and waiting for delete.
-    std::set<ImmutableString> readyExpiredObjects_;
     OCMetadataManager *ocMetadataManager_;
 };
 }  // namespace master

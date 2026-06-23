@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_OC_METADATA_MANAGER_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_OC_METADATA_MANAGER_H
 
+#include <array>
 #include <cstdint>
 #include <iomanip>
 #include <list>
@@ -68,6 +69,7 @@ class WorkerWorkerOCServiceImpl;
 }
 
 namespace master {
+enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
     SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
         : reqId_(std::move(reqId)),
@@ -92,6 +94,8 @@ struct ObjectMeta {
     ObjectMetaPb meta;
     int64_t value = 0;
     std::unordered_map<ImmutableString, AckState> locations;
+    MULTI_SET_STATE multiSetState = MULTI_SET_STATE::IDLE;
+    int64_t multiSetTimestamp = 0;
 
     /**
      * @brief Check if the object is binary.
@@ -289,7 +293,15 @@ public:
                       const std::set<ImmutableString> &nestedObjectKeys, int64_t &version, bool &firstOne);
 
     /**
-     * @brief Create multi object meta info in cache and rocksdb.
+     * @brief Create multi object meta info in cache and rocksdb transaction.
+     * @param[in] request The meta of object.
+     * @param[out] response The response to worker.
+     * @return Status of the call.
+     */
+    Status CreateMultiMetaTx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp);
+
+    /**
+     * @brief Create multi object meta info in cache and rocksdb not transaction.
      * @param[in] request The meta of object.
      * @param[out] response The response to worker.
      * @return Status of the call.
@@ -390,7 +402,7 @@ public:
      * @param[in] version The version of meta.
      */
     void RollBackMultiMetaWhenCreateFailed(const std::vector<std::string> &rollBackIds, const std::string address,
-                                           uint64_t version);
+                                           uint64_t version = 0);
 
     /**
      * @brief Create multi meta in rocks db and etcd and update subscribe.
@@ -400,6 +412,8 @@ public:
      * @param[out] rsp The rpc response protobuf.
      * @return Status of the call
      */
+    Status PublishMultiMeta(const std::vector<std::string> &objectKeys, const std::string &address,
+                            ObjectMetaStore::WriteType type, uint64_t version, CreateMultiMetaRspPb &rsp);
 
     /**
      * @brief Create multi meta.
@@ -447,6 +461,8 @@ public:
      * @return Status of the call.
      */
     Status RemoveMetaByWorker(const std::string &workerAddr);
+
+    Status RemoveMetaByWorkerForKey(const std::string &objectKey, const std::string &workerAddr);
 
     /**
      * @brief Remove object meta infos and global ref because of worker time out.
@@ -1065,13 +1081,61 @@ public:
      */
     bool CheckMetaTableEmpty();
 
+    // ===== MetaTable shard infrastructure =====
+    static constexpr size_t kMetaTableShardCount = 64;
+
+    struct MetaTableShard {
+        std::shared_timed_mutex mutex;
+        TbbMetaTable table;
+    };
+
+    std::array<MetaTableShard, kMetaTableShardCount> metaShards_;
+
+    size_t GetShardIndex(const std::string& key) const
+    {
+        return std::hash<std::string>{}(key) % kMetaTableShardCount;
+    }
+
+    template <typename Func>
+    void WithAllShardsLocked(Func&& func)
+    {
+        size_t lockedCount = 0;
+        try {
+            for (; lockedCount < kMetaTableShardCount; ++lockedCount) {
+                metaShards_[lockedCount].mutex.lock();
+            }
+            func();
+        } catch (...) {
+            // Unlock whatever we've locked so far (partial lock on acquire failure,
+            // full lock on func() throw), then rethrow to preserve exception semantics.
+            for (int i = static_cast<int>(lockedCount) - 1; i >= 0; --i) {
+                metaShards_[i].mutex.unlock();
+            }
+            throw;
+        }
+        for (int i = static_cast<int>(kMetaTableShardCount) - 1; i >= 0; --i) {
+            metaShards_[i].mutex.unlock();
+        }
+    }
+    // ===== end sharding infrastructure =====
+
     /**
      * @brief Get current size of the master object metadata table.
      * @return Number of object metadata entries currently held by master.
      */
     size_t GetMetaTableSize() const
     {
-        return metaTable_.size();
+        size_t total = 0;
+        for (const auto& shard : metaShards_) {
+            total += shard.table.size();
+        }
+        return total;
+    }
+
+    // Public helper for friend classes to access sharded meta table.
+    MetaTableShard& GetShardFor(const std::string& key)
+    {
+        return metaShards_[GetShardIndex(key)];
     }
 
     /**
@@ -1163,6 +1227,9 @@ public:
      * @param[in] accessor A tbb accessor lock for id2location table.
      * @param[out] primaryCopy Reselected primary copy.
      * @return Status of the call.
+     *
+     * @note Caller must already hold `metaShards_[GetShardIndex(objectKey)].mutex` (shared lock).
+     *       This function does not acquire the shard mutex internally.
      */
     Status ReselectPrimaryCopy(const std::string &objectKey, const std::unordered_set<std::string> &excludedAddr,
                                TbbMetaTable::accessor &accessor, std::string &primaryCopy);
@@ -1207,8 +1274,6 @@ protected:
     Status LoadObjectLocations(
         bool isFromRocksdb, std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
 
-    std::shared_timed_mutex metaTableMutex_;
-    TbbMetaTable metaTable_;  // Metadata table.
 private:
     friend class MasterOCServiceImpl;
     friend class OCNotifyWorkerManager;
@@ -1268,6 +1333,17 @@ private:
      */
     Status CreateMetaFirstTime(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
                                const std::set<ImmutableString> &nestedObjectKeys, TbbMetaTable::accessor &accessor);
+
+    /**
+     * @brief Create pending meta entry for the first-time create meta rpc.
+     * @param[in] newMeta Metadata of object.
+     * @param[in] address Server address.
+     * @param[in] pendingTtl The ttl of pending.
+     * @param[out] firstOne if the object exist before.
+     * @return Status of call.
+     */
+    Status CreatePendingMeta(const ObjectMetaPb &newMeta, const std::string &address, int64_t pendingTtl,
+                             bool &firstOne);
 
     /**
      * @brief Update meta info in cache and rocksdb.
@@ -1391,7 +1467,6 @@ private:
 
     /**
      * @brief Clear object meta infos of server in cache rocksdb by object key.
-     * @note Shred lock of metaTableMutex_ should be acquired before this function call.
      * @param[in] sendAllDelObjs bfs id.
      * @param[in] isExpired Is expired delete.
      * @param[in/out] failedObjects worker delete failed object keys.
