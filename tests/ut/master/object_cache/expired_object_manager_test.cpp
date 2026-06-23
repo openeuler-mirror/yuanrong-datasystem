@@ -63,5 +63,54 @@ TEST_F(ExpiredObjectManagerTest, TestParallelInsert)
         t.join();
     }
 }
+
+TEST_F(ExpiredObjectManagerTest, TestGetExpiredObjectCrossShardFairness)
+{
+    ExpiredObjectManager manager("127.0.0.1:10001", nullptr);
+    DS_ASSERT_OK(inject::Set("master.ExpiredObjectManager.Run", "call()"));
+    manager.Init();
+
+    // Generate keys that hash to specific shards. Shard 0 gets > MAX_DEL_BATCH_NUM (3000)
+    // entries with later expiration; shard 63 gets a handful with earlier expiration.
+    // The k-way merge must surface the earlier-expiring shard-63 entries even though
+    // shard 0 has enough volume to fill the entire batch.
+    static constexpr size_t kShardCount = 64;
+    static constexpr size_t kTargetShardLow = 0;
+    static constexpr size_t kTargetShardHigh = 63;
+    static constexpr size_t kFillShardLow = 3100;
+    static constexpr size_t kFillShardHigh = 20;
+
+    std::vector<std::string> keysShardLow;
+    std::vector<std::string> keysShardHigh;
+    keysShardLow.reserve(kFillShardLow);
+    keysShardHigh.reserve(kFillShardHigh);
+
+    for (size_t i = 0; keysShardLow.size() < kFillShardLow || keysShardHigh.size() < kFillShardHigh; ++i) {
+        std::string key = "fairness-" + std::to_string(i);
+        size_t shardIdx = std::hash<std::string>{}(key) % kShardCount;
+        if (shardIdx == kTargetShardLow && keysShardLow.size() < kFillShardLow) {
+            keysShardLow.push_back(key);
+        } else if (shardIdx == kTargetShardHigh && keysShardHigh.size() < kFillShardHigh) {
+            keysShardHigh.push_back(key);
+        }
+    }
+
+    const uint64_t laterExpireUs = 2000;
+    const uint64_t earlierExpireUs = 100;
+    for (const auto &key : keysShardLow) {
+        (void)manager.InsertObject(key, laterExpireUs, 1);
+    }
+    for (const auto &key : keysShardHigh) {
+        (void)manager.InsertObject(key, earlierExpireUs, 1);
+    }
+
+    auto expired = manager.GetExpiredObject();
+
+    // Shard 63's earlier-expiring entries must be present — they expire first.
+    for (const auto &key : keysShardHigh) {
+        EXPECT_TRUE(expired.find(key) != expired.end())
+            << "Key " << key << " from shard " << kTargetShardHigh << " should be in expired set";
+    }
+}
 }  // namespace ut
 }  // namespace datasystem

@@ -146,6 +146,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_cache_meta_sharding_test",
+    srcs = ["kv_cache_meta_sharding_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/eventloop:common_event_loop",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_centralized_scaleup_test",
     srcs = ["kv_client_centralized_scaleup_test.cpp"],
     tags = ["manual"],

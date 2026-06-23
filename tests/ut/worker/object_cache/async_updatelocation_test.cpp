@@ -67,8 +67,9 @@ public:
     void InsertObjectKey(const std::string &objectKey)
     {
         master::TbbMetaTable::accessor accessor;
-        std::unique_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-        (void)metaTable_.insert(accessor, objectKey);
+        auto &shard = metaShards_[GetShardIndex(objectKey)];
+        std::unique_lock<std::shared_timed_mutex> lck(shard.mutex);
+        (void)shard.table.insert(accessor, objectKey);
     }
 
     Status GetObjectKeyAckState(const std::string &objectKey, const std::string &workerAddress,
@@ -76,8 +77,9 @@ public:
     {
         master::TbbMetaTable::accessor accessor;
         LOG(INFO) << "get the object key " << objectKey;
-        std::shared_lock<std::shared_timed_mutex> lck(metaTableMutex_);
-        auto found = metaTable_.find(accessor, objectKey);
+        auto &shard = metaShards_[GetShardIndex(objectKey)];
+        std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
+        auto found = shard.table.find(accessor, objectKey);
         if (!found) {
             RETURN_STATUS(K_NOT_FOUND, "not found the object key");
         }

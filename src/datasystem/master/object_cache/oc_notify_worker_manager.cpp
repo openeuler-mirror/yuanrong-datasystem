@@ -874,9 +874,10 @@ Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &worker
 
 Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKey, UpdateObjectInfoPb *objectInfoPb)
 {
-    std::shared_lock<std::shared_timed_mutex> lck(ocMetadataManager_->metaTableMutex_);
+    auto& shard = ocMetadataManager_->GetShardFor(objectKey);
+    std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
     TbbMetaTable ::const_accessor accessor;
-    if (!ocMetadataManager_->metaTable_.find(accessor, objectKey)) {
+    if (!shard.table.find(accessor, objectKey)) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "FillUpdateObjectInfoPb failed. objectKey:" + objectKey);
     }
     objectInfoPb->set_object_key(objectKey);
@@ -977,7 +978,8 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
         toBeChanged.clear();
         for (auto &it : needReselectPrimary) {
             std::string newPrimaryCopy;
-            std::shared_lock<std::shared_timed_mutex> lck(ocMetadataManager_->metaTableMutex_);
+            auto& shard = ocMetadataManager_->GetShardFor(it.first);
+            std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
             TbbMetaTable::accessor accessor;
             if (ocMetadataManager_->ReselectPrimaryCopy(it.first, it.second, accessor, newPrimaryCopy).IsOk()) {
                 (void)toBeChanged[newPrimaryCopy].emplace(it.first);
