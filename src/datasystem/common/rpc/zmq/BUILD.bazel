@@ -336,6 +336,7 @@ ds_cc_library(
     hdrs = [
         "zmq_stub_impl.h",
     ],
+    alwayslink = True,
     deps = [
         ":rpc_service_method",
         ":zmq_payload",

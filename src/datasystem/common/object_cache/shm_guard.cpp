@@ -30,6 +30,10 @@ Status ShmGuard::TryRLatch(bool retry)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(impl_);
     RETURN_RUNTIME_ERROR_IF_NULL(impl_->shmUnit);
+    if (metaSize_ == 0) {
+        // Metadata header disabled: skip shm-based lock.
+        return Status::OK();
+    }
     auto lockFrame = reinterpret_cast<uint32_t *>(impl_->shmUnit->GetPointer());
     auto tmpLock = std::make_shared<object_cache::ShmLock>(lockFrame, metaSize_, 0);
     RETURN_IF_NOT_OK(tmpLock->Init());

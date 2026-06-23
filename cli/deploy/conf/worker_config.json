@@ -243,6 +243,10 @@
         "value": "200",
         "description": "Maximum number of clients that can be connected to a worker. Value range: [1, 10000]."
     },
+    "oc_metadata_header": {
+        "value": "true",
+        "description": "Whether to allocate metadata header for object cache shared memory. Set to false/0 to disable (shm latch/visibility will be unavailable)."
+    },
     "l2_cache_type": {
         "value": "none",
         "description": "Config the l2 cache type. Optional value: 'obs', 'sfs', 'distributed_disk', 'none'"

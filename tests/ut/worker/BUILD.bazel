@@ -53,6 +53,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
         "//tests/common/binmock",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
     ],
 )
 
@@ -77,6 +78,20 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/common/binmock:binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Worker OC 服务实现 metadata header 测试
+ds_cc_test(
+    name = "worker_oc_service_impl_header_test",
+    srcs = ["object_cache/worker_oc_service_impl_header_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:lock",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
     ],
 )
@@ -359,6 +374,7 @@ test_suite(
         "stream_data_page_test",
         "stream_usagemonitor_test",
         "worker_oc_eviction_test",
+        "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",

@@ -2806,10 +2806,14 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
     Status rc = Get(objectKeys, subTimeoutMs, buffers);
     for (auto &buffer : buffers) {
         if (buffer) {
-            RETURN_IF_NOT_OK(buffer->RLatch());
-            vals.emplace_back(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
-            dataSize += buffer->GetSize();
-            RETURN_IF_NOT_OK(buffer->UnRLatch());
+            // Use the SDK-internal helper so the read-and-copy works whether the
+            // shm buffer has a metadata-header lock or not (oc_metadata_header=false
+            // → DisabledLock → no latch needed for safe reads).
+            RETURN_IF_NOT_OK(buffer->CopyDataWithRLatch([&] {
+                vals.emplace_back(reinterpret_cast<const char *>(buffer->ImmutableData()), buffer->GetSize());
+                dataSize += buffer->GetSize();
+                return Status::OK();
+            }));
         } else {
             vals.emplace_back(nullptr, 0);
         }

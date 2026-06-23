@@ -14,6 +14,7 @@ ds_cc_test(
         "//src/datasystem/common/object_cache:object_ref_info",
         "//src/datasystem/common/object_cache:safe_table",
         "//src/datasystem/worker/object_cache:object_kv",
+        "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
     ],
 )
@@ -23,6 +24,7 @@ ds_cc_test(
     name = "object_base_test",
     srcs = ["object_base_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/object_cache:object_ref_info",
         "//src/datasystem/common/object_cache:buffer",
         "//tests/ut:ut_common",
@@ -34,6 +36,7 @@ ds_cc_test(
     name = "rwlock_test",
     srcs = ["rwlock_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:object_ref_info",
@@ -45,6 +48,7 @@ ds_cc_test(
     name = "urma_fallback_tcp_limiter_test",
     srcs = ["urma_fallback_tcp_limiter_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/object_cache:buffer",
         "//src/datasystem/common/object_cache:common_object_cache",
         "//tests/ut:ut_common",

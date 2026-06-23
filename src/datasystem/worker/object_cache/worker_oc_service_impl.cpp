@@ -122,6 +122,9 @@ DS_DEFINE_bool(oc_io_from_l2cache_need_metadata, true,
                "Whether data read and write from the L2 cache daemon depend on metadata. Note: If set to false, it "
                "indicates that the metadata is not stored in etcd.");
 DS_DECLARE_string(l2_cache_type);
+DS_DEFINE_bool(oc_metadata_header, true,
+               "Whether to allocate metadata header for object cache shared memory. Set to false (0) to disable the "
+               "metadata header, which also disables shm-based latch/visibility.");
 DS_DEFINE_uint32(data_migrate_rate_limit_mb, 40, "Data migrate rate limit for every node when scale down happen");
 DS_DEFINE_validator(data_migrate_rate_limit_mb, [](const char *flagName, uint32_t value) {
     (void)flagName;
@@ -1135,7 +1138,9 @@ Status WorkerOCServiceImpl::RefreshMeta(const ClientKey &clientId)
         std::shared_ptr<ShmUnit> shmUnit;
         auto stat = memoryRefTable_->GetShmUnit(shmId, shmUnit);
         if (stat.IsOk()) {
-            TryUnlatch(shmUnit->pointer, lockId);
+            if (metadataSize_ > 0) {
+                TryUnlatch(shmUnit->pointer, lockId);
+            }
         }
     }
     // 1st: Cleanup Shm.
@@ -1742,6 +1747,11 @@ void WorkerOCServiceImpl::TryUnlatch(void *pointer, int lockId)
 
 void WorkerOCServiceImpl::InitMetaSize()
 {
+    if (!FLAGS_oc_metadata_header) {
+        metadataSize_ = 0;
+        LOG(INFO) << "Object cache metadata header disabled: shm latch/visibility are unavailable.";
+        return;
+    }
     constexpr int alignment = 0x8;
     // Worker set lockId_ = 0(shm_guard), so we need client_nums + 1 bits slot.
     metadataSize_ = FLAGS_max_client_num == 0 ? 0 : FLAGS_max_client_num / alignment + 1;

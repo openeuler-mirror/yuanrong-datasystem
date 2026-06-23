@@ -20,6 +20,7 @@ ds_cc_test(
     srcs = ["master_dev_dead_lock_manager_test.cpp"],
     deps = [
         "//src/datasystem/master/object_cache/device:master_dev_dead_lock_manager",
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//tests/ut:ut_common",
     ],
 )
@@ -28,6 +29,7 @@ ds_cc_test(
     name = "master_dev_oc_directory_test",
     srcs = ["master_dev_oc_directory_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/master/object_cache/device:master_dev_oc_directory",
         "//tests/ut:ut_common",
@@ -53,6 +55,7 @@ ds_cc_test(
     name = "meta_async_queue_test",
     srcs = ["meta_async_queue_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/master/object_cache/store:meta_async_queue",
         "//tests/ut:ut_common",
     ],
@@ -79,9 +82,13 @@ ds_cc_test(
     name = "oc_notify_worker_manager_test",
     srcs = ["oc_notify_worker_manager_test.cpp"],
     deps = [
-        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/signal:signal",
+        "//src/datasystem/common/util:net_util",
         "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker",
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
     ],

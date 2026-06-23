@@ -142,24 +142,15 @@ StatusC BufferToCString(datasystem::Optional<datasystem::Buffer> input,
     if (*valPointer == nullptr) {
         return StatusC{ datasystem::K_RUNTIME_ERROR, "Memory allocation failed" };
     }
-    datasystem::Status bufferRLatchRc = input->RLatch();
-    if (bufferRLatchRc.IsError()) {
-        free(*valPointer);
-        *valPointer = nullptr;
-        return ToStatusC(bufferRLatchRc);
-    }
-    *valLen = input->GetSize();
-
-    datasystem::Status rc =
-        datasystem::MemoryCopy(reinterpret_cast<uint8_t *>(*valPointer), destSize,
-                               static_cast<const uint8_t *>(input->ImmutableData()), *valLen, copyThreads);
-
-    datasystem::Status bufferUnRLatchRc = input->UnRLatch();
-    if (bufferUnRLatchRc.IsError()) {
-        free(*valPointer);
-        *valPointer = nullptr;
-        return ToStatusC(bufferUnRLatchRc);
-    }
+    // Use the SDK-internal helper so the copy still happens when the buffer was
+    // returned with oc_metadata_header disabled (DisabledLock — no latch frame in
+    // the shm layout). Explicit user calls to Buffer::RLatch() continue to fail
+    // with K_NOT_SUPPORTED, but internal Get-and-copy paths must not.
+    datasystem::Status rc = input->CopyDataWithRLatch([&] {
+        *valLen = input->GetSize();
+        return datasystem::MemoryCopy(reinterpret_cast<uint8_t *>(*valPointer), destSize,
+                                      static_cast<const uint8_t *>(input->ImmutableData()), *valLen, copyThreads);
+    });
     if (rc.IsError()) {
         free(*valPointer);
         *valPointer = nullptr;

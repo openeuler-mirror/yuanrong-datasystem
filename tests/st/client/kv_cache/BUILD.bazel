@@ -85,6 +85,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_cache_no_metadata_header_test",
+    srcs = ["kv_cache_no_metadata_header_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/kv_cache:read_only_buffer",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_test(
     name = "kv_cache_client_storage_test",
     srcs = ["kv_cache_client_storage_test.cpp"],
     tags = ["manual"],

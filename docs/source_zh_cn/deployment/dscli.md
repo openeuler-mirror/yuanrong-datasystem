@@ -858,34 +858,33 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 #### 性能相关配置
 
-| 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
-|-----|------|---------|-----|-------------|
-| enable_huge_tlb | bool | `false` | 否 | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
-| enable_fallocate | bool | `true` | 否 | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率 |
-| shared_memory_populate | bool | `false` | 否 | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arena_per_tenant'必须设置为1，'enable_fallocate'必须设置为false |
-| enable_thp | bool | `false` | 否 | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
-| arena_per_tenant | int | `16` | 是 | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
-| memory_reclamation_time_second | int | `600` | 否 | 释放后的内存回收时间控制日志消息的最大缓冲时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
-| async_delete | bool | `false` | 是 | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
-| enable_p2p_transfer | bool | `false` | 否 | 是否开启异构对象传输协议支持点对点传输 |
-| enable_worker_worker_batch_get | bool | `false` | 否 | 是否开启worker到worker的对象数据批量获取，默认值为false |
-| enable_urma | bool | `false` | 否 | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
-| enable_ub_numa_affinity | bool | `false` | 否 | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
-| shared_memory_distribution_policy | string | `none` | 否 | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
-| urma_connection_size | int | `0` | 否 | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
-| urma_event_mode | bool | `false` | 否 | 是否使用中断模式轮询完成事件 |
-| urma_poll_size | int | `8` | 否 | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| urma_max_write_size_mb | int | `4` | 否 | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
-| urma_register_whole_arena | bool | `true` | 否 | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| urma_failover_success_rate_ratio | double | `0.5` | 是 | 客户端 URMA 数据面成功率阈值，窗口成功率低于该比例时尝试切换 worker；0.0 表示禁用 URMA failover |
-| urma_failover_min_sample_count | int | `5` | 是 | 每个 client_dead_timeout_s 窗口内触发 URMA failover 评估所需的最小样本数 |
-| enable_rdma | bool | `false` | 否 | 是否开启RDMA以实现对象worker之间的数据传输 |
-| rdma_register_whole_arena | bool | `true` | 否 | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
-| oc_shm_transfer_threshold_kb | int | `500` | 否 | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
-| shared_disk_arena_per_tenant | int | `8` | 是 | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
-| shared_disk_directory | string | `""` | 否 | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
-| shared_disk_size_mb | int | `0` | 否 | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
-| memory_alignment | int | `64` | 否 | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| enable_huge_tlb | bool | `false` | 是否开启共享内存大页内存功能，它可以提高内存访问，减少页表的开销 |
+| enable_fallocate | bool | `true` | 由于Kubernetes(k8s)的资源计算策略，共享内存有时会被计算两次，这可能会导致客户端OOM崩溃。为了解决这个问题，我们使用了fallocate来链接客户端和工作节点的共享内存，从而纠正内存计算错误。缺省情况下，fallocate是使能的。启用fallocate会降低内存分配的效率 |
+| shared_memory_populate | bool | `false` | 是否开启共享内存预热功能，启用该功能可以加速应用运行期间的共享内存拷贝速度，但是在datasystem_worker进程启动时也会由于预热导致启动速度变慢（取决于sharedMemory的配置）。如果开启该功能，'arena_per_tenant'必须设置为1，'enable_fallocate'必须设置为false |
+| enable_thp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
+| arena_per_tenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
+| memory_reclamation_time_second | int | `600` | 释放后的内存回收时间控制日志消息的最大缓冲时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
+| async_delete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
+| enable_p2p_transfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
+| enable_worker_worker_batch_get | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
+| enable_urma | bool | `false` | 是否开启Urma以实现对象worker之间的数据传输，开启后worker启动时会自动预热URMA worker-worker连接 |
+| enable_ub_numa_affinity | bool | `false` | 是否开启 UB NUMA 亲和优化。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
+| shared_memory_distribution_policy | string | `none` | 共享内存在 NUMA 上的分布策略。可选值：`none`、`interleave_all_numa`、`interleave_affinity_numa`。仅在 `enable_urma=true` 且 `urma_register_whole_arena=true` 时生效。 |
+| urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
+| urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
+| urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
+| urma_max_write_size_mb | int | `4` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
+| urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
+| rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
+| oc_shm_transfer_threshold_kb | int | `500` | 在客户端和worker之间通过共享内存传输对象数据的阈值，单位为KB |
+| shared_disk_arena_per_tenant | int | `8` | 每个租户的磁盘缓存区域数量，多个区域可以提高首次共享磁盘分配的性能，但每个区域会多占用一个文件描述符（fd）。取值范围：[0, 32] |
+| shared_disk_directory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
+| shared_disk_size_mb | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
+| memory_alignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
+| oc_metadata_header | bool | `true` | 是否为对象缓存共享内存分配元数据头，如果设置为`false`则关闭此功能（此时shm latch/可见性将不可用）|
 
 `shared_memory_distribution_policy` 策略说明：
 

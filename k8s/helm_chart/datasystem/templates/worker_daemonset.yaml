@@ -122,6 +122,7 @@ spec:
         - -sc_regular_socket_num={{ $.Values.global.rpc.scRegularSocketNum }}
         - -sc_stream_socket_num={{ $.Values.global.rpc.scStreamSocketNum }}
         - -enable_huge_tlb={{ $.Values.global.performance.enableHugeTlb }}
+        - -oc_metadata_header={{ $.Values.global.performance.enableOcMetadataHeader }}
         - -enable_fallocate={{ $.Values.global.performance.enableFallocate }}
         - -authorization_enable={{ $.Values.global.tenantAuth.authorizationEnable }}
         - -iam_kit={{ $.Values.global.tenantAuth.iamKit }}
