@@ -17,6 +17,9 @@
 /**
  * Description: RPC client streaming common code
  * It is in order to reduce code duplication
+ *
+ * Note: ClientWriterReader methods are now defined inline in rpc_stub.h
+ * using virtual dispatch through ClientWriterReaderBase.
  */
 #ifndef DATASYSTEM_COMMON_RPC_RPC_CLIENT_STREAM_BASE_COMMON_H
 #define DATASYSTEM_COMMON_RPC_RPC_CLIENT_STREAM_BASE_COMMON_H
@@ -26,45 +29,6 @@
 #include "datasystem/common/rpc/rpc_stub.h"
 
 namespace datasystem {
-template <typename W, typename R>
-ClientWriterReader<W, R>::ClientWriterReader(std::unique_ptr<ClientWriterReaderImpl<W, R>> &&impl)
-{
-    pimpl_ = std::move(impl);
-}
-
-template <typename W, typename R>
-ClientWriterReader<W, R>::~ClientWriterReader() = default;
-
-template <typename W, typename R>
-Status ClientWriterReader<W, R>::Write(const W &pb)
-{
-    return pimpl_->Write(pb);
-}
-
-template <typename W, typename R>
-Status ClientWriterReader<W, R>::Read(R &pb)
-{
-    return pimpl_->Read(pb);
-}
-
-template <typename W, typename R>
-Status ClientWriterReader<W, R>::Finish()
-{
-    return pimpl_->Finish();
-}
-
-template <typename W, typename R>
-Status ClientWriterReader<W, R>::SendPayload(const std::vector<MemView> &payload)
-{
-    return pimpl_->SendPayload(payload);
-}
-
-template <typename W, typename R>
-Status ClientWriterReader<W, R>::ReceivePayload(std::vector<RpcMessage> &recvBuffer)
-{
-    return pimpl_->ReceivePayload(recvBuffer);
-}
-
 template <typename W>
 ClientWriter<W>::ClientWriter(std::unique_ptr<ClientWriterImpl<W>> &&impl)
 {

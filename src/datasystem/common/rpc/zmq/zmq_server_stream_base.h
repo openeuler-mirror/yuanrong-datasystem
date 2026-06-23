@@ -28,6 +28,7 @@
 #include <mutex>
 #include <condition_variable>
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/rpc/server_writer_reader_base.h"
 #include "datasystem/common/rpc/zmq/zmq_service.h"
 #include "datasystem/common/rpc/zmq/zmq_stream_base.h"
 #include "datasystem/common/log/log_helper.h"
@@ -236,7 +237,7 @@ public:
  * @tparam R Stream RPC mode, ReadPb type.
  */
 template <typename W, typename R>
-class ServerWriterReaderImpl : public ServerStreamBase {
+class ServerWriterReaderImpl : public ServerStreamBase, public ServerWriterReaderBase<W, R> {
 public:
     explicit ServerWriterReaderImpl(std::shared_ptr<ZmqServerMsgQueRef> sock, MetaPb meta, bool sendPayload,
                                     bool recvPayload, int64_t seqNo)
@@ -246,7 +247,12 @@ public:
 
     ~ServerWriterReaderImpl() override = default;
 
-    Status Read(R &pb)
+    Status SendStatus(const Status &rc) override
+    {
+        return ServerStreamBase::SendStatus(rc);
+    }
+
+    Status Read(R &pb) override
     {
         Status rc = ServerStreamBase::ReadPb(pb);
         if (rc.GetCode() == K_RPC_STREAM_END) {
@@ -256,9 +262,29 @@ public:
         return rc;
     }
 
-    Status Write(const W &pb)
+    Status Write(const W &pb) override
     {
         return ServerStreamBase::WritePb(pb);
+    }
+
+    Status Finish() override
+    {
+        return ServerStreamBase::Finish();
+    }
+
+    Status SendPayload(std::vector<RpcMessage> &buffer) override
+    {
+        return ServerStreamBase::SendPayload(buffer);
+    }
+
+    Status SendPayload(const std::vector<MemView> &payload) override
+    {
+        return ServerStreamBase::SendPayload(payload);
+    }
+
+    Status ReceivePayload(std::vector<RpcMessage> &payload) override
+    {
+        return ServerStreamBase::ReceivePayload(payload);
     }
 };
 

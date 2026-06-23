@@ -78,12 +78,14 @@
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
 
+DS_DECLARE_bool(use_brpc);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
 DS_DEFINE_uint32_dynamic(add_node_wait_time_s, 60, "Wait time (s) for the first node joining a working hash ring.");
@@ -274,6 +276,17 @@ WorkerOCServer::~WorkerOCServer()
     objCacheMasterSvc_.reset();
     objCacheWorkerWkSvc_.reset();
     objCacheWorkerMsSvc_.reset();
+    brpcOcAdapter_.reset();
+    brpcMasterAdapter_.reset();
+    brpcWorkerAdapter_.reset();
+    brpcWorkerWorkerOcAdapter_.reset();
+    brpcWorkerWorkerTransAdapter_.reset();
+    brpcMasterWorkerOcAdapter_.reset();
+    brpcMasterOcAdapter_.reset();
+    brpcMasterScAdapter_.reset();
+    brpcClientWorkerScAdapter_.reset();
+    brpcWorkerWorkerScAdapter_.reset();
+    brpcMasterWorkerScAdapter_.reset();
     objCacheClientWorkerSvc_.reset();
     objCacheWorkerTransSvc_.reset();
     streamCacheWorkerWorkerSvc_.reset();
@@ -303,12 +316,17 @@ Status WorkerOCServer::InitWorkerOCService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
-    builder_.AddService(objCacheClientWorkerSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcOcAdapter_ = std::make_unique<WorkerOCServiceBrpcAdapter>(*objCacheClientWorkerSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcOcAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
+        builder_.AddService(objCacheClientWorkerSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -316,17 +334,22 @@ Status WorkerOCServer::InitWorkerWorkerOCService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerWkSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    // The external FLAGS_oc_worker_worker_direct_port will not take '*' as input
-    // even though ZMQ will accept this value.
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        Validator::ValidatePort("FLAGS_oc_worker_worker_direct_port", FLAGS_oc_worker_worker_direct_port), K_INVALID,
-        FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
-    cfg.tcpDirect_ = std::to_string(FLAGS_oc_worker_worker_direct_port);
-    builder_.AddService(objCacheWorkerWkSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcWorkerWorkerOcAdapter_ = std::make_unique<WorkerWorkerOCServiceBrpcAdapter>(*objCacheWorkerWkSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerOcAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            Validator::ValidatePort("FLAGS_oc_worker_worker_direct_port",
+                FLAGS_oc_worker_worker_direct_port),
+            K_INVALID,
+            FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
+        cfg.tcpDirect_ = std::to_string(FLAGS_oc_worker_worker_direct_port);
+        builder_.AddService(objCacheWorkerWkSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -334,11 +357,17 @@ Status WorkerOCServer::InitWorkerWorkerTransportService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerTransSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
-    builder_.AddService(objCacheWorkerTransSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcWorkerWorkerTransAdapter_ =
+            std::make_unique<WorkerWorkerTransportServiceBrpcAdapter>(*objCacheWorkerTransSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerTransAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+        builder_.AddService(objCacheWorkerTransSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -346,11 +375,16 @@ Status WorkerOCServer::InitMasterWorkerOCService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheWorkerMsSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    builder_.AddService(objCacheWorkerMsSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcMasterWorkerOcAdapter_ = std::make_unique<MasterWorkerOCServiceBrpcAdapter>(*objCacheWorkerMsSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerOcAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        builder_.AddService(objCacheWorkerMsSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -379,12 +413,17 @@ Status WorkerOCServer::InitClientWorkerSCService()
                              StatusCode::K_INVALID,
                              "The number of service threads exceeds the upper limit, please adjust it");
     RETURN_IF_NOT_OK(CheckScEncryptSecretKey());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
-    builder_.AddService(streamCacheClientWorkerSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcClientWorkerScAdapter_ = std::make_unique<ClientWorkerSCServiceBrpcAdapter>(*streamCacheClientWorkerSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcClientWorkerScAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        cfg.udsEnabled_ = FLAGS_ipc_through_shared_memory;
+        builder_.AddService(streamCacheClientWorkerSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -395,15 +434,22 @@ Status WorkerOCServer::InitWorkerWorkerSCService()
     CHECK_FAIL_RETURN_STATUS(FLAGS_sc_stream_socket_num + FLAGS_sc_regular_socket_num <= THREAD_POOL_SIZE_LIMIT,
                              StatusCode::K_INVALID,
                              "The number of service threads exceeds the upper limit, please adjust it");
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        Validator::ValidatePort("FLAGS_sc_worker_worker_direct_port", FLAGS_sc_worker_worker_direct_port), K_INVALID,
-        FormatString("Invalid tcp/ip port value %d", FLAGS_sc_worker_worker_direct_port));
-    cfg.tcpDirect_ = std::to_string(FLAGS_sc_worker_worker_direct_port);
-    builder_.AddService(streamCacheWorkerWorkerSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcWorkerWorkerScAdapter_ = std::make_unique<WorkerWorkerSCServiceBrpcAdapter>(*streamCacheWorkerWorkerSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerWorkerScAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = FLAGS_sc_regular_socket_num;
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            Validator::ValidatePort("FLAGS_sc_worker_worker_direct_port",
+                FLAGS_sc_worker_worker_direct_port),
+            K_INVALID,
+            FormatString("Invalid tcp/ip port value %d", FLAGS_sc_worker_worker_direct_port));
+        cfg.tcpDirect_ = std::to_string(FLAGS_sc_worker_worker_direct_port);
+        builder_.AddService(streamCacheWorkerWorkerSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -411,34 +457,48 @@ Status WorkerOCServer::InitMasterWorkerSCService()
 {
     RETURN_OK_IF_TRUE(!EnableSCService());
     RETURN_IF_NOT_OK(streamCacheMasterWorkerSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_sc_regular_socket_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = DEFAULT_STREAM_SOCKET_NUM;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    builder_.AddService(streamCacheMasterWorkerSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcMasterWorkerScAdapter_ = std::make_unique<MasterWorkerSCServiceBrpcAdapter>(*streamCacheMasterWorkerSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterWorkerScAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_sc_regular_socket_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = DEFAULT_STREAM_SOCKET_NUM;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        builder_.AddService(streamCacheMasterWorkerSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
 Status WorkerOCServer::InitWorkerService()
 {
     RETURN_IF_NOT_OK(workerSvc_->Init());
-    RpcServiceCfg cfg;
-    // Explicitly set the regular thread number to the default, so we get matching number of message queues.
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    cfg.udsEnabled_ = false;
-    builder_.AddService(workerSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcWorkerAdapter_ = std::make_unique<WorkerServiceBrpcAdapter>(*workerSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcWorkerAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        cfg.udsEnabled_ = false;
+        builder_.AddService(workerSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
 Status WorkerOCServer::InitMasterService()
 {
     RETURN_IF_NOT_OK(commonSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    builder_.AddService(commonSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcMasterAdapter_ = std::make_unique<master::MasterServiceBrpcAdapter>(*commonSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        builder_.AddService(commonSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -446,10 +506,15 @@ Status WorkerOCServer::InitMasterOCService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
     RETURN_IF_NOT_OK(objCacheMasterSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    builder_.AddService(objCacheMasterSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcMasterOcAdapter_ = std::make_unique<master::MasterOCServiceBrpcAdapter>(*objCacheMasterSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterOcAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        builder_.AddService(objCacheMasterSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -457,11 +522,16 @@ Status WorkerOCServer::InitMasterSCService()
 {
     RETURN_OK_IF_TRUE(!EnableSCService());
     RETURN_IF_NOT_OK(streamCacheMasterSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
-    builder_.AddService(streamCacheMasterSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcMasterScAdapter_ = std::make_unique<master::MasterSCServiceBrpcAdapter>(*streamCacheMasterSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcMasterScAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = std::max(FLAGS_rpc_thread_num, LIGHTWEIGHT_SERVICE_THREAD_NUM);
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
+        builder_.AddService(streamCacheMasterSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 
@@ -886,6 +956,16 @@ Status WorkerOCServer::Init()
     // Configure HCCS worker IP before any allocator/mmap path can trigger RemoteH2DManager::Instance()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetRH2DLocalEndpointIp(hostPort_.Host()), "Failed to configure HCCS worker IP");
 
+    if (FLAGS_use_brpc) {
+        int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
+        builder_.SetUseBrpc(true).SetBrpcAddr(bindHostPort_.Host(), brpcPort);
+        // Exclusive mode: brpc uses the same port as ZMQ would. ZMQ server is
+        // not started (see rpc_server.cpp BuildAndSTart: skips server->Run()
+        // when useBrpc_=true). No dual-listen.
+        LOG(INFO) << "brpc mode enabled, brpc listening on " << bindHostPort_.Host() << ":"
+                  << brpcPort << " (exclusive mode, ZMQ not started)";
+    }
+
     // Init shared memory
     uint64_t sharedMemoryBytes = FLAGS_shared_memory_size_mb * 1024ul * 1024ul;  // convert mb to bytes.
     uint64_t sharedDiskBytes = FLAGS_shared_disk_size_mb * 1024ul * 1024ul;      // convert mb to bytes.
@@ -951,7 +1031,7 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK(ConstructClusterInfo(clusterInfo));
     LOG(INFO) << "The msg in cluster info: " << clusterInfo.ToString();
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo), "cluster manager init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo), "etcd cluster manager init failed");
     LOG(INFO) << "etcd cluster management initialized.";
     if (masterAddr_.Empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterAddr_.ParseString(FLAGS_master_address),
@@ -1132,6 +1212,12 @@ void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
 
 Status WorkerOCServer::WaitForServiceReady()
 {
+    // In brpc exclusive mode ZMQ port is not listened (kBrpcPortOffset=0), so ZMQ-based
+    // HealthCheck RPC always fails. brpc exposes HTTP /status as the health interface;
+    // skip ZMQ probe and let ReadinessProbe fall through to writing the ready file.
+    if (FLAGS_use_brpc) {
+        return Status::OK();
+    }
     if (EnableOCService()) {
         RpcCredential cred;
         RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
@@ -1420,6 +1506,12 @@ size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(
         if (warmedAddrs != nullptr && warmedAddrs->count(worker.first) > 0) {
             continue;
         }
+        // In centralized mode, only warmup the actual master; non-master workers
+        // do not register MasterOCServiceBrpcAdapter, leading to "Fail to find method"
+        // errors in brpc mode (ZMQ mode silently fails on unknown services).
+        if (clusterManager_ != nullptr && clusterManager_->IsCentralized() && worker.first != masterAddr_.ToString()) {
+            continue;
+        }
         if (SubmitWorkerMasterRpcWarmupTask(worker.first, onSuccess)) {
             ++scheduledCount;
         }
@@ -1503,6 +1595,11 @@ void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event 
         return;
     }
     auto masterAddr = GetSubStringAfterField(key, std::string(ETCD_CLUSTER_TABLE) + "/");
+    // In centralized mode, only warmup the actual master; see comment in
+    // ScheduleWorkerMasterRpcWarmupTasks for rationale.
+    if (clusterManager_ != nullptr && clusterManager_->IsCentralized() && masterAddr != masterAddr_.ToString()) {
+        return;
+    }
     if (SubmitWorkerMasterRpcWarmupTask(masterAddr)) {
         LOG(INFO) << FormatString("[MASTER_RPC_WARMUP] scheduled by cluster event, master=%s", masterAddr);
     }
@@ -1533,9 +1630,10 @@ Status WorkerOCServer::ReadinessProbe()
 
 Status WorkerOCServer::Start()
 {
-    // Start the heartbeat thread after the server bind and before it start.
-    clusterManager_->SetWorkerReady();
     RETURN_IF_NOT_OK_APPEND_MSG(CommonServer::Start(), "\nWorker Start failed.");
+    // SetWorkerReady must be called only after both ZMQ and brpc servers are listening,
+    // so that clients discovering this worker via etcd can immediately connect.
+    clusterManager_->SetWorkerReady();
     RETURN_IF_NOT_OK(InitLivenessCheck());
     // The task via uds accept fd is started here.
     clientWorkerCommonSvcStatus_ = loadFunctor(*workerSvc_);
@@ -1665,8 +1763,8 @@ Status WorkerOCServer::PreShutDown()
             if (!scaleIn) {
                 return checkAsyncTasksDone_.load();
             }
-            return checkAsyncTasksDone_.load() && allClientsExited_.load()
-                   && clusterManager_->CheckVoluntaryScaleDown();
+            return checkAsyncTasksDone_.load() && allClientsExited_.load() &&
+                   clusterManager_->CheckVoluntaryScaleDown();
         };
         while (!waitFlag) {
             if (scaleIn) {
@@ -1719,6 +1817,12 @@ Status WorkerOCServer::Shutdown()
     // Stop the background resource collector to prevent the background resource collector from invoking the background
     // resource collector when some objects of the worker exit.
     ResMetricCollector::Instance().Stop();
+    // Stop NodeSelector background thread before CommonServer::Shutdown() shuts down
+    // the brpc server. NodeSelector::WorkerThread periodically issues CollectClusterInfo
+    // RPCs to embedded master; if those RPCs are in flight when brpcServer_->Stop(0)+Join()
+    // runs, Join() blocks waiting for them while the RPC targets are already shutting
+    // down → shutdown deadlock. Idempotent (also called from ~WorkerOCServiceImpl).
+    object_cache::NodeSelector::Instance().Shutdown();
     // Interrupt the service and wait for its completion.
     if (workerSvc_ && IsCallable<datasystem::worker::WorkerServiceImpl>()) {
         InterruptService(*workerSvc_);

@@ -19,6 +19,9 @@
  */
 #include "datasystem/client/client_worker_common_api.h"
 
+#include <brpc/channel.h>
+#include "datasystem/protos/share_memory.brpc.stub.pb.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -42,8 +45,10 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -323,6 +328,28 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
 Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                                          int32_t initAttemptTimeoutMs)
 {
+    // SDK entry: honor the DS_USE_BRPC env var so Python SDK users (and C++ SDK
+    // users who don't want to touch gflags directly) can toggle ZMQ/brpc without
+    // code changes. Idempotent — static local init runs exactly once even under
+    // concurrent Init() calls (C++11 magic statics). Env var wins over the gflag
+    // default (false) but a C++ user who sets FLAGS_use_brpc explicitly in main()
+    // before Init() will still be overridden here; that's intentional — env var
+    // is the SDK-user-facing knob. Accepted values: "1", "true", "TRUE" → brpc;
+    // any other value (including "0"/"false") → ZMQ.
+    static const bool brpcEnvApplied = []() {
+        if (const char *env = std::getenv("DS_USE_BRPC")) {
+            std::string val(env);
+            bool useBrpc = (val == "1" || val == "true" || val == "TRUE");
+            if (useBrpc != FLAGS_use_brpc) {
+                LOG(INFO) << "SDK: DS_USE_BRPC=" << val
+                          << " overrides FLAGS_use_brpc default; now FLAGS_use_brpc=" << useBrpc;
+                FLAGS_use_brpc = useBrpc;
+            }
+        }
+        return true;
+    }();
+    (void)brpcEnvApplied;
+
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
         FormatString("The connectTimeoutMs(%d) should be greater than or equal to %d milliseconds.", connectTimeoutMs,
@@ -351,8 +378,24 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
 Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection,
                                             int32_t stateTimeoutMs)
 {
-    auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-    commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
+    if (FLAGS_use_brpc) {
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        brpcChannel_ = std::make_unique<brpc::Channel>();
+        brpc::ChannelOptions opts;
+        opts.timeout_ms = timeoutMs;
+        opts.connect_timeout_ms = timeoutMs;
+        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            brpcChannel_->Init(brpcAddr.ToString().c_str(), &opts) == 0, StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
+        // brpc Channel::Init() is non-blocking — health check runs periodically.
+        // Wait for the TCP connection to establish before returning.
+        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), timeoutMs);
+    } else {
+        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
+        commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
+    }
 
     bool isConnectSuccess = false;
     int32_t serverFd = INVALID_SOCKET_FD;
@@ -443,24 +486,8 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
                                                                      ShmEnableType &shmEnableType)
 {
     Timer timer(timeoutMs);
-    GetSocketPathReqPb req;
-    RETURN_IF_NOT_OK(SetToken(req));
-    req.set_tenant_id(tenantId_);
     GetSocketPathRspPb reply;
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    auto rc = RetryOnError(
-        timer.GetRemainingTimeMs(),
-        [this, &req, &reply](int32_t realRpcTimeout) {
-            INJECT_POINT("client.get_sock.fail");
-            RpcOptions opts;
-            opts.SetTimeout(realRpcTimeout);
-            return commonWorkerSession_->GetSocketPath(opts, req, reply);
-        },
-        []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE },
-        CalculateSingleRpcTimeout(timeoutMs));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
+    RETURN_IF_NOT_OK(FetchSocketPath(timeoutMs, timer.GetRemainingTimeMs(), reply));
 
     isConnectSuccess = false;
     shmEnableType = ShmEnableType::NONE;
@@ -472,6 +499,40 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
     }
 
     shmWorkerPort_ = reply.shm_worker_port();
+    return HandShakeConnect(timer.GetRemainingTimeMs(), endpointStr, shmEnableType, isConnectSuccess, serverFd,
+                            socketFd);
+}
+
+Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t remainingMs,
+                                                    GetSocketPathRspPb &reply)
+{
+    GetSocketPathReqPb req;
+    RETURN_IF_NOT_OK(SetToken(req));
+    req.set_tenant_id(tenantId_);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    auto rc = RetryOnError(
+        remainingMs,
+        [this, &req, &reply](int32_t realRpcTimeout) {
+            INJECT_POINT("client.get_sock.fail");
+            RpcOptions opts;
+            opts.SetTimeout(realRpcTimeout);
+            if (FLAGS_use_brpc) {
+                return brpcCommonStub_->GetSocketPath(opts, req, reply);
+            }
+            return commonWorkerSession_->GetSocketPath(opts, req, reply);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE },
+        CalculateSingleRpcTimeout(timeoutMs));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteCommonApi::HandShakeConnect(int64_t remainingMs, const std::string &endpointStr,
+                                                     ShmEnableType &shmEnableType, bool &isConnectSuccess,
+                                                     int32_t &serverFd, int32_t &socketFd)
+{
     UnixSockFd sock(RPC_NO_FILE_FD, shmWorkerPort_ > 0);
     auto func = [this, &sock, &endpointStr, &serverFd](int32_t) {
         Status status = CreateHandShakeFunc(sock, endpointStr, serverFd);
@@ -484,7 +545,7 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
         }
         return status;
     };
-    rc = RetryOnError(timer.GetRemainingTimeMs(), func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
+    auto rc = RetryOnError(remainingMs, func, [] { return Status::OK(); }, { StatusCode::K_TRY_AGAIN });
     if (rc.IsOk()) {
         isConnectSuccess = true;
         socketFd = sock.GetFd();
@@ -563,7 +624,12 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
     });
 #endif
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    Status status = commonWorkerSession_->Heartbeat(opts, req, rsp);
+    Status status;
+    if (FLAGS_use_brpc) {
+        status = brpcCommonStub_->Heartbeat(opts, req, rsp);
+    } else {
+        status = commonWorkerSession_->Heartbeat(opts, req, rsp);
+    }
     workerReboot = false;
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;
@@ -680,6 +746,9 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
             INJECT_POINT("client.register.fail");
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
+            if (FLAGS_use_brpc) {
+                return brpcCommonStub_->RegisterClient(opts, req, rsp);
+            }
             return commonWorkerSession_->RegisterClient(opts, req, rsp);
         },
         []() { return Status::OK(); },
@@ -748,7 +817,7 @@ void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<
 
 Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 {
-    CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr, StatusCode::K_OK,
+    CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr || brpcCommonStub_ != nullptr, StatusCode::K_OK,
                              "No active connection. Do not send disconnect notice.");
     LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
     DisconnectClientReqPb req;
@@ -767,7 +836,11 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 #endif
     RpcOptions opts;
     opts.SetTimeout(rpcTimeoutMs);
-    RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK(brpcCommonStub_->DisconnectClient(opts, req, rsp));
+    } else {
+        RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
+    }
     if (!isDestruct && enableExclusiveConnection_ && exclusiveId_.has_value()) {
         LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
                      FormatString("Failed to close exclusive connection %d", exclusiveId_.value()));
@@ -836,7 +909,12 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
 
     // Notice: GetClientFd should not be retried. Otherwise, Fd resources may remain or the process may be suspended.
-    Status status = commonWorkerSession_->GetClientFd(opts, req, rsp);
+    Status status;
+    if (FLAGS_use_brpc) {
+        status = brpcCommonStub_->GetClientFd(opts, req, rsp);
+    } else {
+        status = commonWorkerSession_->GetClientFd(opts, req, rsp);
+    }
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.GetClientFd.preReceive");
 #endif

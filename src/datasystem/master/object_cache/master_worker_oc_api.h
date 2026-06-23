@@ -24,6 +24,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.stub.pb.h"
 
 namespace datasystem {
 
@@ -221,6 +222,7 @@ public:
 private:
     HostPort workerHostPort_;                                            // The HostPort of the worker node.
     std::shared_ptr<MasterWorkerOCService_Stub> rpcSession_{ nullptr };  // Session to the worker rpc service.
+    std::shared_ptr<MasterWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 }  // namespace master
 }  // namespace datasystem

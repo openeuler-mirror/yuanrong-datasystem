@@ -89,6 +89,9 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/protos:p2p_subscribe_cc_proto",
+        "//src/datasystem/protos:object_posix_brpc",
+        "//src/datasystem/protos:object_posix_zmq_cc_proto",
+        "@com_github_apache_brpc//:brpc",
     ],
     visibility = ["//visibility:public"],
 )

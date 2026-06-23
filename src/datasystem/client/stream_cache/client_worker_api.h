@@ -39,10 +39,15 @@
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/sensitive_value.h"
 
+// PIMPL: forward-declare brpc stub so Python extension doesn't pull in brpc/glog.
 namespace datasystem {
+class ClientWorkerSCService_BrpcGenericStub;
+
 namespace client {
 namespace stream_cache {
 class ClientWorkerApi : public ClientWorkerRemoteCommonApi {
+public:
+    ~ClientWorkerApi();
 public:
     using ClientWorkerRemoteCommonApi::Init;
     /**
@@ -150,7 +155,11 @@ private:
      */
     std::pair<int32_t, int32_t> GetRpcTimeout(int64_t requestedTimeout, int32_t defaultRpcTimeout);
 
-    std::unique_ptr<ClientWorkerSCService_Stub> rpcSession_;
+    // Shared_ptr so call sites can hold a local copy to keep the stub alive across concurrent
+    // ClientWorkerApi teardown. See docs/4w-shutdown-debug-2026-06-12.md (Phase C fix).
+    std::shared_ptr<ClientWorkerSCService_Stub> rpcSession_;
+    std::shared_ptr<ClientWorkerSCService_BrpcGenericStub> brpcRpcSession_;
+    std::unique_ptr<brpc::Channel> brpcChannel_;
 };
 }  // namespace stream_cache
 }  // namespace client

@@ -92,11 +92,16 @@ void SCMetadataManager::Shutdown()
     StartClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     ClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::RecoverMetaRanges::GetInstance().RemoveSubscriber(eventName_);
-    if (notifyWorkerManager_ != nullptr) {
-        notifyWorkerManager_->Shutdown();
-    }
+    // Stop async reconciliation pool FIRST to prevent new brpc streaming
+    // RPCs (e.g., CheckMetadataImpl -> QueryMetadata) from being created
+    // while the notification manager is shutting down.  This avoids
+    // brpc::Stream::Consume() UAF when in-flight streams outlive their
+    // owning channel after the RPC session manager is torn down.
     if (asyncReconciliationPool_ != nullptr) {
         asyncReconciliationPool_.reset();
+    }
+    if (notifyWorkerManager_ != nullptr) {
+        notifyWorkerManager_->Shutdown();
     }
 }
 

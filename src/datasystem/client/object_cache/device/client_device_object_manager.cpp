@@ -28,6 +28,8 @@
 #include "datasystem/client/object_cache/device/device_memory_unit.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/client/object_cache/object_client_impl.h"
+
+#include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/object_cache/buffer_composer.h"

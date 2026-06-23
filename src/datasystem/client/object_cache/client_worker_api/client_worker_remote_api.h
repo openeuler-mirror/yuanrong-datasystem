@@ -37,9 +37,15 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/hetero/device_common.h"
 #include "datasystem/object/buffer.h"
+#include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"
+
+// PIMPL: forward-declare brpc types so Python extension headers don't pull in brpc/glog.
+namespace brpc { class Channel; }
 namespace datasystem {
+class WorkerOCService_BrpcGenericStub;
+
 namespace object_cache {
 class ClientWorkerRemoteApi : public ClientWorkerBaseApi, public client::ClientWorkerRemoteCommonApi {
 public:
@@ -60,7 +66,7 @@ public:
                                    bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false,
                                    std::string deviceId = "");
 
-    ~ClientWorkerRemoteApi() = default;
+    ~ClientWorkerRemoteApi();
 
     /**
      * @brief Initialize ClientWorkerApi.
@@ -209,7 +215,9 @@ private:
     mutable std::mutex mtx_;
     std::unordered_map<int, uint8_t *> waitRespMap_;
     std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
-    std::unique_ptr<WorkerOCService::Stub> stub_;
+    std::unique_ptr<WorkerOCService_BrpcGenericStub> stub_;
+    std::unique_ptr<WorkerOCService_Stub> zmqStub_;
+    std::unique_ptr<brpc::Channel> brpcChannel_;
     std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{ 0 };
 
     // for pipeline rh2d receive queue

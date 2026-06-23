@@ -52,6 +52,14 @@
 #include "datasystem/client/embedded_client_worker_api.h"
 #include "datasystem/client/urma_success_rate_tracker.h"
 
+// PIMPL: brpc types are forward-declared so headers that include this
+// file (e.g. Python extension) do not transitively pull in brpc/glib.
+// The full types are included in the .cpp files only.
+namespace brpc { class Channel; }
+namespace datasystem {
+class WorkerService_BrpcGenericStub;
+}
+
 namespace datasystem {
 static constexpr int MIN_HEARTBEAT_TIMEOUT_MS = 15 * 1000;
 static constexpr int MAX_HEARTBEAT_TIMEOUT_MS = 60 * 1000;  // 60s, Maintain compatibility of EDA scenarios.
@@ -505,6 +513,8 @@ protected:
     std::string workerStartId_;  // To judge whether the worker is restarted.
 
     std::unique_ptr<WorkerService_Stub> commonWorkerSession_{ nullptr };
+    std::unique_ptr<WorkerService_BrpcGenericStub> brpcCommonStub_{ nullptr };
+    std::unique_ptr<brpc::Channel> brpcChannel_{ nullptr };
 
     std::atomic_bool storeNotifyReboot_{ false };
     Thread recvPageThread_;
@@ -597,6 +607,28 @@ private:
      */
     Status CreateConnectionForTransferShmFd(int32_t timeoutMs, bool &isConnectSuccess, int32_t &serverFd,
                                             int32_t &socketFd, ShmEnableType &shmEnableType);
+
+    /**
+     * @brief Fetch the worker socket path via RPC.
+     * @param[in] timeoutMs Register request timeout interval (used to derive per-call timeout).
+     * @param[in] remainingMs Aggregate time budget for retries.
+     * @param[out] reply Worker socket-path response.
+     * @return Status of the call.
+     */
+    Status FetchSocketPath(int32_t timeoutMs, int64_t remainingMs, GetSocketPathRspPb &reply);
+
+    /**
+     * @brief Establish the shared-memory handshake connection with retries.
+     * @param[in] remainingMs Aggregate time budget for retries.
+     * @param[in] endpointStr Resolved endpoint to connect to.
+     * @param[out] shmEnableType Shared-memory connection type (reset to NONE on failure).
+     * @param[out] isConnectSuccess Set to true on success.
+     * @param[out] serverFd Worker server fd.
+     * @param[out] socketFd Local UNIX socket fd.
+     * @return Status of the call.
+     */
+    Status HandShakeConnect(int64_t remainingMs, const std::string &endpointStr, ShmEnableType &shmEnableType,
+                            bool &isConnectSuccess, int32_t &serverFd, int32_t &socketFd);
 
     /**
      * @brief Construct decShmUnit_ after register.

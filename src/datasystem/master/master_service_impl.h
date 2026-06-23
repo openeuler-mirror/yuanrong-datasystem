@@ -27,13 +27,15 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/node_manager.h"
+#include "datasystem/protos/master_heartbeat.irpc.pb.h"
 #include "datasystem/protos/master_heartbeat.service.rpc.pb.h"
+#include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 class ClusterManager;
 namespace master {
-class MasterServiceImpl final : public MasterService {
+class MasterServiceImpl final : public MasterService, public IMasterService {
 public:
     /**
      * @brief Construct MasterServiceImpl.

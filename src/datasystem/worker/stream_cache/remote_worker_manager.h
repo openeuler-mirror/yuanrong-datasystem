@@ -34,6 +34,8 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/metrics/metrics_vector/metrics_sc_remote_vector.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/worker/stream_cache/buffer_pool.h"
 #include "datasystem/worker/stream_cache/page_queue/exclusive_page_queue.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue_group.h"
@@ -399,7 +401,12 @@ private:
 
     int BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub, std::vector<PushReq> &requests,
                              std::vector<std::vector<MemView>> &payloads);
+    int BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
+                             std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads);
     void BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub,
+                             PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
+                             std::unordered_map<std::string, StreamRaii> &raii);
+    void BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                              PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
                              std::unordered_map<std::string, StreamRaii> &raii);
     void HandleBlockedElements(std::list<std::shared_ptr<SharedPageElementView>> &moveList,

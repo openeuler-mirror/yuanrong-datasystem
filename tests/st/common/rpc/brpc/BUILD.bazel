@@ -1,0 +1,12 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "hello_test",
+    srcs = ["hello_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc/brpc:hello_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)

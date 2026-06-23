@@ -22,7 +22,9 @@
 #define DATASYSTEM_WORKER_STREAM_CACHE_WORKER_WORKER_SC_SERVICE_IMPL_H
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/protos/stream_posix.irpc.pb.h"
 #include "datasystem/protos/stream_posix.service.rpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/worker/stream_cache/buffer_pool.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/usage_monitor.h"
@@ -51,7 +53,7 @@ struct RecvElementView : public BaseBufferData {
     void *GetBufferPointer();
 };
 
-class WorkerWorkerSCServiceImpl : public WorkerWorkerSCService,
+class WorkerWorkerSCServiceImpl : public WorkerWorkerSCService, public IWorkerWorkerSCService,
                                   public std::enable_shared_from_this<WorkerWorkerSCServiceImpl> {
 public:
     WorkerWorkerSCServiceImpl(ClientWorkerSCServiceImpl *impl, std::shared_ptr<AkSkManager> akSkManager);

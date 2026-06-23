@@ -34,6 +34,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue.h"
@@ -1034,6 +1035,70 @@ void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCServi
     }
 }
 
+int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
+                                       std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads)
+{
+    int numReqSent = 0;
+    for (size_t i = 0; i < requests.size(); ++i) {
+        Status &status = requests.at(i).rc_;
+        auto &pushReq = requests.at(i).req_;
+        const auto visitor = [&](auto &&pushReqPb) {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReqPb.trace_id());
+            if constexpr (std::is_same_v<std::decay_t<decltype(pushReqPb)>, PushReqPb>) {
+                VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Calling PushElementsCursorsAsyncWrite for %s with %zu PV",
+                                                         pushReqPb.stream_name(), pushReqPb.element_meta_size());
+                status = stub->PushElementsCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+            } else {
+                VLOG(SC_DEBUG_LOG_LEVEL) << FormatString(
+                    "Calling PushSharedPageCursorsAsyncWrite for shared page with %zu PV", pushReqPb.metas_size());
+                status = stub->PushSharedPageCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+            }
+        };
+
+        PerfPoint point(PerfKey::REMOTE_WORKER_SEND_ONE_STREAM);
+        std::visit(visitor, pushReq);
+        numReqSent++;
+    }
+    VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Number of outstanding PushElementsCursorsAsyncWrite request %d",
+                                             numReqSent);
+    return numReqSent;
+}
+
+void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
+                                       PendingFlushList &pendingFlushList, std::vector<PushReq> &requests,
+                                       std::unordered_map<std::string, StreamRaii> &raii)
+{
+    size_t numAsync = requests.size();
+    for (size_t i = 0; i < numAsync; ++i) {
+        Status &status = requests.at(i).rc_;
+        if (status.IsError()) {
+            continue;
+        }
+        const auto visitor = [&](auto &&pushReq) {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(pushReq.trace_id());
+            PushRspPb pushRspPb;
+            PerfPoint point(PerfKey::REMOTE_WORKER_MAIN_RECV);
+            INJECT_POINT("RemoteWorker.SleepBeforeAsyncRead", [](uint64_t timeoutMs) -> void {
+                std::this_thread::sleep_for(std::chrono::milliseconds(timeoutMs));
+                return;
+            });
+            if constexpr (std::is_same_v<std::decay_t<decltype(pushReq)>, PushReqPb>) {
+                status = stub->PushElementsCursorsAsyncRead(requests.at(i).tag_, pushRspPb, RpcRecvFlags::NONE);
+            } else {
+                status = stub->PushSharedPageCursorsAsyncRead(requests.at(i).tag_, pushRspPb, RpcRecvFlags::NONE);
+            }
+            point.Record();
+            INJECT_POINT_NO_RETURN("RemoteWorker.BatchFlushAsyncRead.rpc.timeout", [&status]() {
+                status = { K_RPC_UNAVAILABLE, "Fake worker not responding" };
+            });
+            VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("PushElementsCursorsAsyncRead rc for stream %s: %s",
+                                                     requests.at(i).keyName_, status.ToString());
+            PostRecvCleanup(requests.at(i).keyName_, status, pendingFlushList, pushReq, pushRspPb, raii);
+        };
+        std::visit(visitor, requests.at(i).req_);
+    }
+}
+
 void RemoteWorker::HandleBlockedElements(std::list<std::shared_ptr<SharedPageElementView>> &moveList,
                                          std::unordered_set<std::shared_ptr<SharedPageQueue>> &needAckList)
 {
@@ -1087,15 +1152,21 @@ Status RemoteWorker::BatchAsyncFlushEntry(PendingFlushList &pendingFlushList)
     RETURN_IF_NOT_OK(ParsePendingFlushList(pendingFlushList, requests, payloads, raii, moveList, needAckList));
     std::shared_ptr<RpcStubBase> stub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(remoteWorkerAddr_, StubType::WORKER_WORKER_SC_SVC, stub));
-    auto derivedStub = std::dynamic_pointer_cast<WorkerWorkerSCService_Stub>(stub);
-    RETURN_RUNTIME_ERROR_IF_NULL(derivedStub);
-    // This code is driven by BufferPool async flush code path which will retry on error.
-    auto numRequestSent = BatchFlushAsyncWrite(derivedStub, requests, payloads);
-    // Handle the blocked elements in between async write and read.
-    HandleBlockedElements(moveList, needAckList);
-    // If nothing is sent out and there is no need to continue.
-    RETURN_OK_IF_TRUE(numRequestSent == 0);
-    BatchFlushAsyncRead(derivedStub, pendingFlushList, requests, raii);
+    if (FLAGS_use_brpc) {
+        auto brpcStub = std::dynamic_pointer_cast<WorkerWorkerSCService_BrpcGenericStub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+        auto numRequestSent = BatchFlushAsyncWrite(brpcStub, requests, payloads);
+        HandleBlockedElements(moveList, needAckList);
+        RETURN_OK_IF_TRUE(numRequestSent == 0);
+        BatchFlushAsyncRead(brpcStub, pendingFlushList, requests, raii);
+    } else {
+        auto derivedStub = std::dynamic_pointer_cast<WorkerWorkerSCService_Stub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(derivedStub);
+        auto numRequestSent = BatchFlushAsyncWrite(derivedStub, requests, payloads);
+        HandleBlockedElements(moveList, needAckList);
+        RETURN_OK_IF_TRUE(numRequestSent == 0);
+        BatchFlushAsyncRead(derivedStub, pendingFlushList, requests, raii);
+    }
     // Return the first non-ok error
     for (auto &req : requests) {
         if (req.rc_.IsError()) {

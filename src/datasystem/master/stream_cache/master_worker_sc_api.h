@@ -29,6 +29,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/worker_stream.stub.rpc.pb.h"
+#include "datasystem/protos/worker_stream.brpc.stub.pb.h"
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
@@ -231,6 +232,7 @@ private:
 
     HostPort workerAddress_;
     std::shared_ptr<MasterWorkerSCService_Stub> rpcSession_{ nullptr };  // Session to the worker rpc service.
+    std::shared_ptr<MasterWorkerSCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 
 /**

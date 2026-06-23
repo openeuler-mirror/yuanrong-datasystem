@@ -20,6 +20,7 @@
 #include "cluster/external_cluster.h"
 
 #include <csignal>
+#include <cstdlib>
 #include <fstream>
 #include <netdb.h>
 #include <sys/prctl.h>
@@ -520,7 +521,7 @@ Status ExternalCluster::WaitForExpectedResult(std::function<Status()> function, 
                                               StatusCode expectedStatusCode)
 {
     timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
     time_t deadline = now.tv_sec + timeoutSecs;
     int intervals = 200;
     Status res;
@@ -530,7 +531,7 @@ Status ExternalCluster::WaitForExpectedResult(std::function<Status()> function, 
             break;
         }
         timeval curr;
-        gettimeofday(&curr, NULL);
+        gettimeofday(&curr, nullptr);
         CHECK_FAIL_RETURN_STATUS(curr.tv_sec < deadline, StatusCode::K_RUNTIME_ERROR,
                                  "wait for expected result timeout");
         std::this_thread::sleep_for(std::chrono::milliseconds(intervals));
@@ -604,7 +605,7 @@ std::string ExternalCluster::ConstructEtcdCheckHealthCmd() const
 Status ExternalCluster::WaitEtcdReadyOrTimeout(int timeoutSecs)
 {
     timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
     time_t deadLine = now.tv_sec + timeoutSecs;
     std::string cmd = ConstructEtcdCheckHealthCmd();
 
@@ -635,7 +636,7 @@ Status ExternalCluster::WaitEtcdReadyOrTimeout(int timeoutSecs)
             }
         }
         timeval curr;
-        gettimeofday(&curr, NULL);
+        gettimeofday(&curr, nullptr);
         CHECK_FAIL_RETURN_STATUS(curr.tv_sec < deadLine, StatusCode::K_RUNTIME_ERROR,
                                  "Process startup etcd cluster timed out.");
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -727,7 +728,7 @@ Status ExternalCluster::StartWorkers()
 Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
 {
     timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
     time_t deadLine = now.tv_sec + timeoutSecs;
 
     std::vector<std::string> allAddrs;
@@ -741,11 +742,24 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
     }
 
     // Check whether the RPC service is started based on whether the process listens to the IP port.
+    const bool checkBrpc = []() {
+        const char *env = std::getenv("DS_USE_BRPC");
+        return env != nullptr && std::string(env) == "1";
+    }();
     for (auto addr : allAddrs) {
         timeval curr;
-        gettimeofday(&curr, NULL);
+        gettimeofday(&curr, nullptr);
         int timeout = deadLine - curr.tv_sec;
         RETURN_IF_NOT_OK(CheckIpPortListen(addr, timeout));
+        // Also verify the brpc port (ZMQ port + 10000) is listening when brpc mode is enabled.
+        if (checkBrpc) {
+            HostPort hp;
+            RETURN_IF_NOT_OK(hp.ParseString(addr));
+            gettimeofday(&curr, nullptr);
+            timeout = deadLine - curr.tv_sec;
+            HostPort brpcAddr(hp.Host(), hp.Port() + 10000);
+            RETURN_IF_NOT_OK(CheckIpPortListen(brpcAddr.ToString(), timeout));
+        }
     }
 
     LOG(INFO) << "All processes are started successfully. numMasters:" << opts_.numMasters
@@ -780,7 +794,7 @@ Status ExternalCluster::CheckIpPortListen(const std::string &addr, int timeoutSe
 Status ExternalCluster::CheckProbeFile(const std::string &filepath, int timeoutSecs, pid_t pid)
 {
     timeval now;
-    gettimeofday(&now, NULL);
+    gettimeofday(&now, nullptr);
     time_t deadLine = now.tv_sec + timeoutSecs;
     while (true) {
         if (access(filepath.c_str(), F_OK) != -1) {
@@ -796,7 +810,7 @@ Status ExternalCluster::CheckProbeFile(const std::string &filepath, int timeoutS
             return Status(K_NOT_READY, "Subprocess is abnormal.");
         }
         timeval curr;
-        gettimeofday(&curr, NULL);
+        gettimeofday(&curr, nullptr);
         CHECK_FAIL_RETURN_STATUS(curr.tv_sec < deadLine, StatusCode::K_RUNTIME_ERROR,
                                  FormatString("CheckHealthFile timed out, %s", filepath));
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

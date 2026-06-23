@@ -22,6 +22,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 
 namespace datasystem {
@@ -108,8 +109,13 @@ Status MasterRemoteWorkerSCApi::Init()
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(
         RpcStubCacheMgr::Instance().GetStub(workerAddress_, StubType::MASTER_WORKER_SC_SVC, rpcStub));
-    rpcSession_ = std::dynamic_pointer_cast<MasterWorkerSCService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    if (FLAGS_use_brpc) {
+        brpcSession_ = std::dynamic_pointer_cast<MasterWorkerSCService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+    } else {
+        rpcSession_ = std::dynamic_pointer_cast<MasterWorkerSCService_Stub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    }
     return Status::OK();
 }
 
@@ -129,9 +135,13 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcast(const std::string &str
     SET_RPC_TIMEOUT(scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->DelStreamContext(opts, req, rsp));
-    VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream broadcast success.", LogPrefix(), streamName);
-    return Status::OK();
+    Status rc = brpcSession_ ? brpcSession_->DelStreamContext(opts, req, rsp)
+                               : rpcSession_->DelStreamContext(opts, req, rsp);
+    if (rc.IsOk()) {
+        VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream broadcast success.", LogPrefix(),
+            streamName);
+    }
+    return rc;
 }
 
 Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncWrite(const std::string &streamName, bool forceDelete,
@@ -145,7 +155,8 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncWrite(const std::s
     SET_RPC_TIMEOUT(scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->DelStreamContextAsyncWrite(opts, req, tagId));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DelStreamContextAsyncWrite(opts, req, tagId)
+                                    : rpcSession_->DelStreamContextAsyncWrite(opts, req, tagId));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream async broadcast send success.", LogPrefix(),
                                               streamName);
     return Status::OK();
@@ -154,7 +165,8 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncWrite(const std::s
 Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncRead(int64_t tagId, RpcRecvFlags flags)
 {
     DelStreamContextRspPb rsp;
-    RETURN_IF_NOT_OK(rpcSession_->DelStreamContextAsyncRead(tagId, rsp, flags));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DelStreamContextAsyncRead(tagId, rsp, flags)
+                                    : rpcSession_->DelStreamContextAsyncRead(tagId, rsp, flags));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s] Delete stream async broadcast receive success.", LogPrefix());
     return Status::OK();
 }
@@ -169,7 +181,8 @@ Status MasterRemoteWorkerSCApi::SyncPubNode(const std::string &streamName, const
     RpcOptions opts;
     SET_RPC_TIMEOUT(scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->SyncPubNode(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->SyncPubNode(opts, req, rsp)
+                                    : rpcSession_->SyncPubNode(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] SyncPubNode success, node size:[%d]", LogPrefix(), streamName,
                                               pubNodeSet.size());
     return Status::OK();
@@ -186,7 +199,8 @@ Status MasterRemoteWorkerSCApi::SyncConsumerNode(const std::string &streamName,
     RpcOptions opts;
     SET_RPC_TIMEOUT(scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->SyncConsumerNode(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->SyncConsumerNode(opts, req, rsp)
+                                    : rpcSession_->SyncConsumerNode(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] SyncConsumer success, consumer size:[%d]", LogPrefix(),
                                               streamName, consumerMetas.size());
     return Status::OK();
@@ -203,7 +217,8 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePub(const std::string &streamName)
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Send ClearAllRemotePub request to worker", LogPrefix(),
                                               streamName);
-    RETURN_IF_NOT_OK(rpcSession_->ClearAllRemotePub(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->ClearAllRemotePub(opts, req, rsp)
+                                    : rpcSession_->ClearAllRemotePub(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] ClearAllRemotePub to worker success", LogPrefix(),
                                               streamName);
     return Status::OK();
@@ -217,7 +232,7 @@ std::string MasterRemoteWorkerSCApi::LogPrefix() const
 Status MasterRemoteWorkerSCApi::QueryMetadata(
     std::unique_ptr<ClientWriterReader<GetMetadataAllStreamReqPb, GetStreamMetadataRspPb>> &stream)
 {
-    return rpcSession_->QueryMetadata(&stream);
+    return brpcSession_ ? brpcSession_->QueryMetadata(&stream) : rpcSession_->QueryMetadata(&stream);
 }
 
 Status MasterRemoteWorkerSCApi::UpdateTopoNotification(UpdateTopoNotificationReq &req)
@@ -231,7 +246,8 @@ Status MasterRemoteWorkerSCApi::UpdateTopoNotification(UpdateTopoNotificationReq
     });
     UpdateTopoNotificationRsp rsp;
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return rpcSession_->UpdateTopoNotification(opts, req, rsp);
+    return brpcSession_ ? brpcSession_->UpdateTopoNotification(opts, req, rsp)
+                          : rpcSession_->UpdateTopoNotification(opts, req, rsp);
 }
 
 Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynWrite(const std::string &streamName, int64_t &tagId)
@@ -244,7 +260,8 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynWrite(const std::string &st
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s]Asyn write ClearAllRemotePub request to worker", LogPrefix(),
                                               streamName);
-    Status rc = rpcSession_->ClearAllRemotePubAsyncWrite(opts, req, tagId);
+    Status rc = brpcSession_ ? brpcSession_->ClearAllRemotePubAsyncWrite(opts, req, tagId)
+                               : rpcSession_->ClearAllRemotePubAsyncWrite(opts, req, tagId);
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s]Asyn write ClearAllRemotePub to worker success", LogPrefix(),
                                               streamName);
     return rc;
@@ -253,7 +270,8 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynWrite(const std::string &st
 Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynRead(int64_t tagId, RpcRecvFlags flags)
 {
     ClearRemoteInfoRspPb rsp;
-    Status rc = rpcSession_->ClearAllRemotePubAsyncRead(tagId, rsp, flags);
+    Status rc = brpcSession_ ? brpcSession_->ClearAllRemotePubAsyncRead(tagId, rsp, flags)
+                               : rpcSession_->ClearAllRemotePubAsyncRead(tagId, rsp, flags);
     return rc;
 }
 

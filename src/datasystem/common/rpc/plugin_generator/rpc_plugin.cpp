@@ -23,7 +23,10 @@
 
 namespace compiler = google::protobuf::compiler;
 
-static const bool STUB_HEADER_ONLY = true;
+// Must be false: the brpc three-output pattern (.irpc.pb.h, .brpc.pb.h, .brpc.pb.cc)
+// is generated after the stubHeaderOnly early-return guard in Generate(), so it
+// requires the full generation path to be active.
+static const bool STUB_HEADER_ONLY = false;
 
 int main(int argc, char **argv)
 {

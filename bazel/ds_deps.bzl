@@ -25,6 +25,9 @@ def ds_deps():
     setup_securec()
     setup_tbb()
     setup_zmq()
+    setup_gflags()
+    setup_leveldb()
+    setup_brpc()
     setup_nlohmann_json()
     setup_rocksdb()
     setup_curl()
@@ -289,6 +292,45 @@ def setup_re2():
         ],
         patches = [
             "@yuanrong-datasystem//third_party/patches/re2:modify_deps_absl_namespace.patch",
+        ],
+        patch_args = ["-p1"],
+    )
+
+def setup_gflags():
+    """Setup gflags library for Bazel builds (brpc dependency)."""
+    maybe(
+        http_archive,
+        name = "com_github_gflags_gflags",
+        sha256 = "34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf",
+        strip_prefix = "gflags-2.2.2",
+        urls = ["https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz"],
+    )
+
+def setup_leveldb():
+    """Setup leveldb library for Bazel builds (brpc dependency)."""
+    maybe(
+        http_archive,
+        name = "com_github_google_leveldb",
+        sha256 = "9a37f8a6174f09bd622bc723b55881dc541cd50747cbd08831c2a82d620f6d76",
+        strip_prefix = "leveldb-1.23",
+        urls = ["https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz"],
+        build_file = "@yuanrong-datasystem//third_party:leveldb.BUILD",
+    )
+
+def setup_brpc():
+    """Setup brpc library for Bazel builds."""
+    maybe(
+        http_archive,
+        name = "com_github_apache_brpc",
+        sha256 = "f674b753af71dc313d9d2dcf34f574f0a3438c9f9bb9e7e6ca500a3b0ca7ddfb",
+        urls = ["https://github.com/apache/brpc/archive/refs/tags/1.15.0.tar.gz"],
+        strip_prefix = "brpc-1.15.0",
+        repo_mapping = {
+            "@com_github_madler_zlib": "@zlib",
+            "@openssl": "@boringssl",
+        },
+        patches = [
+            "@yuanrong-datasystem//third_party/patches/brpc:fix-boringssl-compat.patch",
         ],
         patch_args = ["-p1"],
     )

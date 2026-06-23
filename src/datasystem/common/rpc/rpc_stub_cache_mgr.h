@@ -25,6 +25,8 @@
 #include <shared_mutex>
 #include <string>
 
+#include <brpc/channel.h>
+
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/lru/lru_cache.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
@@ -38,6 +40,17 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+
+// brpc uses the same port as ZMQ (the one specified by --worker_address / --master_address).
+// No offset: FLAGS_use_brpc selects which server listens on the port (ZMQ or brpc, not both).
+constexpr int kBrpcPortOffset = 0;
+constexpr int kBrpcConnMaxRetries = 30;
+constexpr int kBrpcConnRetryIntervalUs = 100000;
+
+// Wait for brpc health check to establish TCP connection to the given brpc address.
+// Returns true if the socket becomes available within maxRetries * intervalUs.
+bool WaitForBrpcSocketAvailable(const HostPort& brpcAddr, int maxRetries = kBrpcConnMaxRetries,
+                                int intervalUs = kBrpcConnRetryIntervalUs);
 
 enum class StubPriority : int {
     HIGH = 0,
@@ -185,6 +198,18 @@ public:
     Status GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub);
 
     /**
+     * @brief Verify the cached brpc stub's underlying socket is still alive; evict if stale.
+     *
+     * Only meaningful under FLAGS_use_brpc. Resets rpcStub to nullptr when the cached
+     * channel's socket is dead so the caller falls through to stub recreation.
+     *
+     * @param[in] hostPort The worker address (zmq port convention).
+     * @param[in] type The stub type.
+     * @param[in,out] rpcStub The cached stub; reset to nullptr if evicted.
+     */
+    void MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub);
+
+    /**
      * @brief Remove stub.
      * @param[in] hostPort The host and port of the stub.
      * @param[in] type The type of the stub.
@@ -227,6 +252,11 @@ protected:
     static Status CreateRpcChannel(const HostPort &hostPort, const std::string &serviceName,
                                    std::shared_ptr<RpcChannel> &channel, size_t poolSize = 0);
 
+    static Status CreateBrpcStub(StubType type, const std::shared_ptr<brpc::Channel> &brpcChannel,
+                                 std::shared_ptr<RpcStubBase> &stub);
+
+    static Status CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel);
+
     template <typename CreateRpcChannelFunc>
     static Status CreatorTemplate(CreateRpcChannelFunc &&createRpcChannelFunc, StubType stubType,
                                   std::shared_ptr<RpcStubBase> &rpcStub)
@@ -234,6 +264,27 @@ protected:
         std::shared_ptr<RpcChannel> channel;
         RETURN_IF_NOT_OK(createRpcChannelFunc(channel));
         return CreateRpcStub(stubType, channel, rpcStub);
+    }
+
+    /**
+     * @brief Brpc version of CreatorTemplate that creates a brpc::Channel and _BrpcGenericStub.
+     * Uses a holder struct to keep the brpc::Channel alive for the lifetime of the stub.
+     */
+    template <typename CreateBrpcChannelFunc>
+    static Status BrpcCreatorTemplate(CreateBrpcChannelFunc &&createBrpcChannelFunc, StubType stubType,
+                                      std::shared_ptr<RpcStubBase> &rpcStub)
+    {
+        // Holder keeps both the channel and stub alive; aliased shared_ptr exposes only the RpcStubBase.
+        struct BrpcChannelStubHolder {
+            std::shared_ptr<brpc::Channel> channel;
+            std::shared_ptr<RpcStubBase> stub;
+        };
+        auto holder = std::make_shared<BrpcChannelStubHolder>();
+        RETURN_IF_NOT_OK(createBrpcChannelFunc(holder->channel));
+        RETURN_IF_NOT_OK(CreateBrpcStub(stubType, holder->channel, holder->stub));
+        // Aliased shared_ptr: control block is holder's, stored pointer is the stub.
+        rpcStub = std::shared_ptr<RpcStubBase>(holder, holder->stub.get());
+        return Status::OK();
     }
 
     std::mutex initMutex_;  // Avoid repeated initialization.

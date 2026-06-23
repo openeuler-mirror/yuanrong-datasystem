@@ -16,7 +16,12 @@ set(protobuf_CMAKE_OPTIONS
     -Dprotobuf_ABSL_PROVIDER:STRING=package
     -Dabsl_DIR:PATH=${absl_PKG_PATH}
     -DCMAKE_CXX_STANDARD=17
-    -DCMAKE_SKIP_RPATH:BOOL=TRUE)
+    -DCMAKE_SKIP_RPATH:BOOL=TRUE
+    # zlib is required so protobuf compiles gzip_stream.cc (gated by HAVE_ZLIB); otherwise the
+    # resulting libprotobuf.so is missing Gzip{Input,Output}Stream symbols that brpc links against.
+    -Dprotobuf_WITH_ZLIB:BOOL=ON
+    -DZLIB_ROOT:PATH=${ZLIB_ROOT}
+    -DHAVE_ZLIB:BOOL=ON)
 
 if (USE_SANITIZER)
     set(protobuf_CXX_FLAGS "${THIRDPARTY_SAFE_FLAGS} ${SANITIZER_FLAGS} -fPIE -pie -fPIC")

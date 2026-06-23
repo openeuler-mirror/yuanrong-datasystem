@@ -26,6 +26,7 @@
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -34,6 +35,10 @@
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+// Upper bound for RPC timeout to prevent infinite wait on network failures.
+constexpr int64_t kWorkerWorkerRpcMaxTimeoutMs = 120'000;
+}  // namespace
 
 WorkerLocalWorkerOCApi::WorkerLocalWorkerOCApi(WorkerWorkerOCServiceImpl *service,
                                                std::shared_ptr<AkSkManager> akSkManager)
@@ -63,8 +68,13 @@ Status WorkerRemoteWorkerOCApi::Init()
 {
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_WORKER_OC_SVC, rpcStub));
-    rpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    if (FLAGS_use_brpc) {
+        brpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+    } else {
+        rpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_Stub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    }
     return Status::OK();
 }
 
@@ -84,15 +94,16 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetOb
                            "GetObjectRemote", localHostPort_, hostPort_);
     }
     // If timeout duration is too large, prevent from waiting too long when network errors.
-    int64_t maxTimeoutMs = 120000;
+    int64_t maxTimeoutMs = kWorkerWorkerRpcMaxTimeoutMs;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(remainingTime);
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "GetObjectRemote",
                            localHostPort_, hostPort_);
     }
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->GetObjectRemote(opts, req, rsp, payload);
+    Status rc = brpcSession_ ? brpcSession_->GetObjectRemote(opts, req, rsp, payload)
+                             : rpcSession_->GetObjectRemote(opts, req, rsp, payload);
     return WithRpcDiag(rc, "GetObjectRemote", localHostPort_, hostPort_);
 }
 
@@ -108,14 +119,15 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(
                            "GetObjectRemote", localHostPort_, hostPort_);
     }
     // If timeout duration is too large, prevent from waiting too long when network errors.
-    int64_t maxTimeoutMs = 120000;
+    int64_t maxTimeoutMs = kWorkerWorkerRpcMaxTimeoutMs;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(remainingTime);
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "GetObjectRemote",
                            localHostPort_, hostPort_);
     }
-    auto rc = rpcSession_->GetObjectRemote(opts, clientApi);
+    auto rc = brpcSession_ ? brpcSession_->GetObjectRemote(opts, clientApi)
+                           : rpcSession_->GetObjectRemote(opts, clientApi);
     return WithRpcDiag(rc, "GetObjectRemote", localHostPort_, hostPort_);
 }
 
@@ -143,14 +155,15 @@ Status WorkerRemoteWorkerOCApi::BatchGetObjectRemote(
                            "BatchGetObjectRemote", localHostPort_, hostPort_);
     }
     // If timeout duration is too large, prevent from waiting too long when network errors.
-    int64_t maxTimeoutMs = 120000;
+    int64_t maxTimeoutMs = kWorkerWorkerRpcMaxTimeoutMs;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(remainingTime);
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "BatchGetObjectRemote",
                            localHostPort_, hostPort_);
     }
-    auto rc = rpcSession_->BatchGetObjectRemote(opts, clientApi);
+    auto rc = brpcSession_ ? brpcSession_->BatchGetObjectRemote(opts, clientApi)
+                           : rpcSession_->BatchGetObjectRemote(opts, clientApi);
     return WithRpcDiag(rc, "BatchGetObjectRemote", localHostPort_, hostPort_);
 }
 
@@ -165,43 +178,48 @@ Status WorkerRemoteWorkerOCApi::BatchGetObjectRemoteWrite(
 
 Status WorkerRemoteWorkerOCApi::CheckEtcdStateAsyncWrite(CheckEtcdStateReqPb &req, int64_t &tag)
 {
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->CheckEtcdStateAsyncWrite(req, tag));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckEtcdStateAsyncWrite(req, tag)
+                                  : rpcSession_->CheckEtcdStateAsyncWrite(req, tag));
     return Status::OK();
 }
 
 Status WorkerRemoteWorkerOCApi::CheckEtcdStateAsyncRead(int64_t tag, CheckEtcdStateRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
-    RETURN_IF_NOT_OK(rpcSession_->CheckEtcdStateAsyncRead(tag, rsp));
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckEtcdStateAsyncRead(tag, rsp)
+                                  : rpcSession_->CheckEtcdStateAsyncRead(tag, rsp));
     return Status::OK();
 }
 
 Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int64_t &tag)
 {
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->GetClusterStateAsyncWrite(req, tag));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncWrite(req, tag)
+                                  : rpcSession_->GetClusterStateAsyncWrite(req, tag));
     return Status::OK();
 }
 
 Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
-    RETURN_IF_NOT_OK(rpcSession_->GetClusterStateAsyncRead(tag, rsp));
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncRead(tag, rsp)
+                                  : rpcSession_->GetClusterStateAsyncRead(tag, rsp));
     return Status::OK();
 }
 
 Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads,
                                             MigrateDataRspPb &rsp)
 {
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "MigrateData",
                            localHostPort_, hostPort_);
     }
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->MigrateData(req, rsp, payloads);
+    auto rc = brpcSession_ ? brpcSession_->MigrateData(req, rsp, payloads)
+                           : rpcSession_->MigrateData(req, rsp, payloads);
     return WithRpcDiag(rc, "MigrateData", localHostPort_, hostPort_);
 }
 
@@ -218,12 +236,13 @@ Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, M
     constexpr int64_t maxTimeoutMs = 180'000;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(static_cast<int32_t>(remainingTime));
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "MigrateDataDirect",
                            localHostPort_, hostPort_);
     }
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->MigrateDataDirect(opts, req, rsp);
+    auto rc = brpcSession_ ? brpcSession_->MigrateDataDirect(opts, req, rsp)
+                           : rpcSession_->MigrateDataDirect(opts, req, rsp);
     return WithRpcDiag(rc, "MigrateDataDirect", localHostPort_, hostPort_);
 }
 
@@ -242,12 +261,13 @@ Status WorkerRemoteWorkerOCApi::NotifyRemoteGet(NotifyRemoteGetReqPb &req, Notif
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(static_cast<int32_t>(remainingTime));
 
-    if (rpcSession_ == nullptr) {
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "NotifyRemoteGet",
                            req.addr(), hostPort_);
     }
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = rpcSession_->NotifyRemoteGet(opts, req, rsp);
+    auto rc = brpcSession_ ? brpcSession_->NotifyRemoteGet(opts, req, rsp)
+                           : rpcSession_->NotifyRemoteGet(opts, req, rsp);
     return WithRpcDiag(rc, "NotifyRemoteGet", req.addr(), hostPort_);
 }
 

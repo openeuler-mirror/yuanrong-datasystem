@@ -24,11 +24,13 @@
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
+#include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.pb.h"
 
 namespace datasystem {
 namespace object_cache {
-class MasterWorkerOCServiceImpl : public MasterWorkerOCService {
+class MasterWorkerOCServiceImpl : public MasterWorkerOCService, public IMasterWorkerOCService {
 public:
     /**
      * @brief MasterWorkerOCServiceImpl constructor.

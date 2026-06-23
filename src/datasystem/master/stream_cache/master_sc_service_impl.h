@@ -29,7 +29,9 @@
 #include "datasystem/master/stream_cache/master_worker_sc_api.h"
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/stream_metadata.h"
+#include "datasystem/protos/master_stream.irpc.pb.h"
 #include "datasystem/protos/master_stream.service.rpc.pb.h"
+#include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
@@ -37,7 +39,7 @@ namespace datasystem {
 class MetadataManagerHolder;
 
 namespace master {
-class MasterSCServiceImpl : public MasterSCService {
+class MasterSCServiceImpl : public MasterSCService, public IMasterSCService {
 public:
     MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
                         MetadataManagerHolder *metadataManagerHolder);

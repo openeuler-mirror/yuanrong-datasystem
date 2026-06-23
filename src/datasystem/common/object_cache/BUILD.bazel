@@ -41,6 +41,7 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/protos:meta_transport_cc_proto",
+        "@com_github_apache_brpc//:brpc",
         "@tbb",
     ],
 )

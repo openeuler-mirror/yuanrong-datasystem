@@ -23,6 +23,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_ZMQ_STREAM_CLIENT_H
 #define DATASYSTEM_COMMON_RPC_ZMQ_STREAM_CLIENT_H
 
+#include "datasystem/common/rpc/client_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_client_stream_base_common.h"
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
 #include "datasystem/common/rpc/zmq/zmq_stream_base.h"
@@ -183,7 +184,7 @@ public:
  * @tparam R Stream RPC mode, ReadPb type.
  */
 template <typename W, typename R>
-class ClientWriterReaderImpl : public ClientStreamBase {
+class ClientWriterReaderImpl : public ClientStreamBase, public ClientWriterReaderBase<W, R> {
 public:
     explicit ClientWriterReaderImpl(std::shared_ptr<ZmqMsgQueRef> s, const std::string &svcName, int32_t methodIndex,
                                     std::string workerId, bool sendPayload, bool recvPayload)
@@ -192,16 +193,31 @@ public:
     }
     ~ClientWriterReaderImpl() override = default;
 
-    Status Write(const W &pb)
+    Status Write(const W &pb) override
     {
         PerfPoint point(PerfKey::ZMQ_STREAM_WRITE);
         return ClientStreamBase::WritePb(pb);
     }
 
-    Status Read(R &pb)
+    Status Read(R &pb) override
     {
         PerfPoint point(PerfKey::ZMQ_STREAM_READ);
         return ClientStreamBase::ReadPb(pb);
+    }
+
+    Status Finish() override
+    {
+        return ClientStreamBase::Finish();
+    }
+
+    Status SendPayload(const std::vector<MemView> &payload) override
+    {
+        return ClientStreamBase::SendPayload(payload);
+    }
+
+    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer) override
+    {
+        return ClientStreamBase::ReceivePayload(recvBuffer);
     }
 };
 }  // namespace datasystem

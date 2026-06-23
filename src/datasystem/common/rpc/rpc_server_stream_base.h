@@ -26,6 +26,7 @@
 #include <variant>
 
 #include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/rpc/server_writer_reader_base.h"
 #include "datasystem/common/rpc/zmq/zmq_server_stream_base.h"
 #include "datasystem/common/log/log_helper.h"
 
@@ -159,13 +160,14 @@ private:
 
 /**
  * Both sides are streaming.
+ * Uses ServerWriterReaderBase for virtual dispatch instead of std::variant.
  * @tparam W Stream RPC mode, WritePb type.
  * @tparam R Stream RPC mode, ReadPb type.
  */
 template <typename W, typename R>
 class ServerWriterReader {
 public:
-    explicit ServerWriterReader(std::unique_ptr<ServerWriterReaderImpl<W, R>> &&impl) : pimpl_(std::move(impl))
+    explicit ServerWriterReader(std::unique_ptr<ServerWriterReaderBase<W, R>> &&impl) : pimpl_(std::move(impl))
     {
     }
 
@@ -173,41 +175,41 @@ public:
 
     Status SendStatus(const Status &rc)
     {
-        return std::visit([&rc](auto &pimpl) { return pimpl->SendStatus(rc); }, pimpl_);
+        return pimpl_->SendStatus(rc);
     }
 
     Status Read(R &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Read(pb); }, pimpl_);
+        return pimpl_->Read(pb);
     }
 
     Status Write(const W &pb)
     {
-        return std::visit([&pb](auto &pimpl) { return pimpl->Write(pb); }, pimpl_);
+        return pimpl_->Write(pb);
     }
 
     Status Finish()
     {
-        return std::visit([](auto &pimpl) { return pimpl->Finish(); }, pimpl_);
+        return pimpl_->Finish();
     }
 
     Status SendPayload(std::vector<RpcMessage> &buffer)
     {
-        return std::visit([&buffer](auto &pimpl) { return pimpl->SendPayload(buffer); }, pimpl_);
+        return pimpl_->SendPayload(buffer);
     }
 
     Status SendPayload(const std::vector<MemView> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->SendPayload(payload); }, pimpl_);
+        return pimpl_->SendPayload(payload);
     }
 
     Status ReceivePayload(std::vector<RpcMessage> &payload)
     {
-        return std::visit([&payload](auto &pimpl) { return pimpl->ReceivePayload(payload); }, pimpl_);
+        return pimpl_->ReceivePayload(payload);
     }
 
 private:
-    std::variant<std::unique_ptr<ServerWriterReaderImpl<W, R>>> pimpl_;
+    std::unique_ptr<ServerWriterReaderBase<W, R>> pimpl_;
 };
 
 template <typename W, typename R>

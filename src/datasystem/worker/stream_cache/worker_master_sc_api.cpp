@@ -23,6 +23,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
@@ -88,8 +89,13 @@ Status WorkerRemoteMasterSCApi::Init()
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(
         RpcStubCacheMgr::Instance().GetStub(masterAddress_, StubType::WORKER_MASTER_SC_SVC, rpcStub));
-    rpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    if (FLAGS_use_brpc) {
+        brpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+    } else {
+        rpcSession_ = std::dynamic_pointer_cast<master::MasterSCService_Stub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    }
     return Status::OK();
 }
 
@@ -103,7 +109,8 @@ Status WorkerRemoteMasterSCApi::CreateProducer(master::CreateProducerReqPb &req,
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->CreateProducer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CreateProducer(opts, req, rsp)
+                                  : rpcSession_->CreateProducer(opts, req, rsp));
     INJECT_POINT("worker.CreateProducer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Add new pub node on master success", LogPrefix(),
@@ -121,7 +128,8 @@ Status WorkerRemoteMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, m
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->CloseProducer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CloseProducer(opts, req, rsp)
+                                  : rpcSession_->CloseProducer(opts, req, rsp));
     INJECT_POINT("worker.CloseProducer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s] Closing %d producers on master success", LogPrefix(),
@@ -147,7 +155,8 @@ Status WorkerRemoteMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::S
         return Status::OK();
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->Subscribe(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->Subscribe(opts, req, rsp)
+                                  : rpcSession_->Subscribe(opts, req, rsp));
     INJECT_POINT("worker.Subscribe.afterSendToMaster");
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Add new consumer on master succeeded", LogPrefix(),
                                               req.consumer_meta().stream_name(), req.consumer_meta().consumer_id());
@@ -164,7 +173,8 @@ Status WorkerRemoteMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, m
         RETURN_STATUS(GetStatusCodeByName(code), "inject status");
     });
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->CloseConsumer(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CloseConsumer(opts, req, rsp)
+                                  : rpcSession_->CloseConsumer(opts, req, rsp));
     INJECT_POINT("worker.CloseConsumer.afterSendToMaster");
 
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Delete consumer on master succeeded", LogPrefix(),
@@ -177,7 +187,8 @@ Status WorkerRemoteMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mas
     RpcOptions opts;
     CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->DeleteStream(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DeleteStream(opts, req, rsp)
+                                  : rpcSession_->DeleteStream(opts, req, rsp));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream succeeded.", LogPrefix(), req.stream_name());
     return Status::OK();
 }
@@ -186,14 +197,16 @@ Status WorkerRemoteMasterSCApi::QueryGlobalProducersNum(master::QueryGlobalNumRe
                                                         master::QueryGlobalNumRsqPb &rsp)
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return rpcSession_->QueryGlobalProducersNum(req, rsp);
+    return brpcSession_ ? brpcSession_->QueryGlobalProducersNum(req, rsp)
+                        : rpcSession_->QueryGlobalProducersNum(req, rsp);
 }
 
 Status WorkerRemoteMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumReqPb &req,
                                                         master::QueryGlobalNumRsqPb &rsp)
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return rpcSession_->QueryGlobalConsumersNum(req, rsp);
+    return brpcSession_ ? brpcSession_->QueryGlobalConsumersNum(req, rsp)
+                        : rpcSession_->QueryGlobalConsumersNum(req, rsp);
 }
 
 std::string WorkerRemoteMasterSCApi::LogPrefix() const

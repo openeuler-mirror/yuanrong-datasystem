@@ -72,12 +72,10 @@ ds_cc_library(
         "//src/datasystem/protos:utils_cc_proto",
         "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/hash_ring:hash_ring_event",
-        "@com_google_protobuf//:protoc_lib",
+        "@com_google_protobuf//:protobuf",
         "@tbb",
     ],
 )
-
-
 
 ds_cc_library(
     name = "master_service_impl",
@@ -91,6 +89,7 @@ ds_cc_library(
         ":node_manager",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:master_heartbeat_brpc",
         "//src/datasystem/protos:master_heartbeat_zmq_cc_proto",
     ],
 )

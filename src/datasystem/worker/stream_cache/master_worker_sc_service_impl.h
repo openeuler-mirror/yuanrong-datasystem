@@ -19,14 +19,16 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/stream_cache/consumer_meta.h"
+#include "datasystem/protos/worker_stream.irpc.pb.h"
 #include "datasystem/protos/worker_stream.service.rpc.pb.h"
+#include "datasystem/protos/worker_stream.brpc.pb.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
 
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
-class MasterWorkerSCServiceImpl : public MasterWorkerSCService {
+class MasterWorkerSCServiceImpl : public MasterWorkerSCService, public IMasterWorkerSCService {
 public:
     /**
      * @brief Construct MasterWorkerSCServiceImpl that is used to provide service for master.

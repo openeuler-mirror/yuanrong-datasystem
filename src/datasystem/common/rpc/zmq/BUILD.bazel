@@ -460,6 +460,7 @@ ds_cc_library(
         ":zmq_stream_base",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:server_writer_reader_base",
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/common/util:wait_post",
     ],

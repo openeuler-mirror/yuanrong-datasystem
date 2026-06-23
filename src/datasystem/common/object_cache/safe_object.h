@@ -27,12 +27,17 @@
 
 #include <sys/syscall.h>
 
+#include <bthread/rwlock.h>
+
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/template_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
+
+DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 
@@ -65,6 +70,7 @@ public:
      */
     SafeObject() : realObject_(nullptr), deleted_(false), wLocked_(false)
     {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
 
     /**
@@ -75,6 +81,7 @@ public:
     explicit SafeObject(std::unique_ptr<ObjType> objPtr)
         : realObject_(std::move(objPtr)), deleted_(false), wLocked_(false)
     {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
 
     /**
@@ -86,12 +93,22 @@ public:
     explicit SafeObject(const ObjType &obj)
         : realObject_(std::make_unique<ObjType>(obj)), deleted_(false), wLocked_(false)
     {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
 
     /**
      * @brief Default destructor.
+     *
+     * @note Caller must guarantee no bthread still holds a read or write lock
+     *       when this SafeObject is destroyed (e.g. LRU eviction must complete
+     *       the eviction under WLock and release before dropping the object).
+     *       Destroying a bthread_rwlock_t that is still held is UB; we cannot
+     *       query lock state portably, so we rely on the caller invariant.
      */
-    ~SafeObject() = default;
+    ~SafeObject()
+    {
+        bthread_rwlock_destroy(&bthread_mutex_);
+    }
 
     /**
      * @brief Assigns the real object into the SafeObject via copy constructor of the passed-in object.
@@ -235,7 +252,8 @@ public:
     SafeObject &operator=(SafeObject &&other) noexcept = delete;
 
 private:
-    std::shared_mutex mutex_;              // The lock for the object metadata and data.
+    std::shared_mutex mutex_;              // The lock for the object metadata and data (ZMQ mode).
+    bthread_rwlock_t bthread_mutex_;      // The lock for the object metadata and data (brpc mode).
     std::mutex gRefLock_;                  // The lock for the object global reference.
     std::unique_ptr<ObjType> realObject_;  // The actual object stored in a unique_ptr.
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
@@ -259,11 +277,19 @@ template <typename ObjType>
 Status SafeObject<ObjType>::WLock(bool nullable)
 {
     Timer timer;
-    mutex_.lock();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_wrlock(&bthread_mutex_);
+    } else {
+        mutex_.lock();
+    }
     workerOperationTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
     masterOperationTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        mutex_.unlock();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock();
+        }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -274,12 +300,21 @@ Status SafeObject<ObjType>::WLock(bool nullable)
 template <typename ObjType>
 Status SafeObject<ObjType>::TryWLock(bool nullable)
 {
-    bool locked = mutex_.try_lock();
+    bool locked;
+    if (FLAGS_use_brpc) {
+        locked = (bthread_rwlock_trywrlock(&bthread_mutex_) == 0);
+    } else {
+        locked = mutex_.try_lock();
+    }
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        mutex_.unlock();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock();
+        }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
@@ -292,21 +327,38 @@ void SafeObject<ObjType>::WUnlock()
 {
     if (wLocked_.exchange(false)) {
 #ifdef WITH_TESTS
-        auto currentThread = syscall(__NR_gettid);
-        if (currentThread != lastWriteThread_) {
-            std::abort();
+        // brpc bthreads can migrate between pthreads across yield points (RPC calls, sleeps),
+        // so the kernel tid at lock time may differ from the tid at unlock time. Skip the check
+        // when running under brpc to avoid false-positive aborts.
+        if (!FLAGS_use_brpc) {
+            auto currentThread = syscall(__NR_gettid);
+            if (currentThread != lastWriteThread_) {
+                std::abort();
+            }
         }
 #endif
-        mutex_.unlock();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock();
+        }
     }
 }
 
 template <typename ObjType>
 Status SafeObject<ObjType>::RLock(bool nullable)
 {
-    mutex_.lock_shared();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_rdlock(&bthread_mutex_);
+    } else {
+        mutex_.lock_shared();
+    }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        mutex_.unlock_shared();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock_shared();
+        }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -315,12 +367,21 @@ Status SafeObject<ObjType>::RLock(bool nullable)
 template <typename ObjType>
 Status SafeObject<ObjType>::TryRLock(bool nullable)
 {
-    bool locked = mutex_.try_lock_shared();
+    bool locked;
+    if (FLAGS_use_brpc) {
+        locked = (bthread_rwlock_tryrdlock(&bthread_mutex_) == 0);
+    } else {
+        locked = mutex_.try_lock_shared();
+    }
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        mutex_.unlock_shared();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
+            mutex_.unlock_shared();
+        }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     return Status::OK();
@@ -329,7 +390,11 @@ Status SafeObject<ObjType>::TryRLock(bool nullable)
 template <typename ObjType>
 void SafeObject<ObjType>::RUnlock()
 {
-    mutex_.unlock_shared();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_unlock(&bthread_mutex_);
+    } else {
+        mutex_.unlock_shared();
+    }
 }
 
 template <typename ObjType>
@@ -384,6 +449,13 @@ ObjType &SafeObject<ObjType>::operator*()
 template <typename ObjType>
 bool SafeObject<ObjType>::IsWLockedByCurrentThread() const
 {
+    // Under brpc, bthreads share pthreads and may migrate across yield points,
+    // so kernel tid comparison is meaningless. Fall back to checking whether
+    // ANY thread holds the WLock. Not ownership-verifying, but prevents false
+    // negatives that would break ClearObject, cleanup loops, and assertions.
+    if (FLAGS_use_brpc) {
+        return wLocked_;
+    }
     if (wLocked_ && lastWriteThread_ == syscall(__NR_gettid)) {
         return true;
     }

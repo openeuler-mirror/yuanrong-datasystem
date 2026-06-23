@@ -21,9 +21,20 @@
 #define DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 #include <variant>
+
+namespace brpc {
+class Server;
+}  // namespace brpc
+
+namespace google {
+namespace protobuf {
+class Service;
+}  // namespace protobuf
+}  // namespace google
 
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_credential.h"
@@ -111,6 +122,30 @@ public:
         }
 
         /**
+         * @brief Enable brpc mode instead of ZMQ.
+         * @param[in] use Whether to use brpc.
+         * @return Reference to this builder.
+         */
+        Builder &SetUseBrpc(bool use)
+        {
+            useBrpc_ = use;
+            return *this;
+        }
+
+        /**
+         * @brief Set brpc listen address.
+         * @param[in] addr IP address.
+         * @param[in] port Port number.
+         * @return Reference to this builder.
+         */
+        Builder &SetBrpcAddr(const std::string &addr, int port)
+        {
+            brpcAddr_ = addr;
+            brpcPort_ = port;
+            return *this;
+        }
+
+        /**
          * @brief Build and start RPC server.
          * @param[in] Built rpc server.
          * @return A rpc server.
@@ -143,6 +178,9 @@ public:
         std::vector<std::pair<std::variant<ZmqService *>, RpcServiceCfg>> svcList_;
         RpcCredential cred_;
         std::function<Status()> preStartCallback_{};
+        bool useBrpc_ = false;
+        std::string brpcAddr_;
+        int brpcPort_ = 0;
     };
 
     /**
@@ -186,6 +224,26 @@ public:
     void Shutdown();
 
     /**
+     * @brief Register a brpc protobuf service.
+     * @param[in] service The protobuf service to register.
+     * @return Status of the call.
+     */
+    Status AddBrpcService(google::protobuf::Service *service);
+
+    /**
+     * @brief Start the brpc server listening on the given address and port.
+     * @param[in] addr IP address.
+     * @param[in] port Port number.
+     * @return Status of the call.
+     */
+    Status StartBrpcServer(const std::string &addr, int port);
+
+    /**
+     * @brief Stop the brpc server.
+     */
+    void StopBrpcServer();
+
+    /**
      * @brief Post an interrupt signal.
      */
     void Interrupt() override;
@@ -195,6 +253,15 @@ public:
      * @return Whether it is interrupted.
      */
     bool IsInterrupted() const override;
+
+    /**
+     * @brief Check if brpc mode is enabled.
+     * @return True if brpc mode is enabled.
+     */
+    bool IsBrpc() const
+    {
+        return useBrpc_;
+    }
 
     /**
      * @brief Query what ports the server is listening.
@@ -236,6 +303,8 @@ private:
     Status InitAuthHandler();
 
     std::variant<std::unique_ptr<ZmqServerImpl>> pimpl_;
+    std::unique_ptr<brpc::Server> brpcServer_;
+    bool useBrpc_ = false;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_SERVER_H
