@@ -22,15 +22,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <securec.h>
+#include <sstream>
 #include <stdarg.h>
 #include <string>
 #include <type_traits>
 #include <utility>
-
-#include <securec.h>
 
 #include "datasystem/common/flags/string_to_long.h"
 #include "datasystem/common/util/format.h"
@@ -915,4 +916,46 @@ bool FlagManager::CheckAndReportErrors(std::string &errMsg) const
     }
     return error;
 }
+bool FlagManager::ParseConfigFile(const std::string &path, std::string &errMsg)
+{
+    if (path.empty()) {
+        errMsg = "config file path invalid: empty path";
+        return false;
+    }
+    std::string fileContent;
+    {
+        std::ifstream ifs(path);
+        if (!ifs.is_open()) {
+            errMsg = std::string("config file path invalid: file not found: ") + path;
+            return false;
+        }
+        std::ostringstream oss;
+        oss << ifs.rdbuf();
+        fileContent = oss.str();
+    }
+
+    std::unordered_map<std::string, std::string> flagMap;
+    try {
+        auto parsed = nlohmann::json::parse(fileContent);
+        for (auto &[key, val] : parsed.items()) {
+            if (val.is_object() && val.contains("value")) {
+                if (val["value"].is_string()) {
+                    flagMap[key] = val["value"].get<std::string>();
+                } else {
+                    flagMap[key] = val["value"].dump();
+                }
+            }
+        }
+    } catch (const nlohmann::json::exception &ex) {
+        errMsg = std::string("config parse error: ") + ex.what();
+        return false;
+    }
+    if (flagMap.empty()) {
+        errMsg = std::string("config parse error: no valid flags from file: ") + path;
+        return false;
+    }
+
+    return ParseCommandLineFlags(flagMap, errMsg);
+}
+
 }  // namespace datasystem

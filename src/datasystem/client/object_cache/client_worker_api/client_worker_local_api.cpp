@@ -52,7 +52,7 @@ Status ClientWorkerLocalApi::Init(int32_t requestTimeoutMs, int32_t connectTimeo
     connectTimeoutMs_ = connectTimeoutMs;
     RETURN_IF_NOT_OK(
         ClientWorkerLocalCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
-    workerOCService_ = api_->GetWorkerOCService(worker_);
+    workerOCService_ = api_->GetWorkerOCService();
     return Status::OK();
 }
 

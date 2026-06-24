@@ -242,6 +242,15 @@ public:
     bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg);
 
     /**
+     * @brief Parse a JSON worker config file and apply flags.
+     * @details Validates path, reads and parses JSON, then calls ParseCommandLineFlags.
+     * @param[in] path Absolute path to the config file.
+     * @param[out] errMsg Error message if parse failed.
+     * @return True on success; false otherwise.
+     */
+    bool ParseConfigFile(const std::string &path, std::string &errMsg);
+
+    /**
      * @brief Get program invocation short name.
      * @return Program invocation short name.
      */

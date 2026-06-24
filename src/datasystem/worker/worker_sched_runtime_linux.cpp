@@ -21,10 +21,7 @@
 #include <linux/sched.h>
 #include <linux/sched/types.h>
 
-struct SetSchedRuntimeResult {
-    bool success;
-    int err;
-};
+#include "datasystem/worker/worker_sched_runtime.h"
 
 namespace {
 // Use half of /sys/kernel/debug/sched/base_slice_ns to reduce worker scheduling latency while keeping the value

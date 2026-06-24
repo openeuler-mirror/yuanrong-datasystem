@@ -1,5 +1,5 @@
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,21 +15,19 @@
  */
 
 /**
- * Description: Worker program master file.
+ * Description: Declarations for worker scheduling runtime configuration.
  */
+#ifndef DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H
+#define DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H
 
-#include "datasystem/common/log/log.h"
-#include "datasystem/worker/worker.h"
+#include <cstdint>
 
-using namespace datasystem;
-using namespace datasystem::worker;
+struct SetSchedRuntimeResult {
+    bool success;
+    int err;
+};
 
-int main(int argc, char **argv)
-{
-    auto rc = Worker::GetInstance()->InitAndRun(argc, argv);
-    if (rc.IsError()) {
-        LOG(ERROR) << "Worker failed: " << rc.ToString();
-        return -1;
-    }
-    return 0;
-}
+SetSchedRuntimeResult SetWorkerSchedRuntime();
+uint64_t GetWorkerSchedRuntimeNs();
+
+#endif  // DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H

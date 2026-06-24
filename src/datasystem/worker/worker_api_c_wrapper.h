@@ -35,15 +35,13 @@ extern "C" {
 #endif
 /**
  * @brief Get workerservice ptr.
- * @param[in] obj worker ptr.
  */
-void *GetWorkerService(void *obj);
+void *GetWorkerService();
 
 /**
  * @brief Get workerocservice ptr.
- * @param[in] obj worker ptr.
  */
-void *GetWorkerOCService(void *obj);
+void *GetWorkerOCService();
 
 /**
  * @brief RegisterClient.

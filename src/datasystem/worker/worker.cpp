@@ -15,28 +15,31 @@
  */
 
 /**
- * Description: Worker for start and shutdown worker.
+ * Description: Worker lifecycle management — startup, event loop, and shutdown.
  */
 #include "datasystem/worker/worker.h"
 
-#include <fstream>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <string>
-#include <libgen.h>
+#include <cerrno>
+#include <cstring>
 #include <sys/prctl.h>
 
 #include "datasystem/common/encrypt/secret_manager.h"
+#include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/failure_handler.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/dynamic_config_updater.h"
 #include "datasystem/common/util/gflag/flags.h"
-#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
@@ -44,6 +47,8 @@
 #include "datasystem/common/util/version.h"
 #include "datasystem/worker/worker_cli.h"
 #include "datasystem/worker/worker_oc_server.h"
+#include "datasystem/worker/worker_sched_runtime.h"
+#include "datasystem/worker/worker_service_accessor.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 
 DS_DECLARE_string(worker_address);
@@ -76,8 +81,7 @@ void *CreateWorker()
 void WorkerDestroy(void *w)
 {
     auto *worker = static_cast<datasystem::worker::Worker *>(w);
-    LOG_IF_ERROR(worker->PreShutDown(), "worker pre-shutdown failed");
-    LOG_IF_ERROR(worker->ShutDown(), "worker shut down failed");
+    LOG_IF_ERROR(worker->StopEmbeddedWorker(), "worker stop embedded failed");
 }
 
 Status InitEmbeddedWorker(const EmbeddedConfig &config, void *w)
@@ -138,6 +142,10 @@ struct WorkerServerOptions {
         return Status::OK();
     }
 };
+
+constexpr int CHECK_EVERY_MS = 1'000;
+constexpr int MAX_TOLERATED_ATTEMPTS = 10;
+constexpr int REPORTING_THRESHOLD_MS = CHECK_EVERY_MS * MAX_TOLERATED_ATTEMPTS;
 
 /*
  * Keep all post processing may cause early return in WorkerPostProcessing() function
@@ -205,6 +213,32 @@ void InitWorkerLogConfig()
     }
 }
 
+constexpr size_t ERR_MSG_BUF_SIZE = 256;
+
+std::string SchedStrError(int err)
+{
+    char buf[ERR_MSG_BUF_SIZE] = { 0 };
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+    return std::string(strerror_r(err, buf, sizeof(buf)));
+#else
+    auto ret = strerror_r(err, buf, sizeof(buf));
+    if (ret != 0) {
+        return FormatString("Unknown error %d", err);
+    }
+    return std::string(buf);
+#endif
+}
+
+void LogSetWorkerSchedRuntimeResult(const SetSchedRuntimeResult &result)
+{
+    if (!result.success) {
+        LOG(WARNING) << FormatString("Failed to set worker sched runtime to %llu ns, errno: %d, error: %s",
+            static_cast<unsigned long long>(GetWorkerSchedRuntimeNs()), result.err, SchedStrError(result.err));
+        return;
+    }
+    LOG(INFO) << "Set worker sched runtime to " << GetWorkerSchedRuntimeNs() << " ns.";
+}
+
 Worker *Worker::GetInstance()
 {
     static Worker instance;
@@ -213,11 +247,11 @@ Worker *Worker::GetInstance()
 
 Status Worker::ShutDown()
 {
+    WorkerServiceAccessor::Instance().Unregister();
     if (worker_) {
         RETURN_IF_NOT_OK(worker_->Shutdown());
         worker_.reset();
     }
-    runtimeFlags_ = nullptr;
     return Status::OK();
 }
 
@@ -235,32 +269,32 @@ Worker::~Worker()
     LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
 }
 
-WorkerServiceImpl *Worker::GetWorkerService()
+Status Worker::Stop()
 {
-    return worker_->GetWorkerService();
+    LOG(INFO) << "Worker::Stop() called, requesting shutdown";
+    g_exitFlag = 1;
+    g_termSignalCv.notify_all();
+    return Status::OK();
 }
 
-object_cache::WorkerOCServiceImpl *Worker::GetWorkerOCService()
+Status Worker::StopEmbeddedWorker()
 {
-    return worker_->GetWorkerOCService();
+    LOG(INFO) << "Worker::StopEmbeddedWorker() called";
+    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
+    LOG_IF_ERROR(ShutDown(), "worker shut down failed");
+    return Status::OK();
 }
 
 Status Worker::UpdateConfig(const std::string &configJson)
 {
-    if (runtimeFlags_ == nullptr) {
+    if (!worker_) {
         return Status(StatusCode::K_RUNTIME_ERROR, "UpdateConfig: worker not initialized");
     }
-    if (!FLAGS_monitor_config_file.empty()) {
-        return Status(StatusCode::K_INVALID,
-                      "UpdateConfig: monitor_config_file must be empty when using UpdateConfig API");
-    }
-    DynamicConfigUpdater updater(*runtimeFlags_);
-    return updater.ApplyJson(configJson, "UpdateConfig");
+    return worker_->UpdateConfig(configJson);
 }
 
-Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const bool isEmbeddedClient)
+Status Worker::InitWorker(Flags &flags, const bool isEmbeddedClient)
 {
-    runtimeFlags_ = &flags;
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
 
@@ -270,8 +304,6 @@ Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const 
     LOG(WARNING) << "Worker support jeprof.";
 #endif
 
-    LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
-    LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     TrySetInjectActions();
     if (!isEmbeddedClient) {
         // We need to handle the SIGPIPE or worker will die when
@@ -287,6 +319,7 @@ Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const 
     WorkerServerOptions options;
     RETURN_IF_NOT_OK(options.LoadParameters());
     worker_ = std::make_unique<WorkerOCServer>(options.workerAddress, options.bindAddress, options.masterAddress);
+    worker_->SetFlags(&flags);
 
     LOG_IF_ERROR(PreInitRocksDB(), "Failed to initialize the rocksdb database in advance.");
 
@@ -305,13 +338,21 @@ Status Worker::InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const 
 
 Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
 {
+    std::lock_guard<std::mutex> lock(initMutex_);
+    if (started_.load()) {
+        return Status(StatusCode::K_DUPLICATED, "Worker already started");
+    }
+
     SetVersionString(DATASYSTEM_VERSION);
     SetUsageMessage(
         "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
         "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
+
     Flags flags;
     flags.SetValidateSpecial(WorkerFlagValidateSpecial);
     GFlagsMap defaultGflagMap = flags.GetAllFlagsToMap();
+    LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+    LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     FLAGS_log_filename = "datasystem_worker";
     FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.
     std::string errMsg;
@@ -324,34 +365,140 @@ Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
     flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
     AdjustNodeTimeoutFlags();
     CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
-    return InitWorker(flags, defaultGflagMap, true);
-}
-
-Status Worker::Init(Flags &flags, int argc, char **argv)
-{
-    SetVersionString(DATASYSTEM_VERSION);
-    SetUsageMessage(
-        "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
-        "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
-
-    flags.SetValidateSpecial(WorkerFlagValidateSpecial);
-    GFlagsMap defaultGflagMap = flags.GetAllFlagsToMap();
-    FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.
-    ParseCommandLineFlags(argc, argv);
-    if (cli::HandleCli()) {
-        // Notify worker_main to exit after the one-shot CLI command finishes.
-        SignalHandler(0);
-        return Status::OK();
+    auto rc = InitWorker(flags, true);
+    if (rc.IsOk()) {
+        WorkerServiceAccessor::Instance().Register(worker_.get());
+        started_.store(true);
     }
-    // The configuration file processing is triggered immediately when the worker is started.
-    flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
-    AdjustNodeTimeoutFlags();
-    CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
-    RETURN_IF_NOT_OK(flags.EraseInfo(argc, argv));
-
-    InstallFailureSignalHandler(argv[0]);
-    return InitWorker(flags, defaultGflagMap, false);
-    ;
+    return rc;
 }
+
+/// @brief Run the event loop, then perform PreShutDown and ShutDown.
+/// @details Blocks until a termination signal or Stop() is received.
+///          Shared by both InitAndRun overloads.
+void Worker::RunEventLoopAndShutdown(Flags &flags)
+{
+    PerfManager *perfManager = PerfManager::Instance();
+    Timer timer;
+    std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
+    while (!IsTermSignalReceived()) {
+        bool signalReceived = g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
+                                                      [] { return IsTermSignalReceived(); });
+        if (signalReceived) {
+            break;
+        }
+        auto elapsedMs = timer.ElapsedMilliSecondAndReset();
+        if (elapsedMs > REPORTING_THRESHOLD_MS) {
+            LOG(ERROR) << FormatString("Worker was hanged about %.2f ms", elapsedMs);
+        }
+        if (perfManager != nullptr) {
+            perfManager->Tick();
+        }
+        metrics::Tick();
+        if (!FLAGS_monitor_config_file.empty()) {
+            flags.MonitorConfigFile(FLAGS_monitor_config_file);
+        }
+    }
+    termSignalLock.unlock();
+
+    if (perfManager != nullptr) {
+        perfManager->PrintPerfLog();
+    }
+    metrics::PrintSummary();
+
+    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
+    LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
+}
+
+Status Worker::DoInit(Flags &flags, const char *crashReporterLabel)
+{
+    auto setSchedRuntimeResult = SetWorkerSchedRuntime();
+    auto rc = InitWorker(flags, false);
+    if (rc.IsError()) {
+        LOG(ERROR) << "Worker runtime error:" << rc.ToString();
+        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
+        LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
+        return rc;
+    }
+    if (!IsTermSignalReceived()) {
+        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
+    }
+
+    WorkerServiceAccessor::Instance().Register(worker_.get());
+    InstallFailureSignalHandler(crashReporterLabel);
+    started_.store(true);
+    return Status::OK();
+}
+
+Status Worker::InitAndRun(int argc, char **argv)
+{
+    Flags flags;
+    {
+        std::lock_guard<std::mutex> lock(initMutex_);
+        if (started_.load()) {
+            return Status(StatusCode::K_DUPLICATED, "Worker already started");
+        }
+
+        SetVersionString(DATASYSTEM_VERSION);
+        SetUsageMessage(
+            "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
+            "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
+
+        flags.SetValidateSpecial(WorkerFlagValidateSpecial);
+        LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+        FLAGS_logfile_mode = 0640;
+        ParseCommandLineFlags(argc, argv);
+        LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(flags.GetAllFlagsToMap());
+        if (cli::HandleCli()) {
+            SignalHandler(0);
+            return Status::OK();
+        }
+        flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
+        AdjustNodeTimeoutFlags();
+        CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
+                                 "invalid evict/spill watermark flag configuration");
+        RETURN_IF_NOT_OK(flags.EraseInfo(argc, argv));
+        RETURN_IF_NOT_OK(DoInit(flags, argv[0]));
+    }  // initMutex_ released here; subsequent threads will see started_==true
+
+    RunEventLoopAndShutdown(flags);
+    return Status::OK();
+}
+
+Status Worker::InitAndRun(const WorkerOptions &options)
+{
+    Flags flags;
+    {
+        std::lock_guard<std::mutex> lock(initMutex_);
+        if (started_.load()) {
+            return Status(StatusCode::K_DUPLICATED, "Worker already started");
+        }
+
+        SetVersionString(DATASYSTEM_VERSION);
+        SetUsageMessage(
+            "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
+            "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
+
+        flags.SetValidateSpecial(WorkerFlagValidateSpecial);
+        LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
+        FLAGS_logfile_mode = 0640;
+
+        std::string errMsg;
+        CHECK_FAIL_RETURN_STATUS(
+            FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg),
+            K_INVALID, FormatString("Parse config file %s error: %s", options.configFilePath, errMsg));
+        LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(flags.GetAllFlagsToMap());
+
+        flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
+        AdjustNodeTimeoutFlags();
+        CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
+                                 "invalid evict/spill watermark flag configuration");
+        RETURN_IF_NOT_OK(DoInit(flags, "datasystem_worker"));
+    }  // initMutex_ released here; subsequent threads will see started_==true
+
+    RunEventLoopAndShutdown(flags);
+    return Status::OK();
+}
+
 }  // namespace worker
 }  // namespace datasystem
