@@ -33,6 +33,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/l2cache/persistence_api.h"
+#include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
@@ -71,6 +72,7 @@
 
 namespace datasystem {
 namespace worker {
+
 class WorkerOCServer : public CommonServer {
 public:
     /**
@@ -162,6 +164,19 @@ public:
     {
         return objCacheClientWorkerSvc_.get();
     }
+
+    /**
+     * @brief Set the Flags pointer for runtime configuration updates.
+     * @param[in] flags Pointer to the Flags instance. Must outlive this WorkerOCServer.
+     */
+    void SetFlags(Flags *flags) { runtimeFlags_ = flags; }
+
+    /**
+     * @brief Apply runtime JSON config updates to modifiable worker flags.
+     * @param[in] configJson JSON object mapping flag names to string values.
+     * @return Status::OK() on success; error status otherwise.
+     */
+    Status UpdateConfig(const std::string &configJson);
 
 private:
     /**
@@ -637,6 +652,9 @@ private:
 #ifdef ENABLE_PERF
     std::unique_ptr<PerfServiceImpl> perfService_{ nullptr };
 #endif
+
+    /** Non-owning pointer to caller Flags; valid only between Init and Shutdown. */
+    Flags *runtimeFlags_{nullptr};
 };
 }  // namespace worker
 }  // namespace datasystem

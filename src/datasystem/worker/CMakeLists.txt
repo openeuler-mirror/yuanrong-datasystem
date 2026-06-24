@@ -17,12 +17,14 @@ add_subdirectory(coordinator)
 set(WORKER_SRCS
         authenticate.cpp
         worker_service_impl.cpp
+        worker_service_accessor.cpp
         worker_oc_server.cpp
         worker_liveness_check.cpp
         worker_cli.cpp
         worker_flags.cpp
         worker.cpp
         worker_api_c_wrapper.cpp
+        worker_sched_runtime_linux.cpp
         )
 
 set(WORKER_DEPEND_LIBS
@@ -95,7 +97,7 @@ if (WITH_TESTS)
 endif ()
 
 # generate datasystem_worker bin
-add_executable(datasystem_worker_bin worker_main.cpp worker_sched_runtime_linux.cpp)
+add_executable(datasystem_worker_bin worker_main.cpp)
 set_target_properties(datasystem_worker_bin PROPERTIES LINK_FLAGS "-fPIE -pie")
 target_link_libraries(datasystem_worker_bin PRIVATE ${JEMALLOC_SHARED_LIBRARY} nlohmann_json::nlohmann_json datasystem_worker_shared)
 target_link_options(datasystem_worker_bin PRIVATE -Wl,--no-as-needed ${JEMALLOC_SHARED_LIBRARY} -Wl,--as-needed)

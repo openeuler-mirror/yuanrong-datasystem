@@ -93,6 +93,7 @@ endfunction()
 
 add_ds_ut_executable(ds_ut
         ${DS_TEST_UT_SRCS}
+        common/flags/flag_manager_config_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 add_ds_ut_executable(ds_ut_stream

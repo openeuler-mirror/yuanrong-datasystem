@@ -15,94 +15,101 @@
  */
 
 /**
- * Description: The interface of worker server.
+ * Description: Public API for KVCache Worker.
+ *              This header has zero internal dependencies.
  */
 #ifndef DATASYSTEM_WORKER_H
 #define DATASYSTEM_WORKER_H
 
 #include <atomic>
-#include <condition_variable>
+#include <memory>
 #include <mutex>
-#include <thread>
-#include <vector>
+#include <string>
 
-#include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
-#include "datasystem/worker/worker_oc_server.h"
-#include "datasystem/worker/worker_service_impl.h"
 
 namespace datasystem {
+
+class Flags;
+
 namespace worker {
+
+class WorkerOCServer;
+
+struct WorkerOptions {
+    // Absolute path to worker_config.json file.
+    std::string configFilePath;
+};
 
 class Worker {
 public:
     ~Worker();
 
     Worker& operator=(const Worker&) = delete;
-
     Worker(const Worker&) = delete;
 
-    /**
-     * @brief Init worker for process mode
-     */
-    Status Init(Flags &flags, int argc, char **argv);
-
-    /**
-     * @brief Get worker instance.
-     */
+    /// @brief Get the singleton instance.
     static Worker *GetInstance();
 
-    /**
-     * @brief Init worker for embedded client.
-     */
+    /// @brief Process-mode startup (command-line arguments).
+    /// @details Internally parses argc/argv, blocks until termination signal or Stop() is called.
+    /// @param argc Argument count.
+    /// @param argv Argument vector.
+    /// @return K_OK on normal exit; error code otherwise.
+    Status InitAndRun(int argc, char **argv);
+
+    /// @brief Process-mode startup (config file).
+    /// @details Reads and parses the JSON config file, blocks until termination signal or Stop() is called.
+    /// @param options Startup options containing the config file path.
+    /// @return K_OK on normal exit; error code otherwise.
+    Status InitAndRun(const WorkerOptions &options);
+
+    /// @brief Embedded-mode initialization.
+    /// @details Initializes without blocking. Caller manages lifecycle.
+    /// @param config Embedded configuration, depends only on public type EmbeddedConfig.
+    /// @return K_OK on success; error code otherwise.
     Status InitEmbeddedWorker(const EmbeddedConfig &config);
 
-    /**
-     * @brief Worker shutdown.
-     */
-    Status ShutDown();
+    /// @brief Request shutdown of a running InitAndRun() event loop.
+    /// @details Thread-safe, idempotent. Sets exit flag and wakes the event loop;
+    ///          actual PreShutDown/ShutDown is performed by InitAndRun after the loop exits.
+    /// @return K_OK
+    Status Stop();
 
-    /**
-     * @brief Worker pre-shutdown.
-     */
-    Status PreShutDown();
+    /// @brief Stop an embedded-mode Worker.
+    /// @details Executes PreShutDown -> ShutDown directly. Idempotent.
+    ///          Called by extern "C" WorkerDestroy for embedded lifecycle management.
+    /// @return K_OK
+    Status StopEmbeddedWorker();
 
-    /**
-     * @brief GetWorkerService ptr
-     */
-    WorkerServiceImpl *GetWorkerService();
-
-    /**
-     * @brief GetWorkerOCService ptr
-     */
-    object_cache::WorkerOCServiceImpl *GetWorkerOCService();
-
-    /**
-     * @brief Apply runtime JSON config updates to modifiable worker flags.
-     * @param[in] configJson JSON object mapping flag names to string values.
-     * @return Status::OK() on success; error status otherwise.
-     * @note Requires Init/InitEmbeddedWorker to have completed. The caller-owned Flags passed to Init must
-     *       outlive this Worker instance; UpdateConfig is only valid between Init and ShutDown.
-     */
+    /// @brief Apply runtime JSON config updates to modifiable worker flags.
+    /// @param configJson JSON object mapping flag names to string values.
+    /// @return Status::OK() on success; error status otherwise.
     Status UpdateConfig(const std::string &configJson);
 
 private:
-    Status InitWorker(Flags &flags, const GFlagsMap &defaultGflagMap, const bool isEmbeddedClient);
+    /// @brief Initialize WorkerOCServer and start all services.
+    Status InitWorker(Flags &flags, bool isEmbeddedClient);
+
+    /// @brief Shutdown Worker.
+    Status ShutDown();
+
+    /// @brief Pre-shutdown (wait for async tasks to complete).
+    Status PreShutDown();
+
+    /// @brief Run the blocking event loop, then perform PreShutDown and ShutDown.
+    void RunEventLoopAndShutdown(Flags &flags);
+
+    /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
+    Status DoInit(Flags &flags, const char *crashReporterLabel);
 
     Worker() = default;
-
-    std::unique_ptr<WorkerOCServer> worker_{ nullptr };
-    /** Non-owning pointer to caller Flags; valid only between InitWorker and ShutDown. */
-    Flags *runtimeFlags_{ nullptr };
+    std::unique_ptr<WorkerOCServer> worker_{nullptr};
+    std::atomic<bool> started_{false};
+    std::mutex initMutex_;
 };
-}  // namespace worker
 
-/**
- * @brief The signal handler
- * @param[in] signum The signal number.
- */
-void SignalHandler(int signum);
+}  // namespace worker
 }  // namespace datasystem
-#endif
+#endif  // DATASYSTEM_WORKER_H

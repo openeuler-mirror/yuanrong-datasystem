@@ -173,7 +173,7 @@ Status ClientWorkerLocalCommonApi::Init(int32_t requestTimeoutMs, int32_t connec
     (void)fastTransportSize;
     requestTimeoutMs_ = requestTimeoutMs;
     connectTimeoutMs_ = connectTimeoutMs;
-    workerService_ = api_->GetWorkerService(worker_);
+    workerService_ = api_->GetWorkerService();
     RegisterClientReqPb req;
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs));
     return Status::OK();

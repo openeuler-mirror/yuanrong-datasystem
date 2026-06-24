@@ -94,20 +94,20 @@ Status EmbeddedClientWorkerApi::InitEmbeddedWorker(const EmbeddedConfig &config,
     return InitEmbeddedWorkerFunc_(config, worker);
 }
 
-void *EmbeddedClientWorkerApi::GetWorkerService(void *worker)
+void *EmbeddedClientWorkerApi::GetWorkerService()
 {
     if (GetWorkerServiceFunc_ == nullptr) {
         return nullptr;
     }
-    return GetWorkerServiceFunc_(worker);
+    return GetWorkerServiceFunc_();
 }
 
-void *EmbeddedClientWorkerApi::GetWorkerOCService(void *worker)
+void *EmbeddedClientWorkerApi::GetWorkerOCService()
 {
     if (GetWorkerOCServiceFunc_ == nullptr) {
         return nullptr;
     }
-    return GetWorkerOCServiceFunc_(worker);
+    return GetWorkerOCServiceFunc_();
 }
 
 Status EmbeddedClientWorkerApi::WorkerOCCreate(void *obj, const CreateReqPb &req, CreateRspPb &resp)

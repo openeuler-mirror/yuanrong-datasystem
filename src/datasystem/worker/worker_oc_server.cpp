@@ -37,6 +37,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/gflag/dynamic_config_updater.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
@@ -138,6 +139,9 @@ DS_DECLARE_int32(sc_regular_socket_num);
 DS_DECLARE_int32(sc_stream_socket_num);
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(monitor_config_file);
+DS_DECLARE_string(worker_address);
+DS_DECLARE_string(master_address);
 DS_DECLARE_string(metastore_address);
 DS_DEFINE_bool(start_metastore_service, false,
                "Start metastore service on master worker to replace external etcd server for cluster worker "
@@ -183,7 +187,6 @@ DS_DEFINE_uint64(oc_worker_aggregate_merge_size, 2097152,
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);
 DS_DECLARE_string(distributed_disk_path);
-DS_DECLARE_string(worker_address);
 DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 
@@ -2015,5 +2018,19 @@ void WorkerOCServer::NotifyShutdownToEtcd()
         } while (std::chrono::duration_cast<std::chrono::milliseconds>(currTime - startTime).count() < timeoutMs);
     }
 }
+
+Status WorkerOCServer::UpdateConfig(const std::string &configJson)
+{
+    if (runtimeFlags_ == nullptr) {
+        return Status(StatusCode::K_RUNTIME_ERROR, "UpdateConfig: worker not initialized");
+    }
+    if (!FLAGS_monitor_config_file.empty()) {
+        return Status(StatusCode::K_INVALID,
+                      "UpdateConfig: monitor_config_file must be empty when using UpdateConfig API");
+    }
+    DynamicConfigUpdater updater(*runtimeFlags_);
+    return updater.ApplyJson(configJson, "UpdateConfig");
+}
+
 }  // namespace worker
 }  // namespace datasystem

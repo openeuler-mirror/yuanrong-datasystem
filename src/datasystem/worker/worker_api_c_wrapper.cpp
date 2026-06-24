@@ -20,14 +20,16 @@
 
 #include "datasystem/worker/worker_api_c_wrapper.h"
 
-void *GetWorkerService(void *obj)
+#include "datasystem/worker/worker_service_accessor.h"
+
+void *GetWorkerService()
 {
-    return static_cast<datasystem::worker::Worker *>(obj)->GetWorkerService();
+    return datasystem::worker::WorkerServiceAccessor::Instance().GetWorkerService();
 }
 
-void *GetWorkerOCService(void *obj)
+void *GetWorkerOCService()
 {
-    return static_cast<datasystem::worker::Worker *>(obj)->GetWorkerOCService();
+    return datasystem::worker::WorkerServiceAccessor::Instance().GetWorkerOCService();
 }
 
 Status WorkerRegisterClient(void *obj, const RegisterClientReqPb &req, RegisterClientRspPb &resp)

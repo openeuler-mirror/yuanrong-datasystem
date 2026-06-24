@@ -41,8 +41,8 @@ public:
     void *CreateWorker();
     void WorkerDestroy(void *worker);
     Status InitEmbeddedWorker(const EmbeddedConfig &config, void *worker);
-    void *GetWorkerService(void *worker);
-    void *GetWorkerOCService(void *worker);
+    void *GetWorkerService();
+    void *GetWorkerOCService();
     // common service
     Status WorkerRegisterClient(void *obj, const RegisterClientReqPb &req, RegisterClientRspPb &resp);
     Status WorkerHeartbeat(void *obj, const HeartbeatReqPb &req, HeartbeatRspPb &resp);
@@ -81,8 +81,8 @@ private:
     REG_METHOD(CreateWorker, void *);
     REG_METHOD(WorkerDestroy, void, void *);
     REG_METHOD(InitEmbeddedWorker, Status, const EmbeddedConfig &, void *);
-    REG_METHOD(GetWorkerService, void *, void *);
-    REG_METHOD(GetWorkerOCService, void *, void *);
+    REG_METHOD(GetWorkerService, void *);
+    REG_METHOD(GetWorkerOCService, void *);
     // common service
     REG_METHOD(WorkerRegisterClient, Status, void *, const RegisterClientReqPb &, RegisterClientRspPb &);
     REG_METHOD(WorkerHeartbeat, Status, void *, const HeartbeatReqPb &, HeartbeatRspPb &);

@@ -24,6 +24,7 @@ ds_cc_library(
         ":ds_flags_header",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
+        "@nlohmann_json//:json",
         "@securec",
     ],
 )
