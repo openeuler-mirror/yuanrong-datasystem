@@ -18,6 +18,8 @@
 
 #include <mutex>
 
+#include <brpc/channel.h>
+
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
@@ -29,6 +31,15 @@
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
 #include "datasystem/protos/worker_stream.stub.rpc.pb.h"
+
+// brpc stub headers
+#include <brpc/socket.h>
+#include <brpc/socket_map.h>
+#include "datasystem/protos/master_object.brpc.stub.pb.h"
+#include "datasystem/protos/master_stream.brpc.stub.pb.h"
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
+#include "datasystem/protos/worker_object.brpc.stub.pb.h"
+#include "datasystem/protos/worker_stream.brpc.stub.pb.h"
 
 DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
@@ -128,6 +139,41 @@ Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcCh
     return stub->GetInitStatus();
 }
 
+Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc::Channel> &brpcChannel,
+                                       std::shared_ptr<RpcStubBase> &stub)
+{
+    int32_t timeoutMs = FLAGS_node_timeout_s * TO_MILLISECOND;
+    switch (type) {
+        case StubType::WORKER_WORKER_OC_SVC:
+            stub = std::make_shared<WorkerWorkerOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::WORKER_MASTER_OC_SVC:
+            stub = std::make_shared<master::MasterOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::WORKER_WORKER_SC_SVC:
+            stub = std::make_shared<WorkerWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::WORKER_MASTER_SC_SVC:
+            stub = std::make_shared<master::MasterSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::MASTER_WORKER_OC_SVC:
+            stub = std::make_shared<MasterWorkerOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::MASTER_WORKER_SC_SVC:
+            stub = std::make_shared<MasterWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::MASTER_MASTER_OC_SVC:
+            stub = std::make_shared<master::MasterOCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::WORKER_WORKER_TRANS_SVC:
+            stub = std::make_shared<WorkerWorkerTransportService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        default:
+            RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
+    }
+    return stub->GetInitStatus();
+}
+
 Status RpcStubCacheMgr::CreateRpcChannel(const HostPort &hostPort, const std::string &serviceName,
                                          std::shared_ptr<RpcChannel> &channel, size_t poolSize)
 {
@@ -145,6 +191,40 @@ Status RpcStubCacheMgr::CreateRpcChannel(const HostPort &hostPort, const std::st
     return Status::OK();
 }
 
+bool WaitForBrpcSocketAvailable(const HostPort& brpcAddr, int maxRetries, int intervalUs)
+{
+    butil::EndPoint ep;
+    if (butil::str2endpoint(brpcAddr.Host().c_str(), brpcAddr.Port(), &ep) != 0) {
+        return false;
+    }
+    for (int i = 0; i < maxRetries; ++i) {
+        brpc::SocketId sid;
+        if (brpc::SocketMapFind(brpc::SocketMapKey(ep), &sid) == 0) {
+            brpc::SocketUniquePtr ptr;
+            if (brpc::Socket::Address(sid, &ptr) == 0 && ptr->IsAvailable()) {
+                return true;
+            }
+        }
+        usleep(intervalUs);
+    }
+    return false;
+}
+
+Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_ptr<brpc::Channel> &brpcChannel)
+{
+    CHECK_FAIL_RETURN_STATUS(brpcChannel == nullptr, K_RUNTIME_ERROR, "brpc channel is not nullptr");
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+    brpcChannel = std::make_shared<brpc::Channel>();
+    brpc::ChannelOptions opts;
+    opts.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    opts.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        brpcChannel->Init(brpcAddr.ToString().c_str(), &opts) == 0, K_RPC_UNAVAILABLE,
+        FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+    (void)WaitForBrpcSocketAvailable(brpcAddr);
+    return Status::OK();
+}
+
 bool RpcStubCacheMgr::EnableOcWorkerWorkerDirectPort()
 {
     INJECT_POINT("RpcStubCacheMgr.EnableOcWorkerWorkerDirectPort", []() { return true; });
@@ -158,6 +238,29 @@ bool RpcStubCacheMgr::EnableScWorkerWorkerDirectPort()
 
 void RpcStubCacheMgr::InitCreators()
 {
+    if (FLAGS_use_brpc) {
+        // brpc path: each creator makes a brpc::Channel and a _BrpcGenericStub
+        auto makeBrpcCreator = [](StubType stubType) -> RpcStubCacheCreateFunc {
+            return [stubType](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+                return BrpcCreatorTemplate(
+                    [&hostPort](std::shared_ptr<brpc::Channel> &brpcChannel) {
+                        return CreateBrpcChannel(hostPort, brpcChannel);
+                    },
+                    stubType, rpcStub);
+            };
+        };
+        creators_.emplace(StubType::WORKER_WORKER_OC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_OC_SVC));
+        creators_.emplace(StubType::WORKER_MASTER_OC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_OC_SVC));
+        creators_.emplace(StubType::WORKER_WORKER_SC_SVC, makeBrpcCreator(StubType::WORKER_WORKER_SC_SVC));
+        creators_.emplace(StubType::WORKER_MASTER_SC_SVC, makeBrpcCreator(StubType::WORKER_MASTER_SC_SVC));
+        creators_.emplace(StubType::MASTER_WORKER_OC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_OC_SVC));
+        creators_.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
+        creators_.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
+        creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
+        return;
+    }
+
+    // ZMQ path (original)
     creators_.emplace(
         StubType::WORKER_WORKER_OC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
             return CreatorTemplate(
@@ -217,6 +320,29 @@ void RpcStubCacheMgr::InitCreators()
         });
 }
 
+void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType type,
+                                              std::shared_ptr<RpcStubBase> &rpcStub)
+{
+    HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+    // Single non-blocking check: IsAvailable() costs <1us. If the socket is
+    // dead, evict the stub so the next access creates a fresh one. No retries —
+    // blocking 3s on the hot path would stall all concurrent RPCs after worker
+    // restart. If this check misses a transient state, the RPC will fail with
+    // E112 and the error path will evict the stub then.
+    //
+    // F09 note: WaitForBrpcSocketAvailable(addr, maxRetries=1, intervalUs=0)
+    // is the fast-path variant — single SocketMap::find + IsAvailable, no
+    // sleeping. brpc SocketMap read lock is sharded, so under 4w QPS the
+    // contention is bounded. If profiling shows this still hot, move the
+    // check off the cache-hit path entirely and rely on E112 retry alone.
+    if (!WaitForBrpcSocketAvailable(brpcAddr, 1, 0)) {
+        LOG(WARNING) << FormatString("Stale brpc stub evicted for %s type=%d, reconnecting", hostPort.ToString(),
+                                     static_cast<int>(type));
+        (void)Remove(hostPort, type);
+        rpcStub.reset();
+    }
+}
+
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
 {
     Timer timer;
@@ -233,9 +359,17 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
         rpcStub = encapsulatedData->GetData();
         getDataElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());
         if (rpcStub != nullptr) {
-            LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
-                            accessElapsedMs, createElapsedMs, 0);
-            return Status::OK();
+            // For brpc mode, verify the cached channel's socket is still alive.
+            // After worker restart, the cached Channel may hold a dead Socket
+            // while the cache entry still exists, causing E112 "Not connected".
+            if (FLAGS_use_brpc) {
+                MaybeEvictStaleBrpcStub(hostPort, type, rpcStub);
+            }
+            if (rpcStub != nullptr) {
+                LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
+                                accessElapsedMs, createElapsedMs, 0);
+                return Status::OK();
+            }
         }
     } else {
         lookupElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecondAndReset());

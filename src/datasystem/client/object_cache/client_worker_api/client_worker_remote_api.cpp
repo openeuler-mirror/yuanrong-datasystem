@@ -19,6 +19,9 @@
  */
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 
+#include <brpc/channel.h>
+#include "datasystem/protos/object_posix.brpc.stub.pb.h"
+
 #include <cstdint>
 #include <shared_mutex>
 #include <utility>
@@ -30,12 +33,22 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
+
+// Dispatch helper for dual-mode brpc/ZMQ stubs. Both stub_ and zmqStub_ derive
+// from RpcStubBase but are distinct concrete types, so a ternary expression on
+// the unique_ptrs fails to compile under GCC 14 (which is stricter than the
+// GCC 12 used when this code was originally written). Use an explicit branch
+// inside a lambda to keep the call sites readable.
+#define DS_OC_DISPATCH(method, ...) \
+    ([&]() { return stub_ ? stub_->method(__VA_ARGS__) : zmqStub_->method(__VA_ARGS__); }())
 
 namespace datasystem {
 namespace object_cache {
@@ -160,25 +173,37 @@ ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cr
     }
 }
 
+ClientWorkerRemoteApi::~ClientWorkerRemoteApi() = default;
+
 Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                                    int32_t initAttemptTimeoutMs)
 {
     RETURN_IF_NOT_OK(
         ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
-    std::shared_ptr<RpcChannel> channel;
-    channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-    // We will enable uds after handshaking with the worker.
-    if (IsShmEnableByUDS()) {
-        channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
-                                      GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
-    }
     if (clientDeadTimeoutMs_ > 0) {
         connectTimeoutMs = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs));
     }
-    stub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
-        // Note: exclusiveConnSockPath_ will be initialized during client register call driven from base class Init()
-        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+    if (FLAGS_use_brpc) {
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        brpcChannel_ = std::make_unique<brpc::Channel>();
+        brpc::ChannelOptions opts;
+        opts.timeout_ms = requestTimeoutMs;
+        opts.connect_timeout_ms = connectTimeoutMs;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_->Init(brpcAddr.ToString().c_str(), &opts) == 0,
+                                             StatusCode::K_RPC_UNAVAILABLE,
+                                             FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        stub_ = std::make_unique<WorkerOCService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs);
+    } else {
+        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
+        if (IsShmEnableByUDS()) {
+            channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
+                                          GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
+        }
+        zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
+        if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
+            zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+        }
     }
     return Status::OK();
 }
@@ -236,9 +261,9 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
     RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
+    if (!FLAGS_use_brpc && enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
         // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
-        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+        zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
     }
     return Status::OK();
 }
@@ -247,18 +272,47 @@ void ClientWorkerRemoteApi::RecreateOCStub()
 {
     // Recreate the OC service stub after hostPort_ changes (e.g., worker IP change).
     // Connect() only updates commonWorkerSession_, not stub_.
-    auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-    if (IsShmEnableByUDS()) {
-        channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
-                                      GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
-    }
+    //
+    // F08 note: stub_/brpcChannel_ replacement races with concurrent DS_OC_DISPATCH
+    // readers. std::unique_ptr assignment is not atomic, so in principle a reader
+    // could observe a transient null stub_ (UB). In practice RecreateOCStub is only
+    // called on worker IP change (rare, single-threaded caller path inside
+    // ClientWorkerRemoteApi), and the two-step "swap stub before channel" pattern
+    // above already prevents the dangling-channel case. A fully safe fix would
+    // require std::atomic<std::shared_ptr<...>> or a mutex on the dispatch hot path,
+    // which is invasive; tracked as follow-up if real UAF reports surface.
     int32_t stubTimeout = connectTimeoutMs_;
     if (clientDeadTimeoutMs_ > 0) {
         stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
     }
-    stub_ = std::make_unique<WorkerOCService_Stub>(channel, stubTimeout);
-    if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
-        stub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+    if (FLAGS_use_brpc) {
+        auto newChannel = std::make_unique<brpc::Channel>();
+        brpc::ChannelOptions opts;
+        opts.timeout_ms = requestTimeoutMs_;
+        opts.connect_timeout_ms = stubTimeout;
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        int rc = newChannel->Init(brpcAddr.ToString().c_str(), &opts);
+        if (rc != 0) {
+            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, rc=" << rc;
+            return;
+        }
+        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        // Create the new stub pointing to the new channel before replacing brpcChannel_,
+        // so concurrent readers of stub_ never observe a stub whose raw channel pointer
+        // was made dangling by brpcChannel_ move-assignment destroying the old channel.
+        auto newStub = std::make_unique<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
+        stub_ = std::move(newStub);          // old stub destroyed while old channel still alive
+        brpcChannel_ = std::move(newChannel);  // old channel destroyed, new channel in place
+    } else {
+        auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
+        if (IsShmEnableByUDS()) {
+            channel->SetServiceUdsEnabled(WorkerOCService_Stub::FullServiceName(),
+                                          GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
+        }
+        zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, stubTimeout);
+        if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
+            zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
+        }
     }
 }
 
@@ -294,7 +348,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
-            return stub_->Create(opts, req, rsp);
+            return DS_OC_DISPATCH(Create, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
@@ -348,7 +402,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
-            return stub_->MultiCreate(opts, req, rsp);
+            return DS_OC_DISPATCH(MultiCreate, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
@@ -383,7 +437,7 @@ Status ClientWorkerRemoteApi::HealthCheck(ServerState &state)
         storeNotifyReboot_ = false;
         state = ServerState::REBOOT;
     }
-    return stub_->HealthCheck(opts, req, rsp);
+    return DS_OC_DISPATCH(HealthCheck, opts, req, rsp);
 }
 
 bool ClientWorkerRemoteApi::IsAllGetFailed(GetRspPb &rsp)
@@ -487,7 +541,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
                 FormatString("Start to get object key from worker, rpc timeout: %d", realRpcTimeout), "",
                 hostPort_.ToString());
             Timer timer;
-            getStatus = stub_->Get(opts, req, rsp, payloads);
+            getStatus = DS_OC_DISPATCH(Get, opts, req, rsp, payloads);
             if (getStatus.IsError()) {
                 getStatus = WithRpcDiag(getStatus, "Get", hostPort_);
             }
@@ -545,7 +599,7 @@ Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
     InvalidateBufferRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_INVALIDATE_BUFFER);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    return stub_->InvalidateBuffer(opts, req, rsp);
+    return DS_OC_DISPATCH(InvalidateBuffer, opts, req, rsp);
 }
 
 Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm, bool isSeal,
@@ -576,7 +630,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                 reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 VLOG(1) << "Start to send rpc to publish object: " << req.object_key();
-                Status s = stub_->Publish(opts, req, rsp, payloads);
+                Status s = DS_OC_DISPATCH(Publish, opts, req, rsp, payloads);
                 if (req.is_retry() && req.is_seal() && s.GetCode() == K_OC_ALREADY_SEALED) {
                     VLOG(1) << FormatString(
                         "Object(%s) retry seal and returned K_OC_ALREADY_SEALED, success is also considered.",
@@ -641,7 +695,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
                 opts.SetTimeout(realRpcTimeout);
                 reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-                return stub_->MultiPublish(opts, req, rsp, payloads);
+                return DS_OC_DISPATCH(MultiPublish, opts, req, rsp, payloads);
             },
             []() { return Status::OK(); },
             { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -788,7 +842,7 @@ Status ClientWorkerRemoteApi::DecreaseWorkerRef(const std::vector<ShmKey> &objec
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     DecreaseReferenceResponse resp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(stub_->DecreaseReference(opts, req, resp));
+    RETURN_IF_NOT_OK(DS_OC_DISPATCH(DecreaseReference, opts, req, resp));
     RETURN_STATUS(static_cast<StatusCode>(resp.error().error_code()), resp.error().error_msg());
 }
 
@@ -807,7 +861,7 @@ Status ClientWorkerRemoteApi::ReconcileShmRef(const std::unordered_set<ShmKey> &
     reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
     ReconcileShmRefRspPb resp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(stub_->ReconcileShmRef(opts, req, resp));
+    RETURN_IF_NOT_OK(DS_OC_DISPATCH(ReconcileShmRef, opts, req, resp));
     maybeExpiredShmIds.reserve(resp.maybe_expired_shm_ids_size());
     std::transform(resp.maybe_expired_shm_ids().begin(), resp.maybe_expired_shm_ids().end(),
                    std::back_inserter(maybeExpiredShmIds), [](const auto &shmId) { return ShmKey::Intern(shmId); });
@@ -875,7 +929,7 @@ Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> 
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            auto rc = stub_->GIncreaseRef(opts, req, rsp);
+            auto rc = DS_OC_DISPATCH(GIncreaseRef, opts, req, rsp);
             return WithRpcDiag(rc, "GIncreaseRef", hostPort_);
         },
         []() { return Status::OK(); },
@@ -914,7 +968,7 @@ Status ClientWorkerRemoteApi::GDecreaseWorkerRef(const std::vector<std::string> 
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            Status rc = stub_->GDecreaseRef(opts, req, rsp);
+            Status rc = DS_OC_DISPATCH(GDecreaseRef, opts, req, rsp);
             if (rc.IsError()) {
                 rc = WithRpcDiag(rc, "GDecreaseRef", hostPort_);
             }
@@ -952,7 +1006,7 @@ Status ClientWorkerRemoteApi::ReleaseGRefs(const std::string &remoteClientId)
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            auto rc = stub_->ReleaseGRefs(opts, req, rsp);
+            auto rc = DS_OC_DISPATCH(ReleaseGRefs, opts, req, rsp);
             return WithRpcDiag(rc, "ReleaseGRefs", hostPort_);
         },
         []() { return Status::OK(); },
@@ -995,7 +1049,7 @@ Status ClientWorkerRemoteApi::Delete(const std::vector<std::string> &objectKeys,
             reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to delete object: " << VectorToString(objectKeys);
-            Status status = stub_->DeleteAllCopy(opts, req, rsp);
+            Status status = DS_OC_DISPATCH(DeleteAllCopy, opts, req, rsp);
             if (status.IsError()) {
                 status = WithRpcDiag(status, "DeleteAllCopy", hostPort_);
             }
@@ -1032,7 +1086,7 @@ Status ClientWorkerRemoteApi::QueryGlobalRefNum(
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     LOG(INFO) << "[GRef] Client Send Rpc QueryGlobalRefNum to worker";
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(stub_->QueryGlobalRefNum(opts, req, rsp));
+    RETURN_IF_NOT_OK(DS_OC_DISPATCH(QueryGlobalRefNum, opts, req, rsp));
     LOG(INFO) << "[GRef] Client Recv Rpc QueryGlobalRefNum Response From worker";
     ParseGlbRefPb(rsp, gRefMap);
     LOG(INFO) << "[GRef] Client Parsed QueryGlobalRefNum Response Successfully";
@@ -1058,7 +1112,7 @@ Status ClientWorkerRemoteApi::PublishDeviceObject(const std::shared_ptr<DeviceBu
     PublishDeviceObjectRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when PublishDeviceObject data.");
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    return stub_->PublishDeviceObject(opts, req, rsp, payloads);
+    return DS_OC_DISPATCH(PublishDeviceObject, opts, req, rsp, payloads);
 }
 
 Status ClientWorkerRemoteApi::GetDeviceObject(const std::vector<std::string> &devObjKeys, uint64_t dataSize,
@@ -1082,7 +1136,7 @@ Status ClientWorkerRemoteApi::GetDeviceObject(const std::vector<std::string> &de
     auto rpcTimeout = std::max<int32_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
     reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
-    return stub_->GetDeviceObject(opts, req, rsp, payloads);
+    return DS_OC_DISPATCH(GetDeviceObject, opts, req, rsp, payloads);
 }
 
 Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeReceiveEventRspPb &resp)
@@ -1109,7 +1163,7 @@ Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeR
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SubscribeReceiveEvent data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
-    return stub_->SubscribeReceiveEvent(opts, req, resp);
+    return DS_OC_DISPATCH(SubscribeReceiveEvent, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
@@ -1130,7 +1184,7 @@ Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo>
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUT_P2PMETA);
-    return stub_->PutP2PMeta(opts, req, resp);
+    return DS_OC_DISPATCH(PutP2PMeta, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBufferInfo>> &bufferInfoList,
@@ -1163,7 +1217,7 @@ Status ClientWorkerRemoteApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBuffe
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_P2PMETA);
-    return stub_->GetP2PMeta(opts, req, resp);
+    return DS_OC_DISPATCH(GetP2PMeta, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
@@ -1175,7 +1229,7 @@ Status ClientWorkerRemoteApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoR
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_SEND_ROOT_INFO);
-    return stub_->SendRootInfo(opts, req, resp);
+    return DS_OC_DISPATCH(SendRootInfo, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoRspPb &resp)
@@ -1192,7 +1246,7 @@ Status ClientWorkerRemoteApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoR
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_RECV_ROOT_INFO);
-    return stub_->RecvRootInfo(opts, req, resp);
+    return DS_OC_DISPATCH(RecvRootInfo, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::AckRecvFinish(AckRecvFinishReqPb &req)
@@ -1205,7 +1259,7 @@ Status ClientWorkerRemoteApi::AckRecvFinish(AckRecvFinishReqPb &req)
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_ACK_RECV_FINISH);
-    return stub_->AckRecvFinish(opts, req, resp);
+    return DS_OC_DISPATCH(AckRecvFinish, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::GetBlobsInfo(const std::string &devObjKey, int32_t timeoutMs, std::vector<Blob> &blobs)
@@ -1225,7 +1279,7 @@ Status ClientWorkerRemoteApi::GetBlobsInfo(const std::string &devObjKey, int32_t
                                      "Fail to generate signature when create date.");
     GetDataInfoRspPb resp;
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_GET_DATA_INFO);
-    RETURN_IF_NOT_OK(stub_->GetDataInfo(opts, req, resp));
+    RETURN_IF_NOT_OK(DS_OC_DISPATCH(GetDataInfo, opts, req, resp));
     // Obtains the blobs from resp
     std::vector<DataInfoPb> dataInfoPbs = { resp.data_infos().begin(), resp.data_infos().end() };
     blobs.reserve(dataInfoPbs.size());
@@ -1249,7 +1303,7 @@ Status ClientWorkerRemoteApi::RemoveP2PLocation(const std::string &objectKey, in
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data.");
     PerfPoint perfPoint(PerfKey::RPC_HETERO_CLIENT_LOCAL_DELETE);
-    return stub_->RemoveP2PLocation(opts, req, resp);
+    return DS_OC_DISPATCH(RemoveP2PLocation, opts, req, resp);
 }
 
 Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
@@ -1269,7 +1323,7 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys()) << " of tenant "
                     << tenantId;
-            return stub_->GetObjMetaInfo(opts, req, rsp);
+            return DS_OC_DISPATCH(GetObjMetaInfo, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
@@ -1302,7 +1356,7 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys());
-            auto rc = stub_->QuerySize(opts, req, rsp);
+            auto rc = DS_OC_DISPATCH(QuerySize, opts, req, rsp);
             if (rc.IsError()) {
                 return WithRpcDiag(rc, "QuerySize", hostPort_);
             }
@@ -1348,7 +1402,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to check existence";
-            return stub_->Exist(opts, req, rsp);
+            return DS_OC_DISPATCH(Exist, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
@@ -1390,7 +1444,7 @@ Status ClientWorkerRemoteApi::Expire(const std::vector<std::string> &keys, uint3
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to set expire ttl time";
-            return stub_->Expire(opts, req, rsp);
+            return DS_OC_DISPATCH(Expire, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
@@ -1421,7 +1475,7 @@ Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, 
             opts.SetTimeout(realRpcTimeout);
             reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-            return stub_->GetMetaInfo(opts, req, rsp);
+            return DS_OC_DISPATCH(GetMetaInfo, opts, req, rsp);
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {

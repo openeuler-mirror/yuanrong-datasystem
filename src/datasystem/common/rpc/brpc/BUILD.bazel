@@ -1,0 +1,17 @@
+load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+PROTO_ROOT = "/src"
+
+proto_library(
+    name = "hello_proto",
+    srcs = ["hello.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "hello_cc_proto",
+    deps = [":hello_proto"],
+)

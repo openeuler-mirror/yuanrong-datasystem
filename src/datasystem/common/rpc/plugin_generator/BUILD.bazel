@@ -27,6 +27,8 @@ cc_binary(
 ds_cc_library(
     name = "plugin_generator",
     srcs = [
+        "brpc_service_generator.cpp",
+        "brpc_stub_generator.cpp",
         "service_cpp_generator.cpp",
         "service_header_generator.cpp",
         "stub_cpp_generator.cpp",

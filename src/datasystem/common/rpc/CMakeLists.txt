@@ -14,6 +14,8 @@ set(ZMQ_RPC_GENERATOR_SRC
         plugin_generator/service_header_generator.cpp
         plugin_generator/stub_cpp_generator.cpp
         plugin_generator/stub_header_generator.cpp
+        plugin_generator/brpc_service_generator.cpp
+        plugin_generator/brpc_stub_generator.cpp
 )
 
 add_library(zmq_rpc_generator ${ZMQ_RPC_GENERATOR_SRC})
@@ -65,6 +67,7 @@ set(COMMON_RPC_ZMQ_DEPENDS_LIBS
         nlohmann_json::nlohmann_json
         ${ZeroMQ_LIBRARY}
         ${SECUREC_LIBRARY}
+        ${BRPC_LIBRARIES}
         common_log
         common_perf
         common_metrics
@@ -80,6 +83,7 @@ set(COMMON_RPC_ZMQ_CLIENT_DEPENDS_LIBS
         nlohmann_json::nlohmann_json
         ${ZeroMQ_LIBRARY}
         ${SECUREC_LIBRARY}
+        ${BRPC_LIBRARIES}
         common_log
         common_perf
         common_util

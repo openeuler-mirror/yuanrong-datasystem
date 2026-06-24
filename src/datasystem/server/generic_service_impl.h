@@ -20,11 +20,13 @@
 #ifndef DATASYSTEM_SERVER_GENERIC_SERIVICE_IMPL_H
 #define DATASYSTEM_SERVER_GENERIC_SERIVICE_IMPL_H
 
+#include "datasystem/protos/generic_service.irpc.pb.h"
 #include "datasystem/protos/generic_service.service.rpc.pb.h"
+#include "datasystem/protos/generic_service.brpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-class GenericServiceImpl : public GenericService {
+class GenericServiceImpl : public GenericService, public IGenericService {
 public:
     /**
      * @brief Create a new GenericServiceImpl object, it is used to define common service of rpc server.

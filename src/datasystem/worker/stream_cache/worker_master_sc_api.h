@@ -25,6 +25,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
+#include "datasystem/protos/master_stream.brpc.stub.pb.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/worker/stream_cache/stream_producer.h"
@@ -179,6 +180,7 @@ public:
 private:
     HostPort masterAddress_;                                       // The HostPort of the master node
     std::shared_ptr<MasterSCService_Stub> rpcSession_{ nullptr };  // Session to the master rpc service
+    std::shared_ptr<master::MasterSCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 
 /**

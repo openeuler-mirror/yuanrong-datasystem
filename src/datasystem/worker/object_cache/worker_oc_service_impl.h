@@ -59,6 +59,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
+#include "datasystem/protos/object_posix.irpc.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/protos/share_memory.pb.h"
@@ -99,7 +100,7 @@ class WorkerRemoteWorkerOCApi;
 
 enum LockMode { Read = 0, Write = 1 };
 
-class WorkerOCServiceImpl : public WorkerOCService {
+class WorkerOCServiceImpl : public WorkerOCService, public IWorkerOCService {
 public:
     using AsyncTasksDoneChecker = std::function<Status(const std::string &)>;
 

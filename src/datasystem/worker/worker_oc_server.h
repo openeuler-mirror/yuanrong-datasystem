@@ -52,6 +52,15 @@
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/protos/object_posix.brpc.pb.h"
+#include "datasystem/protos/master_heartbeat.brpc.pb.h"
+#include "datasystem/protos/share_memory.brpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.pb.h"
+#include "datasystem/protos/master_object.brpc.pb.h"
+#include "datasystem/protos/master_stream.brpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.pb.h"
+#include "datasystem/protos/worker_stream.brpc.pb.h"
+#include "datasystem/protos/generic_service.brpc.pb.h"
 #include "datasystem/worker/worker_service_impl.h"
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
 #ifdef WITH_TESTS
@@ -565,6 +574,17 @@ private:
     WaitPost waitCond_;
     // Object cache rpc service for client request.
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc_{ nullptr };
+    std::unique_ptr<WorkerOCServiceBrpcAdapter> brpcOcAdapter_{ nullptr };
+    std::unique_ptr<master::MasterServiceBrpcAdapter> brpcMasterAdapter_{ nullptr };
+    std::unique_ptr<WorkerServiceBrpcAdapter> brpcWorkerAdapter_{ nullptr };
+    std::unique_ptr<WorkerWorkerOCServiceBrpcAdapter> brpcWorkerWorkerOcAdapter_{ nullptr };
+    std::unique_ptr<WorkerWorkerTransportServiceBrpcAdapter> brpcWorkerWorkerTransAdapter_{ nullptr };
+    std::unique_ptr<MasterWorkerOCServiceBrpcAdapter> brpcMasterWorkerOcAdapter_{ nullptr };
+    std::unique_ptr<master::MasterOCServiceBrpcAdapter> brpcMasterOcAdapter_{ nullptr };
+    std::unique_ptr<master::MasterSCServiceBrpcAdapter> brpcMasterScAdapter_{ nullptr };
+    std::unique_ptr<ClientWorkerSCServiceBrpcAdapter> brpcClientWorkerScAdapter_{ nullptr };
+    std::unique_ptr<WorkerWorkerSCServiceBrpcAdapter> brpcWorkerWorkerScAdapter_{ nullptr };
+    std::unique_ptr<MasterWorkerSCServiceBrpcAdapter> brpcMasterWorkerScAdapter_{ nullptr };
     std::future<Status> clientWorkerCommonSvcStatus_;
     // Object cache rpc service for worker request.
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };

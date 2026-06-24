@@ -24,6 +24,8 @@
 
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
+
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/client/stream_cache/consumer_impl.h"
 #include "datasystem/client/stream_cache/producer_impl.h"
 #include "datasystem/client/stream_cache/producer_consumer_worker_api.h"

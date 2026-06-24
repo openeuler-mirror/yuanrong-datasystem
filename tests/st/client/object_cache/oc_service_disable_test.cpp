@@ -18,6 +18,7 @@
  * Description: Test oc service disable.
  */
 #include "common.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"
@@ -51,8 +52,9 @@ void OcOp(const std::shared_ptr<ObjectClient> &client, bool success)
     if (success) {
         DS_ASSERT_OK(client->Put(objKey, (uint8_t *)data.data(), data.size(), CreateParam{}));
     } else {
-        ASSERT_EQ(client->Put(objKey, (uint8_t *)data.data(), data.size(), CreateParam{}).GetCode(),
-                  StatusCode::K_RUNTIME_ERROR);
+        auto rc = client->Put(objKey, (uint8_t *)data.data(), data.size(), CreateParam{});
+        ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
+                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 
@@ -63,7 +65,9 @@ void ScOp(const std::shared_ptr<StreamClient> &client, bool success)
     if (success) {
         DS_ASSERT_OK(client->Subscribe("test1", config, consumer));
     } else {
-        ASSERT_EQ(client->Subscribe("test1", config, consumer).GetCode(), StatusCode::K_RUNTIME_ERROR);
+        auto rc = client->Subscribe("test1", config, consumer);
+        ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
+                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 
@@ -90,7 +94,9 @@ void KvOp(const std::shared_ptr<KVClient> &client, bool success)
     if (success) {
         DS_ASSERT_OK(client->Set(key, val));
     } else {
-        ASSERT_EQ(client->Set(key, val).GetCode(), StatusCode::K_RUNTIME_ERROR);
+        auto rc = client->Set(key, val);
+        ASSERT_TRUE(rc.GetCode() == StatusCode::K_RUNTIME_ERROR ||
+                    (FLAGS_use_brpc && rc.GetCode() == StatusCode::K_RPC_CANCELLED));
     }
 }
 

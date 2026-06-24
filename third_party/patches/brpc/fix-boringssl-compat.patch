@@ -1,0 +1,16 @@
+diff --git a/src/butil/ssl_compat.h b/src/butil/ssl_compat.h
+index 1111111..2222222 100644
+--- a/src/butil/ssl_compat.h
++++ b/src/butil/ssl_compat.h
+@@ -513,7 +513,11 @@
+ }
+
+ BRPC_INLINE int EVP_PKEY_base_id(const EVP_PKEY *pkey) {
++#ifdef OPENSSL_IS_BORINGSSL
++    return EVP_PKEY_type(EVP_PKEY_id(pkey));
++#else
+     return EVP_PKEY_type(pkey->type);
++#endif
+ }
+
+ #endif /* OPENSSL_VERSION_NUMBER < 0x0090801fL || OPENSSL_IS_BORINGSSL */

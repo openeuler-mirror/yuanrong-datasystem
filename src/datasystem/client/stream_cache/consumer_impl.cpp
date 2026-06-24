@@ -22,6 +22,8 @@
 #include <utility>
 #include "datasystem/client/listen_worker.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
+
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/client/stream_cache/stream_client_impl.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"

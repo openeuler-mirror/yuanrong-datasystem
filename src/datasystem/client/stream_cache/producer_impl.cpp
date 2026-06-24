@@ -23,6 +23,8 @@
 
 #include "datasystem/client/mmap_manager.h"
 #include "datasystem/client/stream_cache/client_worker_api.h"
+
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/client/stream_cache/stream_client_impl.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/inject/inject_point.h"

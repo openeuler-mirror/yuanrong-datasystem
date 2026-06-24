@@ -42,6 +42,7 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
         "//src/datasystem/protos:master_heartbeat_cc_proto",
+        "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl_header",
     ],
@@ -224,6 +225,7 @@ ds_cc_library(
         "//src/datasystem/common:common_constants",
         "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/protos:master_heartbeat_cc_proto",
+        "//src/datasystem/protos:object_posix_brpc",
         "//src/datasystem/protos:share_memory_cc_proto",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/cluster_manager:worker_health_check",
@@ -292,6 +294,22 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "async_rollback_manager",
+    srcs = [
+    ],
+    hdrs = [
+    ],
+    deps = [
+        ":worker_request_manager_header",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:thread_local",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+    ],
+)
 
 ds_cc_library(
     name = "worker_oc_eviction_manager",
@@ -347,6 +365,7 @@ ds_cc_library(
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/master/object_cache:master_oc_service_impl",
+        "//src/datasystem/protos:master_object_brpc",
         "//src/datasystem/worker:worker_master_api_manager_base",
         "//src/datasystem/worker/object_cache:async_rpc_request_manager",
     ],
@@ -433,6 +452,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/object_cache/device:worker_dev_req_manager",
+        "//src/datasystem/protos:worker_object_brpc",
         #"//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
     ],
 )
@@ -482,6 +502,7 @@ ds_cc_library(
         "//src/datasystem/common/util:deadlock_util",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/object_cache:object_kv",
         "@tbb",
@@ -498,6 +519,7 @@ ds_cc_library(
         ":worker_worker_oc_service_impl_header",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/protos:worker_object_brpc",
     ],
     alwayslink = True,
 )
@@ -516,6 +538,8 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:wait_post",
         "//src/datasystem/common/util/queue",
+        "//src/datasystem/protos:master_object_brpc",
+        "//src/datasystem/protos:master_object_zmq_cc_proto",
     ],
 )
 
@@ -555,6 +579,7 @@ ds_cc_library(
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
     ],
 )
@@ -574,6 +599,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_unary_client_impl",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:meta_transport_cc_proto",
+        "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
     ],

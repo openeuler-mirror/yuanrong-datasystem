@@ -135,6 +135,75 @@ inline bool ShouldLogFirstAndEveryN(uint32_t n, std::atomic<uint64_t> &counter)
 }
 
 // Basic Logging Macros Impl
+// Undefine brpc/butil logging macros to prevent redefinition warnings when both
+// datasystem log.h and brpc butil/logging.h are included in the same TU.
+// brpc's butil/logging.h (pulled in via <brpc/channel.h> etc.) defines LOG, VLOG,
+// CHECK, DLOG and friends with different semantics. Our definitions below take
+// precedence; the #undef ensures no -Werror macro-redefinition under cmake.
+#ifdef LOG
+#undef LOG
+#endif
+#ifdef PLOG
+#undef PLOG
+#endif
+#ifdef LOG_IF
+#undef LOG_IF
+#endif
+#ifdef PLOG_IF
+#undef PLOG_IF
+#endif
+#ifdef LOG_EVERY_N
+#undef LOG_EVERY_N
+#endif
+#ifdef LOG_FIRST_N
+#undef LOG_FIRST_N
+#endif
+#ifdef LOG_IF_EVERY_N
+#undef LOG_IF_EVERY_N
+#endif
+#ifdef VLOG
+#undef VLOG
+#endif
+#ifdef VLOG_IF
+#undef VLOG_IF
+#endif
+#ifdef VLOG_EVERY_N
+#undef VLOG_EVERY_N
+#endif
+#ifdef VLOG_IS_ON
+#undef VLOG_IS_ON
+#endif
+#ifdef CHECK
+#undef CHECK
+#endif
+#ifdef CHECK_EQ
+#undef CHECK_EQ
+#endif
+#ifdef CHECK_NE
+#undef CHECK_NE
+#endif
+#ifdef CHECK_LT
+#undef CHECK_LT
+#endif
+#ifdef CHECK_LE
+#undef CHECK_LE
+#endif
+#ifdef CHECK_GT
+#undef CHECK_GT
+#endif
+#ifdef CHECK_GE
+#undef CHECK_GE
+#endif
+#ifdef DLOG
+#undef DLOG
+#endif
+#ifdef DCHECK
+#undef DCHECK
+#endif
+#ifdef DCHECK_IS_ON
+#undef DCHECK_IS_ON
+#endif
+
 #define LOG_IMPL(severity) \
     datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, false, true).Stream()
 #define SLOW_LOG_IMPL(severity) \

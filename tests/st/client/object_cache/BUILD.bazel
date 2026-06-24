@@ -6,6 +6,7 @@ package(default_visibility = ["//visibility:public"])
 # package and dependents can use #include "oc_client_common.h" directly.
 ds_cc_test_library(
     name = "oc_client_common",
+    srcs = ["oc_client_common.cpp"],
     hdrs = ["oc_client_common.h"],
     deps = [
         "//src/datasystem/client:datasystem",

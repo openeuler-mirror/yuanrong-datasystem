@@ -23,6 +23,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
@@ -83,8 +84,13 @@ Status WorkerRemoteWorkerTransApi::Init()
 {
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_WORKER_TRANS_SVC, rpcStub));
-    rpcSession_ = std::dynamic_pointer_cast<WorkerWorkerTransportService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    if (FLAGS_use_brpc) {
+        brpcSession_ = std::dynamic_pointer_cast<WorkerWorkerTransportService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+    } else {
+        rpcSession_ = std::dynamic_pointer_cast<WorkerWorkerTransportService_Stub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(rpcSession_);
+    }
     return Status::OK();
 }
 
@@ -97,12 +103,13 @@ Status WorkerRemoteWorkerTransApi::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &r
     int64_t maxTimeoutMs = 60000;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
     opts.SetTimeout(remainingTime);
-    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
 
     UrmaHandshakeReqPb req;
     std::string senderAddStr = hostPort_.ToString();
     RETURN_IF_NOT_OK(ConstructHandshakePb(senderAddStr, req, firstClientEntityId_));
-    RETURN_IF_NOT_OK(rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp)
+                                  : rpcSession_->WorkerWorkerExchangeUrmaConnectInfo(opts, req, rsp));
     RETURN_IF_NOT_OK(FinalizeOutboundConnection(rsp));
     return Status::OK();
 }

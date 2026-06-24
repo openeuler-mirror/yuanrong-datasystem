@@ -178,6 +178,7 @@ py_wheel(
         "//:commit_id_file",
         "//:cpp_template_files",
         "//:datasystem_worker_file",
+        "//:libdatasystem_worker_shared_file",
         "//:dockerentry_daemonset_files",
         "//:dockerentry_deployment_files",
         "//:dsbench_file",

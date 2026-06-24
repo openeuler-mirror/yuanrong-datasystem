@@ -19,6 +19,7 @@ ds_cc_test(
     srcs = ["listen_worker_test.cpp"],
     tags = ["manual"],
     deps = [
+        "//src/datasystem/client:add_client_miss_libs_fixme",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:listen_worker",
         "//src/datasystem/common/inject:common_inject",

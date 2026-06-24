@@ -33,7 +33,9 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
+#include "datasystem/protos/stream_posix.irpc.pb.h"
 #include "datasystem/protos/stream_posix.service.rpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/worker/stream_cache/remote_worker_manager.h"
@@ -179,7 +181,7 @@ private:
     std::shared_ptr<ClientWorkerSCServiceImpl> service_;
     std::unique_ptr<ReadLockHelperType> rlock_;
 };
-class ClientWorkerSCServiceImpl : public ClientWorkerSCService,
+class ClientWorkerSCServiceImpl : public ClientWorkerSCService, public IClientWorkerSCService,
                                   public std::enable_shared_from_this<ClientWorkerSCServiceImpl> {
 public:
     /**

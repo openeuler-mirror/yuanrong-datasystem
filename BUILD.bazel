@@ -358,7 +358,7 @@ copy_file(
 copy_file(
     name = "libdatasystem_worker_shared_file",
     src = "//src/datasystem/worker:datasystem_worker_shared",
-    out = "yr/datasystem/service/libdatasystem_worker.so",
+    out = "yr/datasystem/lib/libdatasystem_worker.so",
     visibility = [
         "//bazel:__pkg__",
     ],

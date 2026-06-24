@@ -100,7 +100,12 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
         list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h")
         list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc")
         list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h")
-        
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.irpc.pb.h")
+        list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.cc")
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.h")
+        list(APPEND ${source_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc")
+        list(APPEND ${header_files} "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h")
+
         set(LD_LIB_PATH "${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}")
         add_custom_command(
             OUTPUT "${_OUTPUT_PREFIX}/${file_name}.pb.cc"
@@ -109,6 +114,11 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
             "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h"
             "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc"
             "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.irpc.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.cc"
+            "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.h"
+            "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc"
+            "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${LD_LIB_PATH}
                     $<TARGET_FILE:protobuf::protoc>
             ARGS -I ${CMAKE_SOURCE_DIR}/src -I ${proto_src_directory}
@@ -124,7 +134,12 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
                 "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.cc"
                 "${_OUTPUT_PREFIX}/${file_name}.service.rpc.pb.h"
                 "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.cc"
-                "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h")
+                "${_OUTPUT_PREFIX}/${file_name}.stub.rpc.pb.h"
+                "${_OUTPUT_PREFIX}/${file_name}.irpc.pb.h"
+                "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.cc"
+                "${_OUTPUT_PREFIX}/${file_name}.brpc.pb.h"
+                "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.cc"
+                "${_OUTPUT_PREFIX}/${file_name}.brpc.stub.pb.h")
         add_dependencies(${ZMQ_PROTO_LIB_DEPEND} ZMQ_PROTO_LIB_DEPEND_${file_name})
     endforeach ()
 

@@ -67,8 +67,8 @@ public:
 private:
     std::vector<std::pair<std::string, uint64_t>> durationList_;
 
-    static const uint64_t timeThreshold_ = 3;
-    static const size_t maxCount_ = 32;
+    static constexpr uint64_t timeThreshold_ = 3;
+    static constexpr size_t maxCount_ = 32;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_LOG_TINE_COST_H

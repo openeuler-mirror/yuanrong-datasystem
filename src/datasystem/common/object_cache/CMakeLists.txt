@@ -17,6 +17,7 @@ set(COMMON_REF_SRCS object_ref_info.cpp)
 
 set(COMMON_REF_DEPEND_LIBS
         ${TBB_LIBRARY}
+        ${BRPC_LIBRARY}
         common_log
         common_util
         common_metrics

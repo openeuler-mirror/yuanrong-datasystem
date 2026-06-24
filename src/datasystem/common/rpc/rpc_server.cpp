@@ -19,19 +19,29 @@
  */
 #include "datasystem/common/rpc/rpc_server.h"
 
+#include <brpc/server.h>
+
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
 #include "datasystem/common/util/thread_pool.h"
 
 namespace datasystem {
-RpcServer::RpcServer(Token key, const RpcCredential &cred)
+namespace {
+constexpr int BRPC_SERVER_STOP_TIMEOUT_MS = 5000;
+}  // namespace
+
+RpcServer::RpcServer(Token key, const RpcCredential &cred) : useBrpc_(false)
 {
     (void)key;
-    LOG(INFO) << "Start up server with ZMQ communication framework.";
     auto passkey = ZmqServerImpl::Token();
     pimpl_ = std::make_unique<ZmqServerImpl>(passkey, cred);
 }
-RpcServer::~RpcServer() noexcept = default;
+RpcServer::~RpcServer() noexcept
+{
+    if (useBrpc_ && brpcServer_) {
+        StopBrpcServer();
+    }
+}
 
 Status RpcServer::Init()
 {
@@ -45,6 +55,9 @@ Status RpcServer::Run()
 
 void RpcServer::Shutdown()
 {
+    if (useBrpc_) {
+        StopBrpcServer();
+    }
     std::visit([](auto &pimpl) { pimpl->Shutdown(); }, pimpl_);
 }
 
@@ -61,6 +74,70 @@ Status RpcServer::RegisterService(ZmqService *svc, const RpcServiceCfg &cfg)
 Status RpcServer::InitAuthHandler()
 {
     return std::visit([](auto &pimpl) { return pimpl->InitAuthHandler(); }, pimpl_);
+}
+
+Status RpcServer::AddBrpcService(google::protobuf::Service *service)
+{
+    CHECK_FAIL_RETURN_STATUS(service != nullptr, StatusCode::K_INVALID, "Service is nullptr");
+    if (!brpcServer_) {
+        brpcServer_ = std::make_unique<brpc::Server>();
+    }
+    if (brpcServer_->AddService(service, brpc::SERVER_DOESNT_OWN_SERVICE) != 0) {
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Failed to add brpc service");
+    }
+    return Status::OK();
+}
+
+Status RpcServer::StartBrpcServer(const std::string &addr, int port)
+{
+    if (!brpcServer_) {
+        brpcServer_ = std::make_unique<brpc::Server>();
+    }
+    brpc::ServerOptions options;
+    options.idle_timeout_sec = -1;
+    // ST workers run worker + master in the same process, so a brpc handler on
+    // worker can make a nested brpc call to itself (as master). With the default
+    // num_threads (#cpu-cores, often small on test boxes), the small bthread
+    // worker pool can be exhausted by concurrent nested RPCs -> Get RPCs queue
+    // but never dispatch. Bump num_threads so handlers always find a free worker.
+    options.num_threads = FLAGS_brpc_server_num_threads;
+    butil::EndPoint ep;
+    if (!addr.empty()) {
+        butil::str2ip(addr.c_str(), &ep.ip);
+    }
+    ep.port = port;
+    if (brpcServer_->Start(ep, &options) != 0) {
+        // Start failed — destroy the server so AddBrpcService + Start can be
+        // retried cleanly. Without this, the partially-initialized server would
+        // reject duplicate service registrations on the next attempt.
+        brpcServer_.reset();
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+            FormatString("Failed to start brpc server on %s:%d", addr.c_str(), port));
+    }
+    LOG(INFO) << "brpc server started on " << addr << ":" << port;
+    return Status::OK();
+}
+
+void RpcServer::StopBrpcServer()
+{
+    if (brpcServer_) {
+        // Wait up to 5s for in-flight bthread handlers to drain before
+        // returning. Without this, the owning WorkerOCServer destructor
+        // may destroy adapters and service impls while bthread handlers
+        // are still executing → UAF in TenantAuthManager, GetImpl, Stream.
+        //
+        // F12 note: brpc Server::Stop(closeTimeoutMs) only schedules shutdown;
+        // Join() blocks until all queued work finishes with no upper bound.
+        // In OOM or stuck-bthread scenarios Join can hang indefinitely.
+        // brpc 1.15 has no Join(timeout) variant; a full fix would run Join
+        // on a separate thread + future.wait_for and LOG FATAL on timeout.
+        // Tracked as follow-up — the 5s Stop timeout already bounds how
+        // long brpc will accept new work.
+        brpcServer_->Stop(BRPC_SERVER_STOP_TIMEOUT_MS);
+        brpcServer_->Join();
+        // Reset so repeated calls are no-ops (V06: StopBrpcServer idempotency).
+        brpcServer_.reset();
+    }
 }
 
 void RpcServer::Interrupt()
@@ -92,12 +169,21 @@ Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 {
     auto key = Token();
     server = std::make_unique<RpcServer>(key, cred_);
+    // In brpc mode, also init ZMQ for client registration/UDS/SHM.
+    // brpc handles RPC calls; ZMQ handles client management.
     RETURN_IF_NOT_OK(server->Init());
     if (RpcAuthKeyManager::Instance().HasAuthHandler()) {
         RETURN_IF_NOT_OK(server->InitAuthHandler());
     }
-    for (const auto &v : endPts_) {
-        RETURN_IF_NOT_OK(server->Bind(v));
+    // brpc owns the TCP port in brpc mode (kBrpcPortOffset=0); ZMQ must skip Bind.
+    // Mirrors the !useBrpc_ guard on Run() in BuildAndStart. UDS/SHM use Init(), not this loop.
+    if (!useBrpc_) {
+        for (const auto &v : endPts_) {
+            RETURN_IF_NOT_OK(server->Bind(v));
+        }
+    }
+    if (useBrpc_) {
+        server->useBrpc_ = true;
     }
     return Status::OK();
 }
@@ -105,6 +191,8 @@ Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
 Status RpcServer::Builder::BuildAndStart(std::unique_ptr<RpcServer> &server) const
 {
     try {
+        // Register ZMQ services and start ZMQ server if any services were registered to ZMQ.
+        // In brpc mode, all RPC services go to brpc and svcList_ may be empty.
         for (auto &ele : svcList_) {
             auto &svcEle = ele.second;
             auto func = [&server, &svcEle](auto *svc) {
@@ -117,7 +205,15 @@ Status RpcServer::Builder::BuildAndStart(std::unique_ptr<RpcServer> &server) con
         if (preStartCallback_) {
             RETURN_IF_NOT_OK(preStartCallback_());
         }
-        RETURN_IF_NOT_OK(server->Run());
+        // Start ZMQ server only in ZMQ mode. In brpc mode (useBrpc_=true), the port is
+        // used exclusively by brpc (kBrpcPortOffset=0), so ZMQ must not bind the same port.
+        if (!useBrpc_ && !svcList_.empty()) {
+            RETURN_IF_NOT_OK(server->Run());
+        }
+        // Start brpc server if enabled (uses the same port as ZMQ would have).
+        if (useBrpc_) {
+            RETURN_IF_NOT_OK(server->StartBrpcServer(brpcAddr_, brpcPort_));
+        }
     } catch (const std::bad_alloc &e) {
         RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, e.what());
     }

@@ -360,6 +360,155 @@ private:
     void CreateStubCpp(const google::protobuf::FileDescriptor &file, compiler::GeneratorContext *generatorCtx) const;
     void CreateServiceCpp(const google::protobuf::FileDescriptor &file, compiler::GeneratorContext *generatorCtx) const;
 
+    // --- V8: three-output pattern ---
+
+    /**
+     * @brief Generate the IRPC pure virtual interface header file (.irpc.pb.h).
+     */
+    void CreateInterfaceHeader(const google::protobuf::FileDescriptor &file,
+                               compiler::GeneratorContext *generatorCtx) const;
+    void GenerateInterfacePrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
+    void GenerateInterface(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                           const std::string &indent) const;
+
+    /**
+     * @brief Generate the brpc adapter header file (.brpc.pb.h).
+     */
+    void CreateBrpcAdapterHeader(const google::protobuf::FileDescriptor &file,
+                                 compiler::GeneratorContext *generatorCtx) const;
+    void GenerateBrpcAdapterPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
+    void GenerateBrpcAdapter(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                             const std::string &indent) const;
+
+    /**
+     * @brief Generate the brpc adapter cpp file (.brpc.pb.cc).
+     */
+    void CreateBrpcAdapterCpp(const google::protobuf::FileDescriptor &file,
+                              compiler::GeneratorContext *generatorCtx) const;
+    void GenerateBrpcAdapterCppPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
+
+    /**
+     * @brief Implement brpc CallMethod dispatch (4 patterns).
+     */
+    void ImplementBrpcServiceBoilerplate(io::Printer &printer,
+                                          const google::protobuf::ServiceDescriptor &svc,
+                                          const std::string &svcName) const;
+    static void ImplementBrpcCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                           const std::string &indent, const std::string &svcName);
+    static void ImplementBrpcMethodVariant(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                           int methodIndex, const std::string &indent);
+    static std::string BuildDirectCallCaseCode(const google::protobuf::MethodDescriptor &method);
+    static std::string BuildSendRecvPayloadImpl();
+    static std::string BuildScTimeoutDurationInitSnippet();
+    static void ImplementBrpcDirectCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                                  const std::string &indent, const std::string &svcName);
+    static void ImplementBrpcCallMethodPlain(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodSendPayload(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodSendRecvPayload(io::Printer &printer,
+                                                        const google::protobuf::MethodDescriptor &method,
+                                                        int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodClientStream(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodServerStream(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     int methodIndex, const std::string &indent);
+    static void ImplementBrpcCallMethodBidiStream(io::Printer &printer,
+                                                   const google::protobuf::MethodDescriptor &method,
+                                                   int methodIndex, const std::string &indent);
+
+    // --- V8: brpc client stub generation ---
+
+    /**
+     * @brief Generate the brpc client stub header file (.brpc.stub.pb.h).
+     */
+    void CreateBrpcStubHeader(const google::protobuf::FileDescriptor &file,
+                              compiler::GeneratorContext *generatorCtx) const;
+    void GenerateBrpcStubPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
+    void GenerateBrpcStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                               const std::string &indent) const;
+    void GenerateBrpcGenericStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                      const std::string &indent) const;
+
+    /**
+     * @brief Generate the brpc client stub cpp file (.brpc.stub.pb.cc).
+     */
+    void CreateBrpcStubCpp(const google::protobuf::FileDescriptor &file,
+                           compiler::GeneratorContext *generatorCtx) const;
+    void GenerateBrpcStubCppPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const;
+
+    /**
+     * @brief Implement brpc stub method definitions.
+     */
+    static void ImplementBrpcStubApiDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                        const std::string &indent);
+    static void ImplementBrpcGenericStubApiDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                               const std::string &indent);
+    static void ImplementBrpcGenericStubConstructor(io::Printer &printer,
+                                                    const google::protobuf::ServiceDescriptor &svc,
+                                                    const std::string &indent);
+    static void ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer, const std::string &stub);
+
+    static void ImplementBrpcStubNoStreamDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                             int methodIndex, const std::string &indent, const std::string &stub);
+    static std::string BuildSendPayloadFramingSnippet();
+    static std::string BuildRecvPayloadFramingSnippet();
+    static std::string BuildAsyncRecvPayloadFramingSnippet();
+    static std::string BuildAsyncWriteImpl(const google::protobuf::MethodDescriptor &method);
+    static std::string BuildAsyncReadImpl(const google::protobuf::MethodDescriptor &method);
+    static void ImplementBrpcStubNoStreamDef2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              int methodIndex, const std::string &indent, const std::string &stub);
+    static void ImplBrpcStubNoStreamShortDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                             int methodIndex, const std::string &indent, const std::string &stub);
+    static void ImplementBrpcStubAsyncWriteDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                               int methodIndex, const std::string &indent, const std::string &stub);
+    static void ImplementBrpcStubAsyncReadDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              int methodIndex, const std::string &indent, const std::string &stub);
+    static void ImplementBrpcStubStreamingDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              int methodIndex, const std::string &indent, const std::string &stub);
+    static void ImplementBrpcStubClientStreamingDef(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    int methodIndex, const std::string &indent,
+                                                    const std::string &stub);
+    static void ImplementBrpcStubServerStreamingDef(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    int methodIndex, const std::string &indent,
+                                                    const std::string &stub);
+
+    static void ImplementBrpcGenericStubNoStreamDef(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubNoStreamDef2(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     const std::string &indent, const std::string &stub);
+    static void ImplBrpcGenericStubNoStreamShortDef(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubAsyncWriteDef(io::Printer &printer,
+                                                      const google::protobuf::MethodDescriptor &method,
+                                                      const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubAsyncReadDef(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubStreamingDef(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubClientStreamingDef(io::Printer &printer,
+                                                           const google::protobuf::MethodDescriptor &method,
+                                                           const std::string &indent, const std::string &stub);
+    static void ImplementBrpcGenericStubServerStreamingDef(io::Printer &printer,
+                                                           const google::protobuf::MethodDescriptor &method,
+                                                           const std::string &indent, const std::string &stub);
+
     /**
      * @brief Parse the name space of the proto file.
      * @param[in] file Pb FileDescriptor.

@@ -27,6 +27,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -74,6 +75,7 @@ public:
 private:
     HostPort hostPort_;
     std::shared_ptr<WorkerWorkerTransportService_Stub> rpcSession_{ nullptr };
+    std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> brpcSession_{ nullptr };
     std::string firstClientEntityId_;
 };
 }  // namespace object_cache

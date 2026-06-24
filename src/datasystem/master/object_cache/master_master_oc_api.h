@@ -31,6 +31,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
+#include "datasystem/protos/master_object.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace master {
@@ -119,6 +120,7 @@ private:
     HostPort localHostPort_;  // The HostPort of the local node
     std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
+    std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 }  // namespace master
 }  // namespace datasystem

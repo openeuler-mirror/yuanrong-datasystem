@@ -447,7 +447,14 @@ public:
      * @param[out] needRollbackState If the client status is successfully changed to INTERMEDIATE,
      * the status needs to be rolled back based on the completion status when the request is completed.
      */
-    void CompleteHandler(bool failed, bool needRollbackState);
+    void CompleteHandler(bool failed, bool needRollbackState)
+    {
+        bool shouldWarmup = needRollbackState && !failed && clientStateManager_->GetState() == INITTING;
+        clientStateManager_->CompleteHandler(failed, needRollbackState);
+        if (shouldWarmup) {
+            WarmupClientWorkerConnection();
+        }
+    }
 
     /**
      * @brief Invoke worker client to create a device object with p2p.

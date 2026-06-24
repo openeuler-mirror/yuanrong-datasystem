@@ -22,6 +22,7 @@
 
 #include <variant>
 
+#include "datasystem/common/rpc/brpc_client_unary_writer_reader.h"
 #include "datasystem/common/rpc/zmq/zmq_unary_client_impl.h"
 
 namespace datasystem {
@@ -29,6 +30,11 @@ template <typename W, typename R>
 class ClientUnaryWriterReader {
 public:
     explicit ClientUnaryWriterReader(std::unique_ptr<ClientUnaryWriterReaderImpl<W, R>> &&impl)
+        : pimpl_(std::move(impl))
+    {
+    }
+
+    explicit ClientUnaryWriterReader(std::unique_ptr<BrpcClientUnaryWriterReader<W, R>> &&impl)
         : pimpl_(std::move(impl))
     {
     }
@@ -100,7 +106,8 @@ public:
     }
 
 private:
-    std::variant<std::unique_ptr<ClientUnaryWriterReaderImpl<W, R>>> pimpl_;
+    std::variant<std::unique_ptr<ClientUnaryWriterReaderImpl<W, R>>,
+                 std::unique_ptr<BrpcClientUnaryWriterReader<W, R>>> pimpl_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_UNARY_CLIENT_IMPL_H

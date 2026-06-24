@@ -28,6 +28,7 @@
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -201,6 +202,7 @@ private:
     HostPort localHostPort_;
     // session to the worker rpc service.
     std::shared_ptr<WorkerWorkerOCService_Stub> rpcSession_{ nullptr };
+    std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> brpcSession_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 

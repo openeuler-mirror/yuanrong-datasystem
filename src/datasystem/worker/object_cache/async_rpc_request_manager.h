@@ -34,6 +34,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
+#include "datasystem/protos/master_object.stub.rpc.pb.h"
+#include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
@@ -211,6 +213,12 @@ public:
         rpcSession_ = rpcSession;
     }
 
+    RemoteAsyncRpcRequest(std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession, uint32_t timeoutMs)
+        : AsyncRpcRequest(timeoutMs)
+    {
+        brpcSession_ = brpcSession;
+    }
+
     ~RemoteAsyncRpcRequest()
     {
     }
@@ -314,6 +322,11 @@ public:
         return rpcSession_;
     }
 
+    std::shared_ptr<master::MasterOCService_BrpcGenericStub> GetBrpcServerApi()
+    {
+        return brpcSession_;
+    }
+
     /**
      * @brief Store async write tag.
      * @param[in] tagId The tag id of async write.
@@ -340,6 +353,7 @@ private:
     RegisterRpcFunc rpcRespFunc_;
 
     std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };
+    std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
     Status replyStatus_;
     bool replyTag_ = false;
     RespPb rsp_;

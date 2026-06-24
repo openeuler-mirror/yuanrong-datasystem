@@ -535,3 +535,475 @@ zmq_cc_proto_library(
         ":zmq_test_cc_proto",
     ],
 )
+
+# --- brpc adapter test (genrule + cc_library) ---
+genrule(
+    name = "generic_service_brpc_gen",
+    srcs = [
+        "generic_service.proto",
+    ],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "generic_service.brpc.pb.h",
+        "generic_service.brpc.pb.cc",
+        "generic_service.brpc.stub.pb.h",
+        "generic_service.brpc.stub.pb.cc",
+        "generic_service.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location generic_service.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location generic_service.proto))/../../.. && pwd)
+        # Use -I pointing to src/ so proto appears as datasystem/protos/generic_service.proto
+        # This ensures fileName = datasystem/protos/generic_service, producing correct
+        # include paths like datasystem/protos/generic_service.pb.h that match cc_proto_library.
+        # Generate to a temp dir then flatten to declared output names.
+        TMPD=$$(mktemp -d)
+        $$PROTOC \\
+            -I$$PROTO_ROOT/src \\
+            --plugin=protoc-gen-rpc=$$PLUGIN \\
+            --rpc_out=$$TMPD \\
+            datasystem/protos/generic_service.proto
+        # Plugin generates under datasystem/protos/ subdirectory.
+        # Move to flat output names expected by Bazel genrule.
+        GEN=$$TMPD/datasystem/protos
+        cp $$GEN/generic_service.brpc.pb.h $$GEN/generic_service.brpc.pb.cc \
+           $$GEN/generic_service.brpc.stub.pb.h $$GEN/generic_service.brpc.stub.pb.cc \
+           $$GEN/generic_service.irpc.pb.h \
+           $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "generic_service_brpc",
+    srcs = [":generic_service_brpc_gen"],
+    hdrs = [":generic_service_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":generic_service_cc_proto",
+        ":rpc_option_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- master_heartbeat brpc adapter ---
+genrule(
+    name = "master_heartbeat_brpc_gen",
+    srcs = ["master_heartbeat.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "master_heartbeat.brpc.pb.h",
+        "master_heartbeat.brpc.pb.cc",
+        "master_heartbeat.brpc.stub.pb.h",
+        "master_heartbeat.brpc.stub.pb.cc",
+        "master_heartbeat.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location master_heartbeat.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location master_heartbeat.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_heartbeat.proto
+        cp $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.cc $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_heartbeat.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "master_heartbeat_brpc",
+    srcs = [":master_heartbeat_brpc_gen"],
+    hdrs = [":master_heartbeat_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":master_heartbeat_cc_proto",
+        ":rpc_option_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- share_memory brpc adapter ---
+genrule(
+    name = "share_memory_brpc_gen",
+    srcs = ["share_memory.proto", "meta_transport.proto", "utils.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "share_memory.brpc.pb.h", "share_memory.brpc.pb.cc",
+        "share_memory.brpc.stub.pb.h", "share_memory.brpc.stub.pb.cc",
+        "share_memory.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location share_memory.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location share_memory.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/share_memory.proto
+        cp $$TMPD/datasystem/protos/share_memory.brpc.pb.h $$TMPD/datasystem/protos/share_memory.brpc.pb.cc $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.h $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.cc $$TMPD/datasystem/protos/share_memory.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "share_memory_brpc",
+    srcs = [":share_memory_brpc_gen"],
+    hdrs = [":share_memory_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":share_memory_cc_proto", ":meta_transport_cc_proto", ":utils_cc_proto", ":rpc_option_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- worker_object brpc adapter (4 services) ---
+genrule(
+    name = "worker_object_brpc_gen",
+    srcs = ["worker_object.proto", "hash_ring.proto", "meta_transport.proto", "object_posix.proto", "p2p_subscribe.proto", "rpc_option.proto", "utils.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "worker_object.brpc.pb.h", "worker_object.brpc.pb.cc",
+        "worker_object.brpc.stub.pb.h", "worker_object.brpc.stub.pb.cc",
+        "worker_object.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location worker_object.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location worker_object.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_object.proto
+        cp $$TMPD/datasystem/protos/worker_object.brpc.pb.h $$TMPD/datasystem/protos/worker_object.brpc.pb.cc $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_object.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "worker_object_brpc",
+    srcs = [":worker_object_brpc_gen"],
+    hdrs = [":worker_object_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":worker_object_cc_proto", ":hash_ring_cc_proto", ":meta_transport_cc_proto",
+        ":object_posix_cc_proto", ":p2p_subscribe_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- master_object brpc adapter ---
+genrule(
+    name = "master_object_brpc_gen",
+    srcs = ["master_object.proto", "object_posix.proto", "p2p_subscribe.proto", "rpc_option.proto", "utils.proto", "worker_object.proto", "hash_ring.proto", "meta_transport.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "master_object.brpc.pb.h", "master_object.brpc.pb.cc",
+        "master_object.brpc.stub.pb.h", "master_object.brpc.stub.pb.cc",
+        "master_object.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location master_object.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location master_object.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_object.proto
+        cp $$TMPD/datasystem/protos/master_object.brpc.pb.h $$TMPD/datasystem/protos/master_object.brpc.pb.cc $$TMPD/datasystem/protos/master_object.brpc.stub.pb.h $$TMPD/datasystem/protos/master_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_object.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "master_object_brpc",
+    srcs = [":master_object_brpc_gen"],
+    hdrs = [":master_object_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":master_object_cc_proto", ":object_posix_cc_proto", ":p2p_subscribe_cc_proto",
+        ":rpc_option_cc_proto", ":utils_cc_proto", ":worker_object_cc_proto",
+        ":hash_ring_cc_proto", ":meta_transport_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- stream_posix brpc adapter (ClientWorkerSC, WorkerWorkerSC) ---
+genrule(
+    name = "stream_posix_brpc_gen",
+    srcs = ["stream_posix.proto", "rpc_option.proto", "utils.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "stream_posix.brpc.pb.h", "stream_posix.brpc.pb.cc",
+        "stream_posix.brpc.stub.pb.h", "stream_posix.brpc.stub.pb.cc",
+        "stream_posix.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location stream_posix.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location stream_posix.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/stream_posix.proto
+        cp $$TMPD/datasystem/protos/stream_posix.brpc.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.pb.cc $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.cc $$TMPD/datasystem/protos/stream_posix.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "stream_posix_brpc",
+    srcs = [":stream_posix_brpc_gen"],
+    hdrs = [":stream_posix_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":stream_posix_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- master_stream brpc adapter ---
+genrule(
+    name = "master_stream_brpc_gen",
+    srcs = ["master_stream.proto", "rpc_option.proto", "utils.proto", "worker_stream.proto", "stream_posix.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "master_stream.brpc.pb.h", "master_stream.brpc.pb.cc",
+        "master_stream.brpc.stub.pb.h", "master_stream.brpc.stub.pb.cc",
+        "master_stream.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location master_stream.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location master_stream.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_stream.proto
+        cp $$TMPD/datasystem/protos/master_stream.brpc.pb.h $$TMPD/datasystem/protos/master_stream.brpc.pb.cc $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_stream.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "master_stream_brpc",
+    srcs = [":master_stream_brpc_gen"],
+    hdrs = [":master_stream_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":master_stream_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
+        ":worker_stream_cc_proto", ":stream_posix_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- worker_stream brpc adapter ---
+genrule(
+    name = "worker_stream_brpc_gen",
+    srcs = ["worker_stream.proto", "stream_posix.proto", "rpc_option.proto", "utils.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "worker_stream.brpc.pb.h", "worker_stream.brpc.pb.cc",
+        "worker_stream.brpc.stub.pb.h", "worker_stream.brpc.stub.pb.cc",
+        "worker_stream.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location worker_stream.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location worker_stream.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_stream.proto
+        cp $$TMPD/datasystem/protos/worker_stream.brpc.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.pb.cc $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_stream.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "worker_stream_brpc",
+    srcs = [":worker_stream_brpc_gen"],
+    hdrs = [":worker_stream_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":worker_stream_cc_proto", ":stream_posix_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+# --- object_posix brpc adapter (genrule + cc_library) ---
+genrule(
+    name = "object_posix_brpc_gen",
+    srcs = [
+        "object_posix.proto",
+        "rpc_option.proto",
+        "utils.proto",
+        "p2p_subscribe.proto",
+        "meta_transport.proto",
+    ],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "object_posix.brpc.pb.h",
+        "object_posix.brpc.pb.cc",
+        "object_posix.brpc.stub.pb.h",
+        "object_posix.brpc.stub.pb.cc",
+        "object_posix.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location object_posix.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location object_posix.proto))/../../.. && pwd)
+        # PROTO_ROOT is execroot/yuanrong-datasystem. The google protobuf well-known
+        # types live at external/com_google_protobuf/src relative to execroot.
+        # However, in the sandbox, external/ may only contain bazel_tools.
+        # Use readlink to resolve protoc's real path and derive the include.
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC \\
+            -I$$PROTO_ROOT/src \\
+            -I$$GOOGLE_PROTOBUF_SRC \\
+            --plugin=protoc-gen-rpc=$$PLUGIN \\
+            --rpc_out=$$TMPD \\
+            datasystem/protos/object_posix.proto
+        GEN=$$TMPD/datasystem/protos
+        cp $$GEN/object_posix.brpc.pb.h $$GEN/object_posix.brpc.pb.cc \
+           $$GEN/object_posix.brpc.stub.pb.h $$GEN/object_posix.brpc.stub.pb.cc \
+           $$GEN/object_posix.irpc.pb.h \
+           $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "object_posix_brpc",
+    srcs = [":object_posix_brpc_gen"],
+    hdrs = [":object_posix_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":object_posix_cc_proto",
+        ":rpc_option_cc_proto",
+        ":utils_cc_proto",
+        ":p2p_subscribe_cc_proto",
+        ":meta_transport_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)

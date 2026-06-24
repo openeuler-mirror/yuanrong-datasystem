@@ -31,14 +31,16 @@
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/resource_manager.h"
 #include "datasystem/protos/master_object.pb.h"
+#include "datasystem/protos/master_object.irpc.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
+#include "datasystem/protos/master_object.brpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
 
-class MasterOCServiceImpl final : public MasterOCService {
+class MasterOCServiceImpl final : public MasterOCService, public IMasterOCService {
 public:
     /**
      * @brief Construct MasterOCServiceImpl.

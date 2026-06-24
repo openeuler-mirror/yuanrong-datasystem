@@ -20,6 +20,8 @@
 
 #include "datasystem/client/object_cache/object_client_impl.h"
 
+#include "datasystem/protos/object_posix.brpc.stub.pb.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -684,15 +686,6 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     }
 
     return InitWorkerClientAtCurrentAddress(enableHeartbeat, true);
-}
-
-void ObjectClientImpl::CompleteHandler(bool failed, bool needRollbackState)
-{
-    bool shouldWarmup = needRollbackState && !failed && clientStateManager_->GetState() == INITTING;
-    clientStateManager_->CompleteHandler(failed, needRollbackState);
-    if (shouldWarmup) {
-        WarmupClientWorkerConnection();
-    }
 }
 
 Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, bool isSameNode,
@@ -3711,60 +3704,6 @@ Status ObjectClientImpl::Set(const std::string &key, const StringView &val, cons
                static_cast<int>(setParam.existence));
 }
 
-void ObjectClientImpl::WarmupClientWorkerConnection()
-{
-    bool skipWarmup = false;
-    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.skip", [&skipWarmup]() { skipWarmup = true; });
-    if (skipWarmup) {
-        LOG(INFO) << "[CLIENT_WORKER_WARMUP] skip by inject";
-        return;
-    }
-    auto rc = DoWarmupClientWorkerConnection();
-    if (rc.IsError()) {
-        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] failed, status=%s", rc.ToString());
-    }
-}
-
-Status ObjectClientImpl::DoWarmupClientWorkerConnection()
-{
-    try {
-        constexpr uint32_t warmupTtlSecond = 10;
-        const std::string warmupKey = "ds_internal_warmup_" + GetStringUuid();
-        const std::string warmupValue = "0";
-        auto cleanupWarmupKey = [this, &warmupKey]() {
-            std::vector<std::string> failedObjectKeys;
-            auto delRc = Delete({ warmupKey }, failedObjectKeys);
-            if (delRc.IsError() || !failedObjectKeys.empty()) {
-                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] cleanup failed, key=%s, status=%s, failed=%s",
-                                             warmupKey, delRc.ToString(), VectorToString(failedObjectKeys));
-            }
-        };
-        SetParam setParam;
-        setParam.writeMode = WriteMode::NONE_L2_CACHE;
-        setParam.ttlSecond = warmupTtlSecond;
-        auto rc = Set(warmupKey, StringView(warmupValue), setParam);
-        if (rc.IsError()) {
-            LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", warmupKey,
-                                         rc.ToString());
-            return rc;
-        }
-        std::vector<Optional<Buffer>> buffers;
-        rc = Get({ warmupKey }, 0, buffers);
-        if (rc.IsError()) {
-            cleanupWarmupKey();
-            LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", warmupKey,
-                                         rc.ToString());
-            return rc;
-        }
-        cleanupWarmupKey();
-        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] success, key=%s", warmupKey);
-        return Status::OK();
-    } catch (const std::exception &e) {
-        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] exception, error=%s", e.what());
-        return Status(K_RUNTIME_ERROR, e.what());
-    }
-}
-
 Status ObjectClientImpl::Set(const StringView &val, const SetParam &setParam, std::string &key)
 {
     std::string tmpKey;
@@ -4689,6 +4628,60 @@ Status ObjectClientImpl::UpdateClientRemoteH2DConfig(int32_t devId)
 std::string ObjectClientImpl::GetTransportType() const
 {
     return AccessTransportTracker::ToString();
+}
+
+void ObjectClientImpl::WarmupClientWorkerConnection()
+{
+    bool skipWarmup = false;
+    INJECT_POINT_NO_RETURN("ObjectClientImpl.ClientWorkerWarmup.skip", [&skipWarmup]() { skipWarmup = true; });
+    if (skipWarmup) {
+        LOG(INFO) << "[CLIENT_WORKER_WARMUP] skip by inject";
+        return;
+    }
+    auto rc = DoWarmupClientWorkerConnection();
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] failed, status=%s", rc.ToString());
+    }
+}
+
+Status ObjectClientImpl::DoWarmupClientWorkerConnection()
+{
+    try {
+        constexpr uint32_t warmupTtlSecond = 10;
+        const std::string warmupKey = "ds_internal_warmup_" + GetStringUuid();
+        const std::string warmupValue = "0";
+        auto cleanupWarmupKey = [this, &warmupKey]() {
+            std::vector<std::string> failedObjectKeys;
+            auto delRc = Delete({ warmupKey }, failedObjectKeys);
+            if (delRc.IsError() || !failedObjectKeys.empty()) {
+                LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] cleanup failed, key=%s, status=%s, failed=%s",
+                                             warmupKey, delRc.ToString(), VectorToString(failedObjectKeys));
+            }
+        };
+        SetParam setParam;
+        setParam.writeMode = WriteMode::NONE_L2_CACHE;
+        setParam.ttlSecond = warmupTtlSecond;
+        auto rc = Set(warmupKey, StringView(warmupValue), setParam);
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] set failed, key=%s, status=%s", warmupKey,
+                                         rc.ToString());
+            return rc;
+        }
+        std::vector<Optional<Buffer>> buffers;
+        rc = Get({ warmupKey }, 0, buffers);
+        if (rc.IsError()) {
+            cleanupWarmupKey();
+            LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] get failed, key=%s, status=%s", warmupKey,
+                                         rc.ToString());
+            return rc;
+        }
+        cleanupWarmupKey();
+        LOG(INFO) << FormatString("[CLIENT_WORKER_WARMUP] success, key=%s", warmupKey);
+        return Status::OK();
+    } catch (const std::exception &e) {
+        LOG(WARNING) << FormatString("[CLIENT_WORKER_WARMUP] exception, error=%s", e.what());
+        return Status(K_RUNTIME_ERROR, e.what());
+    }
 }
 
 }  // namespace object_cache

@@ -117,6 +117,54 @@ public:
     }
 
 private:
+    /**
+     * @brief Fill the ReleaseLobPageReqPb request fields from the stream/page identifiers.
+     * @param[out] req The request to fill.
+     * @param[in] streamName The name of the stream.
+     * @param[in] producerId The producer identifier.
+     * @param[in] pageView The shared-memory view to release.
+     * @param[in] workerApi The worker API used to resolve the client id.
+     */
+    void FillReleaseLobPageReq(ReleaseLobPageReqPb &req, const std::string &streamName,
+                               const std::string &producerId, const ShmView &pageView,
+                               const ClientWorkerApi &workerApi);
+
+    /**
+     * @brief Execute the GetDataPage RPC against the resolved worker session.
+     * @param[in,out] workerApi The worker API owning the RPC sessions.
+     * @param[in,out] req The request; timestamp/timeout fields are refreshed before the call.
+     * @param[out] rsp The response populated on success.
+     * @param[in] timeoutMs Caller-supplied aggregate timeout budget.
+     * @param[in] currDefaultRpcTimeout Per-call timeout computed by the retry loop.
+     * @return Status of the call.
+     */
+    Status DoGetDataPageRpc(ClientWorkerApi &workerApi, GetDataPageReqPb &req, GetDataPageRspPb &rsp,
+                            int64_t timeoutMs, int32_t currDefaultRpcTimeout);
+
+    /**
+     * @brief Execute the AllocBigShmMemory RPC against the resolved worker session.
+     * @param[in,out] workerApi The worker API owning the RPC sessions.
+     * @param[in,out] req The request; timeout/timestamp/signature are refreshed before the call.
+     * @param[out] rsp The response populated on success.
+     * @param[in] timeoutMs Caller-supplied aggregate timeout budget.
+     * @param[in] currDefaultRpcTimeout Per-call timeout computed by the retry loop.
+     * @return Status of the call.
+     */
+    Status DoAllocBigShmMemoryRpc(ClientWorkerApi &workerApi, CreateLobPageReqPb &req, CreateLobPageRspPb &rsp,
+                                  int64_t timeoutMs, int32_t currDefaultRpcTimeout);
+
+    /**
+     * @brief Execute the CreateShmPage RPC against the resolved worker session.
+     * @param[in,out] workerApi The worker API owning the RPC sessions.
+     * @param[in,out] req The request; timeout/timestamp/signature are refreshed before the call.
+     * @param[out] rsp The response populated on success.
+     * @param[in] timeoutMs Caller-supplied aggregate timeout budget.
+     * @param[in] currDefaultRpcTimeout Per-call timeout computed by the retry loop.
+     * @return Status of the call.
+     */
+    Status DoCreateShmPageRpc(ClientWorkerApi &workerApi, CreateShmPageReqPb &req, CreateShmPageRspPb &rsp,
+                              int64_t timeoutMs, int32_t currDefaultRpcTimeout);
+
     std::string tenantId_;
     std::shared_ptr<ClientWorkerApi> workerApi_;
     const std::unordered_set<StatusCode> retryCode_ = { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_UNAVAILABLE,

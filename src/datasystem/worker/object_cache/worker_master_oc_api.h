@@ -29,6 +29,7 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
+#include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
@@ -466,6 +467,7 @@ public:
 private:
     HostPort hostPort_;                                                    // The HostPort of the master node
     std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
+    std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
 };
 
 /**

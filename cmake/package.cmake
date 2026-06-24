@@ -94,6 +94,13 @@ set(SDK_PROTOC_LIB
     "${Protobuf_LIB_PATH}/libprotoc.so*"
 )
 
+# libdatasystem.so transitively NEEDs these via BRPC_LIBRARIES PUBLIC link in common_rpc_zmq_client.
+# leveldb is static (libleveldb.a) and merges into libbrpc.so at link time, so no .so to ship.
+set(SDK_BRPC_LIBS
+    "${brpc_LIB_PATH}/libbrpc.so*"
+    "${gflags_LIB_PATH}/libgflags.so*"
+)
+
 set(SDK_USER_LIB_PATTERNS
     ${SDK_PROTOBUF_LIB}
     ${SDK_PROTOC_LIB})
@@ -118,6 +125,7 @@ set(SDK_USER_LIB_PATTERNS
        "${XML2_LIB_PATH}/libxml2.so*"
        "${CJSON_LIB_PATH}/libcjson.so*"
        "${absl_LIB_PATH}/libabseil_dll*"
+       ${SDK_BRPC_LIBS}
 )
 
 install_file_pattern(
@@ -157,6 +165,7 @@ if (BUILD_PYTHON_API)
             "${OpenSSL_LIB_PATH}/libssl.so*"
             "${OpenSSL_LIB_PATH}/libcrypto.so*"
             ${RPC_LIB_PATH}
+            ${SDK_BRPC_LIBS}
     )
 
     package_python(yr/datasystem
@@ -218,6 +227,7 @@ if (BUILD_GO_API)
            "${SPDLOG_LIB_PATH}/libds-spdlog.so*"
            ${RPC_LIB_PATH}
            "${absl_LIB_PATH}/libabseil_dll*"
+           ${SDK_BRPC_LIBS}
     )
 
     install_file_pattern(
@@ -292,6 +302,7 @@ set(SERVICE_LIB_PATTERNS
     ${RPC_LIB_PATH}
     "${CJSON_LIB_PATH}/libcjson.so*"
     "${absl_LIB_PATH}/libabseil_dll*"
+    ${SDK_BRPC_LIBS}
 )
 
 install_file_pattern(
@@ -358,6 +369,7 @@ if (BUILD_PYTHON_API)
            "${TBB_LIB_PATH}/libtbb.so*"
            "${CURL_LIB_PATH}/libcurl.so*"
            ${RPC_LIB_PATH}
+           ${SDK_BRPC_LIBS}
     )
     if (TRANSFER_ENGINE_GLOG_LIB_PATH)
         list(APPEND TRANSFER_ENGINE_PYTHON_LIB_PATTERNS

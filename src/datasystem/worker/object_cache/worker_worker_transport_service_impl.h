@@ -22,12 +22,14 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
+#include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/protos/meta_transport.pb.h"
 
 namespace datasystem {
 namespace object_cache {
-class WorkerWorkerTransportServiceImpl : public WorkerWorkerTransportService {
+class WorkerWorkerTransportServiceImpl : public WorkerWorkerTransportService, public IWorkerWorkerTransportService {
 public:
     /**
      * @brief Construct WorkerWorkerTransportServiceImpl.

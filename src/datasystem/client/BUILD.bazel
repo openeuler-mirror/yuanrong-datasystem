@@ -117,7 +117,9 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:object_posix_zmq_cc_proto",
         "//src/datasystem/protos:share_memory_zmq_cc_proto",
+        "//src/datasystem/protos:share_memory_brpc",
         "//src/datasystem/worker/object_cache:worker_worker_transport_api",
+        "@com_github_apache_brpc//:brpc",
     ],
     alwayslink = True,
 )
@@ -189,6 +191,7 @@ ds_cc_library(
 
 ds_cc_library(
     name = "add_client_miss_libs_fixme",
+    visibility = ["//visibility:public"],
     deps = [
         "//src/datasystem/client/object_cache/device:client_device_object_manager",
         "//src/datasystem/common/device:comm_wrapper",
@@ -217,6 +220,26 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "router_client",
+    srcs = [
+        "router_client.cpp",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+    ],
+    alwayslink = True,
+)
+
+ds_cc_library(
     name = "datasystem",
     srcs = [
         "datasystem.cpp",
@@ -224,6 +247,7 @@ ds_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":add_client_miss_libs_fixme",
+        ":router_client",
         "//src/datasystem/client:listen_worker",
         "//src/datasystem/client/context",
         "//src/datasystem/client/hetero_cache:hetero_client",

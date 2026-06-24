@@ -20,8 +20,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_STUB_H
 #define DATASYSTEM_COMMON_RPC_STUB_H
 
-#include <variant>
-
+#include "datasystem/common/rpc/client_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/protos/meta_zmq.pb.h"
@@ -43,19 +42,31 @@ class ClientReaderImpl;
 template <typename W, typename R>
 class ClientWriterReader {
 public:
-    explicit ClientWriterReader(std::unique_ptr<ClientWriterReaderImpl<W, R>> &&impl);
+    explicit ClientWriterReader(std::unique_ptr<ClientWriterReaderBase<W, R>> &&impl)
+        : pimpl_(std::move(impl))
+    {
+    }
 
-    ~ClientWriterReader();
+    ~ClientWriterReader() = default;
 
-    Status Write(const W &pb);
+    Status Write(const W &pb)
+    {
+        return pimpl_->Write(pb);
+    }
 
-    Status Read(R &pb);
+    Status Read(R &pb)
+    {
+        return pimpl_->Read(pb);
+    }
 
     /**
      * @brief Done sending sequence of protobuf to the server.
      * @return Status of call.
      */
-    Status Finish();
+    Status Finish()
+    {
+        return pimpl_->Finish();
+    }
 
     /**
      * @brief Send a payload after sending the request protobuf.
@@ -63,7 +74,10 @@ public:
      * @param[in] payload Sending payload buffers.
      * @return Status of call.
      */
-    Status SendPayload(const std::vector<MemView> &payload);
+    Status SendPayload(const std::vector<MemView> &payload)
+    {
+        return pimpl_->SendPayload(payload);
+    }
 
     /**
      * @brief Receive a payload after receiving response protobuf.
@@ -71,10 +85,13 @@ public:
      * @param[out] recvBuffer receiving payload buffers.
      * @return Status of call.
      */
-    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
+    Status ReceivePayload(std::vector<RpcMessage> &recvBuffer)
+    {
+        return pimpl_->ReceivePayload(recvBuffer);
+    }
 
 private:
-    std::unique_ptr<ClientWriterReaderImpl<W, R>> pimpl_;
+    std::unique_ptr<ClientWriterReaderBase<W, R>> pimpl_;
 };
 
 template <typename W>

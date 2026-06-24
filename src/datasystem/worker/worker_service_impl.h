@@ -28,14 +28,16 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/protos/share_memory.irpc.pb.h"
 #include "datasystem/protos/share_memory.service.rpc.pb.h"
+#include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace worker {
-class WorkerServiceImpl : public WorkerService, public Callable {
+class WorkerServiceImpl : public WorkerService, public IWorkerService, public Callable {
 public:
     /**
      * @brief Create a new WorkerServiceImpl object.

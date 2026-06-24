@@ -18,12 +18,17 @@
  * Description: Implement client to worker api.
  */
 #include "datasystem/client/stream_cache/client_worker_api.h"
-#include <cstdint>
 
+#include <brpc/channel.h>
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
+
+#include <cstdint>
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/protos/rpc_option.pb.h"
 #include "datasystem/protos/stream_posix.pb.h"
 #include "datasystem/stream/stream_config.h"
@@ -39,21 +44,39 @@ ClientWorkerApi::ClientWorkerApi(const HostPort &hostPort, RpcCredential cred, S
 {
 }
 
+ClientWorkerApi::~ClientWorkerApi() = default;
+
 Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                              int32_t initAttemptTimeoutMs)
 {
     RETURN_IF_NOT_OK(
         ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
-    std::shared_ptr<RpcChannel> channel;
-    channel = std::make_shared<RpcChannel>(hostPort_, cred_);
-    VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
-                                              (IsShmEnable() ? "true" : "false"));
-    // We will enable uds after handshaking with the worker.
-    if (IsShmEnableByUDS()) {
-        channel->SetServiceUdsEnabled(ClientWorkerSCService_Stub::FullServiceName(),
-                                      GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
+    if (FLAGS_use_brpc) {
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        brpcChannel_ = std::make_unique<brpc::Channel>();
+        brpc::ChannelOptions opts;
+        opts.timeout_ms = requestTimeoutMs;
+        opts.connect_timeout_ms = connectTimeoutMs;
+        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            brpcChannel_->Init(brpcAddr.ToString().c_str(), &opts) == 0, StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("Failed to init brpc channel to %s for ClientWorkerSCService", brpcAddr.ToString()));
+        // Wait for brpc health check to establish TCP connection.
+        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        brpcRpcSession_ =
+            std::make_unique<ClientWorkerSCService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs);
+    } else {
+        std::shared_ptr<RpcChannel> channel;
+        channel = std::make_shared<RpcChannel>(hostPort_, cred_);
+        VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("Setting client-worker communication via Unix socket : %s",
+                                                  (IsShmEnable() ? "true" : "false"));
+        // We will enable uds after handshaking with the worker.
+        if (IsShmEnableByUDS()) {
+            channel->SetServiceUdsEnabled(ClientWorkerSCService_Stub::FullServiceName(),
+                                          GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
+        }
+        rpcSession_ = std::make_shared<ClientWorkerSCService_Stub>(channel);
     }
-    rpcSession_ = std::make_unique<ClientWorkerSCService_Stub>(channel);
     return Status::OK();
 }
 
@@ -82,7 +105,11 @@ Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std:
     opts.SetTimeout(requestTimeoutMs_);
     CreateProducerRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK_EXCEPT(rpcSession_->CreateProducer(opts, req, rsp), StatusCode::K_DUPLICATED);
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK_EXCEPT(brpcRpcSession_->CreateProducer(opts, req, rsp), StatusCode::K_DUPLICATED);
+    } else {
+        RETURN_IF_NOT_OK_EXCEPT(rpcSession_->CreateProducer(opts, req, rsp), StatusCode::K_DUPLICATED);
+    }
     point.Record();
 
     outPageView.off = static_cast<ptrdiff_t>(rsp.page_view().offset());
@@ -124,7 +151,11 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_SUBSCRIBE);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK_EXCEPT(rpcSession_->Subscribe(opts, req, rsp), StatusCode::K_DUPLICATED);
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK_EXCEPT(brpcRpcSession_->Subscribe(opts, req, rsp), StatusCode::K_DUPLICATED);
+    } else {
+        RETURN_IF_NOT_OK_EXCEPT(rpcSession_->Subscribe(opts, req, rsp), StatusCode::K_DUPLICATED);
+    }
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s, C:%s] Create consumer success.", LogPrefix(), streamName,
                                               consumerId);
@@ -164,7 +195,11 @@ Status ClientWorkerApi::DeleteStream(const std::string &streamName)
 
     PerfPoint point(PerfKey::RPC_WORKER_DELETE_STREAM);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->DeleteStream(opts, req, rsp));
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK(brpcRpcSession_->DeleteStream(opts, req, rsp));
+    } else {
+        RETURN_IF_NOT_OK(rpcSession_->DeleteStream(opts, req, rsp));
+    }
     point.Record();
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Delete stream success.", LogPrefix(), streamName);
     return Status::OK();
@@ -181,7 +216,11 @@ Status ClientWorkerApi::QueryGlobalProducersNum(const std::string &streamName, u
     reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->QueryGlobalProducersNum(req, rsp));
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK(brpcRpcSession_->QueryGlobalProducersNum(req, rsp));
+    } else {
+        RETURN_IF_NOT_OK(rpcSession_->QueryGlobalProducersNum(req, rsp));
+    }
     producerNum = rsp.global_count();
     return Status::OK();
 }
@@ -197,7 +236,11 @@ Status ClientWorkerApi::QueryGlobalConsumersNum(const std::string &streamName, u
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(rpcSession_->QueryGlobalConsumersNum(req, rsp));
+    if (FLAGS_use_brpc) {
+        RETURN_IF_NOT_OK(brpcRpcSession_->QueryGlobalConsumersNum(req, rsp));
+    } else {
+        RETURN_IF_NOT_OK(rpcSession_->QueryGlobalConsumersNum(req, rsp));
+    }
     consumerNum = rsp.global_count();
     return Status::OK();
 }
@@ -222,6 +265,9 @@ Status ClientWorkerApi::ResetStreams(const std::vector<std::string> &streamNames
             requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+                if (FLAGS_use_brpc) {
+                    return brpcRpcSession_->ResetStreams(opts, req, rsp);
+                }
                 return rpcSession_->ResetStreams(opts, req, rsp);
             },
             []() { return Status::OK(); }, { K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE }),
@@ -250,6 +296,9 @@ Status ClientWorkerApi::ResumeStreams(const std::vector<std::string> &streamName
             requestTimeoutMs_,
             [this, &opts, &req, &rsp](int32_t) {
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+                if (FLAGS_use_brpc) {
+                    return brpcRpcSession_->ResumeStreams(opts, req, rsp);
+                }
                 return rpcSession_->ResumeStreams(opts, req, rsp);
             },
             []() { return Status::OK(); }, { K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE }),
