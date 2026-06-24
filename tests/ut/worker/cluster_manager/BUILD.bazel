@@ -6,7 +6,7 @@ ds_cc_test(
     name = "cluster_store_test",
     srcs = ["cluster_store_test.cpp"],
     deps = [
-        "//src/datasystem/worker/cluster_manager:cluster_store",
+        "//src/datasystem/common/cluster:cluster_store",
         "//third_party/protos/etcd:kv_cc_proto",
         "//tests/ut:ut_common",
     ],

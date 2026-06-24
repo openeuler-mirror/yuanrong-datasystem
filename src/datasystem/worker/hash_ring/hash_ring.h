@@ -42,7 +42,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
-#include "datasystem/worker/cluster_manager/cluster_store.h"
+#include "datasystem/common/cluster/cluster_store.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
 
 namespace datasystem {

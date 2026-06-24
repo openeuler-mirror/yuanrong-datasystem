@@ -141,6 +141,8 @@
 
 - Build worker and tests:
   - `bash build.sh -t build`
+- Run common topology UT after building tests:
+  - `cd build && ./bin/ds_ut --gtest_filter=TopologyRepositoryTest.*:ClusterRegistryTest.*:ClusterMembershipTest.*:WorkerDirectoryTest.*:TopologyChangeHandlerTest.*`
 - Run system tests that exercise worker/runtime paths:
   - `bash build.sh -t run_cases -l st`
 - Helpful binaries from test build:

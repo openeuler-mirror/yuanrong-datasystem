@@ -39,7 +39,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/worker/cluster_manager/cluster_store.h"
+#include "datasystem/common/cluster/cluster_store.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/priority_queue.h"

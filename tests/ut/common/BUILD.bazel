@@ -1,0 +1,83 @@
+load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+# Topology tests common fake store.
+ds_cc_test_library(
+    name = "topology_test_common",
+    hdrs = ["topology/fake_cluster_store.h"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/cluster:cluster_store",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_repository_test",
+    srcs = ["topology/topology_repository_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/topology:common_topology",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//tests/ut:ut_common",
+        "//tests/ut/common:topology_test_common",
+    ],
+)
+
+ds_cc_test(
+    name = "cluster_registry_test",
+    srcs = ["topology/cluster_registry_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/topology:common_topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/common:topology_test_common",
+    ],
+)
+
+ds_cc_test(
+    name = "cluster_membership_test",
+    srcs = ["topology/cluster_membership_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/topology:common_topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/common:topology_test_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_directory_test",
+    srcs = ["topology/worker_directory_test.cpp"],
+    deps = [
+        "//src/datasystem/common/topology:common_topology",
+        "//src/datasystem/common/util:status_helper",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_change_handler_test",
+    srcs = ["topology/topology_change_handler_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/topology:common_topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/common:topology_test_common",
+    ],
+)
+
+test_suite(
+    name = "all_topology_tests",
+    tests = [
+        "cluster_membership_test",
+        "cluster_registry_test",
+        "topology_change_handler_test",
+        "topology_repository_test",
+        "worker_directory_test",
+    ],
+)

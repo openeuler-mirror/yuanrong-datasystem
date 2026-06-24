@@ -1,6 +1,5 @@
 
 set(CLUSTER_MANAGER_SRCS
-        cluster_store.cpp
         cluster_manager.cpp
         )
 
@@ -13,6 +12,7 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         worker_hash_ring
         worker_update_flag_check
         common_signal
+        cluster_store
         etcdapi_proto
         )
 

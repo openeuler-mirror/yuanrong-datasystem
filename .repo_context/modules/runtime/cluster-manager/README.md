@@ -4,6 +4,7 @@
 
 - Path(s):
   - `src/datasystem/worker/cluster_manager`
+  - shared cluster-store abstraction in `src/datasystem/common/cluster/cluster_store.*`
   - startup integration in `src/datasystem/worker/worker_oc_server.cpp`
   - worker readiness and reconciliation integration in `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp`
   - event subscribers in object-cache, stream-cache, slot-recovery, and hash-ring modules
@@ -16,6 +17,8 @@
   - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/cluster_manager/cluster_manager.h`
   - `src/datasystem/worker/cluster_manager/cluster_node.h`
+  - `src/datasystem/common/cluster/cluster_store.h`
+  - `src/datasystem/common/cluster/cluster_store.cpp`
   - `src/datasystem/worker/cluster_manager/worker_health_check.cpp`
   - `src/datasystem/worker/cluster_event_type.h`
   - `src/datasystem/worker/hash_ring/hash_ring_event.h`
@@ -60,6 +63,8 @@
 - Canonical module boundary:
   - `src/datasystem/worker/cluster_manager` plus event definitions it directly publishes or subscribes to.
 - Candidate sibling submodules considered:
+  - `src/datasystem/common/cluster` owns the reusable `IClusterStore`/`EtcdClusterStore` abstraction so common topology
+    code does not depend on worker internals.
   - `runtime.hash-ring` owns persisted ring state, token/range algorithms, and migration task records.
   - `runtime.etcd-metadata` owns ETCD/Metastore RPC, watch, lease, and CAS mechanics.
   - object-cache and stream-cache metadata managers own actual metadata recovery, reconciliation, and clearing.

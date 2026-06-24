@@ -35,6 +35,7 @@ set(DS_UT_DEPEND_LIBS
         worker_topology_routing
         worker_topology_runtime
         worker_client_manager
+        common_topology
         datasystem_worker_static
         )
 

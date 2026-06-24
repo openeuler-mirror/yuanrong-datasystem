@@ -116,6 +116,21 @@ Treat raw pointers, detached threads, captured references, shared futures, and `
 surfaces. Use `.repo_context/playbooks/features/concurrency-and-memory-safety.md` for changes in shared state,
 threading, async queues, lock behavior, or buffer ownership.
 
+Review-derived constraints:
+
+- callbacks passed across module boundaries must not capture stack objects by reference unless the callee contract
+  explicitly guarantees immediate synchronous execution; prefer value capture, owned state, or `weak_ptr`/`shared_ptr`
+  when the callback can outlive the caller;
+- copy-modify-publish updates to immutable snapshots must be protected by one lock-held critical section or by an
+  explicit compare-exchange/version check, otherwise rebuild/event races can overwrite newer snapshots;
+- test fakes for CAS-capable stores must model revision conflicts and retry/abort behavior, not only happy-path
+  read-modify-write, so production conflict paths remain covered.
+- concrete classes and stateless helper classes introduced in new code must make construction/destruction intent
+  explicit: provide a default destructor for instantiable utility objects, and delete constructor/destructor for
+  all-static helper classes instead of relying on implicit special members;
+- before opening or refreshing a PR, run a static/codecheck-style pass over the diff for magic numbers and special
+  member omissions; semantic constants are required for non-`0`/`1` numeric literals even inside small parser helpers.
+
 ## Reuse Before New Code
 
 Before implementing new logic, search for existing repository primitives:
@@ -139,6 +154,9 @@ Keep module boundaries explicit:
 - interface separation where consumers do not need implementation detail
 - dependency direction that follows existing source layout
 - explicit startup, shutdown, and recovery lifecycle
+
+Shared code under `src/datasystem/common` must not depend on `src/datasystem/worker`; if both common and worker modules
+need an abstraction, move the abstraction to common and let worker depend on it.
 
 Functions should normally do one job. If a function grows beyond about 50 lines, assess whether it should be split into
 validation, prepare, execute, commit, cleanup, rollback, or error-handling pieces. This is a design trigger, not a blind
