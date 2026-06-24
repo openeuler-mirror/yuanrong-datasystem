@@ -31,6 +31,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/worker_cli.h"
 
@@ -175,9 +176,9 @@ protected:
         addr.ParseString(addrStr);
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
-        clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-        clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
-                                                                   nullptr));
+        clusterStores_.emplace_back(std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_.back().get()));
+        clusterManagers_.emplace_back(
+            std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(), nullptr));
         rings_.emplace_back(static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing()));
         ClusterInfo clusterInfo;
         DS_EXPECT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
@@ -187,8 +188,8 @@ protected:
     }
     std::unique_ptr<EtcdStore> db_;
     std::vector<std::unique_ptr<ClusterManager>> clusterManagers_;  // just used for construction of hash rings.
-    std::vector<std::unique_ptr<EtcdStore>> etcdStores_;        // Each EtcdStore is used for each ClusterManager.
-    std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
+    std::vector<std::unique_ptr<EtcdStore>> etcdStores_;            // Each EtcdStore is used for each ClusterManager.
+    std::vector<std::unique_ptr<topology::EtcdCoordinationBackend>> clusterStores_;
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     std::vector<std::future<Status>> futures_;
     std::vector<TestHashRing *> rings_;
@@ -283,9 +284,9 @@ void HashRingTest::InitRing(uint32_t workerNum)
         LOG(INFO) << "Ready to init for " << workerIds_[i];
         etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
         etcdStores_.back()->Init();
-        clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-        clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
-                                                                   nullptr));
+        clusterStores_.emplace_back(std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_.back().get()));
+        clusterManagers_.emplace_back(
+            std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(), nullptr));
         rings_[i] = static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing());
         futures_.emplace_back(threadPool_->Submit([this, i]() {
             ClusterInfo clusterInfo;
@@ -328,10 +329,9 @@ void HashRingTest::RestartRing(int workerIndex)
     etcdStores_[workerIndex].reset();
     etcdStores_[workerIndex] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
     etcdStores_[workerIndex]->Init();
-    clusterStores_[workerIndex] = std::make_unique<EtcdClusterStore>(etcdStores_[workerIndex].get());
+    clusterStores_[workerIndex] = std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_[workerIndex].get());
     clusterManagers_.emplace(clusterManagers_.begin() + workerIndex,
-                     std::make_unique<ClusterManager>(addr, addr, clusterStores_[workerIndex].get(),
-                                                          nullptr));
+                             std::make_unique<ClusterManager>(addr, addr, clusterStores_[workerIndex].get(), nullptr));
     const auto &cm = clusterManagers_[workerIndex];
     ClusterInfo clusterInfo;
     DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[workerIndex].get(), clusterInfo));

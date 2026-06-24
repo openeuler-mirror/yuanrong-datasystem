@@ -42,6 +42,7 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "gtest/gtest.h"
@@ -91,9 +92,8 @@ public:
         FLAGS_master_address = hostPort_.ToString();
         RETURN_IF_NOT_OK(etcdStore_->Init());
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
-        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
-        clusterManager_ = std::make_unique<ClusterManager>(hostPort_, hostPort_, clusterStore_.get(),
-                                                       nullptr);
+        clusterStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
+        clusterManager_ = std::make_unique<ClusterManager>(hostPort_, hostPort_, clusterStore_.get(), nullptr);
         ClusterInfo clusterInfo;
         RETURN_IF_NOT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStore_.get(), clusterInfo));
         RETURN_IF_NOT_OK(clusterManager_->Init(clusterInfo));
@@ -119,8 +119,8 @@ public:
     Status InitInstance()
     {
         InitInstanceBase();
-        RETURN_IF_NOT_OK(
-            OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, clusterManager_.get(), metadataManagerHolder_.get()));
+        RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(hostPort_, akSkManager_, clusterManager_.get(),
+                                                                   metadataManagerHolder_.get()));
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(0, workerAddress_));
         int stubCacheNum = 100;
         RpcStubCacheMgr::Instance().Init(stubCacheNum);
@@ -248,7 +248,7 @@ public:
     std::string accessKey_ = "QTWAOYTTINDUT2QVKYUC";
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<EtcdClusterStore> clusterStore_;
+    std::unique_ptr<topology::EtcdCoordinationBackend> clusterStore_;
     std::unique_ptr<ClusterManager> clusterManager_;
     std::unique_ptr<MetadataManagerHolder> metadataManagerHolder_;
     std::string workerUuid_;

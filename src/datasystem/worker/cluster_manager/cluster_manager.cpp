@@ -97,7 +97,8 @@ bool ClusterManager::ClusterNode::DemoteTimedOutNode()
 }
 
 ClusterManager::ClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
-                               IClusterStore *clusterStore, std::shared_ptr<AkSkManager> akSkManager, const int pqSize)
+                               topology::ICoordinationBackend *clusterStore, std::shared_ptr<AkSkManager> akSkManager,
+                               const int pqSize)
     : workerAddress_(workerAddress),
       masterAddress_(masterAddress),
       clusterStore_(clusterStore),
@@ -184,7 +185,8 @@ Status ClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterInfo)
         if (workerAddress_.ToString() == node.first && clusterInfo.etcdAvailable) {
             continue;
         }
-        ClusterStoreEvent fakeEvent{ ClusterStoreEventType::PUT, clusterPrefix_ + "/" + node.first, node.second };
+        topology::CoordinationEvent fakeEvent{ topology::CoordinationEventType::PUT, clusterPrefix_ + "/" + node.first,
+                                               node.second };
         LOG(INFO) << "Adding key: " << node.first << " value: " << node.second << " to priority queue.";
         RETURN_IF_NOT_OK(eventPq_->EmplaceBack(new CmEvent(std::move(fakeEvent), PrefixType::CLUSTER)));
     }
@@ -220,7 +222,7 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
     LOG(INFO) << "Init cluster manager.";
     auto traceId = Trace::Instance().GetTraceID();
     isEtcdAvailableWhenStart_ = clusterInfo.etcdAvailable;
-    clusterStore_->SetEventHandler([this, traceId](ClusterStoreEvent &&event) {
+    clusterStore_->SetEventHandler([this, traceId](topology::CoordinationEvent &&event) {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         EnqueEvent(std::move(event));
     });
@@ -495,7 +497,7 @@ Status ClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNodeKey
     return Status::OK();
 }
 
-void ClusterManager::EnqueEvent(ClusterStoreEvent &&event)
+void ClusterManager::EnqueEvent(topology::CoordinationEvent &&event)
 {
     INJECT_POINT("ClusterManager.EnqueEvent", [] { return; });
     if (thread_ == nullptr) {
@@ -582,19 +584,19 @@ Status ClusterManager::DequeEventCallHandler(bool &isHandleEvent)
     return Status::OK();
 }
 
-Status ClusterManager::HandleRingEvent(const ClusterStoreEvent &event)
+Status ClusterManager::HandleRingEvent(const topology::CoordinationEvent &event)
 {
     return hashRing_->HandleRingEvent(event, ringPrefix_);
 }
 
-Status ClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
+Status ClusterManager::HandleClusterEvent(const topology::CoordinationEvent &event)
 {
     Status rc;
     std::string nodeHostPortStr = event.key;
     std::string nodeTimestamp = event.value;
     // Parse the type of event of addition appended to timestamp.
     std::string additionEventType;  // "start", "restart", "recover"
-    if (event.type == ClusterStoreEventType::PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
+    if (event.type == topology::CoordinationEventType::PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
         KeepAliveValue keepAliveValue;
         auto parseRc = KeepAliveValue::FromString(nodeTimestamp, keepAliveValue);
         if (parseRc.IsOk()) {
@@ -613,10 +615,10 @@ Status ClusterManager::HandleClusterEvent(const ClusterStoreEvent &event)
     HostPort eventNodeKey;
     RETURN_IF_NOT_OK(eventNodeKey.ParseString(nodeHostPortStr));
     auto eventNode = std::make_unique<ClusterNode>(nodeTimestamp, additionEventType);
-    if (event.type == ClusterStoreEventType::PUT) {
+    if (event.type == topology::CoordinationEventType::PUT) {
         LOG(INFO) << "Event Type: Add Node: " << eventNode->ToString(eventNodeKey);
         rc = HandleNodeAdditionEvent(eventNodeKey, std::move(eventNode), "");
-    } else if (event.type == ClusterStoreEventType::DELETE) {
+    } else if (event.type == topology::CoordinationEventType::DELETE) {
         LOG(INFO) << "Event Type: Remove Node: " << eventNode->ToString(eventNodeKey);
         LOG_IF_ERROR_EXCEPT(RemoveRemoteFastTransportNode(eventNodeKey), "", K_NOT_FOUND);
         rc = HandleNodeRemoveEvent(eventNodeKey, std::move(eventNode), "");
@@ -1243,10 +1245,10 @@ void ClusterManager::CompleteNodeTableWithFakeNode(const std::string &lackNode)
     // Enqueue a fake event and let the background thread to handle it.
     LOG(INFO) << "Create fake add-and-remove event of node " << lackNode << " to priority queue.";
     // Key is the string of HostPort. Value is the timestamp with additionType.
-    ClusterStoreEvent fakeAddEvent{ ClusterStoreEventType::PUT, clusterPrefix_ + "/" + lackNode,
-                                    FAKE_NODE_EVENT_VALUE };
-    ClusterStoreEvent fakeDeleteEvent{ ClusterStoreEventType::DELETE, clusterPrefix_ + "/" + lackNode,
-                                       FAKE_NODE_EVENT_VALUE };
+    topology::CoordinationEvent fakeAddEvent{ topology::CoordinationEventType::PUT, clusterPrefix_ + "/" + lackNode,
+                                              FAKE_NODE_EVENT_VALUE };
+    topology::CoordinationEvent fakeDeleteEvent{ topology::CoordinationEventType::DELETE,
+                                                 clusterPrefix_ + "/" + lackNode, FAKE_NODE_EVENT_VALUE };
 
     if (eventPq_ && thread_) {
         eventPq_->EmplaceBack(new CmEvent(std::move(fakeAddEvent), PrefixType::CLUSTER));

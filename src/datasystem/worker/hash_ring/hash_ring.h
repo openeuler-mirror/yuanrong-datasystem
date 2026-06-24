@@ -42,7 +42,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
-#include "datasystem/common/cluster/cluster_store.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
 
 namespace datasystem {
@@ -54,7 +54,7 @@ public:
      * @param[in] workerId The worker uuid or ip address and port
      *
      */
-    explicit HashRing(std::string workerId, IClusterStore *clusterStore);
+    explicit HashRing(std::string workerId, topology::ICoordinationBackend *clusterStore);
 
     ~HashRing();
 
@@ -172,12 +172,12 @@ public:
     Status GetMasterUuid(const std::string &objKey, std::string &masterUuid);
 
     /**
-     * @brief Called when cluster-store event is about /datasystem/ring.
+     * @brief Called when coordination-backend event is about /datasystem/ring.
      * @param[in] event Cluster-store event.
      * @param[in] prefix Prefix of event.
      * @return Status
      */
-    Status HandleRingEvent(const ClusterStoreEvent &event, const std::string &prefix);
+    Status HandleRingEvent(const topology::CoordinationEvent &event, const std::string &prefix);
 
     /**
      * @brief Update the hash ring according to newSerializedRingInfo.
@@ -737,7 +737,7 @@ protected:
     const std::string MASTER_ADDRESS_KEY = "master_address";
     const std::string workerAddr_;
     std::string workerUuid_;
-    IClusterStore *clusterStore_;
+    topology::ICoordinationBackend *clusterStore_;
     std::atomic<HashState> state_;
     bool enableDistributedMaster_;
     std::atomic<StartUpState> startUpState_{ StartUpState::UNDETERMINED };

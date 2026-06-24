@@ -1,0 +1,19 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "coordination_backend",
+    srcs = [
+        "coordination_backend.cpp",
+        "etcd_coordination_backend.cpp",
+    ],
+    hdrs = [
+        "coordination_backend.h",
+        "etcd_coordination_backend.h",
+    ],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

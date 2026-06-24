@@ -64,7 +64,7 @@ namespace worker {
 static constexpr int MAX_CANDIDATE_WORKER_NUM = 5;
 const HashRing::HashFunction HashRing::hashFunction_ = MurmurHash3_32;
 
-HashRing::HashRing(std::string workerAddr, IClusterStore *clusterStore)
+HashRing::HashRing(std::string workerAddr, topology::ICoordinationBackend *clusterStore)
     : workerAddr_(std::move(workerAddr)),
       clusterStore_(clusterStore),
       state_(INIT),
@@ -668,9 +668,9 @@ Status HashRing::GetPrimaryWorkerAddrNoLock(uint32_t keyHash, std::string &outWo
     return Status::OK();
 }
 
-Status HashRing::HandleRingEvent(const ClusterStoreEvent &event, const std::string &prefix)
+Status HashRing::HandleRingEvent(const topology::CoordinationEvent &event, const std::string &prefix)
 {
-    if (event.type == ClusterStoreEventType::DELETE) {
+    if (event.type == topology::CoordinationEventType::DELETE) {
         return Status::OK();
     }
 
@@ -679,7 +679,8 @@ Status HashRing::HandleRingEvent(const ClusterStoreEvent &event, const std::stri
     }
 
     if (event.key == (prefix + "/")) {
-        RETURN_IF_NOT_OK_APPEND_MSG(UpdateRing(event.value, event.revision), "UpdateRing failed when WatchKey");
+        RETURN_IF_NOT_OK_APPEND_MSG(UpdateRing(event.value, event.revision),
+                                    "UpdateRing failed when coordination watch event");
     }
     return Status::OK();
 }

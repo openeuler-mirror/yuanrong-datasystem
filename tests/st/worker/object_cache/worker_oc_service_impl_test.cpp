@@ -40,6 +40,7 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #include "datasystem/common/flags/flags.h"
@@ -194,7 +195,7 @@ public:
         cluster_->GetEtcdAddrs(0, addrs);
         etcdStore_ = std::make_unique<EtcdStore>(addrs.first.ToString());
         etcdStore_->Init();
-        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        clusterStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
         clusterManager_ = std::make_unique<ClusterManager>(localAddress_, metaAddress, clusterStore_.get(), nullptr);
         metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
         objCacheMasterSvc_ = std::make_unique<datasystem::master::MasterOCServiceImpl>(
@@ -340,7 +341,7 @@ public:
     std::string secretKey_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     std::shared_ptr<datasystem::AkSkManager> akSkManager_;
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<EtcdClusterStore> clusterStore_;
+    std::unique_ptr<topology::EtcdCoordinationBackend> clusterStore_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::MasterOCServiceImpl> objCacheMasterSvc_{ nullptr };
     HostPort localAddress_;

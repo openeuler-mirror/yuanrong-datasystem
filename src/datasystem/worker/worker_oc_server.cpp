@@ -19,6 +19,8 @@
  */
 #include "datasystem/worker/worker_oc_server.h"
 
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -170,8 +172,9 @@ DS_DEFINE_validator(sc_encrypt_secret_key, &Validator::ValidateScEncryptSecretKe
 DS_DEFINE_int32(max_rpc_session_num, 2048,
                 "Maximum number of sessions that can be cached, must be within [512, 10'000]");
 DS_DEFINE_validator(max_rpc_session_num, &Validator::ValidateMaxRpcSessionNum);
-DS_DEFINE_bool_dynamic(enable_lossless_data_exit_mode, false,
-               "Decide whether to migrate data to other nodes or not when current node exits, default is false.");
+DS_DEFINE_bool_dynamic(
+    enable_lossless_data_exit_mode, false,
+    "Decide whether to migrate data to other nodes or not when current node exits, default is false.");
 DS_DEFINE_bool(shared_memory_populate, false,
                "Avoiding page faults during copying improves runtime performance but may result in longer worker "
                "startup times (depending on shared_memory_size_mb).");
@@ -229,10 +232,13 @@ bool EnableSCService()
 std::string BuildWarmupKey(const std::string &workerAddr)
 {
     std::string encoded = workerAddr;
-    std::replace_if(encoded.begin(), encoded.end(), [](unsigned char c) {
-        return !(std::isalnum(c) || c == '-' || c == '_' || c == '!' || c == '@' || c == '#' || c == '%' ||
-                 c == '^' || c == '*' || c == '(' || c == ')' || c == '+' || c == '=' || c == ':' || c == ';');
-    }, '_');
+    std::replace_if(
+        encoded.begin(), encoded.end(),
+        [](unsigned char c) {
+            return !(std::isalnum(c) || c == '-' || c == '_' || c == '!' || c == '@' || c == '#' || c == '%' || c == '^'
+                     || c == '*' || c == '(' || c == ')' || c == '+' || c == '=' || c == ':' || c == ';');
+        },
+        '_');
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 
@@ -346,10 +352,8 @@ Status WorkerOCServer::InitWorkerWorkerOCService()
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            Validator::ValidatePort("FLAGS_oc_worker_worker_direct_port",
-                FLAGS_oc_worker_worker_direct_port),
-            K_INVALID,
-            FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
+            Validator::ValidatePort("FLAGS_oc_worker_worker_direct_port", FLAGS_oc_worker_worker_direct_port),
+            K_INVALID, FormatString("Invalid tcp/ip port value %d", FLAGS_oc_worker_worker_direct_port));
         cfg.tcpDirect_ = std::to_string(FLAGS_oc_worker_worker_direct_port);
         builder_.AddService(objCacheWorkerWkSvc_.get(), cfg);
     }
@@ -446,10 +450,8 @@ Status WorkerOCServer::InitWorkerWorkerSCService()
         cfg.numStreamSockets_ = 0;
         cfg.hwm_ = RPC_HEAVY_SERVICE_HWM;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            Validator::ValidatePort("FLAGS_sc_worker_worker_direct_port",
-                FLAGS_sc_worker_worker_direct_port),
-            K_INVALID,
-            FormatString("Invalid tcp/ip port value %d", FLAGS_sc_worker_worker_direct_port));
+            Validator::ValidatePort("FLAGS_sc_worker_worker_direct_port", FLAGS_sc_worker_worker_direct_port),
+            K_INVALID, FormatString("Invalid tcp/ip port value %d", FLAGS_sc_worker_worker_direct_port));
         cfg.tcpDirect_ = std::to_string(FLAGS_sc_worker_worker_direct_port);
         builder_.AddService(streamCacheWorkerWorkerSvc_.get(), cfg);
     }
@@ -765,7 +767,7 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
     TryWarmupWorkerMasterRpcOnClusterEvent(event);
 }
 
-Status WorkerOCServer::ConstructClusterStore()
+Status WorkerOCServer::ConstructCoordinationBackend()
 {
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
     std::string clusterInfoRocksDir = FLAGS_rocksdb_store_dir + "/cluster_info";
@@ -965,8 +967,8 @@ Status WorkerOCServer::Init()
         // Exclusive mode: brpc uses the same port as ZMQ would. ZMQ server is
         // not started (see rpc_server.cpp BuildAndSTart: skips server->Run()
         // when useBrpc_=true). No dual-listen.
-        LOG(INFO) << "brpc mode enabled, brpc listening on " << bindHostPort_.Host() << ":"
-                  << brpcPort << " (exclusive mode, ZMQ not started)";
+        LOG(INFO) << "brpc mode enabled, brpc listening on " << bindHostPort_.Host() << ":" << brpcPort
+                  << " (exclusive mode, ZMQ not started)";
     }
 
     // Init shared memory
@@ -1018,7 +1020,7 @@ Status WorkerOCServer::Init()
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
     etcdStore_->SetUpdateClusterInfoInRocksDbHandler(
         std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
-    clusterManagerStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+    clusterManagerStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
     clusterManager_ =
@@ -1029,7 +1031,7 @@ Status WorkerOCServer::Init()
     memory::Allocator::Instance()->SetCheckIfAllFdReleasedHandler(
         [](const std::vector<int> &workerFds) { return ClientManager::Instance().IsAllWorkerFdsReleased(workerFds); });
 
-    RETURN_IF_NOT_OK(ConstructClusterStore());
+    RETURN_IF_NOT_OK(ConstructCoordinationBackend());
     ClusterInfo clusterInfo;
     RETURN_IF_NOT_OK(ConstructClusterInfo(clusterInfo));
     LOG(INFO) << "The msg in cluster info: " << clusterInfo.ToString();
@@ -1766,8 +1768,8 @@ Status WorkerOCServer::PreShutDown()
             if (!scaleIn) {
                 return checkAsyncTasksDone_.load();
             }
-            return checkAsyncTasksDone_.load() && allClientsExited_.load() &&
-                   clusterManager_->CheckVoluntaryScaleDown();
+            return checkAsyncTasksDone_.load() && allClientsExited_.load()
+                   && clusterManager_->CheckVoluntaryScaleDown();
         };
         while (!waitFlag) {
             if (scaleIn) {

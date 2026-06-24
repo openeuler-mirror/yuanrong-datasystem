@@ -6,7 +6,7 @@ set(WORKER_HASH_RING_DEPEND_LIBS
         common_log
         common_etcd
         common_rocksdb
-        cluster_store
+        coordination_backend
         posix_protos
         worker_health_check
         )

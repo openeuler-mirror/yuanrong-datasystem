@@ -76,9 +76,12 @@ Use this file as the cross-module map. Use the detailed package for source-level
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h` defines the worker-side watch RPC service skeleton and inherits from generated `CoordinatorWatchService`.
   - `src/datasystem/common/coordinator/coordinator_service_proxy.h` defines the shared `ICoordinatorServiceProxy` interface and `CoordinatorServiceProxyImpl` skeleton for worker and tests.
   - `src/datasystem/common/coordinator` currently contains only the shared coordinator service proxy skeleton and key/value entry helpers for this phase.
-  - `src/datasystem/worker/cluster_manager/cluster_store.h` defines the worker-side cluster metadata store abstraction used by `ClusterManager` and hash-ring code; `EtcdClusterStore` adapts the current `EtcdStore` backend into that abstraction.
+  - `src/datasystem/topology/coordination_backend/coordination_backend.h` defines the topology coordination backend
+    abstraction used by `ClusterManager` and hash-ring code; `EtcdCoordinationBackend` adapts the current `EtcdStore`
+    backend into that abstraction.
 - Current limitation:
-  - this is not yet a supported runtime metadata mode; startup still constructs an `EtcdClusterStore` adapter over ETCD/Metastore until a coordinator-backed adapter is implemented.
+  - this is not yet a supported runtime metadata mode; startup still constructs an `EtcdCoordinationBackend` adapter over
+    ETCD/Metastore until a coordinator-backed adapter is implemented.
 
 ### ETCD mode
 
@@ -121,8 +124,10 @@ Use this file as the cross-module map. Use the detailed package for source-level
 - Verified from `cluster_manager.cpp`:
   - cluster manager owns worker-address keyed node state and subscribes to several hash-ring and cluster-related events
   - cross-cluster/cross-AZ read-ring and worker-access paths have been removed; routing is local-cluster only
-  - it now receives an `IClusterStore` instead of constructing an ETCD adapter internally; current worker startup passes an `EtcdClusterStore` adapter while keeping the `ClusterManager` class name unchanged
-  - hash-ring and read-ring construction now use the same `IClusterStore` abstraction, so ETCD-specific KV/CAS/watch calls are localized behind the store adapter boundary for this phase
+  - it now receives an `ICoordinationBackend` instead of constructing an ETCD adapter internally; current worker startup
+    passes an `EtcdCoordinationBackend` adapter while keeping the `ClusterManager` class name unchanged
+  - hash-ring and read-ring construction now use the same `ICoordinationBackend` abstraction, so ETCD-specific
+    KV/CAS/watch calls are localized behind the backend adapter boundary for this phase
   - shutdown removes subscribers and stops background threads cleanly
   - `ClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
     `WaitWorkerReadyIfNeed()` before processing node utility events
