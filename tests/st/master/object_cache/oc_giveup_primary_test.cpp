@@ -31,6 +31,7 @@
 
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"

@@ -26,6 +26,7 @@
 
 #include "common.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/wait_post.h"

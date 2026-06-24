@@ -26,6 +26,7 @@
 #include "../../../common/binmock/binmock.h"
 #include "ut/common.h"
 #include "datasystem/common/constants.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/master/resource_manager.h"

@@ -27,6 +27,7 @@
 #include "datasystem/client/mmap/shm_mmap_table_entry.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/net_util.h"

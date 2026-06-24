@@ -24,6 +24,7 @@
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 

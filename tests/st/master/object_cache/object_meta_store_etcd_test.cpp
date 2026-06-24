@@ -31,6 +31,7 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/random_data.h"

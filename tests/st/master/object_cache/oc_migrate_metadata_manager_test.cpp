@@ -28,6 +28,7 @@
 
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/util/file_util.h"

@@ -24,6 +24,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/client/mmap/embedded_mmap_table.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/perf/perf_manager.h"
