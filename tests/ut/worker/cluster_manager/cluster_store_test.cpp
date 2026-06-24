@@ -1,4 +1,4 @@
-#include "datasystem/worker/cluster_manager/cluster_store.h"
+#include "datasystem/common/cluster/cluster_store.h"
 
 #include <gtest/gtest.h>
 

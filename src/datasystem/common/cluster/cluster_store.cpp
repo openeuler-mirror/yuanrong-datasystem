@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Cluster metadata store abstraction used by ClusterManager.
+ * Description: Cluster metadata store abstraction.
  */
-#include "datasystem/worker/cluster_manager/cluster_store.h"
+#include "datasystem/common/cluster/cluster_store.h"
 
 #include <sstream>
 #include <utility>

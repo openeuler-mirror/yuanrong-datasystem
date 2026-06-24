@@ -38,7 +38,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/hash_ring.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_store.h"
+#include "datasystem/common/cluster/cluster_store.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 namespace datasystem {

@@ -15,10 +15,10 @@
  */
 
 /**
- * Description: Cluster metadata store abstraction used by ClusterManager.
+ * Description: Cluster metadata store abstraction.
  */
-#ifndef DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_STORE_H
-#define DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_STORE_H
+#ifndef DATASYSTEM_COMMON_CLUSTER_CLUSTER_STORE_H
+#define DATASYSTEM_COMMON_CLUSTER_CLUSTER_STORE_H
 
 #include <cstdint>
 #include <functional>
@@ -111,4 +111,4 @@ private:
     EtcdStore *etcdStore_;
 };
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_STORE_H
+#endif  // DATASYSTEM_COMMON_CLUSTER_CLUSTER_STORE_H

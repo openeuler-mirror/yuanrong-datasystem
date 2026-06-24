@@ -1,0 +1,17 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "cluster_store",
+    srcs = [
+        "cluster_store.cpp",
+    ],
+    hdrs = [
+        "cluster_store.h",
+    ],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)

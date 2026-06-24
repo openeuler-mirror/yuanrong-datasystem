@@ -23,20 +23,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "cluster_store",
-    srcs = [
-        "cluster_store.cpp",
-    ],
-    hdrs = [
-        "cluster_store.h",
-    ],
-    deps = [
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
     name = "cluster_manager_header",
     hdrs = [
         "cluster_manager.h",
@@ -47,7 +33,7 @@ ds_cc_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log",
-        "//src/datasystem/worker/cluster_manager:cluster_store",
+        "//src/datasystem/common/cluster:cluster_store",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
@@ -101,7 +87,7 @@ ds_cc_library(
         "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/master/object_cache/store:object_meta_store",
         "//src/datasystem/worker:cluster_event_type",
-        "//src/datasystem/worker/cluster_manager:cluster_store",
+        "//src/datasystem/common/cluster:cluster_store",
         "//src/datasystem/worker:worker_update_flag_check",
         "//src/datasystem/worker/cluster_manager:worker_health_check",
         "//src/datasystem/worker/hash_ring",
