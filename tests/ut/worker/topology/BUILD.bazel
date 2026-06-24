@@ -1,0 +1,16 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "placement_runtime_test",
+    srcs = ["placement_runtime_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/worker/topology:worker_topology_membership",
+        "//src/datasystem/worker/topology:worker_topology_routing",
+        "//src/datasystem/worker/topology:worker_topology_runtime",
+        "//src/datasystem/worker:worker_oc_server",
+        "//tests/ut:ut_common",
+    ],
+)
