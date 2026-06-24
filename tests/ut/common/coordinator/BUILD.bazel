@@ -1,0 +1,21 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "coordinator_store_test",
+    srcs = ["coordinator_store_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_store_perf_test",
+    srcs = ["coordinator_store_perf_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//tests/ut:ut_common",
+    ],
+)
