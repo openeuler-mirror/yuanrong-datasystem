@@ -60,7 +60,6 @@
 #include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/worker_stream.brpc.pb.h"
-#include "datasystem/protos/generic_service.brpc.pb.h"
 #include "datasystem/worker/worker_service_impl.h"
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
 #ifdef WITH_TESTS
