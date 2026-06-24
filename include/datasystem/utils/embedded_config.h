@@ -238,7 +238,7 @@ public:
     EmbeddedConfig &EnableRedirect(bool enable);
 
     /**
-     * @brief Enable data replication across zones.
+     * @brief Enable experimental local data replica cache after remote get.
      * @param[in] enable Equivalent to flag enable_data_replication.
      * @return Reference to self for chaining.
      */

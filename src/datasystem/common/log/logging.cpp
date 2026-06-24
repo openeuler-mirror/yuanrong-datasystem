@@ -96,7 +96,7 @@ DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of as
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
                "log files.");
-DS_DEFINE_bool(enable_perf_trace_log, DEFAULT_ENABLE_PERF_TRACE_LOG,
+DS_DEFINE_bool(enable_perf_trace_log, GetBoolFromEnv(PERF_TRACE_LOG_ENV.c_str(), DEFAULT_ENABLE_PERF_TRACE_LOG),
                "Enable perf log output, When true always output perf related log.");
 
 DS_DEFINE_double_dynamic(request_sample_rate, 1.0,

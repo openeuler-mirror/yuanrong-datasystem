@@ -228,7 +228,7 @@ global:
 | global.metadata.rocksdbStoreDir | string | `"/home/jd/kvcache/rocksdb"` | 配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中 |
 | global.metadata.rocksdbWriteMode | string | `none` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
 | global.metadata.enableRedirect | bool | `false` | 是否开启元数据持久化目录重定向，如果开启，元数据将被持久化到指定的目录中 |
-| global.metadata.enableDataReplication | bool | `false` | 是否开启元数据数据复制，如果开启，元数据将被复制到指定的目录中 |
+| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 | global.metadata.clusterName | string | `AZ1` | 配置ETCD表前缀，值只能包含英文字母（a-zA-Z）和数字（0-9）,用于逻辑隔离集群 |
 
 **样例**：
@@ -238,7 +238,7 @@ global:
     rocksdbStoreDir: /home/jd/kvcache/rocksdb
     rocksdbWriteMode: "none"
     enableRedirect: false
-    enableDataReplication: false
+    enableDataReplication: true
     clusterName: "AZ1"
 ```
 
