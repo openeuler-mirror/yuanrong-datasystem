@@ -633,7 +633,7 @@
     },
     "enable_data_replication": {
         "value": "true",
-        "description": "Allow data's replica to be cached locally"
+        "description": "Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered in metadata. This is only for hot-replica performance optimization; it is not a data reliability mechanism and does not guarantee data reliability or availability."
     },
     "enable_redirect": {
         "value": "true",

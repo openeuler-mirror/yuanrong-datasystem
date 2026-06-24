@@ -280,7 +280,8 @@ global:
     enableRedirect: "true"
     # Whether to recover worker metadata to master during worker restart cleanup, default is false
     enableMetadataRecovery: "false"
-    # Allow local data replica cache; mainly for performance validation, keep enabled unless needed.
+    # Experimental parameter. Allow data read from a remote worker to be cached locally as a hot replica and registered
+    # in metadata. This is only for hot-replica performance optimization, not a data reliability mechanism.
     enableDataReplication: "true"
 
   rpc:

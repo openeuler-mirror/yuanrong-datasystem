@@ -39,6 +39,7 @@ static const std::string LOG_DIR_ENV = "DATASYSTEM_CLIENT_LOG_DIR";
 static const std::string MAX_LOG_SIZE_ENV = "DATASYSTEM_CLIENT_MAX_LOG_SIZE";
 static const std::string MAX_LOG_FILE_NUM_ENV = "DATASYSTEM_MAX_LOG_FILE_NUM";
 static const std::string LOG_COMPRESS_ENV = "DATASYSTEM_LOG_COMPRESS";
+static const std::string PERF_TRACE_LOG_ENV = "DATASYSTEM_PERF_TRACE_LOG";
 static const std::string LOG_RETENTION_DAY_ENV = "DATASYSTEM_LOG_RETENTION_DAY";
 static const std::string DEFAULT_LOG_DIR = "~/datasystem/logs";
 static const std::string LOG_TO_STDERR_ENV = "DATASYSTEM_LOG_TO_STDERR";
