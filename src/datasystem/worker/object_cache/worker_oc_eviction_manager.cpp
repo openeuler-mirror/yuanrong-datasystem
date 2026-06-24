@@ -43,6 +43,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -1056,6 +1057,7 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
     }
     master::DeleteAllCopyMetaRspPb rsp;
     reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
+    ApiDeadline::Instance().Reset();
     Raii resetTimeout([] { reqTimeoutDuration.Reset(); });
     RETURN_IF_NOT_OK(workerMasterApi->DeleteAllCopyMeta(req, rsp));
     return CollectDeleteAllCopyMetaResult(rsp, failedKeys);

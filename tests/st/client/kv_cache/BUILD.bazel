@@ -102,7 +102,16 @@ ds_cc_test(
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/util:file_util",
-        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:random_data",
+        "//src/datasystem/common/util:timer",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_timeout_test",
+    srcs = ["kv_client_timeout_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
         "//src/datasystem/common/util:timer",
     ],
 )

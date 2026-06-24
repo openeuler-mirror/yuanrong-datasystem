@@ -885,7 +885,7 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
 TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client);
+    InitTestKVClient(0, client, 60000, false, false, 3000);
     std::string objectKey1 = NewObjectKey();
 
     uint64_t size = 20 * 1024 * 1024;
@@ -897,7 +897,6 @@ TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
 
     DS_ASSERT_OK(client->Set(objectKey1, data));
 
-    DS_ASSERT_OK(inject::Set("ClientWorkerApi.Get.retryTimeout", "1*call(3000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Get.asyncGetStart", "1*call(2000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Get.beforeReturn", "1*sleep(4000)"));
     std::vector<std::string> dataList;

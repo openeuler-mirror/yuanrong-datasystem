@@ -23,11 +23,30 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "api_deadline_test",
+    srcs = ["api_deadline_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_test(
+    name = "network_latency_estimator_test",
+    srcs = ["network_latency_estimator_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:network_latency_estimator",
+    ],
+)
+
+ds_cc_test(
     name = "zmq_trace_sampling_meta_test",
     srcs = ["zmq_trace_sampling_meta_test.cpp"],
     deps = [
-        "//src/datasystem/common/rpc/zmq:zmq_common",
         "//src/datasystem/common/log:log_sampler",
+        "//src/datasystem/common/rpc/zmq:zmq_common",
         "//tests/ut:ut_common",
     ],
 )

@@ -1234,6 +1234,25 @@ private:
                          const std::shared_ptr<IClientWorkerApi> &workerApi, int existence);
 
     /**
+     * @brief Mmap-lookup of a shared-memory object, bounded by the current API deadline.
+     * @param[in] shmBuf The shared-memory unit info.
+     * @param[in] size Size in bytes to look up.
+     * @return Status of the call.
+     */
+
+    Status TimedMmapLookupWithDeadline(const std::shared_ptr<ShmUnitInfo> &shmBuf, uint64_t size);
+    /**
+     * @brief Copy object data into a buffer, bounded by the current API deadline.
+     * @param[in] buffer The destination buffer.
+     * @param[in] data The source data pointer.
+     * @param[in] size Size in bytes to copy.
+     * @param[in] traceEnabled Whether to record trace timing.
+     * @return Status of the call.
+     */
+    Status TimedMemoryCopyWithDeadline(const std::shared_ptr<Buffer> &buffer, const uint8_t *data, uint64_t size,
+                                       bool traceEnabled);
+
+    /**
      * @brief construcs object key with tenant id
      * @param[in] objKey object key
      * @return std::string object key with tenant id
@@ -1264,6 +1283,25 @@ private:
                                     const std::vector<StringView> &deduplicateVals, const MSetParam &param,
                                     const std::shared_ptr<IClientWorkerApi> &workerApi,
                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    /**
+     * @brief Memory copy with deadline check and slow-path logging.
+     * @param[in] isParallel Whether to copy in parallel.
+     * @param[in] keys The object keys.
+     * @param[in] vals The object values.
+     * @param[in] creatParam The create parameters.
+     * @param[in,out] bufferList The buffer list.
+     * @param[in,out] bufferInfoList The buffer info list.
+     * @param[in] dataSizeSum The total data size.
+     * @param[out] requestTransportKind The transport kind used.
+     * @return Status of the call.
+     */
+    Status MemoryCopyParallelWithDeadline(bool isParallel, const std::vector<std::string> &keys,
+                                          const std::vector<StringView> &vals, const FullParam &creatParam,
+                                          std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                          std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                                          uint64_t dataSizeSum, AccessTransportKind *requestTransportKind);
+
     /**
      * @brief Muti create buffer parallel
      * @param[in] skipCheckExistence is skip check existence

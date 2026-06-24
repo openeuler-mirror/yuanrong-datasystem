@@ -39,6 +39,7 @@
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/timeout_duration.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
@@ -51,37 +52,33 @@ namespace datasystem {
 namespace worker {
 
 static constexpr int64_t WORKER_ADD_MILLISECOND = 5 * 1000;
-static constexpr int64_t WORKER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
-static constexpr double WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
 static constexpr int64_t RETRY_WAIT_MAX_TIME_MS = 2;
 static constexpr int64_t RESOURCE_REPORT_RPC_TIMEOUT_MS = 3 * 1000;
 
-#define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                               \
-    do {                                                                                       \
-        int64_t remainingTime_ = timeoutDuration_.CalcRemainingTime();                         \
-        CHECK_FAIL_RETURN_STATUS(remainingTime_ > 0, K_RPC_DEADLINE_EXCEEDED,                  \
-                                 FormatString("Request timeout (%lld ms).", -remainingTime_)); \
-        request_.set_timeout(WorkerGetRequestTimeout(remainingTime_));                         \
-        opts_.SetTimeout(remainingTime_);                                                      \
+#define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                              \
+    do {                                                                                      \
+        int64_t remainingUs_ = (timeoutDuration_).CalcRemainingAfterDeductionUs();            \
+        CHECK_FAIL_RETURN_STATUS(remainingUs_ > 0, K_RPC_DEADLINE_EXCEEDED,                   \
+                                 FormatString("Request timeout, remaining %ld us.",           \
+                                              (timeoutDuration_).CalcRealRemainingTimeUs())); \
+        int64_t remainingMs_ = TimeoutDuration::CeilUsToMs(remainingUs_);                     \
+        (request_).set_timeout(TimeoutDuration::WorkerGetRequestTimeout(remainingMs_));       \
+        (opts_).SetTimeout(remainingMs_);                                                     \
     } while (false)
 
-#define CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(method_, timeoutDuration_, request_, opts_, src_, dst_)             \
-    do {                                                                                                       \
-        int64_t remainingTime_ = timeoutDuration_.CalcRemainingTime();                                         \
-        if (remainingTime_ <= 0) {                                                                             \
-            return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,                             \
-                                      FormatString("Request timeout (%lld ms).", -remainingTime_)),             \
-                               method_, src_, dst_);                                                           \
-        }                                                                                                      \
-        request_.set_timeout(WorkerGetRequestTimeout(remainingTime_));                                         \
-        opts_.SetTimeout(remainingTime_);                                                                      \
+#define CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(method_, timeoutDuration_, request_, opts_, src_, dst_)           \
+    do {                                                                                                      \
+        int64_t remainingUs_ = (timeoutDuration_).CalcRemainingAfterDeductionUs();                            \
+        if (remainingUs_ <= 0) {                                                                              \
+            return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,                            \
+                                      FormatString("Request timeout, remaining %ld us.",                      \
+                                                   (timeoutDuration_).CalcRealRemainingTimeUs())),            \
+                               method_, src_, dst_);                                                          \
+        }                                                                                                     \
+        int64_t remainingMs_ = TimeoutDuration::CeilUsToMs(remainingUs_);                                     \
+        (request_).set_timeout(TimeoutDuration::WorkerGetRequestTimeout(remainingMs_));                       \
+        (opts_).SetTimeout(remainingMs_);                                                                     \
     } while (false)
-
-inline int64_t WorkerGetRequestTimeout(int32_t timeout)
-{
-    return std::max(TimeoutDuration::ScaleTimeoutMs(timeout, WORKER_TIMEOUT_DESCEND_FACTOR),
-                    timeout - WORKER_TIMEOUT_MINUS_MILLISECOND);
-}
 
 // Build a RemoteAsyncRpcRequest, wire up the four callbacks, kick off AsyncWrite,
 // and register it with the manager. Shared by the P2P-style async RPC entrypoints
@@ -206,7 +203,8 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
     RpcOptions opts;
     // seal operation can't been retry.
     if (request.meta().life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
-        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG("CreateMeta", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
+        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
+            "CreateMeta", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
         RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
         Timer sealTimer;
         Status rc = (brpcSession_ ? brpcSession_->CreateMeta(opts, request, response)
@@ -241,9 +239,11 @@ Status WorkerRemoteMasterOCApi::ReportResource(master::ResourceReportReqPb &requ
                                                master::ResourceReportRspPb &response)
 {
     reqTimeoutDuration.Init();
+    ApiDeadline::Instance().Reset();
     RpcOptions opts;
-    int64_t timeoutMs =
-        std::min(WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()), RESOURCE_REPORT_RPC_TIMEOUT_MS);
+    int64_t timeoutMs = std::min(
+        TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()),
+        RESOURCE_REPORT_RPC_TIMEOUT_MS);
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
@@ -267,8 +267,8 @@ Status WorkerRemoteMasterOCApi::ReportRebalanceResult(master::ReportRebalanceRes
 {
     reqTimeoutDuration.Init();
     RpcOptions opts;
-    int64_t timeoutMs =
-        std::min(WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()), RESOURCE_REPORT_RPC_TIMEOUT_MS);
+    int64_t timeoutMs = std::min(TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()),
+                                 RESOURCE_REPORT_RPC_TIMEOUT_MS);
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
@@ -315,7 +315,7 @@ Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &requ
                                                master::CreateCopyMetaRspPb &response)
 {
     RpcOptions opts;
-    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
@@ -340,7 +340,7 @@ Status WorkerRemoteMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaR
                                                    master::CreateMultiCopyMetaRspPb &response)
 {
     RpcOptions opts;
-    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
@@ -375,7 +375,7 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
     }
     request.set_sub_timeout(std::min<int64_t>(subTimeout, remainingTime));
     RpcOptions opts;
-    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     Status status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response, &payloads](int32_t) {
@@ -399,7 +399,7 @@ Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, mas
 {
     RpcOptions opts;
 
-    int64_t timeoutMs = WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
+    int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     auto status = RetryOnErrorRepent(
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
@@ -446,7 +446,8 @@ Status WorkerRemoteMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, mas
     RpcOptions opts;
     // seal operation can't been retry.
     if (request.life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
-        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG("UpdateMeta", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
+        CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
+            "UpdateMeta", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
         RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
         Timer sealTimer;
         Status rc = (brpcSession_ ? brpcSession_->UpdateMeta(opts, request, response)
@@ -502,7 +503,8 @@ Status WorkerRemoteMasterOCApi::DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb
 Status WorkerRemoteMasterOCApi::ReleaseGRefs(master::ReleaseGRefsReqPb &request, master::ReleaseGRefsRspPb &response)
 {
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG("ReleaseGRefs", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
+    CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
+        "ReleaseGRefs", reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     auto rc = (brpcSession_ ? brpcSession_->ReleaseGRefs(opts, request, response)
                               : rpcSession_->ReleaseGRefs(opts, request, response));
@@ -1187,8 +1189,8 @@ Status WorkerLocalMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint64
     int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
-    request.set_sub_timeout(
-        std::min<int64_t>(subTimeout, WorkerGetRequestTimeout(reqTimeoutDuration.CalcRemainingTime())));
+    request.set_sub_timeout(std::min<int64_t>(
+        subTimeout, TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRemainingTime())));
     request.set_timeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     Status rc = masterOC_->QueryMeta(request, response, payloads);

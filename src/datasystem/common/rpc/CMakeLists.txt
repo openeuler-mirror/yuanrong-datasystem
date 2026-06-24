@@ -30,6 +30,8 @@ target_link_libraries(rpc_plugin PRIVATE rpc_generator)
 
 # zmq server library
 set(COMMON_RPC_ZMQ_SRCS
+        api_deadline.cpp
+        network_latency_estimator.cpp
         rpc_auth_key_manager.cpp
         rpc_channel.cpp
         rpc_message.cpp

@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -90,6 +91,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
 Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                                          std::vector<RpcMessage> &payloads, const ClientKey &clientId)
 {
+    INJECT_POINT("worker.before_CreateMultiMetaToMaster");
     PerfPoint pointAll(PerfKey::WORKER_MULTI_PUBLISH_TOTAL);
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_INPUT_CHECK);
     // Add namespace for objectKey.
@@ -285,22 +287,43 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
     return Status::OK();
 }
 
-void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
-                                                              std::vector<master::CreateMultiMetaReqPb> &reqs,
-                                                              std::vector<CreateMultiMetaResult> &respRes)
+WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPublishImpl::BuildCreateMultiMetaResult(
+    const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::CreateMultiMetaReqPb &req,
+    const MetaAddrInfo &masterAddrInfo)
+{
+    CreateMultiMetaRspPb rsp;
+    PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
+    auto rc = RetryCreateMultiMeta(api, req, rsp);
+    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        rsp.mutable_last_rc()->set_error_code(rc.GetCode());
+        rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+        for (auto &meta : *(req.mutable_metas())) {
+            rsp.add_failed_object_keys(meta.object_key());
+        }
+    }
+    return CreateMultiMetaResult{ rc, rsp, masterAddrInfo };
+}
+
+Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+                                                                std::vector<master::CreateMultiMetaReqPb> &reqs,
+                                                                std::vector<CreateMultiMetaResult> &respRes)
 {
     if (masterAddrs.empty()) {
-        return;
+        return Status::OK();
     }
-    int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    if (remainingUs <= 0) {
+        return Status(K_RPC_DEADLINE_EXCEEDED,
+                      FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
+    }
+    auto dispatchTime = std::chrono::steady_clock::now();
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMultiMetaResult>> futures;
-    Timer timer;
     CreateMultiMetaResult lastRc;
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddrInfo = masterAddrs[i];
         auto &req = reqs[i];
-        auto func = [this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
+        auto func = [this, &masterAddrInfo, &req, remainingUs, dispatchTime, &traceId] {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
             const auto &masterAddr = masterAddrInfo.GetAddress();
             std::shared_ptr<WorkerMasterOCApi> api;
@@ -308,27 +331,16 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
             if (rc.IsError()) {
                 return CreateMultiMetaResult{ rc, {}, masterAddrInfo };
             }
-            int64_t elapsed = timer.ElapsedMilliSecond();
-            LOG_IF(WARNING, elapsed > THREAD_WAIT_TIME_MS) << FormatString(
-                "Create meta threads statistics: %s, elapsed ms: %lld", threadPool_->GetStatistics(), elapsed);
-            if (elapsed >= timeout) {
-                return CreateMultiMetaResult{ Status{ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" }, {}, masterAddrInfo };
+            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+            if (initRc.IsError()) {
+                return CreateMultiMetaResult{ initRc, {}, masterAddrInfo };
             }
-            reqTimeoutDuration.Init(timeout - elapsed);
-            CreateMultiMetaRspPb rsp;
-            PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
-            rc = RetryCreateMultiMeta(api, req, rsp);
-            if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-                rsp.mutable_last_rc()->set_error_code(rc.GetCode());
-                rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
-                for (auto &meta : *(req.mutable_metas())) {
-                    rsp.add_failed_object_keys(meta.object_key());
-                }
-            }
-            return CreateMultiMetaResult{ rc, rsp, masterAddrInfo };
+            return BuildCreateMultiMetaResult(api, req, masterAddrInfo);
         };
         if (i == masterAddrs.size() - 1) {
             // using current thread handle the last task.
+            ApiDeadline::Instance().Push();
+            Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
             lastRc = func();
         } else {
             futures.emplace_back(threadPool_->Submit(std::move(func)));
@@ -339,6 +351,7 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
         respRes.emplace_back(future.get());
     }
     respRes.emplace_back(lastRc);
+    return Status::OK();
 }
 
 Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<WorkerMasterOCApi> api,
@@ -387,7 +400,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_PARALLEL);
     std::vector<CreateMultiMetaResult> respRes;
     respRes.reserve(createReqs.size());
-    CreateMultiMetaParallel(addrs, createReqs, respRes);
+    RETURN_IF_NOT_OK(CreateMultiMetaParallel(addrs, createReqs, respRes));
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_FILL_RSP);
     CHECK_FAIL_RETURN_STATUS(
         respRes.size() == createReqs.size(), K_RUNTIME_ERROR,

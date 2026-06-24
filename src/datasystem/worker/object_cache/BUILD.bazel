@@ -378,6 +378,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_server_stream_base",
         "//src/datasystem/common/rpc:rpc_stub",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/common/util:status_helper",

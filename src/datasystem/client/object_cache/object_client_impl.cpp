@@ -69,6 +69,8 @@
 #ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
+#include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -2024,6 +2026,7 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "The objectKey is empty");
     RETURN_IF_NOT_OK(CheckValidObjectKey(objectKey));
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, K_INVALID, "The dataSize value should be bigger than zero.");
@@ -2214,6 +2217,7 @@ void ObjectClientImpl::BatchReleaseBufferPtr(const std::vector<Buffer *> &buffer
 
 void ObjectClientImpl::BatchDecreaseRefCnt(const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos)
 {
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     auto decreaseRefCnt = [this](const std::vector<std::pair<ShmKey, std::uint32_t>> &shmInfos) {
         std::vector<ShmKey> decreaseShms;
         for (auto &info : shmInfos) {
@@ -2246,10 +2250,22 @@ void ObjectClientImpl::DecreaseReferenceCnt(const ShmKey &shmId, bool isShm, uin
         METRIC_INC(metrics::KvMetricId::CLIENT_DEC_REF_SKIPPED_TOTAL);
         return;
     }
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    int64_t apiRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    auto dispatchTime = std::chrono::steady_clock::now();
     bool async = true;
     INJECT_POINT("client.DecreaseReferenceCnt", [&async](bool value) { async = value; });
     if (async) {
-        asyncReleasePool_->Execute([this, shmId, isShm, version] {
+        asyncReleasePool_->Execute([this, shmId, isShm, version, apiRemainingUs, dispatchTime] {
+            ApiDeadline::Instance().Push();
+            Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
+            auto queueDelayUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - dispatchTime)
+                                    .count();
+            int64_t actualRemainingUs = apiRemainingUs - queueDelayUs;
+            if (actualRemainingUs > 0) {
+                ApiDeadline::Instance().InitUs(actualRemainingUs);
+            }
             LOG_IF_ERROR(DecreaseReferenceCntImpl(shmId, isShm, version), "DecreaseReferenceCntImpl failed");
         });
     } else {
@@ -2317,6 +2333,7 @@ Status ObjectClientImpl::Seal(const std::shared_ptr<ObjectBufferInfo> &bufferInf
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     PerfPoint sealPoint(PerfKey::CLIENT_SEAL_OBJECT);
     RETURN_IF_NOT_OK(CheckConnection());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(nestedObjectKeys, true));
@@ -2342,6 +2359,7 @@ Status ObjectClientImpl::Publish(const std::shared_ptr<ObjectBufferInfo> &buffer
 {
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     PerfPoint perfPoint(PerfKey::CLIENT_PUBLISH_OBJECT);
@@ -2394,6 +2412,39 @@ Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
     return Status::OK();
 }
 
+Status ObjectClientImpl::TimedMmapLookupWithDeadline(const std::shared_ptr<ShmUnitInfo> &shmBuf, uint64_t size)
+{
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+    Timer mmapTimer;
+    auto mmapRc = mmapManager_->LookupUnitsAndMmapFd("", shmBuf);
+    int64_t mmapCostUs = mmapTimer.ElapsedMicroSecond();
+    int64_t mmapRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    SLOW_LOG_IF_OR_VLOG(INFO, mmapCostUs >= TimeoutDuration::SLOW_PATH_LOG_THRESHOLD_US || mmapRc.IsError(), 1,
+        FormatString("[Set] phase=mmap costUs=%lld remainingUs=%lld size=%zu rc=%s",
+                     mmapCostUs, mmapRemainingUs, size, mmapRc.ToString()));
+    return mmapRc;
+}
+
+Status ObjectClientImpl::TimedMemoryCopyWithDeadline(const std::shared_ptr<Buffer> &buffer, const uint8_t *data,
+                                                     uint64_t size, bool traceEnabled)
+{
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_MEMORY_COPY_START);
+    }
+    Timer copyTimer;
+    // Copy user data into the shared memory buffer.
+    // no need call WLatch, the other thread cannot change before publish.
+    auto copyRc = buffer->MemoryCopy(data, size);
+    int64_t copyCostUs = copyTimer.ElapsedMicroSecond();
+    int64_t copyRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    SLOW_LOG_IF_OR_VLOG(INFO, copyCostUs >= TimeoutDuration::SLOW_PATH_LOG_THRESHOLD_US || copyRc.IsError(), 1,
+        FormatString("[Set] phase=MemoryCopy costUs=%lld remainingUs=%lld size=%zu rc=%s",
+                     copyCostUs, copyRemainingUs, size, copyRc.ToString()));
+    RETURN_IF_NOT_OK(copyRc);
+    return ApiDeadline::Instance().CheckApiDeadline();
+}
+
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                        const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                        uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
@@ -2416,7 +2467,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     std::shared_ptr<ObjectBufferInfo> objInfo = nullptr;
     std::shared_ptr<client::IMmapTableEntry> mmapEntry = nullptr;
     if (!urmaDataInfo) {
-        RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+        RETURN_IF_NOT_OK(TimedMmapLookupWithDeadline(shmBuf, size));
         mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
         CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
         objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
@@ -2431,13 +2482,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     memoryRefCount_.IncreaseRef(shmBuf->id);
     RETURN_IF_NOT_OK(Buffer::CreateBuffer(objInfo, shared_from_this(), buffer));
 
-    // Copy user data into the shared memory buffer.
-    // no need call WLatch, the other thread cannot change before publish.
-    reqTimeoutDuration.Init(requestTimeoutMs_);
-    if (traceEnabled) {
-        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_MEMORY_COPY_START);
-    }
-    RETURN_IF_NOT_OK(buffer->MemoryCopy(data, size));
+    RETURN_IF_NOT_OK(TimedMemoryCopyWithDeadline(buffer, data, size, traceEnabled));
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_MEMORY_COPY_END);
     }
@@ -2535,6 +2580,7 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
 
     Timer setTimer;
@@ -2769,10 +2815,28 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
                         .version = 0 };
 
     auto traceContext = Trace::Instance().GetContext();
-    asyncResource->rpcFuture = asyncGetRPCPool_->Submit([this, asyncResource, traceContext, workerApi]() {
+    int64_t apiRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    if (apiRemainingUs <= 0) {
+        Status rc(K_RPC_DEADLINE_EXCEEDED,
+                  FormatString("API deadline exceeded before PipelineRH2D dispatch, remaining %ld us.",
+                               apiRemainingUs));
+        asyncResource->promise.set_value({ rc, objectKeys });
+        LOG(ERROR) << rc.GetMsg();
+        return future;
+    }
+    auto dispatchTime = std::chrono::steady_clock::now();
+    asyncResource->rpcFuture = asyncGetRPCPool_->Submit(
+        [this, asyncResource, traceContext, workerApi, apiRemainingUs, dispatchTime]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
+        ApiDeadline::Instance().Push();
+        Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
         std::unique_ptr<Raii> raii = std::make_unique<Raii>([workerApi]() { workerApi->DecreaseInvokeCount(); });
-        datasystem::reqTimeoutDuration.InitWithPositiveTime(asyncResource->piplnRh2dParam.subTimeoutMs);
+        auto initRc = InitTimeoutsFromDispatch(apiRemainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            asyncResource->promise.set_value({ initRc, asyncResource->piplnRh2dParam.objectKeys });
+            LOG(ERROR) << initRc.GetMsg();
+            return initRc;
+        }
 
         // do RH2D
         GetRspPb getRsp;
@@ -2979,6 +3043,7 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     getParam.actualTransportKind = nullptr;
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
 
 #ifdef USE_URMA
     // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
@@ -2991,9 +3056,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
         getParam.ubMetaResolved = true;
-        if (metaRc.IsError()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
-        } else if (objMetas.size() != objectsNeedToGet.size()) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
+        if (objMetas.size() != objectsNeedToGet.size()) {
             LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size() << " but got "
                          << objMetas.size() << ", fallback to TCP/IP payload before get.";
             actualTransportKind = AccessTransportKind::TCP;
@@ -3724,6 +3788,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
 {
     AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "The buffer should not be empty.");
     RETURN_IF_NOT_OK(buffer->CheckDeprecated());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
@@ -3749,6 +3814,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(buffers.size()), K_INVALID,
                                          FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -3927,7 +3993,9 @@ Status ObjectClientImpl::MCreate(const std::vector<std::string> &keys, const std
     LOG(INFO) << "Begin to create multiput object." << VectorToString(keys);
     std::vector<bool> exist;
     bool skipCheckExistence = param.existence != ExistenceOpt::NX;
-    return MultiCreate(keys, sizes, param, skipCheckExistence, buffers, exist);
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    auto rc = MultiCreate(keys, sizes, param, skipCheckExistence, buffers, exist);
+    return rc;
 }
 
 Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<std::string> &keys,
@@ -3937,6 +4005,7 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
                                             AccessTransportKind *requestTransportKind)
 {
     const int sz = static_cast<int>(bufferList.size());
+    INJECT_POINT("ObjectClientImpl.MemoryCopyParallel.slow");
     std::atomic<AccessTransportKind> aggregatedTransport(AccessTransportKind::SHM);
     auto memoryCopy = [&](int start, int end) {
         for (int i = start; i < end; i++) {
@@ -3980,6 +4049,38 @@ Status ObjectClientImpl::MemoryCopyParallel(bool isParallel, const std::vector<s
     return rc;
 }
 
+Status ObjectClientImpl::MemoryCopyParallelWithDeadline(bool isParallel, const std::vector<std::string> &keys,
+                                                        const std::vector<StringView> &vals,
+                                                        const FullParam &creatParam,
+                                                        std::vector<std::shared_ptr<Buffer>> &bufferList,
+                                                        std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfoList,
+                                                        uint64_t dataSizeSum, AccessTransportKind *requestTransportKind)
+{
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+    Timer memCopyTimer;
+    auto memCopyRc =
+        MemoryCopyParallel(isParallel, keys, vals, creatParam, bufferList, bufferInfoList, requestTransportKind);
+    int64_t memCopyCostUs = memCopyTimer.ElapsedMicroSecond();
+    int64_t memCopyRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, memCopyCostUs >= TimeoutDuration::SLOW_PATH_LOG_THRESHOLD_US || memCopyRc.IsError(), 1,
+        FormatString("[MSet] phase=MemoryCopyParallel costUs=%lld remainingUs=%lld size=%zu keys=%zu rc=%s",
+                     memCopyCostUs, memCopyRemainingUs, dataSizeSum, keys.size(), memCopyRc.ToString()));
+    RETURN_IF_NOT_OK(memCopyRc);
+    return ApiDeadline::Instance().CheckApiDeadline();
+}
+
+namespace {
+void ComputeDataSizes(const std::vector<StringView> &vals, std::vector<uint64_t> &sizes, uint64_t &sum)
+{
+    sizes.reserve(vals.size());
+    for (const auto &val : vals) {
+        sizes.emplace_back(val.size());
+        sum += val.size();
+    }
+}
+}  // namespace
+
 Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string> &keys,
                                                   const std::vector<StringView> &vals,
                                                   const std::vector<std::string> &deduplicateKeys,
@@ -3998,11 +4099,7 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTICREATE);
     std::vector<uint64_t> dataSizeList;
     uint64_t dataSizeSum = 0;
-    dataSizeList.reserve(filteredValues.size());
-    for (const auto &val : filteredValues) {
-        dataSizeList.emplace_back(val.size());
-        dataSizeSum += val.size();
-    }
+    ComputeDataSizes(filteredValues, dataSizeList, dataSizeSum);
     std::vector<std::shared_ptr<Buffer>> bufferList;
     std::vector<bool> exist;
     RETURN_IF_NOT_OK(MultiCreate(filteredKeys, dataSizeList, creatParam, true, bufferList, exist));
@@ -4014,8 +4111,8 @@ Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string>
         dataSizeSum > minSizeThreshold && (dataSizeSum >= sizeThreshold || filteredKeys.size() >= countThreshold);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
     AccessTransportKind requestTransportKind = AccessTransportKind::SHM;
-    RETURN_IF_NOT_OK(MemoryCopyParallel(isParallel, filteredKeys, filteredValues, creatParam, bufferList,
-                                        bufferInfoList, &requestTransportKind));
+    RETURN_IF_NOT_OK(MemoryCopyParallelWithDeadline(isParallel, filteredKeys, filteredValues, creatParam, bufferList,
+                                                    bufferInfoList, dataSizeSum, &requestTransportKind));
     AccessTransportTracker::Record(requestTransportKind);
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
     MultiPublishRspPb rsp;
@@ -4044,9 +4141,11 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    return MSetCreateCopyAndPublish(keys, vals, deduplicateKeys, deduplicateVals, param, workerApi, outFailedKeys,
-                                    point);
+    auto rc = MSetCreateCopyAndPublish(keys, vals, deduplicateKeys, deduplicateVals, param, workerApi, outFailedKeys,
+                                       point);
+    return rc;
 }
 
 Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefixKey)
@@ -4141,6 +4240,7 @@ Status ObjectClientImpl::GetBlobsInfo(const std::string &devObjKey, int32_t time
 Status ObjectClientImpl::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
 {
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -4151,6 +4251,7 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
                                         std::vector<ObjMetaInfo> &objMetas)
 {
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= OBJ_META_MAX_SIZE_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJ_META_MAX_SIZE_LIMIT));
@@ -4631,6 +4732,7 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
 {
     PerfPoint perfPoint(PerfKey::CLIENT_EXIST);
     RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", QUERY_SIZE_OBJECT_LIMIT));

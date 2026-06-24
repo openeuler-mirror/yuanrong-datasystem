@@ -42,6 +42,7 @@
 #include "datasystem/common/rpc/zmq/zmq_constants.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
@@ -448,7 +449,7 @@ inline void UpdateMetaByThreadLocalValue(MetaPb &meta)
     meta.set_trace_id(traceID);
     meta.set_log_sample_state(GetOrCreateLogSampleState());
 
-    meta.set_timeout(reqTimeoutDuration.CalcRealRemainingTime());
+    meta.set_timeout_us(GetRemainingUsForMeta());
 }
 
 inline TraceGuard SetTraceContextFromMeta(const MetaPb &meta, bool keep = false)
