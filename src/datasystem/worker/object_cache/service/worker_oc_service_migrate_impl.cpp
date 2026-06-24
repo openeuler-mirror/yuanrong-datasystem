@@ -381,7 +381,9 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
                                                        QueryMetaMap &queryMetas,
                                                        std::unordered_set<std::string> &failedIds)
 {
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
     std::unordered_set<std::string> tmpFailedIds;
@@ -731,7 +733,9 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         (void)objectKeys.emplace(objectKey);
     }
 
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
     RedirectMap needRedirectIds;
     for (auto &item : objKeysGrpByMaster) {

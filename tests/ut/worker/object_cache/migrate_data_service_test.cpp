@@ -150,17 +150,17 @@ public:
         return metadataSize;
     }
 
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> MockGroupObjKeysByMasterHostPort(
+    ClusterManager::MetaOwnerKeyGroups MockGroupObjKeysByMasterHostPort(
         const std::unordered_set<std::string> &objectKeys)
     {
-        std::unordered_map<MetaAddrInfo, std::vector<std::string>> result;
+        ClusterManager::MetaOwnerKeyGroups result;
         MetaAddrInfo info(HostPort("127.0.0.1:18481"), "");
         std::vector<std::string> vec{ objectKeys.begin(), objectKeys.end() };
-        result.emplace(info, std::move(vec));
+        result.groups.emplace(info, std::move(vec));
         return result;
     }
 
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> MockGroupObjKeysByMasterHostPort2(
+    ClusterManager::MetaOwnerKeyGroups MockGroupObjKeysByMasterHostPort2(
         const std::unordered_set<std::string> &objectKeys);
 
     Status PureQueryMeta(const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::PureQueryMetaReqPb &req,
@@ -173,6 +173,21 @@ protected:
     WorkerRequestManager requestManager_;
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
+
+TEST(ClusterManagerMetaOwnerKeyGroupsTest, AppendFailuresToGroupDoesNotCreateEmptyGroupWithoutFailures)
+{
+    ClusterManager::MetaOwnerKeyGroups grouped;
+    grouped.AppendFailuresToGroup();
+    EXPECT_TRUE(grouped.groups.empty());
+
+    const std::string failedKey = "failed-key";
+    grouped.failures.emplace(failedKey, Status(K_NOT_FOUND, "route failed"));
+    grouped.AppendFailuresToGroup();
+    ASSERT_EQ(grouped.groups.size(), size_t(1));
+    auto iter = grouped.groups.find(MetaAddrInfo());
+    ASSERT_NE(iter, grouped.groups.end());
+    EXPECT_THAT(iter->second, ElementsAre(failedKey));
+}
 
 TEST_F(MigrateDataServiceTest, TestDiskIOError)
 {
@@ -281,9 +296,8 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
 {
     LOG(INFO) << "Test query objects meta meets rpc error";
-    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(ClusterManager::*)(
-                       const std::unordered_set<std::string> &))
-                       & ClusterManager::GroupObjKeysByMasterHostPort,
+    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups(ClusterManager::*)(
+                       const std::unordered_set<std::string> &)) & ClusterManager::GroupKeysByMetaOwner,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort));
@@ -309,23 +323,23 @@ TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
     ASSERT_EQ(rsp.success_ids_size(), expireCount);
 }
 
-std::unordered_map<MetaAddrInfo, std::vector<std::string>> MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2(
+ClusterManager::MetaOwnerKeyGroups MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2(
     const std::unordered_set<std::string> &objectKeys)
 {
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> result;
+    ClusterManager::MetaOwnerKeyGroups result;
     size_t size = objectKeys.size();
     size_t count = 0;
     size_t batch = 3;
     for (const auto &id : objectKeys) {
         if (count < size / batch) {
             MetaAddrInfo info(HostPort("127.0.0.1:18481"), "");
-            result[info].emplace_back(id);
+            result.groups[info].emplace_back(id);
         } else if (count < (size / batch * 2)) {
             MetaAddrInfo info(HostPort("127.0.0.1:18482"), "");
-            result[info].emplace_back(id);
+            result.groups[info].emplace_back(id);
         } else {
             MetaAddrInfo info(HostPort("127.0.0.1:18483"), "");
-            result[info].emplace_back(id);
+            result.groups[info].emplace_back(id);
         }
         count++;
     }
@@ -375,9 +389,8 @@ Status MigrateDataServiceTest::PureQueryMeta(const std::shared_ptr<worker::Worke
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterBasicFunction)
 {
     LOG(INFO) << "Test query meta from master basic function";
-    BINEXPECT_CALL((std::unordered_map<MetaAddrInfo, std::vector<std::string>>(ClusterManager::*)(
-                       const std::unordered_set<std::string> &))
-                       & ClusterManager::GroupObjKeysByMasterHostPort,
+    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups(ClusterManager::*)(
+                       const std::unordered_set<std::string> &)) & ClusterManager::GroupKeysByMetaOwner,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2));

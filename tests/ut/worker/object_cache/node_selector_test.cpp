@@ -35,6 +35,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
+#include "datasystem/worker/topology/routing/routing_view.h"
 #include "eviction_manager_common.h"
 
 using namespace ::testing;
@@ -69,6 +70,42 @@ public:
     using NodeSelector::totalSize_;
 };
 
+class TestClusterManager : public ClusterManager {
+public:
+    TestClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
+                       topology::ICoordinationBackend *clusterStore)
+        : ClusterManager(workerAddress, masterAddress, clusterStore, nullptr)
+    {
+    }
+
+    void PublishStandbyTopology(const std::vector<std::string> &workerAddrs)
+    {
+        auto directory = std::make_shared<topology::WorkerDirectorySnapshot>();
+        directory->version = 1;
+        directory->localWorkerId = workerAddress_.ToString();
+        directory->localAddress = workerAddress_;
+
+        topology::RoutingSnapshotFacts facts;
+        facts.workerOrder.reserve(workerAddrs.size());
+        for (const auto &workerAddr : workerAddrs) {
+            HostPort hostPort;
+            DS_ASSERT_OK(hostPort.ParseString(workerAddr));
+            directory->workers.emplace(
+                workerAddr, topology::WorkerEndpoint{ workerAddr, hostPort, topology::WorkerAvailability::READY });
+            directory->workerIdsByAddress.emplace(workerAddr, workerAddr);
+            facts.workerOrder.emplace_back(workerAddr);
+            facts.validWorkerIds.emplace(workerAddr);
+            facts.activeWorkerIds.emplace(workerAddr);
+        }
+        workerDirectory_->Publish(std::move(directory));
+
+        auto routingView = std::dynamic_pointer_cast<topology::RoutingView>(routingView_);
+        ASSERT_NE(routingView, nullptr);
+        routingView->Publish(std::make_shared<topology::RoutingSnapshot>(1, std::vector<topology::RoutingOwnerEntry>{},
+                                                                         std::move(facts)));
+    }
+};
+
 class NodeSelectorTest : public CommonTest {
 public:
     NodeSelectorTest() = default;
@@ -97,31 +134,15 @@ public:
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         etcdStore_->Init();
         clusterStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
-        clusterManager_ = new ClusterManager(localAddr_, localAddr_, clusterStore_.get(), nullptr);
+        clusterManager_ = new TestClusterManager(localAddr_, localAddr_, clusterStore_.get());
         apiManager_ = std::make_shared<WorkerMasterOcApiManager>(localAddr_, nullptr, nullptr);
         NodeSelectorHelper::Instance().Init(localAddr_.ToString(), clusterManager_, apiManager_);
     }
 
-    void MockHashRingGetStandbyWorkerByAddr(const std::queue<std::string> &queues)
+    void PublishStandbyTopology(std::vector<std::string> standbyWorkers)
     {
-        if (queues.empty()) {
-            return;
-        }
-        auto standbyWorkers = std::make_shared<std::queue<std::string>>(std::move(queues));
-        BINEXPECT_CALL(&HashRing::GetStandbyWorkerByAddr, (_, _))
-            .Times(AtLeast(1))
-            .WillRepeatedly(Invoke([this, standbyWorkers](const std::string &workerAddr, std::string &nextWorker) {
-                (void)workerAddr;
-                LOG(INFO) << "Mock HashRing GetStandbyWorkerByAddr";
-                if (!standbyWorkers->empty()) {
-                    nextWorker = standbyWorkers->front();
-                    standbyWorkers->pop();
-                    standbyWorkers->push(nextWorker);
-                } else {
-                    nextWorker = localAddr_.ToString();
-                }
-                return Status::OK();
-            }));
+        standbyWorkers.insert(standbyWorkers.begin(), localAddr_.ToString());
+        clusterManager_->PublishStandbyTopology(standbyWorkers);
     }
 
     void MockReportResource(const std::vector<NodeInfo> &nodes)
@@ -187,7 +208,7 @@ private:
     HostPort localAddr_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<topology::EtcdCoordinationBackend> clusterStore_;
-    ClusterManager *clusterManager_;
+    TestClusterManager *clusterManager_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_{ nullptr };
 };
 
@@ -313,10 +334,8 @@ TEST_F(NodeSelectorTest, TestSelectNodeStandbyWorker)
     size_t needSize = 1024;
     std::string outNode;
     MockCollectClusterInfo(nodes);
-    std::queue<std::string> standbyWorkers;
-    std::string standbyWorker = "workerAddress0";
-    standbyWorkers.push(standbyWorker);
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    std::string standbyWorker = "127.0.0.1:5556";
+    PublishStandbyTopology({ standbyWorker });
     excludeNodes.emplace(GetLocalAddrSring());
     auto rc = NodeSelectorHelper::Instance().SelectNode(excludeNodes, preferNode, needSize, outNode);
     DS_ASSERT_OK(rc);
@@ -460,13 +479,9 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorkerFirstStandby)
     // Case: The exclude nodes is empty, can get the first next worker address
     std::unordered_set<std::string> excludeNodes;
     std::string outNode;
-    std::queue<std::string> standbyWorkers;
-    std::string workerAddress0 = "workerAddress0";
-    std::string workerAddress1 = "workerAddress1";
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.emplace(GetLocalAddrSring());
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    std::string workerAddress0 = "127.0.0.1:5556";
+    std::string workerAddress1 = "127.0.0.1:5557";
+    PublishStandbyTopology({ workerAddress0, workerAddress1 });
     DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
     ASSERT_TRUE(outNode == workerAddress0);
 }
@@ -475,13 +490,10 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorkerFirstNotInExclude)
 {
     std::unordered_set<std::string> excludeNodes;
     std::string outNode;
-    std::queue<std::string> standbyWorkers;
-    std::string workerAddress0 = "workerAddress0";
-    std::string workerAddress1 = "workerAddress1";
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
+    std::string workerAddress0 = "127.0.0.1:5556";
+    std::string workerAddress1 = "127.0.0.1:5557";
     excludeNodes.emplace(workerAddress0);
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    PublishStandbyTopology({ workerAddress0, workerAddress1 });
     DS_ASSERT_OK(CallGetStandbyWorker(excludeNodes, outNode));
     ASSERT_TRUE(outNode == workerAddress1);
 }
@@ -490,18 +502,13 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorkerAllInExlcude)
 {
     std::unordered_set<std::string> excludeNodes;
     std::string outNode;
-    std::queue<std::string> standbyWorkers;
-    std::string workerAddress0 = "workerAddress0";
-    std::string workerAddress1 = "workerAddress1";
-    std::string workerAddress2 = "workerAddress2";
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.push(workerAddress2);
-    standbyWorkers.emplace(GetLocalAddrSring());
+    std::string workerAddress0 = "127.0.0.1:5556";
+    std::string workerAddress1 = "127.0.0.1:5557";
+    std::string workerAddress2 = "127.0.0.1:5558";
     excludeNodes.emplace(workerAddress0);
     excludeNodes.emplace(workerAddress1);
     excludeNodes.emplace(workerAddress2);
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    PublishStandbyTopology({ workerAddress0, workerAddress1, workerAddress2 });
     ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
     ASSERT_TRUE(outNode.empty());
 }
@@ -510,26 +517,19 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorkerPreFiveInExclude)
 {
     std::unordered_set<std::string> excludeNodes;
     std::string outNode;
-    std::queue<std::string> standbyWorkers;
-    std::string workerAddress0 = "workerAddress0";
-    std::string workerAddress1 = "workerAddress1";
-    std::string workerAddress2 = "workerAddress2";
-    std::string workerAddress3 = "workerAddress3";
-    std::string workerAddress4 = "workerAddress4";
-    std::string workerAddress5 = "workerAddress5";
-    standbyWorkers.push(workerAddress0);
-    standbyWorkers.push(workerAddress1);
-    standbyWorkers.push(workerAddress2);
-    standbyWorkers.push(workerAddress3);
-    standbyWorkers.push(workerAddress4);
-    standbyWorkers.push(workerAddress5);
-    standbyWorkers.emplace(GetLocalAddrSring());
+    std::string workerAddress0 = "127.0.0.1:5556";
+    std::string workerAddress1 = "127.0.0.1:5557";
+    std::string workerAddress2 = "127.0.0.1:5558";
+    std::string workerAddress3 = "127.0.0.1:5559";
+    std::string workerAddress4 = "127.0.0.1:5560";
+    std::string workerAddress5 = "127.0.0.1:5561";
     excludeNodes.emplace(workerAddress0);
     excludeNodes.emplace(workerAddress1);
     excludeNodes.emplace(workerAddress2);
     excludeNodes.emplace(workerAddress3);
     excludeNodes.emplace(workerAddress4);
-    MockHashRingGetStandbyWorkerByAddr(standbyWorkers);
+    PublishStandbyTopology({ workerAddress0, workerAddress1, workerAddress2, workerAddress3, workerAddress4,
+                             workerAddress5 });
     ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
     ASSERT_TRUE(outNode.empty());
 }
@@ -626,6 +626,8 @@ public:
     {
         hashRing_ = std::move(ring);
         DS_ASSERT_OK(hashRing_->InitWithoutEtcd(ringPb.SerializeAsString()));
+        routingView_ = hashRing_->GetRoutingView();
+        PublishWorkerDirectorySnapshot();
     }
 };
 

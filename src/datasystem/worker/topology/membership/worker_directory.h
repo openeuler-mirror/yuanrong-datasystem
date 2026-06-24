@@ -39,6 +39,7 @@ struct WorkerDirectorySnapshot {
     std::string localWorkerId;
     HostPort localAddress;
     std::unordered_map<std::string, WorkerEndpoint> workers;
+    std::unordered_map<std::string, std::string> workerIdsByAddress;
 };
 
 class IWorkerDirectory {
@@ -57,6 +58,14 @@ public:
     virtual Status ResolveWorker(const std::string &workerId, WorkerEndpoint &endpoint) const = 0;
 
     /**
+     * @brief Resolve a worker endpoint by worker address from the local immutable directory snapshot.
+     * @param[in] workerAddress Worker address string.
+     * @param[out] endpoint Resolved endpoint.
+     * @return K_OK if found, K_NOT_READY if directory is not published, K_NOT_FOUND if worker is absent.
+     */
+    virtual Status ResolveWorkerByAddress(const std::string &workerAddress, WorkerEndpoint &endpoint) const = 0;
+
+    /**
      * @brief Return local worker identity from the local immutable directory snapshot.
      * @param[out] endpoint Local worker endpoint.
      * @return K_OK if found, K_NOT_READY if directory is not published, K_NOT_FOUND if local worker is absent.
@@ -70,6 +79,7 @@ public:
     ~WorkerDirectory() override = default;
 
     Status ResolveWorker(const std::string &workerId, WorkerEndpoint &endpoint) const override;
+    Status ResolveWorkerByAddress(const std::string &workerAddress, WorkerEndpoint &endpoint) const override;
     Status GetLocalWorker(WorkerEndpoint &endpoint) const override;
 
     /**

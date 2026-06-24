@@ -32,6 +32,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/inject/inject_point.h"
@@ -443,8 +444,24 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
                                               TbbMetaTable::accessor &accessor)
 {
     const std::string &objectKey = newMeta.object_key();
-    ObjectMetaStore::WriteType type = WriteMode2MetaType(newMeta.config().write_mode());
     ObjectMeta metaCache;
+    RETURN_IF_NOT_OK(PersistCreatedMeta(newMeta, address, version, accessor, metaCache));
+
+    // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
+    UpdateSubscribeCache(objectKey, metaCache);
+
+    // Update nested reference count to maintain dependencies.
+    if ((ObjectLifeState(newMeta.life_state()) != ObjectLifeState::OBJECT_INVALID) && !nestedObjectKeys.empty()) {
+        RETURN_IF_NOT_OK(HandleNestedRefsOnCreate(objectKey, address, nestedObjectKeys));
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::PersistCreatedMeta(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
+                                             TbbMetaTable::accessor &accessor, ObjectMeta &metaCache)
+{
+    const std::string &objectKey = newMeta.object_key();
+    ObjectMetaStore::WriteType type = WriteMode2MetaType(newMeta.config().write_mode());
     SetMetaInfo(newMeta, address, version, metaCache);
     accessor->second = metaCache;
     // multi create meta save meta to rocksdb and etcd when commit meta.
@@ -464,44 +481,44 @@ Status OCMetadataManager::CreateMetaFirstTime(const ObjectMetaPb &newMeta, const
         return status;
     }
     accessor.release();
+    return Status::OK();
+}
 
-    // Update subscribeCache. if multiset_state == pending, create not finish, don't update subscribe.
-    UpdateSubscribeCache(objectKey, metaCache);
-
-    // Update nested reference count to maintain dependencies.
-    if ((ObjectLifeState(newMeta.life_state()) != ObjectLifeState::OBJECT_INVALID) && !nestedObjectKeys.empty()) {
-        VLOG(DEBUG_LOG_LEVEL) << datasystem::FormatString("Nested dependency set for object: %s, the nested keys: %s",
-                                                          objectKey, VectorToString(nestedObjectKeys));
-        // Store nested relationships
-        RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
-        // Increase the count for objectKeys that current object is dependent on
-        std::vector<std::string> toBeNotifiedNestedRefs;
-        HostPort masterAddr;
-        RETURN_IF_NOT_OK(masterAddr.ParseString(masterAddress_));
-        MetaAddrInfo targetMetaAddrInfo(masterAddr, dbName_);
-        for (const auto &nestedObjectKey : nestedObjectKeys) {
-            size_t shardIdx = GetShardIndex(nestedObjectKey);
-            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-            MetaAddrInfo masterAddrInfo;
-            clusterManager_->GetMetaAddress(nestedObjectKey, masterAddrInfo);
-            INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
-                return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey);
-            });
-            // Check if object to add belongs to this master and then add locally.
-            // if scale up and obj is hash to find master, need redirect will be true, if obj spilt with workerid,
-            // masterAddrInfo is master addr.
-            if (masterAddrInfo == targetMetaAddrInfo && !clusterManager_->NeedRedirect(nestedObjectKey, masterAddr)) {
-                RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey));
-            } else {
-                VLOG(1) << "nested object meta is not in local address, objectkey:" << nestedObjectKey;
-                toBeNotifiedNestedRefs.emplace_back(nestedObjectKey);
-            }
+Status OCMetadataManager::HandleNestedRefsOnCreate(const std::string &objectKey, const std::string &address,
+                                                   const std::set<ImmutableString> &nestedObjectKeys)
+{
+    VLOG(DEBUG_LOG_LEVEL) << datasystem::FormatString("Nested dependency set for object: %s, the nested keys: %s",
+                                                      objectKey, VectorToString(nestedObjectKeys));
+    // Store nested relationships
+    RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(objectKey, nestedObjectKeys));
+    // Increase the count for objectKeys that current object is dependent on
+    std::vector<std::string> toBeNotifiedNestedRefs;
+    HostPort masterAddr;
+    RETURN_IF_NOT_OK(masterAddr.ParseString(masterAddress_));
+    std::string redirectAddr;
+    MetaAddrInfo targetMetaAddrInfo(masterAddr, dbName_);
+    for (const auto &nestedObjectKey : nestedObjectKeys) {
+        size_t shardIdx = GetShardIndex(nestedObjectKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        MetaAddrInfo masterAddrInfo;
+        clusterManager_->GetMetaAddress(nestedObjectKey, masterAddrInfo);
+        INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
+            return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey);
+        });
+        // Check if object to add belongs to this master and then add locally.
+        // if scale up and obj is hash to find master, need redirect will be true, if obj spilt with workerid,
+        // masterAddrInfo is master addr.
+        if (masterAddrInfo == targetMetaAddrInfo && !clusterManager_->EvaluateRedirect(nestedObjectKey, redirectAddr)) {
+            RETURN_IF_NOT_OK(nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey));
+        } else {
+            VLOG(1) << "nested object meta is not in local address, objectkey:" << nestedObjectKey;
+            toBeNotifiedNestedRefs.emplace_back(nestedObjectKey);
         }
+    }
 
-        if (toBeNotifiedNestedRefs.size() > 0) {
-            // send notifications to all masters through sourceWorker
-            RETURN_IF_NOT_OK(notifyWorkerManager_->IncNestedRefs(address, toBeNotifiedNestedRefs));
-        }
+    if (toBeNotifiedNestedRefs.size() > 0) {
+        // send notifications to all masters through sourceWorker
+        RETURN_IF_NOT_OK(notifyWorkerManager_->IncNestedRefs(address, toBeNotifiedNestedRefs));
     }
     return Status::OK();
 }
@@ -2924,10 +2941,8 @@ bool OCMetadataManager::RedirectClientIdRef(const std::string &remoteClientId, b
         VLOG(1) << "receive redirect object: " << remoteClientId;
         return false;
     }
-    HostPort masterAddr;
-    bool redirect = clusterManager_->NeedRedirect(remoteClientId, masterAddr);
+    bool redirect = clusterManager_->EvaluateRedirect(remoteClientId, newAddr);
     if (redirect) {
-        newAddr = masterAddr.ToString();
         LOG(WARNING) << FormatString("ref need redirect, ClientId: %s, redirect address %s", remoteClientId, newAddr);
     }
     return redirect;
@@ -2940,8 +2955,7 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
         needRedirect = false;
         return;
     }
-    HostPort masterAddr;
-    needRedirect = clusterManager_->NeedRedirect(objectKey, masterAddr);
+    needRedirect = clusterManager_->EvaluateRedirect(objectKey, newAddr);
     if (!needRedirect) {
         return;
     }
@@ -2949,7 +2963,6 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
         // refs is migrating, need to wait meta migrate done
         isMoving = true;
         needRedirect = true;
-        newAddr = masterAddr.ToString();
         LOG(WARNING) << FormatString("objectKey %s ref is moving", objectKey);
         return;
     }
@@ -2957,7 +2970,6 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
         // nested ref is moving, need to wait meta migrate done
         isMoving = true;
         needRedirect = true;
-        newAddr = masterAddr.ToString();
         LOG(WARNING) << FormatString("objectKey %s ref is moving", objectKey);
         return;
     }
@@ -2969,7 +2981,6 @@ void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedire
         LOG(WARNING) << FormatString("objectKey %s ref is moved, meta is moving", objectKey);
     }
     needRedirect = true;
-    newAddr = masterAddr.ToString();
     LOG(WARNING) << FormatString("ref need redirect, objectKey: %s, redirect address %s", objectKey, newAddr);
 }
 
@@ -3932,7 +3943,7 @@ Status OCMetadataManager::ClearDataWithoutMeta(const worker::HashRange &ranges, 
     std::vector<std::string> objsMigrateFinished;
     if (!halfCompletedRanges.empty()) {
         GetMetasMatch(
-            [this, &halfCompletedRanges](const std::string &objKey) {
+            [this, halfCompletedRanges](const std::string &objKey) {
                 return clusterManager_->IsInRange(halfCompletedRanges, objKey);
             },
             objsMigrateFinished);

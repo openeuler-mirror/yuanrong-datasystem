@@ -773,12 +773,9 @@ void WorkerOCServiceImpl::GetAllObjectKeys(std::vector<std::string> &objectKeys)
 Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey,
                                                              MetaAddrInfo &metaAddrInfo) const
 {
-    HostPort result;
     CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
-    std::optional<RouteInfo> routeInfo;
-    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddressNotCheckConnection(objKey, metaAddrInfo, routeInfo));
-    return Status::OK();
+    return clusterManager_->LocateMetaOwner(objKey, false, metaAddrInfo);
 }
 
 void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const MetaAddrInfo &targetMetaAddrInfo,
@@ -1038,8 +1035,8 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
         }
     }
     if (!needDelGrefIds.empty() && FLAGS_enable_reconciliation) {
-        auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(needDelGrefIds);
-        Status result = ReconciliationDecrRef(objKeysGrpByMaster);
+        auto grouped = clusterManager_->GroupKeysByMetaOwner(needDelGrefIds);
+        Status result = ReconciliationDecrRef(grouped.groups);
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Decrease gref in master failed. Error: " + rc.ToString());
     }
     LOG(INFO) << "Reconciliation with master " << req.source_address() << " is done.";
@@ -1530,7 +1527,10 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
     PerfPoint pointMeta(PerfKey::WORKER_REMOVE_META);
 
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeysRemove);
+    std::vector<std::string> objectKeys(objectKeysRemove.begin(), objectKeysRemove.end());
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {

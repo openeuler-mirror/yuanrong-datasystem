@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,6 +44,14 @@ struct RoutingRedirectHint {
     HostPort targetAddress;
 };
 
+struct RoutingSnapshotFacts {
+    std::vector<RoutingRedirectHint> redirectHints;
+    std::vector<PlacementUnit> localOwnedRanges;
+    std::vector<std::string> workerOrder;
+    std::unordered_set<std::string> validWorkerIds;
+    std::unordered_set<std::string> activeWorkerIds;
+};
+
 class RoutingSnapshot {
 public:
     RoutingSnapshot() = default;
@@ -55,6 +65,18 @@ public:
 
     RoutingSnapshot(int64_t version, std::vector<RoutingOwnerEntry> owners, std::vector<RoutingRedirectHint> hints)
         : version_(version), sortedOwners_(std::move(owners)), redirectHints_(std::move(hints))
+    {
+        Sort();
+    }
+
+    RoutingSnapshot(int64_t version, std::vector<RoutingOwnerEntry> owners, RoutingSnapshotFacts facts)
+        : version_(version),
+          sortedOwners_(std::move(owners)),
+          redirectHints_(std::move(facts.redirectHints)),
+          localOwnedRanges_(std::move(facts.localOwnedRanges)),
+          workerOrder_(std::move(facts.workerOrder)),
+          validWorkerIds_(std::move(facts.validWorkerIds)),
+          activeWorkerIds_(std::move(facts.activeWorkerIds))
     {
         Sort();
     }
@@ -129,6 +151,64 @@ public:
         return redirectHints_;
     }
 
+    /**
+     * @brief Return local worker owned hash ranges.
+     * @return Local owned hash ranges.
+     */
+    const std::vector<PlacementUnit> &LocalOwnedRanges() const
+    {
+        return localOwnedRanges_;
+    }
+
+    /**
+     * @brief Return valid worker ids in the current topology.
+     * @return Valid worker ids.
+     */
+    const std::unordered_set<std::string> &ValidWorkerIds() const
+    {
+        return validWorkerIds_;
+    }
+
+    /**
+     * @brief Return active worker ids in the current topology.
+     * @return Active worker ids.
+     */
+    const std::unordered_set<std::string> &ActiveWorkerIds() const
+    {
+        return activeWorkerIds_;
+    }
+
+    /**
+     * @brief Return worker ids in standby lookup order.
+     * @return Ordered worker ids.
+     */
+    const std::vector<std::string> &WorkerOrder() const
+    {
+        return workerOrder_;
+    }
+
+    /**
+     * @brief Return the next worker id after the input worker id in topology order.
+     * @param[in] workerId Current worker id.
+     * @param[out] nextWorkerId Next worker id.
+     * @return K_OK if found, K_RUNTIME_ERROR if no standby worker exists.
+     */
+    Status GetStandbyWorkerId(const std::string &workerId, std::string &nextWorkerId) const
+    {
+        CHECK_FAIL_RETURN_STATUS(workerOrder_.size() > 1, K_RUNTIME_ERROR, "Standby worker not found.");
+        auto iter = std::find(workerOrder_.begin(), workerOrder_.end(), workerId);
+        CHECK_FAIL_RETURN_STATUS(iter != workerOrder_.end(), K_NOT_FOUND, "Worker is not found in topology order.");
+        for (size_t i = 1; i < workerOrder_.size(); ++i) {
+            const auto &candidate = workerOrder_[(static_cast<size_t>(iter - workerOrder_.begin()) + i)
+                                                 % workerOrder_.size()];
+            if (candidate != workerId) {
+                nextWorkerId = candidate;
+                return Status::OK();
+            }
+        }
+        RETURN_STATUS(K_RUNTIME_ERROR, "Standby worker not found.");
+    }
+
 private:
     /**
      * @brief Find the entry whose PlacementUnit covers objectHash via binary search + wrapped-front fallback.
@@ -172,6 +252,10 @@ private:
     int64_t version_ = -1;
     std::vector<RoutingOwnerEntry> sortedOwners_;
     std::vector<RoutingRedirectHint> redirectHints_;
+    std::vector<PlacementUnit> localOwnedRanges_;
+    std::vector<std::string> workerOrder_;
+    std::unordered_set<std::string> validWorkerIds_;
+    std::unordered_set<std::string> activeWorkerIds_;
 };
 
 }  // namespace topology

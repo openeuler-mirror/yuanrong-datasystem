@@ -912,9 +912,8 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
 
 Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
 {
-    // Use metastore_address if specified, otherwise use etcd_address
-    std::string backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
-    auto etcdRc = CheckEtcdHealth(backendAddress);
+    CHECK_FAIL_RETURN_STATUS(!backendAddress_.empty(), K_RUNTIME_ERROR, "Coordination backend address is empty.");
+    auto etcdRc = CheckEtcdHealth(backendAddress_);
     if (etcdRc.IsError()) {
         LOG(INFO) << "ETCD fails and the worker tries to run downgraded: " << etcdRc.ToString();
         RETURN_IF_NOT_OK_APPEND_MSG(
@@ -1011,11 +1010,10 @@ Status WorkerOCServer::Init()
                              "Neither etcd_address nor metastore_address is specified");
 
     // Determine which backend to use for metadata storage
-    std::string backendAddress;
     if (!FLAGS_metastore_address.empty()) {
         // Use metastore as the backend
-        backendAddress = FLAGS_metastore_address;
-        LOG(INFO) << "Using metastore as etcd replacement: " << backendAddress;
+        backendAddress_ = FLAGS_metastore_address;
+        LOG(INFO) << "Using metastore as etcd replacement: " << backendAddress_;
         if (FLAGS_start_metastore_service) {
             // Start metastore service on this node (head worker)
             RETURN_IF_NOT_OK(StartMetaStoreService());
@@ -1023,10 +1021,10 @@ Status WorkerOCServer::Init()
     } else {
         // Use external etcd as the backend
         FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
-        backendAddress = FLAGS_etcd_address;
-        LOG(INFO) << "Using external etcd: " << backendAddress;
+        backendAddress_ = FLAGS_etcd_address;
+        LOG(INFO) << "Using external etcd: " << backendAddress_;
     }
-    etcdStore_ = std::make_unique<EtcdStore>(backendAddress);
+    etcdStore_ = std::make_unique<EtcdStore>(backendAddress_);
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));

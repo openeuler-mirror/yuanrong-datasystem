@@ -55,6 +55,7 @@
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "gtest/gtest.h"
 
@@ -218,6 +219,7 @@ public:
     {
         objCacheMasterSvc_->Shutdown();
         objCacheMasterSvc_.reset();
+        object_cache::NodeSelector::Instance().Shutdown();
         clusterManager_.reset();
         etcdStore_.reset();
         objCacheWorkerMsSvc_.reset();

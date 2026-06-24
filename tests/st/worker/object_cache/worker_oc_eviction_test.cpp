@@ -623,6 +623,7 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEviction)
         [oldEnableDistributedMaster]() { FLAGS_enable_distributed_master = oldEnableDistributedMaster; });
     DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
     Raii clearCheckConnection([]() { (void)inject::Clear("ClusterManager.checkConnection"); });
+    DS_ASSERT_OK(inject::Set("WorkerLocator.LocateCentralizedMaster.skipDirectoryCheck", "return(K_OK)"));
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
@@ -670,6 +671,7 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEvictionWithUnroutabl
         [oldEnableDistributedMaster]() { FLAGS_enable_distributed_master = oldEnableDistributedMaster; });
     DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
     Raii clearCheckConnection([]() { (void)inject::Clear("ClusterManager.checkConnection"); });
+    DS_ASSERT_OK(inject::Set("WorkerLocator.LocateCentralizedMaster.skipDirectoryCheck", "return(K_OK)"));
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());

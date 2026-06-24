@@ -20,8 +20,6 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 
 #include <cstddef>
-#include <optional>
-#include <set>
 #include <utility>
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -365,15 +363,13 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
-    ObjGroupMap objGroup;
-    std::optional<std::set<size_t>> targetIndexs;
-    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
-    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, targetIndexs, objGroup, objKeysUndecidedMaster);
+    auto grouped = clusterManager_->GroupKeysByMetaOwnerWithIndex(objectKeys);
+    const auto &objGroup = grouped.groups;
     // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
     // refuse to process all objects, which is very inefficient.
     CHECK_FAIL_RETURN_STATUS(
-        objKeysUndecidedMaster.empty(), K_RPC_UNAVAILABLE,
-        "Getting master api failed. ObjectKey: " + *objKeysUndecidedMaster.begin()->second.begin());
+        grouped.failures.empty(), K_RPC_UNAVAILABLE,
+        "Getting master api failed. ObjectKey: " + grouped.failures.begin()->first);
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
 
     std::vector<MetaAddrInfo> addrs;

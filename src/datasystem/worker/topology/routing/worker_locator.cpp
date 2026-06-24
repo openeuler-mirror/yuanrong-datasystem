@@ -21,6 +21,7 @@
 
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/status_helper.h"
@@ -41,7 +42,7 @@ Status WorkerLocator::LocateMetaOwner(const std::string &objectKey, const RouteO
     decision = RouteDecision{};
     decision.objectKeyHash = MurmurHash3_32(objectKey);
     if (options.centralizedMode) {
-        return LocateCentralizedMaster(objectKey, decision);
+        return LocateCentralizedMaster(objectKey, options, decision);
     }
     CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr && directory_ != nullptr, K_INVALID,
                              "Worker locator dependencies are not set.");
@@ -60,7 +61,7 @@ Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &obje
     }
     if (options.centralizedMode) {
         RouteDecision route;
-        RETURN_IF_NOT_OK(LocateCentralizedMaster(objectKeys.front(), route));
+        RETURN_IF_NOT_OK(LocateCentralizedMaster(objectKeys.front(), options, route));
         const auto metaAddrInfo = route.ToMetaAddrInfo();
         for (const auto &objectKey : objectKeys) {
             route.objectKeyHash = MurmurHash3_32(objectKey);
@@ -131,12 +132,24 @@ Status WorkerLocator::ResolveOwner(const RoutingOwnerEntry &entry, const RouteOp
     return Status::OK();
 }
 
-Status WorkerLocator::LocateCentralizedMaster(const std::string &objectKey, RouteDecision &decision) const
+Status WorkerLocator::LocateCentralizedMaster(const std::string &objectKey, const RouteOptions &options,
+                                              RouteDecision &decision) const
 {
     decision = RouteDecision{};
     decision.objectKeyHash = MurmurHash3_32(objectKey);
     decision.ownerEndpoint.availability = WorkerAvailability::READY;
     RETURN_IF_NOT_OK(decision.ownerEndpoint.address.ParseString(FLAGS_master_address));
+    INJECT_POINT("WorkerLocator.LocateCentralizedMaster.skipDirectoryCheck");
+    decision.ownerWorkerId = FLAGS_master_address;
+    if (!decision.ownerWorkerId.empty()) {
+        WorkerEndpoint resolved;
+        if (directory_->ResolveWorker(decision.ownerWorkerId, resolved).IsOk()) {
+            decision.ownerEndpoint.availability = resolved.availability;
+        }
+    }
+    if (options.requireAvailableTarget && decision.ownerEndpoint.availability != WorkerAvailability::READY) {
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "Centralized master is not available in local worker directory.");
+    }
     return Status::OK();
 }
 

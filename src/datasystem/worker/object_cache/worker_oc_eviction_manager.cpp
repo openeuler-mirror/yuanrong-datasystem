@@ -280,7 +280,9 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
     for (const auto &item : objectKeyVersions) {
         objectKeys.emplace_back(item.first);
     }
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
                            [&objKeysGrpByMaster](const std::string &objectKey) {
                                for (auto &item : objKeysGrpByMaster) {
@@ -815,12 +817,11 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
         objectKeys.emplace_back(task.objectKey);
         taskByKey.emplace(task.objectKey, task);
     }
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupedKeys;
-    std::optional<std::unordered_map<std::string, Status>> errInfos(std::in_place);
-    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, groupedKeys, errInfos);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto &groupedKeys = grouped.groups;
 
     std::unordered_set<std::string> routeFailedKeys;
-    for (const auto &item : *errInfos) {
+    for (const auto &item : grouped.failures) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.", item.first,
                                      item.second.ToString());
         routeFailedKeys.emplace(item.first);

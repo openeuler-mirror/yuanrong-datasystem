@@ -44,6 +44,7 @@
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
 #include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
+#include "datasystem/worker/topology/routing/routing_view.h"
 
 namespace datasystem {
 namespace worker {
@@ -127,6 +128,15 @@ public:
      */
     Status GetPrimaryWorkerUuid(const std::string &key, std::string &outWorkerUuid,
                                 std::optional<RouteInfo> &routeInfo) const;
+
+    /**
+     * @brief Return the immutable routing view published by hash-ring updates.
+     * @return Routing view for R0 request read path.
+     */
+    std::shared_ptr<topology::IRoutingView> GetRoutingView() const
+    {
+        return routingView_;
+    }
 
     /**
      * @brief Recovery migrate task when timeout node recovery.
@@ -401,6 +411,15 @@ public:
      */
     Status GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr);
 
+    /**
+     * @brief Copy hash-ring worker uuid/address state for worker directory publication.
+     * @param[out] version Current local routing version.
+     * @param[out] localWorkerUuid Local worker uuid.
+     * @param[out] workerUuid2AddrMap Worker uuid to worker address map.
+     */
+    void GetWorkerUuidAddressMapSnapshot(int64_t &version, std::string &localWorkerUuid,
+                                         std::map<std::string, HostPort> &workerUuid2AddrMap) const;
+
     bool CheckVoluntaryTaskExpired(const std::string &taskId)
     {
         return taskExecutor_->CheckTaskExpired(taskId);
@@ -489,6 +508,46 @@ protected:
      * @brief Save hash range of current worker.
      */
     void SaveHashRange();
+
+    /**
+     * @brief Publish an immutable R0 routing snapshot from tokenMap_.
+     *
+     * Caller must hold mutex_. This method only builds local memory and swaps a shared pointer; it must not perform IO,
+     * callbacks, task scans, or success-path logging.
+     */
+    void PublishRoutingSnapshotNoLock();
+
+    /**
+     * @brief Build routing owner entries from tokenMap_ for the snapshot.
+     *
+     * Caller must hold mutex_. Each owner covers the range [prev token, current token]; the last token wraps to 0.
+     * @return Owner entries for the current token map.
+     */
+    std::vector<topology::RoutingOwnerEntry> BuildRoutingOwnersNoLock() const;
+
+    /**
+     * @brief Fill redirect hints from add_node_info into the snapshot facts.
+     *
+     * Caller must hold mutex_.
+     * @param[out] facts Snapshot facts to append redirect hints to.
+     */
+    void FillRedirectHintsNoLock(topology::RoutingSnapshotFacts &facts) const;
+
+    /**
+     * @brief Fill local owned ranges into the snapshot facts.
+     *
+     * Caller must hold mutex_.
+     * @param[out] facts Snapshot facts to append local owned ranges to.
+     */
+    void FillLocalOwnedRangesNoLock(topology::RoutingSnapshotFacts &facts) const;
+
+    /**
+     * @brief Fill valid/active worker ids and worker order into the snapshot facts.
+     *
+     * Caller must hold mutex_. Skips workers being deleted or with empty uuid.
+     * @param[out] facts Snapshot facts to fill worker id sets and order into.
+     */
+    void FillWorkerIdsNoLock(topology::RoutingSnapshotFacts &facts) const;
 
     /**
      * @brief Build hash ranges owned by a specified worker from tokenMap_.
@@ -760,6 +819,7 @@ protected:
     std::map<std::string, HostPort> workerUuid2AddrMap_;  // for route master
     std::map<std::string, HostPort> relatedWorkerMap_;    // for get related worker
     std::map<WorkerAddr, std::string> workerAddr2UuidMap_;
+    std::shared_ptr<topology::RoutingView> routingView_;
 
     mutable std::mutex hashRangeMutex_;  // for hash range
     HashRange hashRange_;

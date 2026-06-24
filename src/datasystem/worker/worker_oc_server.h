@@ -580,6 +580,7 @@ private:
 
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
+    std::string backendAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<topology::EtcdCoordinationBackend> clusterManagerStore_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };

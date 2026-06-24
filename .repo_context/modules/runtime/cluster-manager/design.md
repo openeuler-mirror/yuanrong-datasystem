@@ -177,14 +177,21 @@ Failure-sensitive steps:
 ### Route Lookup
 
 1. Centralized mode returns configured `master_address`.
-2. Distributed mode hashes the full object key to a primary worker UUID via hash ring.
-3. Hash ring maps the owner UUID to worker address.
-4. Connection check validates cluster-node state before returning.
+2. Distributed mode routes through the B0/R0 placement path: routing snapshot locates the owner worker UUID, and worker
+   directory snapshot resolves the endpoint.
+3. Connection check reads worker-directory availability by address; the worker directory is derived from
+   `clusterNodeTable_` membership and uses hash-ring uuid/address facts only to attach worker ids. Availability is only
+   `READY` or `NOT_READY`.
+4. Other outward-facing fact queries such as primary replica lookup, valid/active worker list, standby lookup, local
+   worker id, worker count, and local hash ranges read topology snapshots.
 
 Failure-sensitive steps:
 
-- A worker can be in hash ring but not active/ready in cluster-node table.
-- Route lookup now depends on hash-ring and cluster-node state.
+- A worker can be present in routing facts before it appears in the worker directory because hash-ring and
+  cluster-table events are separate streams; flushing cached cluster events must publish a worker-directory snapshot
+  before request threads can rely on the new ring.
+- `HashRing` and `clusterNodeTable_` still publish current topology facts, but request/fact-query adapters should read
+  the published snapshots rather than their mutable source tables.
 
 ## External Interaction And Dependency Analysis
 
@@ -245,7 +252,7 @@ Failure-sensitive steps:
   - `ClusterManager.HandleNodeAdditionEvent.delay`
   - `ClusterManager.CheckWaitNodeTableComplete.*`
   - `ClusterManager.IfNeedTriggerReconciliation.noreconciliation`
-  - `ClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere`
+  - batch route failures reported by `ClusterManager::LocateMetaOwnersBatch`
   - `WorkerOCServiceImpl.Reconciliation.*`
   - `worker.RunKeepAliveTask`
 - How to tell the module is healthy:

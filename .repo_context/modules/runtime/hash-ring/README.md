@@ -30,6 +30,7 @@
   - initializes the first cluster ring, adds `INITIAL` workers to an already initialized ring, removes failed workers, and marks voluntary scale-down workers;
   - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, and redirect checks;
   - keeps local read-side maps (`tokenMap_`, `workerUuid2AddrMap_`, `workerAddr2UuidMap_`, `relatedWorkerMap_`) derived from `HashRingPb`;
+  - publishes an immutable R0 `RoutingSnapshot` through `HashRing::GetRoutingView()` after local token/worker maps are rebuilt by `UpdateRing`, including ownership ranges, local owned ranges, valid/active worker ids, standby lookup order, and add-node redirect hints derived from `add_node_info`;
   - runs `HashRingHealthCheck` to detect long-stuck scale-up, scale-down, initial, joining, and leaving states, optionally self-healing when `enable_hash_ring_self_healing=true`;
 - Pending verification:
   - exact object-cache and stream-cache side effects for every `HashRingEvent` subscriber.
@@ -65,6 +66,8 @@
   - `HashRing::InitWithoutEtcd(const std::string &hashRing)`
   - `HashRing::HandleRingEvent(const topology::CoordinationEvent &, const std::string &prefix)`
   - `HashRing::UpdateRing(const std::string &, int64_t version, bool forceUpdate = false)`
+  - `HashRing::GetRoutingView()`
+  - `HashRing::GetWorkerUuidAddressMapSnapshot(...)`
   - `HashRing::InspectAndProcessPeriodically()`
   - `HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)`
   - `HashRing::VoluntaryScaleDown()`

@@ -197,7 +197,9 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
         return summary;
     }
 
-    auto groupedByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &groupedByMaster = grouped.groups;
     std::vector<const GroupItem *> groupedByMasterKeys;
     groupedByMasterKeys.reserve(groupedByMaster.size());
     for (const auto &item : groupedByMaster) {
@@ -231,7 +233,9 @@ MetaDataRecoveryManager::GroupedByMaster MetaDataRecoveryManager::BuildGroupedBy
     const std::vector<std::string> &objectKeys, const std::string &stanbyAddr) const
 {
     if (stanbyAddr.empty()) {
-        return clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+        auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+        grouped.AppendFailuresToGroup();
+        return std::move(grouped.groups);
     }
     MetaAddrInfo info;
     HostPort masterAddr;
@@ -389,7 +393,9 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
         info.SetAddress(masterAddr);
         groupedKeysByMaster[info] = { objectKeys.begin(), objectKeys.end() };
     } else {
-        groupedKeysByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+        auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+        grouped.AppendFailuresToGroup();
+        groupedKeysByMaster = std::move(grouped.groups);
     }
 
     std::unordered_map<MetaAddrInfo, std::vector<ObjectMetaPb>> groupedMetasByMaster;

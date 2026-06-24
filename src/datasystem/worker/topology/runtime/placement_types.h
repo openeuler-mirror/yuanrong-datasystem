@@ -57,7 +57,7 @@ struct PlacementUnit {
 enum class WorkerAvailability {
     READY,
     NOT_READY,
-    UNAVAILABLE,
+    UNCONFIRMED,
 };
 
 struct WorkerEndpoint {

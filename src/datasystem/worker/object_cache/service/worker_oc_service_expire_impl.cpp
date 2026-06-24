@@ -28,6 +28,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/status_helper.h"
@@ -58,9 +59,8 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
     access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());
 
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
-    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto &objKeysGrpByMaster = grouped.groups;
 
     std::unordered_set<std::string> objKeysExpireFailed;
     std::vector<std::string> absentObjectKeys;
@@ -95,8 +95,8 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
             return futureRc;
         }
     }
-    for (const auto &kv : objKeysUndecidedMaster) {
-        absentObjectKeys.insert(absentObjectKeys.end(), kv.second.begin(), kv.second.end());
+    for (const auto &failure : grouped.failures) {
+        absentObjectKeys.emplace_back(ExtractObjectId(failure.first));
     }
 
     objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
