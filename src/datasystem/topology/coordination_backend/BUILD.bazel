@@ -9,7 +9,7 @@ ds_cc_library(
         "etcd_coordination_backend.cpp",
     ],
     hdrs = [
-        "coordination_backend.h",
+        "i_coordination_backend.h",
         "etcd_coordination_backend.h",
     ],
     deps = [

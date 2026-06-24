@@ -42,7 +42,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
 
 namespace datasystem {

@@ -17,7 +17,7 @@
   - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/cluster_manager/cluster_manager.h`
   - `src/datasystem/worker/cluster_manager/cluster_node.h`
-  - `src/datasystem/topology/coordination_backend/coordination_backend.h`
+  - `src/datasystem/topology/coordination_backend/i_coordination_backend.h`
   - `src/datasystem/topology/coordination_backend/etcd_coordination_backend.h`
   - `src/datasystem/topology/coordination_backend/etcd_coordination_backend.cpp`
   - `src/datasystem/worker/cluster_manager/worker_health_check.cpp`

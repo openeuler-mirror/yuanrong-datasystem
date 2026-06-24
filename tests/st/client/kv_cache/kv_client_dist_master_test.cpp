@@ -34,8 +34,9 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
-#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"

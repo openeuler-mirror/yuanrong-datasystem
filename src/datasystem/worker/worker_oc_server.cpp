@@ -229,16 +229,28 @@ bool EnableSCService()
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
 }
 
+bool IsWarmupKeyChar(unsigned char c)
+{
+    if (std::isalnum(c) != 0) {
+        return true;
+    }
+    static constexpr char allowedSymbols[] = "-_!@#%^*()+=:;";
+    for (char symbol : allowedSymbols) {
+        if (symbol == '\0') {
+            break;
+        }
+        if (static_cast<unsigned char>(symbol) == c) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string BuildWarmupKey(const std::string &workerAddr)
 {
     std::string encoded = workerAddr;
     std::replace_if(
-        encoded.begin(), encoded.end(),
-        [](unsigned char c) {
-            return !(std::isalnum(c) || c == '-' || c == '_' || c == '!' || c == '@' || c == '#' || c == '%' || c == '^'
-                     || c == '*' || c == '(' || c == ')' || c == '+' || c == '=' || c == ':' || c == ';');
-        },
-        '_');
+        encoded.begin(), encoded.end(), [](unsigned char c) { return !IsWarmupKeyChar(c); }, '_');
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 

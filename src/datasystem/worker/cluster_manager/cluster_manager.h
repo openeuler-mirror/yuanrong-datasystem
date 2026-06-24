@@ -40,7 +40,7 @@
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/priority_queue.h"

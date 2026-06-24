@@ -22,7 +22,7 @@
 
 #include <string>
 
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/topology/membership/membership_types.h"
 
 namespace datasystem {

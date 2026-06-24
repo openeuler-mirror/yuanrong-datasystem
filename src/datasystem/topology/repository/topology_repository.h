@@ -22,7 +22,7 @@
 
 #include <vector>
 
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/topology/model/topology_types.h"
 #include "datasystem/topology/repository/topology_repository_codec.h"
 

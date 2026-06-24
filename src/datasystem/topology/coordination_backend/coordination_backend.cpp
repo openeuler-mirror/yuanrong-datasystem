@@ -17,7 +17,7 @@
 /**
  * Description: Topology coordination backend event model.
  */
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 
 #include <sstream>
 
