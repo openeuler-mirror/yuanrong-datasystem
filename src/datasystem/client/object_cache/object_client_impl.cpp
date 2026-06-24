@@ -67,6 +67,7 @@
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
 #ifdef USE_NPU
+#include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 #include "datasystem/common/rpc/api_deadline.h"
@@ -351,6 +352,21 @@ ObjectClientImpl::~ObjectClientImpl()
     clientStateManager_->ProcessDestruct(shutdownFunc);
 }
 
+void ObjectClientImpl::CleanupPreRegisteredDeviceMemory()
+{
+#ifdef USE_NPU
+    std::vector<void *> addrs;
+    {
+        std::lock_guard<std::mutex> lock(preRegisteredDeviceMemoryMutex_);
+        addrs.swap(preRegisteredDeviceMemoryAddrs_);
+    }
+    if (!addrs.empty()) {
+        LOG_IF_ERROR(RemoteH2DManager::Instance().UnregisterDeviceMemory(addrs),
+                     "Failed to unregister pre-registered RemoteH2D device memory");
+    }
+#endif
+}
+
 Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 {
     ShutdownMetricsThread(!isDestruct);
@@ -381,6 +397,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     if (devOcImpl_ != nullptr) {
         devOcImpl_->SetThreadInterruptFlag2True();
     }
+    CleanupPreRegisteredDeviceMemory();
 
     // Step0: notify wait post.
     switchPost_.Set();
@@ -1664,6 +1681,39 @@ Status ObjectClientImpl::MGetH2DImpl(const std::vector<std::string> &objectKeys,
     return rc;
 }
 
+Status ObjectClientImpl::PreRegisterDeviceMemory(const std::vector<void *> &data, const std::vector<uint64_t> &dataSize)
+{
+#ifndef USE_NPU
+    (void)data;
+    (void)dataSize;
+    return Status(K_NOT_SUPPORTED, "RemoteH2D device memory pre-registration is only supported in NPU builds.");
+#else
+    RETURN_IF_NOT_OK(IsClientReady());
+    CHECK_FAIL_RETURN_STATUS(!data.empty(), K_INVALID, "Device memory address list cannot be empty.");
+    CHECK_FAIL_RETURN_STATUS(data.size() == dataSize.size(), K_INVALID,
+                             FormatString("Device memory address count %zu does not match size count %zu.",
+                                          data.size(), dataSize.size()));
+    for (size_t i = 0; i < data.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(data[i] != nullptr, K_INVALID,
+                                 FormatString("Device memory address cannot be null, index: %zu.", i));
+        CHECK_FAIL_RETURN_STATUS(dataSize[i] > 0, K_INVALID,
+                                 FormatString("Device memory size must be greater than 0, index: %zu.", i));
+    }
+
+    int32_t deviceId = -1;
+    RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->GetDeviceIdx(deviceId));
+    CHECK_FAIL_RETURN_STATUS(deviceId >= 0, K_INVALID,
+                             "Device id is not initialized. Set current device before pre-registering device memory.");
+    RETURN_IF_NOT_OK(UpdateClientRemoteH2DConfig(deviceId));
+    RETURN_IF_NOT_OK(RemoteH2DManager::Instance().PreRegisterDeviceMemory(data, dataSize));
+    {
+        std::lock_guard<std::mutex> lock(preRegisteredDeviceMemoryMutex_);
+        preRegisteredDeviceMemoryAddrs_.insert(preRegisteredDeviceMemoryAddrs_.end(), data.begin(), data.end());
+    }
+    return Status::OK();
+#endif
+}
+
 Status ObjectClientImpl::CheckMGetH2DInput(const std::vector<std::string> &objectKeys,
                                            const std::vector<DeviceBlobList> &devBlobList)
 {
@@ -1684,7 +1734,7 @@ Status ObjectClientImpl::CheckMGetH2DInput(const std::vector<std::string> &objec
     return Status::OK();
 }
 
-#ifdef BUILD_HETERO
+#ifdef USE_NPU
 static Status InitRemoteH2DComm(const std::vector<Buffer *> &existBufferList,
                                 std::shared_ptr<RemoteH2DContext> &p2pComm)
 {

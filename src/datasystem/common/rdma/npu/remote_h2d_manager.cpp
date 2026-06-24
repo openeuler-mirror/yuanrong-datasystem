@@ -452,8 +452,6 @@ Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(mlock(data, dataSize) == 0, K_RUNTIME_ERROR,
                                              "Failed to lock physical pages.");
         LOG(INFO) << "RemoteH2DManager::RegisterHostMemory mlock done";
-    } else {
-        LOG(INFO) << "RemoteH2DManager::RegisterHostMemory skipping mlock for HCCS link type";
     }
 
     RETURN_IF_NOT_OK(GetWorkerDeviceIds());
@@ -475,33 +473,73 @@ Status RemoteH2DManager::RegisterHostMemory(void *data, uint64_t dataSize)
                 RETURN_OK_IF_TRUE(!hostSegmentMap_->Insert(accessor, devId));
             }
 
-            if (accessor.entry->data.find(castedData) == accessor.entry->data.end()) {
-                bool needRollback = true;
-                Raii eraseRaii([this, &needRollback, &accessor]() {
-                    if (needRollback) {
-                        hostSegmentMap_->BlockingErase(accessor);
-                    }
-                });
-                P2pSegmentInfo segmentInfo;
-                P2pSegmentPermissions permissions = P2pSegmentPermissions::P2P_SEGMENT_READ_WRITE;
-                RETURN_IF_NOT_OK(transport_->RegisterMemory(data, dataSize, &segmentInfo));
+            RETURN_OK_IF_TRUE(accessor.entry->data.find(castedData) != accessor.entry->data.end());
+            bool needRollback = true;
+            Raii eraseRaii([this, &needRollback, &accessor]() {
+                if (needRollback) {
+                    hostSegmentMap_->BlockingErase(accessor);
+                }
+            });
+            P2pSegmentInfo segmentInfo;
+            P2pSegmentPermissions permissions = P2pSegmentPermissions::P2P_SEGMENT_READ_WRITE;
+            RETURN_IF_NOT_OK(transport_->RegisterMemory(data, dataSize, &segmentInfo));
 
-                // Create Host Segment
-                std::shared_ptr<HostSegment> hostSegment;
-                HostSegment::Create(hostSegment, reinterpret_cast<std::byte *>(data), dataSize, segmentInfo,
-                                    permissions);
-                accessor.entry->data[castedData] = hostSegment;
-                needRollback = false;
-            }
+            // Create Host Segment
+            std::shared_ptr<HostSegment> hostSegment;
+            HostSegment::Create(hostSegment, reinterpret_cast<std::byte *>(data), dataSize, segmentInfo, permissions);
+            accessor.entry->data[castedData] = hostSegment;
+            needRollback = false;
 
             return Status::OK();
         }));
     }
+    Status firstError = Status::OK();
     for (auto &future : futures) {
-        if (!future.get().IsOk()) {
-            LOG(ERROR) << "RegisterHostMemory failed";
+        Status status = future.get();
+        if (status.IsError()) {
+            LOG(ERROR) << "RegisterHostMemory failed: " << status.ToString();
+            if (firstError.IsOk()) {
+                firstError = status;
+            }
         }
     }
+    RETURN_IF_NOT_OK(firstError);
+    return Status::OK();
+}
+
+Status RemoteH2DManager::PreRegisterDeviceMemory(const std::vector<void *> &data, const std::vector<uint64_t> &dataSize)
+{
+    CHECK_FAIL_RETURN_STATUS(IsRemoteH2DEnabled(), K_RUNTIME_ERROR,
+                             "RemoteH2D is not enabled for device memory pre-registration.");
+    CHECK_FAIL_RETURN_STATUS(FLAGS_remote_h2d_link_type == "HCCS", K_RUNTIME_ERROR,
+                             "RemoteH2D device memory pre-registration is only supported for HCCS.");
+    CHECK_FAIL_RETURN_STATUS(!data.empty(), K_INVALID, "Device memory address list cannot be empty.");
+    CHECK_FAIL_RETURN_STATUS(data.size() == dataSize.size(), K_INVALID,
+                             FormatString("Device memory address count %zu does not match size count %zu.",
+                                          data.size(), dataSize.size()));
+    for (size_t i = 0; i < data.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(data[i] != nullptr, K_INVALID,
+                                 FormatString("Device memory address cannot be null, index: %zu.", i));
+        CHECK_FAIL_RETURN_STATUS(dataSize[i] > 0, K_INVALID,
+                                 FormatString("Device memory size must be greater than 0, index: %zu.", i));
+    }
+
+    RETURN_IF_NOT_OK(transport_->PreRegisterDeviceMemory(data, dataSize));
+    return Status::OK();
+}
+
+Status RemoteH2DManager::UnregisterDeviceMemory(const std::vector<void *> &data)
+{
+    CHECK_FAIL_RETURN_STATUS(IsRemoteH2DEnabled(), K_RUNTIME_ERROR,
+                             "RemoteH2D is not enabled for device memory unregistration.");
+    CHECK_FAIL_RETURN_STATUS(FLAGS_remote_h2d_link_type == "HCCS", K_RUNTIME_ERROR,
+                             "RemoteH2D device memory unregistration is only supported for HCCS.");
+    for (size_t i = 0; i < data.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(data[i] != nullptr, K_INVALID,
+                                 FormatString("Device memory address cannot be null, index: %zu.", i));
+    }
+
+    RETURN_IF_NOT_OK(transport_->UnregisterDeviceMemory(data));
     return Status::OK();
 }
 

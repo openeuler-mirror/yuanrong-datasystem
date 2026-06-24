@@ -148,6 +148,18 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                  return std::make_pair(status, std::move(failedKeys));
              })
 
+        .def("pre_register_device_memory",
+             [](HeteroClient &client, const std::vector<uint64_t> &devPtrs, const std::vector<uint64_t> &sizes) {
+                 std::vector<void *> ptrs;
+                 ptrs.reserve(devPtrs.size());
+                 for (auto devPtr : devPtrs) {
+                     ptrs.emplace_back(reinterpret_cast<void *>(devPtr));
+                 }
+                 py::gil_scoped_release release;
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                 return client.PreRegisterDeviceMemory(ptrs, sizes);
+             })
+
         .def("mset_d2h",
              [](HeteroClient &client, const std::vector<std::string> &objectKeys,
                 const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam) {

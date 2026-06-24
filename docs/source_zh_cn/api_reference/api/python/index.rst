@@ -103,6 +103,8 @@ Tensor接口
      - 初始化异构对象客户端。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.mget_h2d <yr.datasystem.hetero_client.HeteroClient.mget_h2d>`
      - 从 host 中获取数据并写入 device 中。
+   * - :doc:`yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory <yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory>`
+     - 为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的 device 目标内存。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.mset_d2h <yr.datasystem.hetero_client.HeteroClient.mset_d2h>`
      - 将 device 的数据写入到 host 中。
    * - :doc:`yr.datasystem.hetero_client.HeteroClient.async_mget_h2d <yr.datasystem.hetero_client.HeteroClient.async_mget_h2d>`

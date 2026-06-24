@@ -21,6 +21,7 @@
 #ifndef DATASYSTEM_HETERO_CLIENT_H
 #define DATASYSTEM_HETERO_CLIENT_H
 
+#include <cstdint>
 #include <future>
 #include <vector>
 
@@ -71,6 +72,14 @@ public:
     /// \return K_OK on any object success; the error code otherwise.
     Status MGetH2D(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                    std::vector<std::string> &failKeys, int32_t subTimeoutMs);
+
+    /// \brief Pre-register device memory regions for RemoteH2D/HCCS transfers.
+    ///     Call this before MGetH2D when the following MGetH2D destination blobs will be allocated from these regions.
+    ///     Datasystem keeps the device memory registrations until the client shuts down.
+    /// \param[in] devPtrs Starting addresses of the device memory regions.
+    /// \param[in] sizes Sizes of the device memory regions in bytes.
+    /// \return K_OK on success; the error code otherwise.
+    Status PreRegisterDeviceMemory(const std::vector<void *> &devPtrs, const std::vector<uint64_t> &sizes);
 
     /// \brief Write the data of the device to the host. If the BLOB of the device contains multiple memory addresses,
     ///     the device automatically combines data and writes the data to the host.

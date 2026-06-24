@@ -105,6 +105,8 @@ Hetero接口
       - 批量将数据从异构设备(Device)缓存到数据系统主机(Host)侧。
     * - :cpp:func:`HeteroClient::MGetH2D`
       - 批量从数据系统主机(Host)侧获取数据并直接写入到异构设备(Device)内存中。该接口与 :cpp:func:`HeteroClient::MSetD2H` 配合使用。
+    * - :cpp:func:`HeteroClient::PreRegisterDeviceMemory`
+      - 为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的异构设备目标内存。
     * - :cpp:func:`HeteroClient::AsyncMSetD2H`
       - 批量将数据从异构设备(Device)异步缓存到数据系统主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。
     * - :cpp:func:`HeteroClient::AsyncMGetH2D`

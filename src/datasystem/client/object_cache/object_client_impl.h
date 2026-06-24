@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
@@ -573,6 +574,14 @@ public:
                    std::vector<std::string> &failedKeys, uint64_t timeoutMs);
 
     /**
+     * @brief Pre-register device memory regions for RemoteH2D/HCCS transfers.
+     * @param[in] data Device memory addresses.
+     * @param[in] dataSize Device memory region sizes.
+     * @return Status of the result.
+     */
+    Status PreRegisterDeviceMemory(const std::vector<void *> &data, const std::vector<uint64_t> &dataSize);
+
+    /**
      * @brief For device object, to async get multiple objects
      * @param[in] objectKeys multiple keys support
      * @param[in] devBlobList vector of compose blobInfo
@@ -734,6 +743,11 @@ private:
      */
     Status CheckMGetH2DInput(const std::vector<std::string> &objectKeys,
                              const std::vector<DeviceBlobList> &devBlobList);
+
+    /**
+     * @brief Release device memory regions pre-registered by this client.
+     */
+    void CleanupPreRegisteredDeviceMemory();
 
     /**
      * @brief The core synchronous implementation shared by MSetD2H and AsyncMSetD2H.
@@ -1571,6 +1585,8 @@ private:
     uint64_t switchGeneration_{ 0 };
     std::unique_ptr<client::MmapManager> mmapManager_{ nullptr };
     std::unique_ptr<ClientDeviceObjectManager> devOcImpl_{ nullptr };
+    std::mutex preRegisteredDeviceMemoryMutex_;
+    std::vector<void *> preRegisteredDeviceMemoryAddrs_;
     bool enableRemoteH2D_;
     int32_t devId_ = -1;
     std::string deviceId_;

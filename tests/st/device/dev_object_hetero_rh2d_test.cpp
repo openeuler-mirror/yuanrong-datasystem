@@ -20,6 +20,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <unistd.h>
 #include <functional>
@@ -42,6 +43,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -98,6 +100,15 @@ std::string Rh2dWorkerFlags()
         flags += std::string(" -remote_h2d_hccs_buffer_pool=") + bufferPool + " ";
     }
     return flags;
+}
+
+bool IsHccsLinkType()
+{
+    const char *linkType = std::getenv("DS_RH2D_LINK_TYPE");
+    if (linkType == nullptr || strlen(linkType) == 0) {
+        return false;
+    }
+    return std::string(linkType) == "HCCS" || std::string(linkType) == "hccs";
 }
 }  // namespace
 
@@ -449,6 +460,73 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTest1)
     InitTestDsClientForRemoteH2D(1, client2);
 
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
+}
+
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DPreRegisterDeviceMemory)
+{
+    // HCCS-only path: pre-register one large destination device range, then MGetH2D into slices of it.
+    if (!IsHccsLinkType()) {
+        GTEST_SKIP() << "PreRegisterDeviceMemory is only supported by RH2D over HCCS. Set DS_RH2D_LINK_TYPE=HCCS.";
+    }
+    InitAcl(deviceId_);
+
+    constexpr size_t numOfObjs = 4;
+    constexpr size_t blksPerObj = 8;
+    constexpr size_t blkSz = 73 * 1024;
+    constexpr int loopsNum = 2;
+    const size_t preRegisterSize = numOfObjs * blksPerObj * blkSz;
+
+    std::shared_ptr<DsClient> setClient;
+    std::shared_ptr<DsClient> getClient;
+    InitTestDsClientForRemoteH2D(0, setClient);
+    InitTestDsClientForRemoteH2D(1, getClient);
+
+    void *getBasePtr = nullptr;
+    DS_ASSERT_OK(AclDeviceManager::Instance()->MallocDeviceMemory(preRegisterSize, getBasePtr));
+    ASSERT_NE(getBasePtr, nullptr);
+    // Pre-registered memory is kept by the RemoteH2D client until process shutdown.
+    DS_ASSERT_OK(
+        getClient->Hetero()->PreRegisterDeviceMemory(std::vector<void *>{ getBasePtr },
+                                                     std::vector<uint64_t>{ preRegisterSize }));
+
+    std::vector<DeviceBlobList> getBlobList;
+    getBlobList.reserve(numOfObjs);
+    auto *getBase = static_cast<uint8_t *>(getBasePtr);
+    for (size_t i = 0; i < numOfObjs; i++) {
+        DeviceBlobList blobList;
+        blobList.deviceIdx = deviceId_;
+        for (size_t j = 0; j < blksPerObj; j++) {
+            auto offset = (i * blksPerObj + j) * blkSz;
+            blobList.blobs.emplace_back(Blob{ getBase + offset, blkSz });
+        }
+        getBlobList.emplace_back(std::move(blobList));
+    }
+
+    std::vector<std::string> objectKeys;
+    for (size_t i = 0; i < numOfObjs; i++) {
+        objectKeys.emplace_back(GetStringUuid());
+    }
+
+    for (int loop = 0; loop < loopsNum; loop++) {
+        std::vector<DeviceBlobList> setBlobList;
+        std::vector<std::vector<std::string>> verifyList;
+        PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
+        DS_ASSERT_OK(setClient->Hetero()->MSetD2H(objectKeys, setBlobList));
+
+        std::vector<std::string> failedList;
+        DS_ASSERT_OK(getClient->Hetero()->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+        ASSERT_TRUE(failedList.empty());
+        for (size_t i = 0; i < numOfObjs; i++) {
+            for (size_t j = 0; j < blksPerObj; j++) {
+                LOG(INFO) << "Check loop " << loop << ", object " << i << ", blob " << j;
+                CheckDevPtrContent(getBlobList[i].blobs[j].pointer, getBlobList[i].blobs[j].size, verifyList[i][j]);
+            }
+        }
+
+        failedList.clear();
+        DS_ASSERT_OK(setClient->Hetero()->Delete(objectKeys, failedList));
+        ASSERT_TRUE(failedList.empty());
+    }
 }
 
 TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestFFTSContextLimit)

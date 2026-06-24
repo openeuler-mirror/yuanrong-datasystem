@@ -1,7 +1,7 @@
 yr.datasystem.hetero_client.HeteroClient
 ========================================
 
-.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, token="", client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_exclusive_connection=False, enable_remote_h2d=False)
 
     异构对象客户端。
 
@@ -9,6 +9,7 @@ yr.datasystem.hetero_client.HeteroClient
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
         - **port** (int) - 数据系统 Worker 的端口号。
         - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
+        - **token** (str) - 客户端认证令牌。默认值： ``""`` 。
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。
@@ -33,6 +34,8 @@ yr.datasystem.hetero_client.HeteroClient
          - 初始化异构对象客户端。
        * - :doc:`mget_h2d <yr.datasystem.hetero_client.HeteroClient.mget_h2d>`
          - 从 host 中获取数据并写入 device 中。
+       * - :doc:`pre_register_device_memory <yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory>`
+         - 为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的 device 目标内存。
        * - :doc:`mset_d2h <yr.datasystem.hetero_client.HeteroClient.mset_d2h>`
          - 将 device 的数据写入到 host 中。
        * - :doc:`async_mget_h2d <yr.datasystem.hetero_client.HeteroClient.async_mget_h2d>`
@@ -68,6 +71,7 @@ yr.datasystem.hetero_client.HeteroClient
 
     yr.datasystem.hetero_client.HeteroClient.init
     yr.datasystem.hetero_client.HeteroClient.mget_h2d
+    yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory
     yr.datasystem.hetero_client.HeteroClient.mset_d2h
     yr.datasystem.hetero_client.HeteroClient.async_mget_h2d
     yr.datasystem.hetero_client.HeteroClient.async_mset_d2h

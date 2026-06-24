@@ -63,6 +63,19 @@ HeteroClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示获取成功，否则返回其他错误码。
 
+    .. cpp:function:: Status PreRegisterDeviceMemory(const std::vector<void *> &devPtrs, const std::vector<uint64_t> &sizes)
+
+        为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的异构设备目标内存范围。
+
+        该接口仅支持启用 RH2D 且链路类型为 HCCS 的场景。调用前需设置当前 device，且当前 device 应与后续 MGetH2D 的 ``DeviceBlobList`` 中的 device id 一致。预注册的内存句柄由 HeteroClient 管理，并在 client shutdown 或析构时释放。推荐预注册一块或少量大连续 HBM 目标池，避免把大量离散小块逐个预注册。
+
+        参数：
+            - **devPtrs** - device 内存范围的起始地址列表。
+            - **sizes** - device 内存范围大小列表，单位为字节，长度需与 ``devPtrs`` 一致。
+
+        返回：
+            返回值状态码为 ``StatusCode::K_OK`` 时表示预注册成功，否则返回其他错误码。
+
     .. cpp:function:: std::shared_future<AsyncResult> AsyncMSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList, const SetParam &setParam = {})
 
         批量将数据从异构设备(Device)异步缓存到数据系统主机(Host)侧，立即返回 std::shared_future< :cpp:class:`AsyncResult` > 对象。

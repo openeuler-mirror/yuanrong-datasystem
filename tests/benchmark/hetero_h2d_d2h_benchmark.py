@@ -212,6 +212,19 @@ def batch_data_check(out_data_blob_list, test_value):
             check_ptr_content(info.dev_ptr, test_value)
 
 
+def should_pre_register_device_memory() -> bool:
+    """Whether this benchmark run should pre-register get-side device memory."""
+    return args.pre_register_device_memory and mode in ["get", "all"]
+
+
+def acl_malloc_device(size: int) -> int:
+    """Allocate device memory and fail fast when ACL returns an error."""
+    dev_ptr, ret = acl.rt.malloc(size, 0)
+    if ret != 0:
+        raise RuntimeError(f"acl.rt.malloc failed, size={size}, ret={ret}")
+    return dev_ptr
+
+
 def mset_thread(client, device_id: int, key_num: int, iterations: int, thread_id: int, list_random_suffix: list,
                 all_in_data_blob_list: list, time_list: list):
     """Thread for mset_d2h"""
@@ -237,8 +250,8 @@ def mget_thread(client, device_id: int, key_num: int, iterations: int, thread_id
             time_list.append(mget_time)
 
 
-def prepare_hbm_data(test_value, thread_number, key_num, blob_nums_per_key, blob_size, device_id, all_in_data_blob_list,
-                     all_out_data_blob_list):
+def prepare_hbm_data(test_value, thread_number, key_num, blob_nums_per_key, blob_size, device_id, client,
+                     all_in_data_blob_list, all_out_data_blob_list, pre_registered_get_buffers):
     """prepare HBM data for set and get"""
     logging.info(f"[Dev {device_id}]Start prepare data")
     for _ in range(thread_number):
@@ -246,7 +259,7 @@ def prepare_hbm_data(test_value, thread_number, key_num, blob_nums_per_key, blob
         for _ in range(key_num):
             tmp_batch_list = []
             for _ in range(blob_nums_per_key):
-                dev_ptr, _ = acl.rt.malloc(blob_size, 0)
+                dev_ptr = acl_malloc_device(blob_size)
                 acl.rt.memcpy(dev_ptr, blob_size, acl.util.bytes_to_ptr(test_value.encode()), blob_size, 1)
                 blob = Blob(dev_ptr, blob_size)
                 tmp_batch_list.append(blob)
@@ -255,17 +268,39 @@ def prepare_hbm_data(test_value, thread_number, key_num, blob_nums_per_key, blob
         all_in_data_blob_list.append(in_data_blob_list)
 
     # prepare HBM data and get from datasystem
-    for _ in range(thread_number):
-        out_data_blob_list = []
-        for _ in range(key_num):
-            tmp_batch_list = []
-            for _ in range(blob_nums_per_key):
-                dev_ptr, _ = acl.rt.malloc(blob_size, 0)
-                blob = Blob(dev_ptr, blob_size)
-                tmp_batch_list.append(blob)
-            blob_list = DeviceBlobList(device_id, tmp_batch_list)
-            out_data_blob_list.append(blob_list)
-        all_out_data_blob_list.append(out_data_blob_list)
+    if should_pre_register_device_memory():
+        total_size = thread_number * key_num * blob_nums_per_key * blob_size
+        base_ptr = acl_malloc_device(total_size)
+        client.pre_register_device_memory([base_ptr], [total_size])
+        pre_registered_get_buffers.append((base_ptr, total_size))
+        logging.info(
+            f"[Dev {device_id}]Pre-registered get buffer base={base_ptr}, size={total_size}, "
+            f"thread_number={thread_number}, key_num={key_num}, blob_nums_per_key={blob_nums_per_key}, "
+            f"blob_size={blob_size}")
+        offset = 0
+        for _ in range(thread_number):
+            out_data_blob_list = []
+            for _ in range(key_num):
+                tmp_batch_list = []
+                for _ in range(blob_nums_per_key):
+                    blob = Blob(base_ptr + offset, blob_size)
+                    tmp_batch_list.append(blob)
+                    offset += blob_size
+                blob_list = DeviceBlobList(device_id, tmp_batch_list)
+                out_data_blob_list.append(blob_list)
+            all_out_data_blob_list.append(out_data_blob_list)
+    else:
+        for _ in range(thread_number):
+            out_data_blob_list = []
+            for _ in range(key_num):
+                tmp_batch_list = []
+                for _ in range(blob_nums_per_key):
+                    dev_ptr = acl_malloc_device(blob_size)
+                    blob = Blob(dev_ptr, blob_size)
+                    tmp_batch_list.append(blob)
+                blob_list = DeviceBlobList(device_id, tmp_batch_list)
+                out_data_blob_list.append(blob_list)
+            all_out_data_blob_list.append(out_data_blob_list)
     logging.info(f"[Dev {device_id}]Success prepare data")
 
 
@@ -351,14 +386,20 @@ def worker_process(
     # prepare data
     test_value = random_str(blob_sizes[0])
     all_in_data_blob_list, all_out_data_blob_list = [], []
+    pre_registered_get_buffers = []
 
     for i, blob_num in enumerate(blob_nums_per_key):
         in_data_blob_list, out_data_blob_list = [], []
-        prepare_hbm_data(test_value, thread_number, key_num, blob_num, blob_sizes[i], device_id,
-                         in_data_blob_list, out_data_blob_list)
+        prepare_hbm_data(test_value, thread_number, key_num, blob_num, blob_sizes[i], device_id, client,
+                         in_data_blob_list, out_data_blob_list, pre_registered_get_buffers)
 
         all_in_data_blob_list.extend(in_data_blob_list)
         all_out_data_blob_list.extend(out_data_blob_list)
+    metrics_data["pre_registered_get_memory_bytes"] = sum(size for _, size in pre_registered_get_buffers)
+    if should_pre_register_device_memory():
+        logging.info(
+            f"[Dev {device_id}]Prepared {len(pre_registered_get_buffers)} pre-registered get buffer(s), "
+            f"total size={metrics_data['pre_registered_get_memory_bytes']}")
 
     # warm up
     warmup(client, device_id, key_num, all_in_data_blob_list, all_out_data_blob_list)
@@ -549,11 +590,15 @@ def run_benchmark(
         p.start()
         processes.append(p)
 
-    # Wait for all processes to complete
-    for p in processes:
-        p.join()
+    # Collect results before join so worker processes do not block while flushing multiprocessing.Queue.
+    results = [result_queue.get() for _ in range(num_processes)]
 
-    results = collect_results(result_queue)
+    for p in processes:
+        p.join(timeout=30)
+        if p.is_alive():
+            logging.warning(f"Process {p.pid} did not exit after result collection, terminate it")
+            p.terminate()
+            p.join()
 
     # Calculate individual request size for metrics
     request_size = 0
@@ -698,6 +743,9 @@ if __name__ == "__main__":
                         help="Show the individual latency of each request")
     parser.add_argument("--perf-path", type=str, default=PERF_RESULT_FILENAME,
                         help=f"Output path for datasystem perf log records (Default {PERF_RESULT_FILENAME})")
+    parser.add_argument("--pre-register-device-memory", action="store_true", dest="pre_register_device_memory",
+                        help="Pre-allocate one large get-side device memory range per blob config, pre-register it "
+                             "with datasystem client, and use slices of that range as MGetH2D destination blobs.")
     args = parser.parse_args()
     init_file(args.perf_path)
 
@@ -732,6 +780,7 @@ if __name__ == "__main__":
             logging.info(
                 f"Perf conf : num_processes: {CONFIG['num_processes']} | thread_num: {CONFIG['thread_number']} | "
                 f"key_num: {CONFIG['key_num']} | blob_nums: {CONFIG['blob_nums']} | blob_sizes: {CONFIG['blob_sizes']}"
-                f" | iterations: {CONFIG['iterations']} | total_size: {total_size} MB")
+                f" | iterations: {CONFIG['iterations']} | total_size: {total_size} MB"
+                f" | pre_register_device_memory: {should_pre_register_device_memory()}")
 
             run_benchmark(**CONFIG)
