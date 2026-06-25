@@ -522,7 +522,14 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     std::shared_ptr<UrmaManager::BufferHandle> ubBufferHandle;
     uint8_t *ubBufferPtr = nullptr;
     uint64_t ubBufferSize = 0;
-    RETURN_IF_NOT_OK(PrepareGetUrmaBuffer(getParam, req, ubBufferHandle, ubBufferPtr, ubBufferSize));
+    if (getParam.ubPreAllocHandle != nullptr) {
+        auto *handle = static_cast<const UrmaManager::BufferHandle *>(getParam.ubPreAllocHandle);
+        UrmaRemoteAddrPb urmaInfo;
+        RETURN_IF_NOT_OK(UrmaManager::Instance().FillRemoteAddr(*handle, urmaInfo));
+        *req.mutable_urma_info() = urmaInfo;
+    } else {
+        RETURN_IF_NOT_OK(PrepareGetUrmaBuffer(getParam, req, ubBufferHandle, ubBufferPtr, ubBufferSize));
+    }
     if (getParam.actualTransportKind != nullptr) {
         *getParam.actualTransportKind = req.has_urma_info() ? AccessTransportKind::UB : AccessTransportKind::TCP;
     }
@@ -571,7 +578,8 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
     }
 #ifdef USE_URMA
-    const bool hasUrmaGetAttempt = ubBufferHandle != nullptr && req.has_urma_info();
+    const bool hasUrmaGetAttempt = (ubBufferHandle != nullptr || getParam.ubPreAllocHandle != nullptr)
+        && req.has_urma_info();
     if (hasUrmaGetAttempt) {
         const bool hasUrmaResponseError = static_cast<StatusCode>(rsp.last_rc().error_code()) == K_URMA_ERROR;
         if (hasUrmaResponseError) {
@@ -580,7 +588,9 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
             RecordUrmaDataPlaneResult(!HasUrmaTcpFallbackPayload(rsp));
         }
     }
-    RETURN_IF_NOT_OK(FillUrmaBuffer(ubBufferHandle, rsp, payloads, ubBufferPtr, ubBufferSize));
+    if (getParam.ubPreAllocHandle == nullptr) {
+        RETURN_IF_NOT_OK(FillUrmaBuffer(ubBufferHandle, rsp, payloads, ubBufferPtr, ubBufferSize));
+    }
 #endif
     version = workerVersion_.load(std::memory_order_relaxed);
     perfPoint.Record();

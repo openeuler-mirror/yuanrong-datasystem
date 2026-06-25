@@ -59,22 +59,23 @@ Status Buffer::Init()
     }
     RETURN_IF_NOT_OK(CheckDeprecated());
 
-    // Special check for Remote H2D or client UB.
-    // If the remote host info exists, then the data is neither in local shared memory nor in payload, but rather still
-    // on a remote worker.
-    // Or if the urma info exists, then the data is in the direct worker's shm.
+    // Step 1: resolve pointer from payload if not already set by caller
+    if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer != nullptr) {
+        bufferInfo_->pointer = static_cast<uint8_t *>(bufferInfo_->payloadPointer->Data());
+    }
+    // Step 2: lazy/remote data — pointer stays null, fetched on demand
     if (bufferInfo_->remoteHostInfo != nullptr || bufferInfo_->ubUrmaDataInfo != nullptr) {
         bufferInfo_->pointer = nullptr;
         isShm_ = false;
         latch_ = std::make_shared<object_cache::CommonLock>();
-    } else if (bufferInfo_->pointer == nullptr
-               && bufferInfo_->payloadPointer == nullptr) {  // non-shared memory Create or Put
+        return latch_->Init();
+    }
+    // Step 3: allocate if still no pointer (Put/Create)
+    if (bufferInfo_->pointer == nullptr) {
         RETURN_IF_NOT_OK(MallocBufferHelper());
-        latch_ = std::make_shared<object_cache::CommonLock>();
-    } else if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer != nullptr) {  // non-shared memory Get.
-        bufferInfo_->pointer = static_cast<uint8_t *>(bufferInfo_->payloadPointer->Data());
-        latch_ = std::make_shared<object_cache::CommonLock>();
-    } else {
+    }
+    // Step 4: determine latch type based on shmId
+    if (!bufferInfo_->shmId.Empty()) {
         isShm_ = true;
         if (bufferInfo_->metadataSize == 0) {
             latch_ = std::make_shared<object_cache::DisabledLock>();
@@ -83,6 +84,9 @@ Status Buffer::Init()
             latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize,
                                                              clientImpl->GetLockId());
         }
+    } else {
+        isShm_ = false;
+        latch_ = std::make_shared<object_cache::CommonLock>();
     }
 #ifdef WITH_TESTS
     INJECT_POINT("buffer.init");
@@ -158,7 +162,8 @@ void Buffer::Reset()
 void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
     if (bufferInfo_ != nullptr) {
-        if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer) {
+        if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer
+            && bufferInfo_->ubGetBufferHandle == nullptr) {
             free(bufferInfo_->pointer);
             bufferInfo_->pointer = nullptr;
         }

@@ -2949,6 +2949,23 @@ std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeObjectBufferInfo(
     return bufferInfo;
 }
 
+#ifdef USE_URMA
+// Remove UB placeholder payload entries and clear their part_index references.
+// Used when UB buffer overflow is detected to prevent downstream code from
+// accessing removed payload entries via dangling part_index values.
+static void ClearUBPayloadPlaceholders(GetRspPb &rsp, std::vector<RpcMessage> &payloads,
+                                       size_t origPayloadSize)
+{
+    payloads.resize(origPayloadSize);
+    for (int k = 0; k < rsp.payload_info_size(); ++k) {
+        auto *pi = rsp.mutable_payload_info(k);
+        if (pi->part_index_size() > 0 && pi->part_index(0) >= origPayloadSize) {
+            pi->clear_part_index();
+        }
+    }
+}
+#endif
+
 Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                               std::vector<std::shared_ptr<Buffer>> &buffers)
 {
@@ -3005,6 +3022,32 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     std::vector<RpcMessage> payloads;
     uint32_t version = 0;
 
+    std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> ubBufferInfos;
+
+#ifdef USE_URMA
+    std::shared_ptr<UrmaManager::BufferHandle> ubHandle;
+    uint8_t *ubPtr = nullptr;
+    uint64_t ubSize = 0;
+    UrmaRemoteAddrPb urmaInfo;
+
+    if (getParam.ubTotalSize > 0 && getParam.ubMetaResolved) {
+        uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
+        if (getParam.ubTotalSize <= ubMaxGetSize) {
+            Status ubRc = UrmaManager::Instance().GetMemoryBufferHandle(ubHandle, getParam.ubTotalSize);
+            if (ubRc.IsOk() && ubHandle != nullptr) {
+                ubRc = UrmaManager::Instance().GetMemoryBufferInfo(ubHandle, ubPtr, ubSize, urmaInfo);
+            }
+            if (ubRc.IsOk()) {
+                getParam.ubPreAllocHandle = ubHandle.get();
+            } else {
+                LOG(WARNING) << "UB buffer allocation failed: " << ubRc.ToString() << ", fallback to TCP";
+                ubHandle.reset();
+                ubPtr = nullptr;
+            }
+        }
+    }
+#endif
+
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_RPC_START);
     }
@@ -3018,10 +3061,48 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(getRc, "Get error");
     stagePoint.RecordAndReset(PerfKey::CLIENT_GET_BUFFERS_FROM_WORKER_PROCESS_RESPONSE);
 
+#ifdef USE_URMA
+    if (ubHandle != nullptr) {
+        uint64_t ubReadOffset = 0;
+        size_t origPayloadSize = payloads.size();
+        for (int i = 0; i < rsp.payload_info_size(); ++i) {
+            auto *pi = rsp.mutable_payload_info(i);
+            if (pi->part_index_size() != 0) continue;
+
+            uint64_t dataSize = static_cast<uint64_t>(pi->data_size());
+            if (ubReadOffset > ubSize || dataSize > ubSize - ubReadOffset) {
+                LOG(ERROR) << "UB payload overflow, object " << pi->object_key()
+                           << ", size " << dataSize << ", consumed " << ubReadOffset
+                           << ", buffer " << ubSize;
+                ClearUBPayloadPlaceholders(rsp, payloads, origPayloadSize);
+                ubHandle.reset();
+                ubBufferInfos.clear();
+                break;
+            }
+            payloads.emplace_back();
+            pi->add_part_index(payloads.size() - 1);
+
+            std::string mapKey = pi->object_key().empty()
+                ? objectsNeedToGet[pi->object_index()]
+                : pi->object_key();
+            FullParam param;
+            param.writeMode = WriteMode(pi->write_mode());
+            param.consistencyType = ConsistencyType(pi->consistency_type());
+            param.cacheType = CacheType(pi->cache_type());
+            auto bufferInfo = MakeObjectBufferInfo(
+                mapKey, ubPtr + ubReadOffset, dataSize, 0, param,
+                pi->is_seal(), version, {}, nullptr, nullptr, nullptr);
+            bufferInfo->ubGetBufferHandle = std::shared_ptr<void>(ubHandle, ubHandle.get());
+            ubBufferInfos[mapKey] = std::move(bufferInfo);
+            ubReadOffset += dataSize;
+        }
+    }
+#endif
+
     std::vector<std::string> failedObjectKey;
     failedObjectKey.reserve(objectsNeedToGet.size());
-    RETURN_IF_NOT_OK(
-        ProcessGetResponse(objectsNeedToGet, readParams, rsp, version, payloads, buffers, failedObjectKey));
+    RETURN_IF_NOT_OK(ProcessGetResponse(objectsNeedToGet, readParams, rsp, version, payloads,
+        buffers, failedObjectKey, ubBufferInfos));
 
     if (objectsNeedToGet.size() > failedObjectKey.size()) {
         totalPoint.Record();
@@ -3162,10 +3243,12 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
 #endif
 
 Status ObjectClientImpl::ProcessGetResponse(const std::vector<std::string> &objectKeys,
-                                            const std::vector<ReadParam> &readParams, GetRspPb &rsp, uint32_t version,
-                                            std::vector<RpcMessage> &payloads,
+                                            const std::vector<ReadParam> &readParams, GetRspPb &rsp,
+                                            uint32_t version, std::vector<RpcMessage> &payloads,
                                             std::vector<std::shared_ptr<Buffer>> &buffers,
-                                            std::vector<std::string> &failedObjectKey)
+                                            std::vector<std::string> &failedObjectKey,
+                                            const std::unordered_map<std::string,
+                                                std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos)
 {
     size_t shmCount = static_cast<size_t>(rsp.objects().size());
     size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
@@ -3180,7 +3263,8 @@ Status ObjectClientImpl::ProcessGetResponse(const std::vector<std::string> &obje
     }
     CHECK_FAIL_RETURN_STATUS(shmCount + noShmCount == objectKeys.size() && payloadSum == payloads.size(),
                              K_UNKNOWN_ERROR, "The response count in GetRspPb does not match with objects count.");
-    RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, version, readParams, payloads, buffers, failedObjectKey));
+    RETURN_IF_NOT_OK(GetObjectBuffers(objectKeys, rsp, version, readParams, payloads, buffers, failedObjectKey,
+                                      ubBufferInfos));
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     if (recvRc.IsError()) {
@@ -3196,14 +3280,15 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                                           uint32_t version, const std::vector<ReadParam> &readParams,
                                           std::vector<RpcMessage> &payloads,
                                           std::vector<std::shared_ptr<Buffer>> &buffers,
-                                          std::vector<std::string> &failedObjectKey)
+                                          std::vector<std::string> &failedObjectKey,
+                                          const std::unordered_map<std::string,
+                                              std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos)
 {
     size_t i = 0;
     size_t j = 0;
     size_t shmCount = static_cast<size_t>(rsp.objects().size());
     size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
-    size_t size = objectsNeedToGet.size();
-    for (size_t index = 0; index < size; index++) {
+    for (size_t index = 0; index < objectsNeedToGet.size(); index++) {
         const std::string &objectKey = objectsNeedToGet[index];
         Status status;
         std::shared_ptr<Buffer> &bufferPtr = buffers[i + j];
@@ -3235,7 +3320,10 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
             }
         } else if (isNoShm) {
             const GetRspPb::PayloadInfoPb &payloadInfo = rsp.payload_info(j);
-            status = SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, bufferPtr);
+            auto it = ubBufferInfos.find(objectKey);
+            status = (it != ubBufferInfos.end())
+                ? Buffer::CreateBuffer(it->second, shared_from_this(), bufferPtr)
+                : SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, bufferPtr);
             j++;
         } else {
             RETURN_STATUS(K_UNKNOWN_ERROR, "Object key does not match with GetRspPb");

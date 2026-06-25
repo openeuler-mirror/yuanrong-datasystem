@@ -373,6 +373,7 @@ struct ObjectBufferInfo {
     std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr;
     std::shared_ptr<UrmaRemoteAddrPb> ubUrmaDataInfo = nullptr;
     bool ubDataSentByMemoryCopy = false;
+    std::shared_ptr<void> ubGetBufferHandle;  // UB Get zero-copy: type-erased BufferHandle ref
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };
