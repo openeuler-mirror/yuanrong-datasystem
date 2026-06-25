@@ -96,6 +96,7 @@ struct GetParam {
     bool ubMetaResolved = false;  // True means UB meta lookup was already attempted for this request.
     int64_t ubGetObjMetaElapsedMs = 0;  // Time spent by UB Get pre-fetching object metadata before Get.
     AccessTransportKind *actualTransportKind = nullptr;  // Actual request transport after UB/TCP resolution.
+    const void *ubPreAllocHandle = nullptr;  // Pre-allocated UB handle (type-erased, non-owning).
 };
 
 struct PiplnRh2dParam {

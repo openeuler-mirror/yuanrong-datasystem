@@ -161,6 +161,14 @@ public:
                                uint64_t &bufferSize, UrmaRemoteAddrPb &urmaInfo);
 
     /**
+     * @brief Fill UrmaRemoteAddrPb from an existing BufferHandle without outputting bufferPtr/bufferSize.
+     * @param[in] handle The pre-allocated buffer handle.
+     * @param[out] urmaInfo Remote address info used by worker-side UrmaWritePayload.
+     * @return Status of the call.
+     */
+    Status FillRemoteAddr(const BufferHandle &handle, UrmaRemoteAddrPb &urmaInfo);
+
+    /**
      * @brief Check if Urma worker flag is set
      * @return True if flag is set, else false
      */

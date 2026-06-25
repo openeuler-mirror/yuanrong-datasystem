@@ -335,15 +335,11 @@ Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle,
     return Status::OK();
 }
 
-Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandle> &handler, uint8_t *&bufferPtr,
-                                        uint64_t &bufferSize, UrmaRemoteAddrPb &urmaInfo)
+Status UrmaManager::FillRemoteAddr(const BufferHandle &handle, UrmaRemoteAddrPb &urmaInfo)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(memoryBuffer_);
-    uint32_t bufferOffset = handler->GetOffset();
-    bufferPtr = reinterpret_cast<uint8_t *>(handler->GetPointer());
-    bufferSize = handler->GetSegmentSize();
     urmaInfo.set_seg_va(reinterpret_cast<uint64_t>(memoryBuffer_));
-    urmaInfo.set_seg_data_offset(bufferOffset);
+    urmaInfo.set_seg_data_offset(handle.GetOffset());
     auto *requestAddr = urmaInfo.mutable_request_address();
     requestAddr->set_host(localUrmaInfo_.localAddress.Host());
     requestAddr->set_port(localUrmaInfo_.localAddress.Port());
@@ -351,12 +347,20 @@ Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandl
         urmaInfo.set_client_id(GetClientId());
     }
     if (IsUbNumaAffinityEnabled()) {
-        auto chipId = NumaIdToChipId(handler->GetNumaId());
+        auto chipId = NumaIdToChipId(handle.GetNumaId());
         if (chipId != INVALID_CHIP_ID) {
             urmaInfo.set_chip_id(chipId);
         }
     }
     return Status::OK();
+}
+
+Status UrmaManager::GetMemoryBufferInfo(std::shared_ptr<UrmaManager::BufferHandle> &handler, uint8_t *&bufferPtr,
+                                        uint64_t &bufferSize, UrmaRemoteAddrPb &urmaInfo)
+{
+    bufferPtr = reinterpret_cast<uint8_t *>(handler->GetPointer());
+    bufferSize = handler->GetSegmentSize();
+    return FillRemoteAddr(*handler, urmaInfo);
 }
 
 Status UrmaManager::InitLocalUrmaInfo(const HostPort &hostport)

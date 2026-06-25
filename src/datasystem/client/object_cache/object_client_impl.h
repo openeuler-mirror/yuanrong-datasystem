@@ -884,7 +884,9 @@ private:
      */
     Status ProcessGetResponse(const std::vector<std::string> &objectKeys, const std::vector<ReadParam> &readParams,
                               GetRspPb &rsp, uint32_t version, std::vector<RpcMessage> &payloads,
-                              std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey);
+                              std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
+                              const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
+                                  &ubBufferInfos = {});
 
     /**
      * @brief Get shared memory data buffers from worker.
@@ -898,7 +900,9 @@ private:
      */
     Status GetObjectBuffers(const std::vector<std::string> &objectsNeedToGet, const GetRspPb &rsp, uint32_t version,
                             const std::vector<ReadParam> &readParams, std::vector<RpcMessage> &payloads,
-                            std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey);
+                            std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
+                            const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
+                                &ubBufferInfos = {});
     /**
      * @brief Fill in buffer for non-shm cases.
      * @param[in] objectKey The object key of the cache object.
