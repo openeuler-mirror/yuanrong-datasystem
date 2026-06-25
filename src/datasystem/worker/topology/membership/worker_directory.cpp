@@ -35,6 +35,19 @@ Status WorkerDirectory::ResolveWorker(const std::string &workerId, WorkerEndpoin
     return Status::OK();
 }
 
+Status WorkerDirectory::ResolveWorkerByAddress(const std::string &workerAddress, WorkerEndpoint &endpoint) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr, K_NOT_READY, "Worker directory snapshot is not published.");
+    auto idIter = snapshot_->workerIdsByAddress.find(workerAddress);
+    CHECK_FAIL_RETURN_STATUS(idIter != snapshot_->workerIdsByAddress.end(), K_NOT_FOUND,
+                             "Worker id is not found by address.");
+    auto endpointIter = snapshot_->workers.find(idIter->second);
+    CHECK_FAIL_RETURN_STATUS(endpointIter != snapshot_->workers.end(), K_NOT_FOUND, "Worker endpoint is not found.");
+    endpoint = endpointIter->second;
+    return Status::OK();
+}
+
 Status WorkerDirectory::GetLocalWorker(WorkerEndpoint &endpoint) const
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);

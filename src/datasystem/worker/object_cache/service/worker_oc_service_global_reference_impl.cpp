@@ -195,7 +195,9 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_QUERY_GLOBAL_REF_NUM);
     access.ObjectKeysRef(namespaceUris);
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(namespaceUris);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(namespaceUris);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
@@ -327,7 +329,9 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                                                               std::vector<std::string> &failIncIds)
 {
     const std::string &remoteClientId = req.remote_client_id();
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(firstIncIds);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(firstIncIds);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     Status lastErr;
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
@@ -404,7 +408,9 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 {
     INJECT_POINT("worker.gdecrease");
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(finishDecIds);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(finishDecIds);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     Status status = Status::OK();
 
     // Send requests for each master
@@ -487,7 +493,9 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
                                                                    std::vector<std::string> &failIncIds)
 {
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(firstIncIds);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(firstIncIds);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     // Send requests for each master
     Status lastErr;
     auto clientId = ClientKey::Intern(req.address());
@@ -631,7 +639,9 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
                                                                       std::vector<std::string> &failDecIds)
 {
     // Group ObjectKeys by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(finishDecIds);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(finishDecIds);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     Status status = Status::OK();
 
     // Send requests for each master
@@ -712,7 +722,9 @@ Status WorkerOcServiceGlobalReferenceImpl::IncNestedRef(const std::vector<std::s
 {
     // Send notifications to owner masters
     // Get map of objectKeys grouped by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(nestedObjectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {
@@ -739,7 +751,9 @@ Status WorkerOcServiceGlobalReferenceImpl::DecNestedRef(const std::vector<std::s
                                                         std::vector<std::string> &unAliveIds)
 {
     // Get map of objectKeys grouped by master
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(nestedObjectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(nestedObjectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {

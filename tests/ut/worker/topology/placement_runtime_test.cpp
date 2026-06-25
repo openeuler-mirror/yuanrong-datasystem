@@ -76,6 +76,8 @@ std::shared_ptr<WorkerDirectorySnapshot> MakeDirectory(
     snapshot->localAddress = MakeAddr(1111);
     snapshot->workers.emplace(WORKER_A, WorkerEndpoint{ WORKER_A, MakeAddr(1111), WorkerAvailability::READY });
     snapshot->workers.emplace(WORKER_B, WorkerEndpoint{ WORKER_B, MakeAddr(2222), workerBAvailability });
+    snapshot->workerIdsByAddress.emplace(MakeAddr(1111).ToString(), WORKER_A);
+    snapshot->workerIdsByAddress.emplace(MakeAddr(2222).ToString(), WORKER_B);
     return snapshot;
 }
 
@@ -159,6 +161,41 @@ TEST(PlacementRuntimeTest, WorkerDirectoryNotReadyThenLocal)
     EXPECT_EQ(local.availability, WorkerAvailability::READY);
 }
 
+TEST(PlacementRuntimeTest, WorkerDirectoryResolveByAddress)
+{
+    WorkerDirectory directory;
+    directory.Publish(MakeDirectory(WorkerAvailability::NOT_READY));
+
+    WorkerEndpoint endpoint;
+    EXPECT_TRUE(directory.ResolveWorkerByAddress(MakeAddr(2222).ToString(), endpoint).IsOk());
+    EXPECT_EQ(endpoint.workerId, WORKER_B);
+    EXPECT_EQ(endpoint.availability, WorkerAvailability::NOT_READY);
+
+    EXPECT_EQ(directory.ResolveWorkerByAddress(MakeAddr(3333).ToString(), endpoint).GetCode(), K_NOT_FOUND);
+}
+
+TEST(PlacementRuntimeTest, RoutingSnapshotTopologyFacts)
+{
+    RoutingSnapshotFacts facts;
+    facts.localOwnedRanges = { PlacementUnit{ 10, 20 } };
+    facts.workerOrder = { WORKER_A, WORKER_B };
+    facts.validWorkerIds = { WORKER_A, WORKER_B };
+    facts.activeWorkerIds = { WORKER_A };
+    std::vector<RoutingOwnerEntry> owners{
+        { PlacementUnit{ 10, 20 }, WORKER_A },
+        { PlacementUnit{ 20, 30 }, WORKER_B },
+    };
+
+    RoutingSnapshot snapshot(VERSION_1, std::move(owners), std::move(facts));
+    EXPECT_EQ(snapshot.LocalOwnedRanges().size(), 1ul);
+    EXPECT_EQ(snapshot.ValidWorkerIds().size(), 2ul);
+    EXPECT_EQ(snapshot.ActiveWorkerIds().size(), 1ul);
+
+    std::string standbyWorkerId;
+    EXPECT_TRUE(snapshot.GetStandbyWorkerId(WORKER_A, standbyWorkerId).IsOk());
+    EXPECT_EQ(standbyWorkerId, WORKER_B);
+}
+
 TEST(PlacementRuntimeTest, RoutingCacheVersionMismatchMiss)
 {
     RoutingCache cache;
@@ -203,7 +240,7 @@ TEST(PlacementRuntimeTest, LocateMetaOwnerRequireAvailableTarget)
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
     auto directory = std::make_shared<WorkerDirectory>();
-    directory->Publish(MakeDirectory(WorkerAvailability::UNAVAILABLE));
+    directory->Publish(MakeDirectory(WorkerAvailability::NOT_READY));
     WorkerLocator locator(routingView, directory);
 
     RouteDecision decision;
@@ -309,7 +346,7 @@ TEST(PlacementRuntimeTest, RedirectTargetUnavailableStillRedirects)
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
     auto directory = std::make_shared<WorkerDirectory>();
-    directory->Publish(MakeDirectory(WorkerAvailability::UNAVAILABLE));
+    directory->Publish(MakeDirectory(WorkerAvailability::NOT_READY));
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     RedirectPolicy policy(routingView, directory, locator);
 

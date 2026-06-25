@@ -263,12 +263,10 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
 {
     Status lastRc;
     // Group ObjectKeys by masterId
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMasterId;
-    std::optional<std::unordered_map<std::string, Status>> errInfos;
-    errInfos.emplace();
-    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(needDeleteObjectKey, objKeysGrpByMasterId, errInfos);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(needDeleteObjectKey);
+    auto &objKeysGrpByMasterId = grouped.groups;
 
-    for (const auto &kv : *errInfos) {
+    for (const auto &kv : grouped.failures) {
         // If objectKey don't belong to any master, just ignore it.
         if (kv.second.GetCode() != K_NOT_FOUND) {
             failedObjectKeys.emplace(kv.first);
@@ -279,10 +277,6 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
     // Send requests for each master
     for (auto &item : objKeysGrpByMasterId) {
         HostPort masterAddr = item.first.GetAddressAndSaveDbName();
-        // Skip the empty master addr, the related object exists in errInfos.
-        if (masterAddr.Empty()) {
-            continue;
-        }
         std::vector<std::string> &currentNeedDeleteObjectKey = item.second;
         LOG(INFO) << "Delete all copy meta from master: " << masterAddr
                   << ", objects: " << VectorToString(currentNeedDeleteObjectKey);

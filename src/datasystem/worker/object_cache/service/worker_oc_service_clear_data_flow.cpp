@@ -22,7 +22,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -79,10 +78,10 @@ void HandleCheckObjectDataLocationRsp(const Status &rc, const master::CheckObjec
                                rsp.need_clear_object_keys().end());
 }
 
-void HandleGroupObjKeysByMasterErrors(const std::optional<std::unordered_map<std::string, Status>> &errInfos,
-                                      std::unordered_set<std::string> &failedIds)
+void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, Status> &failures,
+                                        std::unordered_set<std::string> &failedIds)
 {
-    if (!errInfos || errInfos->empty()) {
+    if (failures.empty()) {
         return;
     }
     struct GetMasterErrorSummary {
@@ -90,7 +89,7 @@ void HandleGroupObjKeysByMasterErrors(const std::optional<std::unordered_map<std
         std::vector<std::string> sampleObjectKeys;
     };
     std::unordered_map<std::string, GetMasterErrorSummary> summaries;
-    for (const auto &kv : *errInfos) {
+    for (const auto &kv : failures) {
         failedIds.emplace(kv.first);
         auto &summary = summaries[kv.second.ToString()];
         summary.count++;
@@ -350,17 +349,11 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
     if (objectKeys.empty()) {
         return;
     }
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMasterId;
-    std::optional<std::unordered_map<std::string, Status>> errInfos;
-    errInfos.emplace();
-    clusterManager_->GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMasterId, errInfos);
-    HandleGroupObjKeysByMasterErrors(errInfos, failedIds);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto &objKeysGrpByMasterId = grouped.groups;
+    HandleGroupKeysByMetaOwnerFailures(grouped.failures, failedIds);
 
     for (auto &item : objKeysGrpByMasterId) {
-        if (item.first.Empty()) {
-            InsertFailedIds(item.second, failedIds);
-            continue;
-        }
         auto workerMasterApi =
             GetWorkerMasterApiForClear(clusterManager_, workerMasterApiManager_, item.first, item.second, failedIds);
         if (workerMasterApi == nullptr) {

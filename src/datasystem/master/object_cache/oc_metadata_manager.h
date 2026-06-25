@@ -1335,6 +1335,34 @@ private:
                                const std::set<ImmutableString> &nestedObjectKeys, TbbMetaTable::accessor &accessor);
 
     /**
+     * @brief Persist first-time meta to the in-memory table and rocksdb.
+     *
+     * Builds the meta cache from newMeta, writes it to the accessor, serializes and persists to rocksdb, and releases
+     * the accessor on success. On failure the accessor entry is erased and the error is returned.
+     * @param[in] newMeta Metadata of object.
+     * @param[in] address Server address.
+     * @param[in] version Object version.
+     * @param[in/out] accessor Tbb table accessor with lock and data; released on success.
+     * @param[out] metaCache The built meta cache, valid on success.
+     * @return Status of call.
+     */
+    Status PersistCreatedMeta(const ObjectMetaPb &newMeta, const std::string &address, int64_t version,
+                              TbbMetaTable::accessor &accessor, ObjectMeta &metaCache);
+
+    /**
+     * @brief Maintain nested reference dependencies for a freshly created object.
+     *
+     * Increases the nested ref count for the created object, then for each nested key either increases the local ref
+     * count (when it belongs to this master) or notifies the owning master via the source worker.
+     * @param[in] objectKey The created object key.
+     * @param[in] address Source worker address.
+     * @param[in] nestedObjectKeys nested object keys.
+     * @return Status of call.
+     */
+    Status HandleNestedRefsOnCreate(const std::string &objectKey, const std::string &address,
+                                    const std::set<ImmutableString> &nestedObjectKeys);
+
+    /**
      * @brief Create pending meta entry for the first-time create meta rpc.
      * @param[in] newMeta Metadata of object.
      * @param[in] address Server address.

@@ -39,7 +39,17 @@
   - drives passive scale-down by demoting timed-out nodes, notifying metadata/slot-recovery events, and calling `HashRing::RemoveWorkers`;
   - delegates voluntary scale-down to `HashRing::VoluntaryScaleDown` after marking local cluster-manager state as leaving;
   - triggers restart/network-recovery reconciliation through event subscribers;
-  - routes object metadata requests through the local hash ring.
+  - owns the B0 `PlacementFacade` backed by local R0 routing and worker-directory snapshots; business route and
+    placement-scope callers use narrow `ClusterManager` methods such as `LocateMetaOwner`, `LocateMetaOwnersBatch`,
+    `EvaluateRedirect`, and `IsInRange`, while `placementFacade_` stays internal;
+  - routes batch metadata-owner groups through one `LocateMetaOwnersBatch` call that also applies local availability
+    facts, so callers should not add a second `CheckConnection` pass after grouping;
+  - evaluates master metadata redirect through `EvaluateRedirect`; the old hash-ring redirect event is not on the
+    business redirect path;
+  - publishes an immutable R0 `WorkerDirectorySnapshot` through `ClusterManager::GetWorkerDirectory()` from
+    `clusterNodeTable_` membership, using hash-ring uuid/address facts only to resolve worker ids for node-table
+    addresses; topology availability is two-state (`READY` or `NOT_READY`) and follows `ClusterNode::IsActive()`;
+  - routes outward-facing fact queries such as connection availability, worker-id lookup by address, primary replica lookup, valid/active worker lists, standby worker lookup, local worker uuid, worker count, and local hash ranges through topology snapshots instead of direct `hashRing_` or `clusterNodeTable_` reads;
   - exposes a worker readiness probe file through `worker_health_check`.
 - Pending verification:
   - exact semantics of every object-cache and stream-cache subscriber for node timeout/recovery;
@@ -98,12 +108,18 @@
   - `SyncNodeTableWithHashRing`
   - `CleanupWorker`
 - Routing entrypoints:
+  - `GetWorkerDirectory`
+  - `LocateMetaOwner`
+  - `LocateMetaOwnersBatch`
+  - `EvaluateRedirect`
+  - `IsInRange`
   - `GetMetaAddress`
   - `GetMetaAddressNotCheckConnection`
   - `GetMasterAddr`
   - `GetPrimaryReplicaLocationByObjectKey`
   - `GetPrimaryReplicaLocationByAddr`
-  - `GroupObjKeysByMasterHostPort`
+  - `GroupKeysByMetaOwner`
+  - `GroupKeysByMetaOwnerWithIndex`
 - Health probe entrypoints:
   - `ResetHealthProbe`
   - `SetHealthProbe`

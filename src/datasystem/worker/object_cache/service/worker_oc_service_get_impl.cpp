@@ -1436,40 +1436,28 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
 }
 
 void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
-    const std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
+    const std::unordered_set<std::string> &routeFailedObjectKeys,
     std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
     std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys)
 {
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
-    if (objKeysUndecidedMaster.empty() && objectKeysPuzzled.empty()) {
+    if (routeFailedObjectKeys.empty() && objectKeysPuzzled.empty()) {
         return;
     }
 
     std::stringstream msg;
     msg << "Try get some miss objs from etcd:" << VectorToString(objectKeysPuzzled);
-    for (const auto &iter : objKeysUndecidedMaster) {
-        msg << VectorToString(iter.second);
-    }
+    msg << ", route failed objs:";
+    msg << VectorToString(routeFailedObjectKeys);
     LOG(INFO) << msg.str();
 
-    std::unordered_map<std::string, std::unordered_set<std::string>> groupedObjectKeysQueryMetaFailed;
-    for (const auto &objKey : objectKeysPuzzled) {
-        auto iter = groupedObjectKeysQueryMetaFailed.find("");
-        if (iter == std::end(groupedObjectKeysQueryMetaFailed)) {
-            std::unordered_set<std::string> objectKeyList({ objKey });
-            groupedObjectKeysQueryMetaFailed.insert(std::make_pair("", std::move(objectKeyList)));
-        } else {
-            iter->second.emplace(objKey);
-        }
+    if (!objectKeysPuzzled.empty()) {
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(objectKeysPuzzled, queryMetas, absentObjectKeys),
+                     "Query metadata from etcd for puzzled keys failed.");
     }
-
-    for (const auto &kv : groupedObjectKeysQueryMetaFailed) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd by hash failed.");
-    }
-    for (const auto &kv : objKeysUndecidedMaster) {
-        LOG_IF_ERROR(QueryMetaDataFromEtcd(kv.second, queryMetas, absentObjectKeys),
-                     "Query metadata from etcd by hash failed.");
+    if (!routeFailedObjectKeys.empty()) {
+        LOG_IF_ERROR(QueryMetaDataFromEtcd(routeFailedObjectKeys, queryMetas, absentObjectKeys),
+                     "Query metadata from etcd for route failed keys failed.");
     }
 }
 
@@ -1485,10 +1473,14 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     std::map<std::string, uint64_t> &absentObjectKeysWithVersion = result.absentObjectKeysWithVersion;
     INJECT_POINT("worker.before_query_meta");
     // 1. Get map of objectKeys grouped by master
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysUndecidedMaster;
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
-    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysUndecidedMaster);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto &objKeysGrpByMaster = grouped.groups;
+    std::unordered_set<std::string> routeFailedObjectKeys;
+    routeFailedObjectKeys.reserve(grouped.failures.size());
+    for (const auto &failure : grouped.failures) {
+        routeFailedObjectKeys.emplace(failure.first);
+    }
     // 2. Send requests for each master
     std::vector<std::future<Status>> futures;
     futures.reserve(objKeysGrpByMaster.size());
@@ -1577,14 +1569,12 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     // If l2cache is disabled, there is no need to query meta in etcd.
     bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
     if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {
-        ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(objKeysUndecidedMaster, std::move(objectKeysNotExist),
+        ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(routeFailedObjectKeys, std::move(objectKeysNotExist),
                                                        objectKeysPuzzled, queryMetas, absentObjectKeys);
     } else {
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysPuzzled.begin(), objectKeysPuzzled.end());
-        for (const auto &kv : objKeysUndecidedMaster) {
-            absentObjectKeys.insert(absentObjectKeys.end(), kv.second.begin(), kv.second.end());
-        }
+        absentObjectKeys.insert(absentObjectKeys.end(), routeFailedObjectKeys.begin(), routeFailedObjectKeys.end());
     }
     for (const auto &id : absentObjectKeys) {
         auto it = deletingObjectsWithVersion.find(id);
@@ -2202,7 +2192,9 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
         objectKeys.emplace_back(param.objectKey);
     }
     // grouped by master address
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> paramsGroupByAddress;
     paramsGroupByAddress.reserve(objKeysGrpByMaster.size());
     std::vector<UpdateLocationParam> params = task.ExtractParams();
@@ -2383,7 +2375,7 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
     CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(objKey, metaAddrInfo));
+    RETURN_IF_NOT_OK(clusterManager_->LocateMetaOwner(objKey, true, metaAddrInfo));
     masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
     return Status::OK();
 }
@@ -2543,9 +2535,8 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
                                                   std::unordered_map<std::string, ObjectLocationInfoPb> &result,
                                                   Status &lastRc)
 {
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-    std::unordered_map<std::string, std::unordered_set<std::string>> objKeysNotInHashRing;
-    clusterManager_->GroupObjKeysByMasterHostPort(objectKeys, objKeysGrpByMaster, objKeysNotInHashRing);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto &objKeysGrpByMaster = grouped.groups;
     for (auto &[master, objs] : objKeysGrpByMaster) {
         HostPort workerAddr = master.GetAddressAndSaveDbName();
         master::GetObjectLocationsReqPb masterReq;

@@ -104,7 +104,10 @@ Status SCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
     info.destAddr = dest;
     info.destDbName = destDbName;
     scMetadataManager->GetMetasMatch(
-        [this, &ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.streamNames);
+        [this, ranges](const std::string &objKey) {
+            return cm_->IsInRange(ranges, objKey);
+        },
+        info.streamNames);
 
     return MigrateMetaDataWithRetry(scMetadataManager, info, isNetworkRecovery);
 }

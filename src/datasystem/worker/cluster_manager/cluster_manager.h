@@ -21,8 +21,9 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_CLUSTER_MANGER_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_CLUSTER_MANGER_H
 
+#include <cmath>
 #include <condition_variable>
-#include <iterator>
+#include <list>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -53,6 +54,8 @@
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
+#include "datasystem/worker/topology/membership/worker_directory.h"
+#include "datasystem/worker/topology/runtime/placement_facade.h"
 
 namespace datasystem {
 struct ClusterInfo {
@@ -70,6 +73,32 @@ struct ClusterInfo {
  */
 class ClusterManager {
 public:
+    struct MetaOwnerKeyGroups {
+        std::unordered_map<MetaAddrInfo, std::vector<std::string>> groups;
+        std::unordered_map<std::string, Status> failures;
+
+        /**
+         * @brief Appends failed route keys to a group to preserve legacy empty-master handling.
+         * @param[in] metaAddrInfo Destination group. Defaults to empty master.
+         */
+        void AppendFailuresToGroup(const MetaAddrInfo &metaAddrInfo = MetaAddrInfo())
+        {
+            if (failures.empty()) {
+                return;
+            }
+            auto &keys = groups[metaAddrInfo];
+            keys.reserve(keys.size() + failures.size());
+            for (const auto &failure : failures) {
+                keys.emplace_back(failure.first);
+            }
+        }
+    };
+
+    struct MetaOwnerIndexedKeyGroups {
+        std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>> groups;
+        std::unordered_map<std::string, Status> failures;
+    };
+
     /**
      * @brief Constructor
      */
@@ -132,9 +161,11 @@ public:
     /**
      * @brief Check rpc network status between the caller node and target node
      * @param[in] nodeAddr The HostPort of the node to check
+     * @param[in] allowDirectoryLag Whether to tolerate a target that is present in routing but not yet confirmed by the
+     * local worker-directory membership snapshot.
      * @return Status of the call
      */
-    Status CheckConnection(const HostPort &nodeAddr, bool allowNotFound = false);
+    Status CheckConnection(const HostPort &nodeAddr, bool allowDirectoryLag = false);
 
     /**
      * @brief Check if the current node is the master node of the cluster.
@@ -146,12 +177,13 @@ public:
     }
 
     /**
-     * @brief Get redirct meta address
-     * @param objKey The key of object
-     * @param masterAddr redirect meta address.
-     * @return if need to redirect.
+     * @brief Return the immutable worker directory published by cluster-manager node events.
+     * @return Worker directory for R0 request read path.
      */
-    bool NeedRedirect(const std::string &objKey, HostPort &masterAddr);
+    std::shared_ptr<topology::IWorkerDirectory> GetWorkerDirectory() const
+    {
+        return workerDirectory_;
+    }
 
     /**
      * @brief Check whether the node on address needs reconciliation or not. If yes, trigger reconciliation.
@@ -163,12 +195,39 @@ public:
                                        bool isDRst = false);
 
     /**
-     * @brief Check object key hash value in range or not
-     * @param[in] ranges Hash range.
-     * @param[in] objKey Object key.
-     * @return Whether object key hash value in range.
+     * @brief Check whether a key hashes into the given ranges via the placement read path.
+     * @param[in] ranges Hash range set. Empty ranges never match.
+     * @param[in] objKey Object key, stream name, or other business id to hash.
+     * @return True if the hashed key falls inside any range, false otherwise.
+     *
+     * Backed by the local immutable routing snapshot; replaces the legacy hash-ring predicate.
      */
     bool IsInRange(const worker::HashRange &ranges, const std::string &objKey);
+
+    /**
+     * @brief Locate the metadata owner endpoint for one object key via the placement read path.
+     * @param[in] objKey Business object key.
+     * @param[in] requireAvailableTarget Whether the owner must be READY in the local worker directory.
+     * @param[out] metaAddrInfo Resolved owner endpoint and worker id as a MetaAddrInfo.
+     * @return K_OK on success; K_NOT_READY if no routing snapshot or facade is available; K_NOT_FOUND if the owner
+     * endpoint is absent; K_RPC_UNAVAILABLE when requireAvailableTarget rejects a non-READY owner.
+     *
+     * Centralized mode is derived from the cluster manager state. This method only reads local immutable snapshots
+     * and must not perform repository/backend IO, CAS, or task scan.
+     */
+    Status LocateMetaOwner(const std::string &objKey, bool requireAvailableTarget, MetaAddrInfo &metaAddrInfo);
+
+    /**
+     * @brief Evaluate whether the local node should serve or redirect one object key via the placement read path.
+     * @param[in] key Business object key.
+     * @param[out] newAddr Resolved redirect target address when the action is REDIRECT.
+     * @return True when the policy decides to REDIRECT (newAddr filled), false for SERVE_LOCAL or when the local
+     * routing state cannot evaluate the request.
+     *
+     * Serves master metadata response filling. Only reads local immutable snapshots and worker-directory facts;
+     * does not scan tasks, wait for topology progress, or access the backend.
+     */
+    bool EvaluateRedirect(const std::string &key, std::string &newAddr);
 
     /**
      * @brief Check if a worker node is in the pre-leaving state.
@@ -257,117 +316,36 @@ public:
      */
     Status WaitNodeJoinToTable();
 
-    void GroupObjKeysByMasterHostPort(
-        const std::vector<std::string> &objectKeys, const std::optional<std::set<size_t>> &targetIndexs,
-        std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>> &objKeysGrpByMaster,
-        std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster)
-    {
-        Hash2MetaInfoType hash2MetaInfo;
-        bool disableCache = objectKeys.size() == 1;
-        if (targetIndexs) {
-            for (auto index : *targetIndexs) {
-                const auto &objectKey = objectKeys[index];
-                MetaAddrInfo metaAddrInfo;
-                std::optional<Status> rc;
-                FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
-                auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
-                con.emplace_back(std::make_pair(objectKey, index));
-            }
-        } else {
-            for (size_t i = 0; i < objectKeys.size(); i++) {
-                const auto &objectKey = objectKeys[i];
-                MetaAddrInfo metaAddrInfo;
-                std::optional<Status> rc;
-                FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
-                auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
-                con.emplace_back(std::make_pair(objectKey, i));
-            }
-        }
-        std::optional<std::unordered_map<std::string, Status>> errInfos;
-        errInfos.emplace();
-        ModifyObjKeysGrpByMasterByCheckConnection(objKeysGrpByMaster, errInfos);
-        if (errInfos && !errInfos->empty()) {
-            LOG(INFO) << "Check connection group by master failed, first errInfo: key is " << errInfos->begin()->first
-                      << ", err is " << errInfos->begin()->second.ToString();
-        }
-        MoveFailedObjKeysFromObjKeysGrpByMaster(objKeysGrpByMaster, objKeysUndecidedMaster);
-    }
+    /**
+     * @brief Groups object keys by metadata owner and keeps original input indexes for each key.
+     * @param[in] objectKeys Object keys to route.
+     * @return Groups by metadata owner and per-key route failures.
+     */
+    MetaOwnerIndexedKeyGroups GroupKeysByMetaOwnerWithIndex(const std::vector<std::string> &objectKeys);
 
     /**
-     * @brief Groups ObjectKeys by their corresponding worker.
-     * @param[in] objectKeys Container(Vector or list) of objectkeys
-     * @param[out] objKeysGrpByMaster map with master as key and objectkeys belong to the master as value
-     * @param[out] objKeysUndecidedMaster IDs without known master in hash ring
+     * @brief Groups object keys by metadata owner.
+     * @param[in] objectKeys Object keys to route.
+     * @return Groups by metadata owner and per-key route failures.
      */
-    template <class container>
-    void GroupObjKeysByMasterHostPort(
-        const container &objectKeys, std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-        std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster)
-    {
-        objKeysGrpByMaster = GroupObjKeysByMasterHostPort(objectKeys);
-        MoveFailedObjKeysFromObjKeysGrpByMaster(objKeysGrpByMaster, objKeysUndecidedMaster);
-    }
+    MetaOwnerKeyGroups GroupKeysByMetaOwner(const std::vector<std::string> &objectKeys);
 
     /**
-     * @brief Groups ObjectKeys by their corresponding worker.
-     * @param[in] objectKeys Container(Vector or list) of objectkeys
-     * @return map with MetaAddrInfo as key and objectkeys belong to the master as value
+     * @brief Groups object keys by metadata owner.
+     * @param[in] objectKeys Object keys to route.
+     * @return Groups by metadata owner and per-key route failures.
      */
-    template <class container>
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> GroupObjKeysByMasterHostPort(const container &objectKeys)
+    MetaOwnerKeyGroups GroupKeysByMetaOwner(const std::unordered_set<std::string> &objectKeys)
     {
-        // go through objectKeys and group them by master and db name.
-        std::unordered_map<MetaAddrInfo, std::vector<std::string>> objKeysGrpByMaster;
-        Timer timer;
-        std::optional<std::unordered_map<std::string, Status>> errInfos;
-        GroupObjKeysByMasterHostPortWithStatus(objectKeys, objKeysGrpByMaster, errInfos);
-        auto elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecond()));
-        workerOperationTimeCost.Append("GroupObjKeys", elapsedMs);
-        return objKeysGrpByMaster;
-    }
-
-    /**
-     * @brief Groups ObjectKeys by their corresponding worker.
-     * @param[in] objectKeys Container(Vector or list) of objectkeys
-     * @param[out] objKeysGrpByMaster map with MetaAddrInfo as key and objectkeys belong to the master as value
-     * @param[out] errInfos the error info for objects.
-     */
-    template <class container>
-    void GroupObjKeysByMasterHostPortWithStatus(
-        const container &objectKeys, std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster,
-        std::optional<std::unordered_map<std::string, Status>> &errInfos)
-    {
-        Hash2MetaInfoType hash2MetaInfo;
-        bool disableCache = objectKeys.size() == 1;
-        // go through objectKeys and group them by master and db name.
-        for (const auto &objectKey : objectKeys) {
-            MetaAddrInfo metaAddrInfo;
-            std::optional<Status> rc;
-            rc.emplace();
-            INJECT_POINT_NO_RETURN(
-                "ClusterManager.GroupObjKeysByMasterHostPortWithStatus.PreFetchDestAddrFromAnywhere");
-            FetchDestAddrFromAnywhere(objectKey, hash2MetaInfo, rc, metaAddrInfo, disableCache);
-            auto &con = objKeysGrpByMaster.try_emplace(std::move(metaAddrInfo)).first->second;
-            con.emplace_back(objectKey);
-            if (rc->IsOk()) {
-                continue;
-            }
-            if (errInfos) {
-                (void)errInfos->emplace(objectKey, *rc);
-            }
-            VLOG(1) << FormatString("objKey[%s] can not find master, status: %s", objectKey, rc->ToString());
-        }
-        ModifyObjKeysGrpByMasterByCheckConnection(objKeysGrpByMaster, errInfos);
+        std::vector<std::string> keys(objectKeys.begin(), objectKeys.end());
+        return GroupKeysByMetaOwnerImpl(keys);
     }
 
     /**
      * @brief Get local worker uuid.
      * @return Return the local worker uuid.
      */
-    std::string GetLocalWorkerUuid() const
-    {
-        return hashRing_->GetLocalWorkerUuid();
-    }
+    std::string GetLocalWorkerUuid() const;
 
     /**
      * @brief Get the number of workers in hashring.
@@ -482,10 +460,7 @@ public:
      * @param[out] standbyWorker The address of standby worker.
      * @return Status of the call.
      */
-    Status GetStandbyWorker(std::string &standbyWorker)
-    {
-        return hashRing_->GetStandbyWorker(standbyWorker);
-    }
+    Status GetStandbyWorker(std::string &standbyWorker);
 
     /**
      * @brief Get active workers.
@@ -493,10 +468,7 @@ public:
      * @param[out] activeWorkers Active worker list.
      * @return Status of the call.
      */
-    Status GetActiveWorkers(uint32_t num, std::vector<std::string> &activeWorkers)
-    {
-        return hashRing_->GetActiveWorkers(num, activeWorkers);
-    }
+    Status GetActiveWorkers(uint32_t num, std::vector<std::string> &activeWorkers);
 
     /**
      * @brief Get the address of next worker.
@@ -504,10 +476,7 @@ public:
      * @param[out] nextWorker The address of next worker.
      * @return Status of the call.
      */
-    Status GetStandbyWorkerByAddr(const std::string &workerAddr, std::string &nextWorker)
-    {
-        return hashRing_->GetStandbyWorkerByAddr(workerAddr, nextWorker);
-    }
+    Status GetStandbyWorkerByAddr(const std::string &workerAddr, std::string &nextWorker);
 
     /**
      * @brief Gets master address for object key and checks if connection is successful
@@ -532,8 +501,15 @@ public:
      * @param[out] metaAddrInfo for the objectKey
      * @return Status
      */
-    Status GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo,
-                                            std::optional<RouteInfo> &routeInfo);
+    Status GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo);
+
+    /**
+     * @brief Locate metadata owners for a batch of keys via the placement read path.
+     * @param[in] objectKeys Object keys to route.
+     * @param[out] decision Batch route decision.
+     * @return Batch-level route status. Per-key failures are stored in decision.
+     */
+    Status LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys, topology::BatchRouteDecision &decision);
 
     /**
      * @brief When all reconciliations are done, replace "restart" with "start" in ETCD.
@@ -603,8 +579,6 @@ public:
     std::string GetWorkerAddress() const;
 
 protected:
-    using Hash2MetaInfoType = std::pair<std::map<HashPosition, std::pair<Range, MetaAddrInfo>>, int64_t>;
-
     /**
      * @brief Private nested class to represent a node in the cluster. ClusterManager will maintain a container
      * of these ClusterNodes.
@@ -842,9 +816,14 @@ protected:
      */
     inline Status FlushTmpClusterEvents()
     {
+        bool flushed = false;
         while (!IsCentralized() && hashRing_->IsWorkable() && !tmpClusterEvents_.empty()) {
             RETURN_IF_NOT_OK(HandleClusterEvent(tmpClusterEvents_.front()->event));
             tmpClusterEvents_.pop_front();
+            flushed = true;
+        }
+        if (flushed) {
+            PublishWorkerDirectorySnapshot();
         }
         return Status::OK();
     }
@@ -891,79 +870,23 @@ protected:
     void SyncNodeTableWithHashRing(const std::set<std::string> &workersInRing);
 
     /**
-     * @brief Process GetMetaAddress in case[hasWorkerId = false].
-     * @param[in] objKey Object key.
-     * @param[out] dbName The dbName.
-     * @param[out] masterAddr The address of the master that manages metadata for objKey.
-     * @return Status of the call.
+     * @brief Implements grouping object keys by metadata owner.
      */
-    Status ProcessGetMetaAddressByHash(const std::string &objKey, std::string &dbName, HostPort &masterAddr,
-                                       std::optional<RouteInfo> &routeInfo);
+    MetaOwnerKeyGroups GroupKeysByMetaOwnerImpl(const std::vector<std::string> &keys);
 
-    template <typename T>
-    void ModifyObjKeysGrpByMasterByCheckConnection(std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
-                                                   std::optional<std::unordered_map<std::string, Status>> &errInfos)
-    {
-        static const auto checkConnectionFunc = [](ClusterManager *ptr, const MetaAddrInfo &metaAddrInfo) -> Status {
-            const auto &masterAddr = metaAddrInfo.GetAddress();
-            return ptr->CheckConnection(masterAddr);
-        };
-        std::vector<std::string> failedMasters;
-        auto emptyIt = objKeysGrpByMaster.end();  // Iterator for the key of the target node not found.
-        for (auto it = objKeysGrpByMaster.begin(); it != objKeysGrpByMaster.end();) {
-            const auto &metaAddrInfo = it->first;
-            const auto &objectKeys = it->second;
-            if (metaAddrInfo.Empty()) {
-                emptyIt = it;
-                ++it;
-                continue;
-            }
-            Status rc = checkConnectionFunc(this, metaAddrInfo);
-            if (rc.IsOk()) {
-                ++it;
-                continue;
-            }
-            if (errInfos) {
-                for (const auto &objectKey : objectKeys) {
-                    (void)errInfos->emplace(ExtractObjectId(objectKey), rc);
-                }
-            }
-            failedMasters.emplace_back(metaAddrInfo.GetAddress().ToString());
-            if (emptyIt == objKeysGrpByMaster.end()) {
-                emptyIt = objKeysGrpByMaster.try_emplace(MetaAddrInfo()).first;
-            }
-            auto &con = emptyIt->second;
-            con.insert(con.end(), std::make_move_iterator(it->second.begin()),
-                       std::make_move_iterator(it->second.end()));
-            it = objKeysGrpByMaster.erase(it);
-        }
-        if (!failedMasters.empty()) {
-            LOG(INFO) << "Check connection failed: masters are " << VectorToString(failedMasters);
-        }
-    }
+    /**
+     * @brief Resolves one key from a batch route decision.
+     */
+    Status ResolveBatchRouteForKey(const std::string &objectKey, const Status &batchRc,
+                                   const topology::BatchRouteDecision &decision, MetaAddrInfo &metaAddrInfo) const;
 
-    template <typename T>
-    void MoveFailedObjKeysFromObjKeysGrpByMaster(
-        std::unordered_map<MetaAddrInfo, std::vector<T>> &objKeysGrpByMaster,
-        std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster)
-    {
-        auto emptyIt = objKeysGrpByMaster.find(MetaAddrInfo());
-        if (emptyIt == objKeysGrpByMaster.end()) {
-            return;
-        }
-        for (auto &objKey : emptyIt->second) {
-            auto &con = objKeysUndecidedMaster.try_emplace("").first->second;
-            (void)con.emplace(ExtractObjectId(std::move(objKey)));
-        }
-        (void)objKeysGrpByMaster.erase(emptyIt);
-    }
-
-    bool IfHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                               std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo);
-    void ProcessNotHitCacheWhenRouting(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                                       std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo, bool disableCache);
-    void FetchDestAddrFromAnywhere(const std::string &objectKey, Hash2MetaInfoType &hash2MetaInfo,
-                                   std::optional<Status> &rc, MetaAddrInfo &metaAddrInfo, bool disableCache);
+    /**
+     * @brief Publish an immutable R0 worker directory snapshot from hash-ring worker facts and cluster node state.
+     *
+     * This method only reads local memory and swaps a shared pointer. It must not perform RPC probing, repository IO,
+     * CAS/List/Watch, task scan, migration, recovery, or cleanup.
+     */
+    void PublishWorkerDirectorySnapshot();
 
     using TbbNodeTable = tbb::concurrent_hash_map<HostPort, std::unique_ptr<ClusterNode>, HashCompare>;
 
@@ -984,6 +907,9 @@ protected:
     std::unordered_map<std::string, TimerQueue::TimerImpl> nodeTableCompletionTimer_;
 
     topology::ICoordinationBackend *clusterStore_;
+    std::shared_ptr<topology::WorkerDirectory> workerDirectory_;
+    std::shared_ptr<topology::IRoutingView> routingView_;
+    std::shared_ptr<topology::IPlacementFacade> placementFacade_;
     mutable std::shared_timed_mutex mutex_;  // TbbNodeTable is not threadsafe for iterations
     std::unique_ptr<worker::HashRing> hashRing_{ nullptr };
 

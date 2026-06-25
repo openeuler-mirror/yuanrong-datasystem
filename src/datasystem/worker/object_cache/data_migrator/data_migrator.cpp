@@ -101,7 +101,9 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
 
     PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objectKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
         objKeysGrpByMaster.clear();
         MetaAddrInfo info;

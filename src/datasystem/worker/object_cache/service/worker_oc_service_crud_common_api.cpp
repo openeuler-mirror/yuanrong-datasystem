@@ -477,7 +477,9 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
     std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
     std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
 {
-    auto objKeysGrpByMaster = clusterManager_->GroupObjKeysByMasterHostPort(objKeys);
+    auto grouped = clusterManager_->GroupKeysByMetaOwner(objKeys);
+    grouped.AppendFailuresToGroup();
+    auto &objKeysGrpByMaster = grouped.groups;
     for (const auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
         std::vector<std::string> currentObjectKeysRemove = item.second;

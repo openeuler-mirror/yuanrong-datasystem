@@ -97,7 +97,10 @@ Status OCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
     info.destDbName = destDbName;
     info.ranges = ranges;
     ocMetadataManager->GetMetasMatch(
-        [this, &ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.objectKeys);
+        [this, ranges](const std::string &objKey) {
+            return cm_->IsInRange(ranges, objKey);
+        },
+        info.objectKeys);
 
     return MigrateMetaDataWithRetry(ocMetadataManager, info, isNetworkRecovery);
 }
@@ -375,7 +378,7 @@ void OCMigrateMetadataManager::FillRemoteClientIds(const std::shared_ptr<master:
 {
     std::vector<std::string> migrationClientIds;
     ocMetadataManager->GetRemoteClientIdsMatch(
-        [this, &ranges, &ocMetadataManager](const std::string &objKey) {
+        [this, ranges](const std::string &objKey) {
             return cm_->IsInRange(ranges, objKey);
         },
         migrationClientIds);
@@ -390,7 +393,7 @@ void OCMigrateMetadataManager::FillSubscribeInfos(const std::shared_ptr<master::
     std::vector<std::string> subObjs;
     std::vector<SubscribeInfoPb> subInfos;
     ocMetadataManager->GetSubscibeInfoMatch(
-        [this, &ranges, &ocMetadataManager](const std::string &objKey) {
+        [this, ranges](const std::string &objKey) {
             return cm_->IsInRange(ranges, objKey);
         },
         subObjs);
@@ -458,7 +461,7 @@ void OCMigrateMetadataManager::GetAndFillMigrateDeviceMetaInfo(
 {
     std::vector<std::string> migrationKeys;
     ocMetadataManager->GetDeviceOcManager()->GetDeviceMetasMatch(
-        [this, &ranges, &ocMetadataManager](const std::string &objKey) {
+        [this, ranges](const std::string &objKey) {
             return cm_->IsInRange(ranges, objKey);
         },
         migrationKeys);
@@ -488,8 +491,8 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
         count += (static_cast<uint64_t>(req.remote_client_ids_size()) + static_cast<uint64_t>(req.sub_metas_size()));
     }
 
-    auto matchFunc = [this, &info, &ocMetadataManager](const std::string &objKey) {
-        return cm_->IsInRange(info.ranges, objKey);
+    auto matchFunc = [this, ranges = info.ranges](const std::string &objKey) {
+        return cm_->IsInRange(ranges, objKey);
     };
 
     std::unordered_set<std::string> allKeys;

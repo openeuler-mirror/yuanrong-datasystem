@@ -283,6 +283,26 @@ private:
                                    std::map<ReadKey, LockedEntity> &entries);
 
     /**
+     * @brief Mark entries whose master is disconnected as need-to-delete.
+     *
+     * If the master is disconnected before updating the location, we have to give up retaining the replica, because the
+     * master will only manage the replica through the location. Keys owned by a disconnected master are collected into
+     * @p needSetDeleteObjectKeys so the caller can skip them when building update-location params.
+     * @param[in] successIds The success objectKeys.
+     * @param[in] entries The entries.
+     * @param[out] needSetDeleteObjectKeys Keys whose master is disconnected.
+     */
+    void MarkNeedDeleteForDisconnectedMasters(const std::vector<std::string> &successIds,
+                                              std::map<ReadKey, LockedEntity> &entries,
+                                              std::unordered_set<std::string> &needSetDeleteObjectKeys);
+
+    /**
+     * @brief Submit an async update-location task if the params are non-empty.
+     * @param[in] params The update location params; nothing is submitted when empty.
+     */
+    void SubmitAsyncUpdateLocation(std::vector<UpdateLocationParam> &params);
+
+    /**
      * @brief Get map of objectKeys grouped by master.
      * @param[in] objectKeys The vector of objectkeys.
      * @param[out] result The meta info result of objects.
@@ -893,14 +913,14 @@ private:
 
     /**
      * @brief Process the object keys that fail to query metadata If meta is stored in etcd.
-     * @param[in] objKeysUndecidedMaster The objects whose metadata location cannot be found.
+     * @param[in] routeFailedObjectKeys The objects whose metadata owner cannot be resolved.
      * @param[in] objectKeysPuzzled The objects whose metadata location can be found, but querying the metadata
      * fails. (Excluding objects that are confirmed to have no metadata)
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The objects whose metadata fails to be queried.
      */
     void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
-        const std::unordered_map<std::string, std::unordered_set<std::string>> &objKeysUndecidedMaster,
+        const std::unordered_set<std::string> &routeFailedObjectKeys,
         std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
         std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys);
 

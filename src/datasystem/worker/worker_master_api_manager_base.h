@@ -46,9 +46,10 @@ public:
     {
         CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
                                  "ClusterManager is empty, get WorkerMasterApi failed");
-        MetaAddrInfo metaAddrInfo;
         Timer timer;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->GetMetaAddress(id, metaAddrInfo), "GetMetaAddress failed");
+        MetaAddrInfo metaAddrInfo;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->LocateMetaOwner(id, true, metaAddrInfo),
+                                         "LocateMetaOwner failed");
         workerOperationTimeCost.Append("Get master address", timer.ElapsedMilliSecond());
         auto masterHostAddress = metaAddrInfo.GetAddressAndSaveDbName();
 

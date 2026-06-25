@@ -68,7 +68,8 @@ HashRing::HashRing(std::string workerAddr, topology::ICoordinationBackend *clust
     : workerAddr_(std::move(workerAddr)),
       clusterStore_(clusterStore),
       state_(INIT),
-      enableDistributedMaster_(FLAGS_enable_distributed_master)
+      enableDistributedMaster_(FLAGS_enable_distributed_master),
+      routingView_(std::make_shared<topology::RoutingView>())
 {
 }
 
@@ -633,6 +634,15 @@ Status HashRing::GetPrimaryWorkerUuid(const std::string &key, std::string &outWo
     return GetUuidByWorkerAddrNoLock(workerAddr, outWorkerUuid);
 }
 
+void HashRing::GetWorkerUuidAddressMapSnapshot(int64_t &version, std::string &localWorkerUuid,
+                                               std::map<std::string, HostPort> &workerUuid2AddrMap) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    version = currHashRingVersion_;
+    localWorkerUuid = workerUuid_;
+    workerUuid2AddrMap = workerUuid2AddrMap_;
+}
+
 Status HashRing::GetPrimaryWorkerAddr(uint32_t keyHash, std::string &outWorkerAddr) const
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
@@ -921,6 +931,7 @@ void HashRing::UpdateLocalRing(const HashRingPb &newRing, bool forceUpdate)
     // 1. update ring
     ringInfo_.CopyFrom(newRing);
     UpdateTokenMap();
+    PublishRoutingSnapshotNoLock();
     // 2. update state_ according to ringInfo_
     UpdateLocalState(forceUpdate);
 }
@@ -1176,6 +1187,87 @@ void HashRing::UpdateTokenMap()
     // 3. print log
     if (log.rdbuf()->in_avail() > 0) {
         LOG(INFO) << log.str();
+    }
+}
+
+void HashRing::PublishRoutingSnapshotNoLock()
+{
+    auto owners = BuildRoutingOwnersNoLock();
+    topology::RoutingSnapshotFacts facts;
+    FillRedirectHintsNoLock(facts);
+    FillLocalOwnedRangesNoLock(facts);
+    FillWorkerIdsNoLock(facts);
+    routingView_->Publish(
+        std::make_shared<topology::RoutingSnapshot>(currHashRingVersion_, std::move(owners), std::move(facts)));
+}
+
+std::vector<topology::RoutingOwnerEntry> HashRing::BuildRoutingOwnersNoLock() const
+{
+    std::vector<topology::RoutingOwnerEntry> owners;
+    owners.reserve(tokenMap_.size());
+    if (tokenMap_.empty()) {
+        return owners;
+    }
+    auto prev = std::prev(tokenMap_.end());
+    for (auto iter = tokenMap_.begin(); iter != tokenMap_.end(); ++iter) {
+        auto workerUuidIter = workerAddr2UuidMap_.find(iter->second);
+        if (workerUuidIter != workerAddr2UuidMap_.end()) {
+            owners.emplace_back(
+                topology::RoutingOwnerEntry{ topology::PlacementUnit{ prev->first, iter->first },
+                                             workerUuidIter->second });
+        }
+        prev = iter;
+    }
+    return owners;
+}
+
+void HashRing::FillRedirectHintsNoLock(topology::RoutingSnapshotFacts &facts) const
+{
+    for (const auto &addNodeInfo : ringInfo_.add_node_info()) {
+        HostPort targetAddress;
+        if (targetAddress.ParseString(addNodeInfo.first).IsError()) {
+            continue;
+        }
+        std::string targetWorkerId;
+        auto workerIdIter = workerAddr2UuidMap_.find(addNodeInfo.first);
+        if (workerIdIter != workerAddr2UuidMap_.end()) {
+            targetWorkerId = workerIdIter->second;
+        }
+        for (const auto &range : addNodeInfo.second.changed_ranges()) {
+            facts.redirectHints.emplace_back(
+                topology::RoutingRedirectHint{ topology::PlacementUnit{ range.from(), range.end() }, targetWorkerId,
+                                               targetAddress });
+        }
+    }
+}
+
+void HashRing::FillLocalOwnedRangesNoLock(topology::RoutingSnapshotFacts &facts) const
+{
+    const auto localRanges = BuildHashRangeForWorkerNoLock(workerAddr_);
+    facts.localOwnedRanges.reserve(localRanges.size());
+    for (const auto &range : localRanges) {
+        facts.localOwnedRanges.emplace_back(topology::PlacementUnit{ range.first, range.second });
+    }
+}
+
+void HashRing::FillWorkerIdsNoLock(topology::RoutingSnapshotFacts &facts) const
+{
+    for (const auto &worker : ringInfo_.workers()) {
+        if (worker.second.worker_uuid().empty()
+            || ringInfo_.del_node_info().find(worker.first) != ringInfo_.del_node_info().end()) {
+            continue;
+        }
+        facts.validWorkerIds.emplace(worker.second.worker_uuid());
+        if (worker.second.state() == WorkerPb::ACTIVE && !worker.second.need_scale_down()) {
+            facts.activeWorkerIds.emplace(worker.second.worker_uuid());
+        }
+    }
+    facts.workerOrder.reserve(workerUuidHashMap_.size());
+    for (const auto &worker : workerUuidHashMap_) {
+        auto workerIdIter = workerAddr2UuidMap_.find(worker.second);
+        if (workerIdIter != workerAddr2UuidMap_.end()) {
+            facts.workerOrder.emplace_back(workerIdIter->second);
+        }
     }
 }
 

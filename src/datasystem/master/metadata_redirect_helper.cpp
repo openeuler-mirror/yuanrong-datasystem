@@ -18,7 +18,6 @@
  * Description: Module responsible for managing the redirect metadata logic on the master.
  */
 #include "datasystem/master/metadata_redirect_helper.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
 
 namespace datasystem {
 namespace master {
@@ -34,13 +33,11 @@ void MetadataRedirectHelper::Shutdown()
 void MetadataRedirectHelper::CheckNeedToRedirectOrNot(const std::string &id, bool &needRedirect,
                                                       std::string &newMetaAddr)
 {
-    HostPort masterAddr;
-    HashRingEvent::CheckNeedRedirect::GetInstance().NotifyAll(id, masterAddr, needRedirect);
+    bool routeRedirect = clusterManager_ != nullptr && clusterManager_->EvaluateRedirect(id, newMetaAddr);
 
     if (MetaIsFound(id)) {
         if (ItemIsMigrating(id)) {
             INJECT_POINT("CheckNeedToRedirectOrNot.delay", []() {});
-            newMetaAddr = masterAddr.ToString();
             LOG(WARNING) << FormatString("meta is moving, need redirect id %s, redirect meta address %s", id,
                                          newMetaAddr);
             needRedirect = true;
@@ -49,8 +46,8 @@ void MetadataRedirectHelper::CheckNeedToRedirectOrNot(const std::string &id, boo
         needRedirect = false;
         return;
     }
+    needRedirect = routeRedirect;
     if (needRedirect) {
-        newMetaAddr = masterAddr.ToString();
         LOG(WARNING) << FormatString("meta need redirect, id: %s, meta address %s", id, newMetaAddr);
     }
 }
