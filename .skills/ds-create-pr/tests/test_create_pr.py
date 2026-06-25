@@ -132,13 +132,13 @@ class PullRequestBodyTemplateTest(unittest.TestCase):
 
 class SensitiveContentValidationTest(unittest.TestCase):
     def test_rejects_sensitive_pr_body_without_echoing_value(self) -> None:
-        body = "验证日志在 /home/example/workspace/project/logs/run.log，服务为 192.0.2.10:2222"
+        body = "验证日志在 <remote-log-dir>/run.log，服务为 192.0.2.10:2222"
         with self.assertRaises(SystemExit) as exc:
             MODULE.validate_no_sensitive_content({"PR body": body})
         message = str(exc.exception)
         self.assertIn("Sensitive information is not allowed", message)
         self.assertIn("PR body", message)
-        self.assertNotIn("/home/example/workspace", message)
+        self.assertNotIn("<remote-log-dir>", message)
         self.assertNotIn("192.0.2.10", message)
 
     def test_build_payload_rejects_sensitive_title_and_squash_commit_message(self) -> None:

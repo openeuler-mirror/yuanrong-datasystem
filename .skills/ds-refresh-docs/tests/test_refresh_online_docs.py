@@ -31,12 +31,12 @@ def subprocess_completed_process(returncode: int, stdout: str) -> object:
 class RefreshOnlineDocsTest(unittest.TestCase):
     def test_parse_gitcode_remote_accepts_https_and_ssh_fork_urls(self) -> None:
         self.assertEqual(
-            MODULE.parse_gitcode_remote("https://gitcode.com/yaohaolin/yuanrong-datasystem.git"),
-            ("yaohaolin", "yuanrong-datasystem"),
+            MODULE.parse_gitcode_remote("https://gitcode.com/example-user/yuanrong-datasystem.git"),
+            ("example-user", "yuanrong-datasystem"),
         )
         self.assertEqual(
-            MODULE.parse_gitcode_remote("git@gitcode.com:yaohaolin/yuanrong-datasystem.git"),
-            ("yaohaolin", "yuanrong-datasystem"),
+            MODULE.parse_gitcode_remote("git@gitcode.com:example-user/yuanrong-datasystem.git"),
+            ("example-user", "yuanrong-datasystem"),
         )
 
     def test_resolve_pr_source_remote_rejects_upstream_remote(self) -> None:
@@ -56,14 +56,14 @@ class RefreshOnlineDocsTest(unittest.TestCase):
             "docs-refresh-branch",
             "docs: refresh zh-cn latest pages",
             pr_body,
-            "yaohaolin",
+            "example-user",
             "yuanrong-datasystem",
         )
         self.assertEqual(command[0], MODULE.sys.executable)
         self.assertIn("--head", command)
-        self.assertIn("yaohaolin:docs-refresh-branch", command)
+        self.assertIn("example-user:docs-refresh-branch", command)
         self.assertIn("--fork-path", command)
-        self.assertIn("yaohaolin/yuanrong-datasystem", command)
+        self.assertIn("example-user/yuanrong-datasystem", command)
         self.assertIn(str(pr_body), command)
 
     def test_validate_upstream_url_accepts_https_and_ssh(self) -> None:

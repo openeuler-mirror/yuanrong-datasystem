@@ -39,8 +39,6 @@
   - read `log-sampler-design.md`
 - If the question is about request-stage access-log latency summaries:
   - read `request-stage-latency-trace-plan.md`
-- If the question is about the implemented Get slow-log change or validation result:
-  - read `plog-slow-get-implementation-summary.md`
 - If the question is about startup, file rotation, compression, monitor flush, or crash log output:
   - read `log-lifecycle-and-rotation.md`
 
@@ -75,8 +73,6 @@
 - `request-stage-latency-trace-plan.md`
   - request business-stage latency ticks, access-log summaries, slow-log gates, and compact proto phases; first scope is
     Get/Set/Create/Exist
-- `plog-slow-get-implementation-summary.md`
-  - implementation scope, changed slow Get segments, remote validation commands, and remaining validation blocker
 - `log-lifecycle-and-rotation.md`
   - startup flow, file lifecycle, monitor flushing, crash logging, flags, and environment overrides
 

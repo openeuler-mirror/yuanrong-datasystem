@@ -86,6 +86,9 @@ before implementation starts.
       randomness, wall-clock, scheduling, or shared-global-state flakiness.
 - [ ] Check that planned source, tests, scripts, docs, change notes, and generated artifacts will not expose secrets,
       private endpoints, local paths, account data, or sensitive payloads.
+- [ ] For `.repo_context/` updates, check that validation notes, incident evidence, examples, and historical summaries
+      use placeholders instead of real private hosts, IPs, ports, SSH users, personal namespaces, expanded home paths, or
+      absolute private log paths.
 - [ ] Decide whether `.repo_context` must be updated with the code change.
 
 Useful search patterns:
@@ -165,6 +168,9 @@ For non-trivial changes, write down the following in the working notes, change n
   assumptions, and shared global flag leakage.
 - Do not introduce secrets, private endpoints, personal paths, account identifiers, raw sensitive payloads, or sensitive
   logs into source, tests, scripts, docs, examples, generated artifacts, change notes, or development records.
+- In `.repo_context/`, record private validation, incident, and operations evidence through placeholders or sanitized
+  identifiers. Keep concrete private endpoints, personal accounts, expanded home directories, remote worktrees, and
+  absolute private log paths in local configuration or controlled logs, not in repository context.
 - When implementing requested follow-up fixes, verify the current source before declaring the item done. If the code still
   violates the requested behavior or design constraint, record the source-backed reason and keep working in the narrowest
   safe scope.

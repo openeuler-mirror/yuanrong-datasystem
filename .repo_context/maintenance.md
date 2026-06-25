@@ -152,6 +152,15 @@ For explicit repo-context generation or module backfill tasks, done means:
 - Prefer short bullets and tables over long prose.
 - Record commands exactly when describing build, test, or reproduction flows.
 - Mark uncertain conclusions as `Pending verification` instead of overstating confidence.
+- Do not record personal or private operational details in `.repo_context/`, including real server hostnames, IPs,
+  ports, SSH users, personal Git remotes or namespaces, employee IDs, account names, expanded home directories, remote
+  worktree paths, absolute private log paths, tokens, AK/SK, private keys, passwords, cookies, or raw sensitive logs.
+- When validation or incident evidence depends on private infrastructure, describe the configured workflow and use
+  placeholders such as `<validation-host>`, `<validation-user>`, `<remote-worktree>`, `<remote-log-dir>`, or sanitized
+  log file names. Repository-relative paths, public upstream URLs, RFC 5737 example IPs, and generic `~` configuration
+  paths are acceptable when they do not identify a person or private environment.
+- Before finishing any `.repo_context/` change, scan the touched files for sensitive-information patterns and replace
+  real values with placeholders instead of documenting exceptions.
 
 ## Recommended Update Workflow
 

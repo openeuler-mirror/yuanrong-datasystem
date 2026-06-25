@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import unittest
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from diff_position import absolute_line_for_position, find_position, parse_patch
+from script_imports import load_script_module
+
+
+diff_position = load_script_module("diff_position")
+absolute_line_for_position = diff_position.absolute_line_for_position
+find_position = diff_position.find_position
+parse_patch = diff_position.parse_patch
 
 
 PATCH = """@@ -26,6 +26,7 @@

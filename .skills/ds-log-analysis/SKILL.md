@@ -90,10 +90,10 @@ Both scripts auto-detect 3 directory structures:
 
 ```
 Layout 1  <log_dir>/<host_ip>/logs/<log_file>
-          e.g. /data/worker_logs/192.168.1.10/logs/access.log
+          e.g. /data/worker_logs/<host_ip>/logs/access.log
 
 Layout 2  <log_dir>/<wrapper>/<host_ip>/logs/<log_file>
-          e.g. /data/worker_logs/kvcache_logs_20260506/192.168.1.10/logs/resource.log
+          e.g. /data/worker_logs/kvcache_logs_20260506/<host_ip>/logs/resource.log
 
 Layout 3  <log_dir>/<log_file>   (single host, flat)
 ```

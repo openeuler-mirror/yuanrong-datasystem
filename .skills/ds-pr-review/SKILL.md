@@ -17,10 +17,20 @@ explicitly asks for local-only review or publishing is blocked by missing creden
 python3 .skills/ds-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
 ```
 
+   `prepare` runs a mandatory sensitive-information scan before writing `bundle.json`. It scans the PR title/body,
+   every changed file path, and every patch line returned by GitCode. If any changed file has no scannable patch payload,
+   or if any scanned field matches a blocked category, stop and report only the category/location summary from the helper.
+   Do not bypass this gate or paste raw sensitive values into local notes, findings, chat output, or PR comments.
+
 2. Read the generated bundle path from the command output, then load the generated `bundle.json`.
-3. Review changed files first using the bundle's annotated patch. Prefer `diff_line_index` from the bundle for comment
+3. Read `bundle.change_stats` and `bundle.review_plan` before reviewing. Follow `review_plan.mode`:
+   - `single_integrated_pass`: one integrated pass is acceptable, but every triggered existing gate must be checked.
+   - `parallel_multi_round`: run the listed rounds as independent focused passes; execute them in parallel when the
+     active tooling supports independent reviewers/subagents, then merge, deduplicate, and calibrate findings before
+     publishing.
+4. Review changed files first using the bundle's annotated patch. Prefer `diff_line_index` from the bundle for comment
    anchoring. Open repository source when the diff and snippets are not enough for a high-confidence finding.
-4. Write findings as JSON matching the output contract. Each finding must include:
+5. Write findings as JSON matching the output contract. Each finding must include:
    - `path`
    - preferred `diff_line_index`, with `line` as human fallback
    - `type`
@@ -32,7 +42,7 @@ python3 .skills/ds-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
    - concrete `suggestion`
    - `example_code` for code-heavy findings or non-trivial API/design suggestions
    - `verification` when tests, build commands, runtime budget, or manual checks are relevant
-5. Dry-run non-trivial findings before posting:
+6. Dry-run non-trivial findings before posting:
 
 ```bash
 python3 .skills/ds-pr-review/scripts/review_pr.py publish \
@@ -41,7 +51,7 @@ python3 .skills/ds-pr-review/scripts/review_pr.py publish \
   --dry-run
 ```
 
-6. Publish findings back to GitCode after inspecting the rendered comments:
+7. Publish findings back to GitCode after inspecting the rendered comments:
 
 ```bash
 python3 .skills/ds-pr-review/scripts/review_pr.py publish \
@@ -108,6 +118,14 @@ security-sensitive PRs, run these passes explicitly. For narrow low-risk changes
 surface, but do not skip any gate that the code path actually triggers. Do not limit the review to modified diff lines
 when the change creates or reshapes a shared module.
 
+`review_pr.py prepare` writes `change_stats` and `review_plan` into the bundle. Use changed-line count to size the
+review without replacing these existing gates: when `additions + deletions <100`, `review_plan.mode` is
+`single_integrated_pass`; when `additions + deletions >=100`, `review_plan.mode` is `parallel_multi_round`. For
+cross-module, hot-path, concurrent, lifecycle-heavy, build-system-facing, or AI-assisted PRs, upgrade to multiple focused
+passes even when the line count is lower, and record which gates still have residual uncertainty. For
+`parallel_multi_round`, run the bundle-listed rounds independently and in parallel when available; do not publish until
+all round findings have been merged, deduplicated, and severity-calibrated.
+
 1. Claim traceability:
    - Map PR-description and design-document claims to actual code, tests, docs, and measurement evidence.
    - Flag claims such as "performance verified", "docs complete", or "Bazel supported" when the supporting artifact is
@@ -125,6 +143,12 @@ when the change creates or reshapes a shared module.
 3. Functional and design-contract correctness:
    - Check startup, runtime update, local/remote, SDK, worker, embedded, and config propagation paths where applicable.
    - Verify default values, explicit default values, derived values, sticky user values, validation, and idempotency.
+   - Check exception safety around operations that may throw or fail, including container insert/emplace, string growth,
+     smart-pointer and thread construction, allocation, logging/formatting, and callback dispatch.
+   - Treat multi-step state updates as transactions: flag erase-then-insert, remove-then-add, publish-before-validate, or
+     partial-registration paths that can leave the old state gone or a new state half-visible when a later step fails.
+   - For callbacks, plugin hooks, futures, and async completion paths, verify that thrown exceptions or failed status
+     returns cannot leak resources, skip cleanup, leave locks held, or expose inconsistent state to later requests.
 4. Hot-path performance gate:
    - Treat SDK, boundary adapters, client/worker/master/common infrastructure, config, RPC, metrics, logging, storage,
      and scheduler paths as hot until source inspection proves otherwise.
@@ -133,6 +157,15 @@ when the change creates or reshapes a shared module.
    - Compare against explicit targets in the design or PR, for example concurrency 32 and QPS 4000.
    - For guard, lazy, deferred, sampling, logging, cache, or fast-reject APIs, inspect both rejected/skipped and accepted
      paths. Check caller-side argument evaluation, not only the callee body.
+   - Quantify hot-path findings when possible: estimate `QPS * per-call cost = CPU%`, allocation rate in MB/s, string
+     copy count and SSO boundary crossings, shared-pointer atomic operations times fanout, and container complexity
+     against the expected deployment scale.
+   - Check microarchitecture-sensitive choices in tight loops: false sharing across atomics, mutexes, counters, and hot
+     fields in the same cache line; unnecessary `seq_cst`; high-frequency `notify_one`/futex wakeups; virtual dispatch
+     that blocks inlining; and unpredictable branches on the hot path.
+   - For data-structure or fanout changes, state the Big-O behavior and the break point: O(N) scans per request, O(N^2)
+     paths, single atomic or single-lock contention frequency, fanout throughput ceiling, and memory footprint as
+     `instances * objects * bytes`.
 5. Minimal implementation and reuse:
    - Search for existing utilities, config helpers, status patterns, test fixtures, and build targets before accepting new
      mechanisms.
@@ -141,6 +174,16 @@ when the change creates or reshapes a shared module.
    - Review ownership, lifetime, nullability, raw pointers, reference captures, async callbacks, singleton/static
      lifetime, RAII, memory bounds, use-after-free risk, lock order, shutdown, and thread visibility.
    - For RAII or one-shot objects with destructor side effects, check copy/move/delete semantics and moved-from safety.
+   - List every lock acquisition path touched by the PR and check for AB/BA lock-order cycles, blocking IO or callbacks
+     while locked, and lock nesting that changed across call sites.
+   - For atomics, verify the memory-order contract against the protection model. Flag `load` plus `store` Start/Stop
+     races that need CAS, unnecessary strong ordering inside lock-protected state, and weak ordering without a documented
+     happens-before edge.
+   - Check lifecycle direction explicitly: who calls Start/Stop, whether construction/destruction owns those calls, which
+     producer or consumer thread joins first, and whether callbacks, notifications, retries, or weak_ptr promotion can
+     access an object after Stop or destruction.
+   - Infinite or unbounded retry loops must have a retry budget, backoff, cancellation/shutdown check, and production
+     signal for exhausted retries.
    - Use Google C++ guidance as a reference for readability, ownership clarity, self-contained headers,
      include-what-you-use, and avoiding surprising or dangerous constructs.
 7. Public interface and docs:
@@ -159,6 +202,8 @@ when the change creates or reshapes a shared module.
    - Inspect flakiness risk from sleeps, wall-clock durations, randomness, thread scheduling, and shared global flags.
    - Require invariant tests for shared abstractions: misuse prevention, error paths, async lifetime, move/copy behavior,
      skipped/fast-reject path cost, and boundary input validation where applicable.
+   - For infrastructure changes, require coverage proportional to risk across normal flow, concurrency, boundary values,
+     exception/error paths, fault injection, shutdown/restart, and retry/backoff behavior.
    - Prefer behavior, state, and invariant tests through public or semi-public APIs. Avoid tests that only lock in private
      call ordering or implementation interactions unless that ordering is itself the contract.
 10. Production diagnosability and locatability:
@@ -268,6 +313,10 @@ Apply these gates to every module in the system. They are not specific to any on
 
 ## Sensitive Information Gate
 
+The `review_pr.py prepare` helper enforces this gate before generating the review bundle. Reviewers must still apply the
+same policy to any extra source, CI output, issue text, design document, or discussion they inspect outside the prepared
+bundle.
+
 Flag sensitive information in any reviewed artifact, including source files, test data, shell/Python/CMake/CI scripts,
 docs, PR descriptions, and commit messages.
 
@@ -279,6 +328,9 @@ Treat the following as review findings:
   already public project documentation;
 - local absolute paths, personal home directories, workspace paths, account names, user names, tenant identifiers, or raw
   log snippets that expose private environment details;
+- employee identifiers, personal identity/contact numbers, personal names, or company labels that reveal non-public
+  affiliation. Company labels are allowed only in copyright statements or when attributing referenced third-party
+  libraries to their upstream source;
 - logs, metrics, errors, tests, or scripts that newly print or persist sensitive request payloads, object data,
   credentials, tokens, or account metadata.
 

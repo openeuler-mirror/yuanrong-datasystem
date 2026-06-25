@@ -17,6 +17,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-infra-engineering/SKILL.md`
   - `.skills/ds-pr-review/SKILL.md`
   - `.skills/ds-pr-review/scripts/review_pr.py`
+  - `.skills/ds-pr-review/scripts/sensitive_scan.py`
   - `.skills/ds-pr-review/scripts/finding_validator.py`
   - `.skills/ds-self-verify/SKILL.md`
   - `.skills/ds-create-pr/SKILL.md`
@@ -32,7 +33,7 @@ when a natural-language request should invoke one of them.
   - `.skills/ds-log-analysis/SKILL.md`
   - `.skills/rdma-ucx-perf-debug/SKILL.md`
 - Last verified against source:
-  - `2026-06-18`
+  - `2026-06-25`
 
 ## Purpose
 
@@ -49,7 +50,7 @@ when a natural-language request should invoke one of them.
 | Skill | Canonical use | Source-backed trigger phrases | Ambiguous mentions that require confirmation |
 | --- | --- | --- | --- |
 | `ds-infra-engineering` | route implementation, debugging, refactor, design, and codebase Q&A through repository-level development gates for change decomposition, risk classification, qualified ownership, module boundaries, internal/public API quality, developer experience, misuse prevention, ownership/lifetime, production locatability, rollout/rollback, security boundaries, hot-path performance, concurrency, recovery, build/test behavior, and context updates | “实现/修复/重构/分析 datasystem 代码”, “修改 worker/client/common/master”, “性能/并发/恢复相关改动”, “infra engineering” | broad discussion of engineering philosophy without asking for codebase-specific analysis |
-| `ds-pr-review` | review code, tests, scripts, docs, diffs, PRs, commits, or designs using strict infrastructure gates for correctness, design-contract compliance, internal/public API quality, naming clarity, developer experience, module locatability, production diagnosability, hot-path performance, concurrency/C++ safety, public API/config/docs coverage, Bazel/CMake support, sensitive-information exposure, behavior-focused test quality, discussion lifecycle, and risk-calibrated rendered comments; when the target is a GitCode PR/MR number or URL, prepare a review bundle and publish validated high-confidence findings back to the PR page through the YuanRong PR review workflow | “review this diff”, “检查这个 PR”, “检视 1031”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review; explicitly requesting local-only review |
+| `ds-pr-review` | review code, tests, scripts, docs, diffs, PRs, commits, or designs using strict infrastructure gates for correctness, design-contract compliance, internal/public API quality, naming clarity, developer experience, module locatability, production diagnosability, hot-path performance, concurrency/C++ safety, public API/config/docs coverage, Bazel/CMake support, mandatory changed-file sensitive-information scanning, line-count-based single-pass or parallel multi-round review planning, behavior-focused test quality, discussion lifecycle, and risk-calibrated rendered comments; when the target is a GitCode PR/MR number or URL, prepare a review bundle and publish validated high-confidence findings back to the PR page through the YuanRong PR review workflow | “review this diff”, “检查这个 PR”, “检视 1031”, “做代码评审”, “审查改动”, “PR review” | asking how the checklist works without requesting a concrete review; explicitly requesting local-only review |
 | `ds-self-verify` | verify diff, tests, context updates, and infra risk before Codex claims work is complete or PR-ready, using the shared AI self-verification playbook | “完成前自检”, “self verify”, “准备提交/PR前检查”, Codex is about to claim completion after file changes | general questions about verification policy |
 | `ds-issue-intake` | fetch a GitCode issue, redact sensitive details, and write a structured task spec for AI-assisted implementation | “拉取 issue”, “分析 issue 572”, “从这个 issue 开始开发”, “issue intake”, “准备 issue 任务” | asking how issue templates work or discussing issue policy without asking to fetch/triage a concrete issue |
 | `ds-test` | plan and run configured validation for code changes, including local command selection and remote validation through private user-provided SSH config | “验证这个改动”, “跑远端验证”, “跑测试并给 PR 验证结果”, “validate this branch”, “run ds-test” | asking what tests should exist in general, or discussing validation policy without asking to run validation |

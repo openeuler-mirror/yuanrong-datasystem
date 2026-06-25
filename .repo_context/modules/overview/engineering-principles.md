@@ -92,6 +92,17 @@ Persistence-sensitive changes must assess:
 Use `.repo_context/playbooks/features/recovery-and-persistence.md` when a change touches durable data, metadata,
 recovery, failover, migration, compaction, or preload.
 
+## Sensitive Information Hygiene
+
+Repository context, skills, docs, tests, scripts, generated artifacts, change notes, PR text, and review replies must not
+store real secrets, private infrastructure, or personal identifiers. This includes passwords, tokens, AK/SK, private
+keys, cookies, real private hosts, IPs, ports, SSH users, personal Git remotes or namespaces, employee IDs, account names,
+expanded home directories, remote worktree paths, absolute private log paths, tenant data, and raw sensitive logs.
+
+Use repository-relative paths, public upstream URLs, placeholders, or sanitized identifiers instead. For private remote
+validation, cite the `$ds-test` workflow and placeholders such as `<validation-host>`, `<validation-user>`,
+`<remote-worktree>`, and `<remote-log-dir>`; keep concrete values in local private config only.
+
 ## Concurrency And Memory Safety
 
 All shared mutable state must have an explicit model:

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
 import unittest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from comment_formatter import format_comment
-from finding_validator import validate_findings
+from script_imports import load_script_module
+
+
+format_comment = load_script_module("comment_formatter").format_comment
+validate_findings = load_script_module("finding_validator").validate_findings
 
 
 def _valid_finding() -> dict[str, object]:
