@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(kvtest CXX)
+project(kvtest C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Use -std=c++17 (not gnu++17) to avoid GNU extension conflicts with the SDK's
