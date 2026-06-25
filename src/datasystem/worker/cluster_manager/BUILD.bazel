@@ -1,17 +1,24 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility=["//visibility:public"])
+
+ds_cc_library(
+    name="cluster_constants",
+    hdrs=[
+        "cluster_constants.h",
+    ],
+)
 
 # success
 ds_cc_library(
-    name = "worker_health_check",
-    srcs = [
+    name="worker_health_check",
+    srcs=[
         "worker_health_check.cpp",
     ],
-    hdrs = [
+    hdrs=[
         "worker_health_check.h",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
@@ -23,11 +30,11 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "cluster_manager_header",
-    hdrs = [
+    name="cluster_manager_header",
+    hdrs=[
         "cluster_manager.h",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/inject:common_inject",
@@ -51,15 +58,15 @@ ds_cc_library(
 
 # success
 ds_cc_library(
-    name = "cluster_manager",
-    srcs = [
+    name="cluster_manager",
+    srcs=[
         "cluster_manager.cpp",
     ],
-    hdrs = [
+    hdrs=[
         "cluster_node.h",
         "cluster_manager.h",
     ],
-    deps = [
+    deps=[
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
@@ -95,5 +102,5 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
         "@tbb",
     ],
-    alwayslink = True,
+    alwayslink=True,
 )

@@ -64,8 +64,8 @@ static const int ASYNC_LOGGER_STOP_MAX_WAIT_SEC = 15;  // The max wait time when
 static const uint64_t DEFAULT_TIMEOUT_MS = 1000;
 
 // cluster info table in rocksDb
-static const std::string CLUSTER_TABLE = "cluster_table";
-static const std::string HASHRING_TABLE = "hashring_table";
+static const std::string ROCKS_CLUSTER_TABLE = "cluster_table";
+static const std::string ROCKS_HASHRING_TABLE = "hashring_table";
 
 // bytes convert
 static const uint64_t MB_TO_BYTES = 1024 * 1024;

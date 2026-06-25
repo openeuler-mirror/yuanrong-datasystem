@@ -166,8 +166,9 @@ private:
     /**
      * @brief Cancel a watcher after notifying that the stream must be rebuilt.
      * @param[in] watchId The watch ID.
+     * @param[in] watcherAddr Address that owns the watch.
      */
-    void RemoveRewatchRequiredWatcher(int64_t watchId);
+    void RemoveRewatchRequiredWatcher(int64_t watchId, const std::string &watcherAddr);
 
     std::deque<std::shared_ptr<WatchEvent>> pendingQueue_;
     std::mutex pendingMutex_;

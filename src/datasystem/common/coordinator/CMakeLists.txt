@@ -21,8 +21,8 @@ set(COORDINATOR_STORE_HDRS
     watch_registry.h
 )
 
-# Coordinator store shared library
-add_library(common_coordinator_store SHARED ${COORDINATOR_STORE_SRCS})
+# Coordinator store static library
+add_library(common_coordinator_store STATIC ${COORDINATOR_STORE_SRCS})
 target_sources(common_coordinator_store PRIVATE ${COORDINATOR_STORE_HDRS})
 target_include_directories(common_coordinator_store PUBLIC ${CMAKE_SOURCE_DIR})
 target_compile_features(common_coordinator_store PUBLIC cxx_std_17)

@@ -93,7 +93,6 @@ Status KeepAliveValue::FromString(const std::string &str, KeepAliveValue &value)
     return Status::OK();
 }
 
-
 static std::string GetBackendAddress()
 {
     if (!FLAGS_metastore_address.empty()) {
@@ -726,8 +725,7 @@ Status EtcdStore::WatchRun()
     return Status::OK();
 }
 
-Status EtcdStore::WatchEvents(const std::string &tableName, const std::string &key,
-                              int64_t startRevision)
+Status EtcdStore::WatchEvents(const std::string &tableName, const std::string &key, int64_t startRevision)
 {
     return WatchEvents({ { tableName, key, startRevision } });
 }

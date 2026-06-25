@@ -45,7 +45,8 @@ public:
      * @param[in] key The key.
      * @param[in] value The value.
      * @param[in] ttlMs TTL in milliseconds. 0 means no expiration.
-     * @param[in] expectedVersion Expected version for CAS. 0 means no check.
+     * @param[in] expectedVersion Expected version for CAS. COORDINATOR_NO_VERSION_CHECK means no check.
+     * COORDINATOR_KEY_NOT_EXISTS_VERSION means the key must not exist.
      * @param[out] version The new version after put.
      * @param[out] revision The new global revision.
      * @return Status of the operation.
@@ -85,6 +86,14 @@ public:
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs);
+
+    /**
+     * @brief Cancel watches for a watcher address.
+     * @param[in] watcherAddr Address that owns the watches.
+     * @param[in] watchIds Watch IDs to cancel.
+     * @return Status of the operation.
+     */
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds);
 
     /**
      * @brief Renew TTL for a key.

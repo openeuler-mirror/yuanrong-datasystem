@@ -312,7 +312,7 @@ private:
     std::unordered_map<std::string, rocksdb::ColumnFamilyHandle *> tables_;
     static std::mutex lck;
     static bool disableRocksDB;
-    std::vector<std::string> clusterInfoTable_ = { CLUSTER_TABLE, HASHRING_TABLE, HEALTH_TABLE };
+    std::vector<std::string> clusterInfoTable_ = { ROCKS_CLUSTER_TABLE, ROCKS_HASHRING_TABLE, HEALTH_TABLE };
     std::unique_ptr<OrderedThreadPool> asyncThreadPool_;
     RocksdbWriteMode mode_;
 };

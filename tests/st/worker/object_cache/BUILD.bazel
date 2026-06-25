@@ -1,12 +1,16 @@
 load("//bazel:build_defs.bzl", "ds_cc_test")
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility=["//visibility:public"])
 
 ds_cc_test(
-    name = "cluster_manager_test",
-    srcs = ["cluster_manager_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="cluster_manager_test",
+    srcs=[
+        "cluster_manager_test.cpp",
+        "coordinator_cluster_store_mock.h",
+    ],
+    tags=["manual"],
+    deps=[
+        "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/worker/cluster_manager:cluster_manager",
@@ -15,10 +19,21 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "evict_mem_test",
-    srcs = ["evict_mem_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="coordinator_cluster_store_test",
+    srcs=["coordinator_cluster_store_test.cpp"],
+    tags=["manual"],
+    deps=[
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/topology/coordination_backend:coordination_backend",
+    ],
+)
+
+ds_cc_test(
+    name="evict_mem_test",
+    srcs=["evict_mem_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//src/datasystem/client:datasystem",
         "//src/datasystem/common/immutable_string:immutable_string",
         "//src/datasystem/common/inject:common_inject",
@@ -35,10 +50,13 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "hash_ring_test",
-    srcs = ["hash_ring_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="hash_ring_test",
+    srcs=[
+        "hash_ring_test.cpp",
+        "coordinator_cluster_store_mock.h",
+    ],
+    tags=["manual"],
+    deps=[
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:container_util",
@@ -52,10 +70,10 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_oc_eviction_test",
-    srcs = ["worker_oc_eviction_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="worker_oc_eviction_test",
+    srcs=["worker_oc_eviction_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/mmap:mmap_table",
         "//src/datasystem/common/immutable_string:immutable_string",
@@ -72,10 +90,10 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_oc_master_test",
-    srcs = ["worker_oc_master_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="worker_oc_master_test",
+    srcs=["worker_oc_master_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_local",
@@ -88,10 +106,10 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_oc_service_impl_test",
-    srcs = ["worker_oc_service_impl_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="worker_oc_service_impl_test",
+    srcs=["worker_oc_service_impl_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//src/datasystem/client/mmap:mmap_table",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/immutable_string:immutable_string",
@@ -109,20 +127,20 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_populate_startup_test",
-    srcs = ["worker_populate_startup_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="worker_populate_startup_test",
+    srcs=["worker_populate_startup_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//tests/st:st_common",
         "//tests/st/cluster:st_cluster",
     ],
 )
 
 ds_cc_test(
-    name = "worker_start_stop_test",
-    srcs = ["worker_start_stop_test.cpp"],
-    tags = ["manual"],
-    deps = [
+    name="worker_start_stop_test",
+    srcs=["worker_start_stop_test.cpp"],
+    tags=["manual"],
+    deps=[
         "//tests/st:st_common",
     ],
 )

@@ -34,6 +34,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/strings_util.h"
@@ -180,7 +181,7 @@ Status HashRingTaskExecutor::SubmitMigrateDataTask()
             return;
         }
         rc = clusterStore_->CAS(
-            ETCD_RING_PREFIX, "",
+            HASHRING_TABLE, "",
             [&](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb ring;
                 if (!ring.ParseFromString(oldValue)) {
@@ -266,7 +267,7 @@ Status HashRingTaskExecutor::MarkAddNodeInfoFinished(const std::string &newNode,
     VLOG(1) << "mark add_node_info finished to etcd: ";
     INJECT_POINT("hashring.finishaddnodeinfo");
     return clusterStore_->CAS(
-        ETCD_RING_PREFIX, "", [&](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
+        HASHRING_TABLE, "", [&](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
             HashRingPb ring;
             if (!ring.ParseFromString(oldValue)) {
                 return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
@@ -328,7 +329,7 @@ void HashRingTaskExecutor::ClearFinishedScaleDownNodes(const std::vector<std::st
     LOG(INFO) << "remove del_node_info range from etcd: ";
     RetryHashRingTaskUntil([this, &processedNodes]() {
         auto status = clusterStore_->CAS(
-            ETCD_RING_PREFIX, "",
+            HASHRING_TABLE, "",
             [this, &processedNodes](const std::string &oldValue, std::unique_ptr<std::string> &newValue,
                                     bool & /* retry */) {
                 HashRingPb oldRing;
@@ -613,7 +614,7 @@ void HashRingTaskExecutor::SubmitScaleDownMigrateTask(
                                                                   recoverDbName, info.ranges, false),
             "scale down migrate task failed");
         RetryHashRingTaskUntil([this, &func]() {
-            auto status = clusterStore_->CAS(ETCD_RING_PREFIX, "", func);
+            auto status = clusterStore_->CAS(HASHRING_TABLE, "", func);
             HASH_RING_LOG_IF_ERROR(status, "Mark failed.");
             return status;
         });

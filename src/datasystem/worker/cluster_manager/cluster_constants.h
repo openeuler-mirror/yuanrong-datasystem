@@ -1,4 +1,4 @@
-/**
+/*
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,23 +15,15 @@
  */
 
 /**
- * Description: Key-value entry for coordinator KV store.
+ * Description: Shared cluster metadata table names used by cluster manager stores.
  */
-#ifndef DATASYSTEM_COMMON_COORDINATOR_KEY_VALUE_ENTRY_H
-#define DATASYSTEM_COMMON_COORDINATOR_KEY_VALUE_ENTRY_H
-
-#include <cstdint>
-#include <string>
+#ifndef DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_CONSTANTS_H
+#define DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_CONSTANTS_H
 
 namespace datasystem {
-static constexpr int64_t COORDINATOR_NO_VERSION_CHECK = -1;
-static constexpr int64_t COORDINATOR_KEY_NOT_EXISTS_VERSION = 0;
-
-struct KeyValueEntry {
-    std::string key;
-    std::string value;
-    int64_t version = 0;
-    int64_t modRevision = 0;
-};
+static constexpr char HASHRING_TABLE[] = "/datasystem/ring";
+static constexpr char CLUSTER_TABLE[] = "datasystem/cluster";
+static constexpr char MASTER_ADDRESS_TABLE[] = "/datasystem";
 }  // namespace datasystem
-#endif  // DATASYSTEM_COMMON_COORDINATOR_KEY_VALUE_ENTRY_H
+
+#endif  // DATASYSTEM_WORKER_CLUSTER_MANAGER_CLUSTER_CONSTANTS_H

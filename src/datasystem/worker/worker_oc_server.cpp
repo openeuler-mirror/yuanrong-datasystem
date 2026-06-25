@@ -768,9 +768,9 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
     const auto &key = event.kv().key();
     std::string tableName;
     if (key.find(ETCD_CLUSTER_TABLE) != std::string::npos) {
-        tableName = CLUSTER_TABLE;
+        tableName = ROCKS_CLUSTER_TABLE;
     } else if (key.find(ETCD_RING_PREFIX) != std::string::npos) {
-        tableName = HASHRING_TABLE;
+        tableName = ROCKS_HASHRING_TABLE;
     } else {
         LOG(ERROR) << "Event of PrefixType::OTHER, no need to enqueue and handle it.";
         return;
@@ -791,8 +791,8 @@ Status WorkerOCServer::ConstructCoordinationBackend()
     clusterStore_ = RocksStore::GetInstance(clusterInfoRocksDir);
     CHECK_FAIL_RETURN_STATUS(clusterStore_ != nullptr, StatusCode::K_RUNTIME_ERROR,
                              "Init rocksdb instance failed, dir: " + clusterInfoRocksDir);
-    RETURN_IF_NOT_OK(clusterStore_->CreateTable(HASHRING_TABLE));
-    RETURN_IF_NOT_OK(clusterStore_->CreateTable(CLUSTER_TABLE));
+    RETURN_IF_NOT_OK(clusterStore_->CreateTable(ROCKS_HASHRING_TABLE));
+    RETURN_IF_NOT_OK(clusterStore_->CreateTable(ROCKS_CLUSTER_TABLE));
     return Status::OK();
 }
 
@@ -829,7 +829,7 @@ Status WorkerOCServer::ReconcileClusterInfo(
 Status WorkerOCServer::LoadHashRingFromRocksDb(ClusterInfo &clusterInfo, HashRingPb &localHashRingPb)
 {
     std::vector<std::pair<std::string, std::string>> allHashRings;
-    RETURN_IF_NOT_OK(clusterStore_->GetAll(HASHRING_TABLE, allHashRings));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(ROCKS_HASHRING_TABLE, allHashRings));
     for (auto itr = allHashRings.begin(); itr != allHashRings.end();) {
         HashRingPb hashRingPb;
         if (!hashRingPb.ParseFromString(itr->second)) {
@@ -849,7 +849,7 @@ Status WorkerOCServer::LoadWorkersFromRocksDb(ClusterInfo &clusterInfo,
                                               std::vector<std::string> &activeNodesInLocalCluster)
 {
     std::vector<std::pair<std::string, std::string>> allWorkers;
-    RETURN_IF_NOT_OK(clusterStore_->GetAll(CLUSTER_TABLE, allWorkers));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(ROCKS_CLUSTER_TABLE, allWorkers));
 
     for (auto itr = allWorkers.begin(); itr != allWorkers.end();) {
         auto workerAddr = GetSubStringAfterField(itr->first, std::string(ETCD_CLUSTER_TABLE) + "/");

@@ -34,6 +34,11 @@ public:
 
     virtual ~ICoordinatorServiceProxy() = default;
 
+    /**
+     * @brief Put a key-value pair.
+     * @param[in] expectedVersion COORDINATOR_NO_VERSION_CHECK means no check.
+     * COORDINATOR_KEY_NOT_EXISTS_VERSION means the key must not exist. Positive values require exact version match.
+     */
     virtual Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                        int64_t &version, int64_t &revision) = 0;
     virtual Status Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
@@ -42,6 +47,7 @@ public:
                                int64_t &revision) = 0;
     virtual Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                               int64_t &watchId, std::vector<KeyValueEntry> &initialKvs) = 0;
+    virtual Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds) = 0;
     virtual Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs) = 0;
     virtual Status CAS(const std::string &key, const CasProcessFunc &processFunc, int64_t &version,
                        int64_t &revision) = 0;
@@ -60,6 +66,7 @@ public:
                        int64_t &revision) override;
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
                       int64_t &watchId, std::vector<KeyValueEntry> &initialKvs) override;
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds) override;
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs) override;
     Status CAS(const std::string &key, const CasProcessFunc &processFunc, int64_t &version, int64_t &revision) override;
 };
