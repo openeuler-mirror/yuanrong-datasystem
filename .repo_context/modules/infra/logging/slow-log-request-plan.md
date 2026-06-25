@@ -249,11 +249,11 @@ logging is not part of the first pass.
 
 - Validation must use the `$ds-test` remote workflow.
 - Local build or local test results do not replace remote validation.
-- The validation branch must be pushed to the same-name branch on `git@gitcode.com:yaohaolin/yuanrong-datasystem.git`.
-- Remote validation must run on `ssh marck@1.95.199.126 -p 22224` under
-  `/home/marck/workspace/yuanrong-datasystem`.
-- Long build/test commands must write full logs under `/home/marck/workspace/yuanrong-datasystem/logs/` and report concise
-  status, failure summaries, and log paths.
+- The validation branch must be pushed to the same-name branch on the configured non-upstream fork remote.
+- Remote validation must run through the private `$ds-test` configuration; do not record the concrete host, port,
+  username, or remote worktree path in repo context.
+- Long build/test commands must write full logs under the configured private remote log directory and report concise
+  status plus sanitized log identifiers, not absolute private paths.
 - Do not claim validation passed unless the relevant remote build/test commands complete successfully.
 
 The following exact segments are not cleanly covered by existing logs:

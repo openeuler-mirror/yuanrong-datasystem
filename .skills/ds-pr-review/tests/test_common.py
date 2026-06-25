@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import unittest
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from common import parse_pr_ref
+from script_imports import load_script_module
+
+
+parse_pr_ref = load_script_module("common").parse_pr_ref
 
 
 class CommonTests(unittest.TestCase):

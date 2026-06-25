@@ -26,6 +26,120 @@ from diff_position import absolute_line_for_position, find_position, parse_patch
 from finding_validator import validate_findings
 from gitcode_api import GitCodeClient
 from language_detect import detect_review_language
+from sensitive_scan import format_sensitive_scan_failure, scan_changed_file, scan_text
+
+
+REVIEW_LINE_THRESHOLD = 100
+
+PARALLEL_REVIEW_ROUNDS: list[dict[str, Any]] = [
+    {
+        "id": "traceability_scope_and_discussion",
+        "gates": [
+            "Claim traceability",
+            "Whole-module cohesion",
+            "Discussion lifecycle",
+            "Sensitive Information Gate",
+        ],
+        "instructions": (
+            "Map PR claims, changed modules, existing comments, and sensitive-information scope "
+            "before publishing findings."
+        ),
+    },
+    {
+        "id": "correctness_exception_and_lifecycle",
+        "gates": [
+            "Functional and design-contract correctness",
+            "C++ safety and concurrency",
+            "Ownership and lifetime",
+        ],
+        "instructions": (
+            "Review correctness, exception safety, multi-step state updates, callback failure paths, "
+            "ownership, and lifecycle."
+        ),
+    },
+    {
+        "id": "concurrency_and_reliability",
+        "gates": ["C++ safety and concurrency", "Operability"],
+        "instructions": (
+            "Review locks, atomics, Start/Stop races, shutdown, retry budgets, weak references, "
+            "and reliability signals."
+        ),
+    },
+    {
+        "id": "performance_scale_and_microarchitecture",
+        "gates": ["Hot-path performance gate", "Hot-path argument cost"],
+        "instructions": (
+            "Quantify hot-path cost, Big-O behavior, fanout, memory footprint, cache-line effects, "
+            "futex wakes, and branch cost."
+        ),
+    },
+    {
+        "id": "api_boundary_and_maintainability",
+        "gates": [
+            "Internal API design",
+            "Developer experience",
+            "Misuse prevention",
+            "Abstraction boundaries",
+            "Consistency and learnability",
+            "Cross-language and boundary layers",
+        ],
+        "instructions": (
+            "Review API clarity, misuse prevention, cross-boundary contracts, locatability, "
+            "and maintainability."
+        ),
+    },
+    {
+        "id": "build_test_docs_and_packaging",
+        "gates": ["Public interface and docs", "Build and packaging", "Build closure", "Tests", "Test contracts"],
+        "instructions": "Review Bazel/CMake closure, docs/config/package updates, and risk-proportional tests.",
+    },
+]
+
+
+def _to_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_change_stats(files: list[dict[str, Any]]) -> dict[str, Any]:
+    additions = sum(_to_int(file_info.get("additions")) for file_info in files)
+    deletions = sum(_to_int(file_info.get("deletions")) for file_info in files)
+    return {
+        "file_count": len(files),
+        "total_additions": additions,
+        "total_deletions": deletions,
+        "total_changed_lines": additions + deletions,
+        "threshold_for_parallel_multi_round": REVIEW_LINE_THRESHOLD,
+    }
+
+
+def build_review_plan(change_stats: dict[str, Any]) -> dict[str, Any]:
+    changed_lines = _to_int(change_stats.get("total_changed_lines"))
+    if changed_lines >= REVIEW_LINE_THRESHOLD:
+        return {
+            "mode": "parallel_multi_round",
+            "parallelizable": True,
+            "reason": f"additions + deletions >= {REVIEW_LINE_THRESHOLD}",
+            "rounds": PARALLEL_REVIEW_ROUNDS,
+        }
+
+    return {
+        "mode": "single_integrated_pass",
+        "parallelizable": False,
+        "reason": f"additions + deletions < {REVIEW_LINE_THRESHOLD}",
+        "rounds": [
+            {
+                "id": "single_integrated_pass",
+                "gates": ["all triggered existing gates"],
+                "instructions": (
+                    "Run one integrated pass, but still cover every triggered existing gates before "
+                    "publishing findings."
+                ),
+            }
+        ],
+    }
 
 
 def _client(settings: dict[str, Any]) -> GitCodeClient:
@@ -58,7 +172,7 @@ def _normalize_patch_payload(file_info: dict[str, Any]) -> tuple[str, dict[str, 
     return "", {}
 
 
-def _prepare(args: argparse.Namespace) -> int:
+def prepare(args: argparse.Namespace) -> int:
     settings = load_settings()
     pr_number = parse_pr_ref(args.pr_ref)
     client = _client(settings)
@@ -67,16 +181,56 @@ def _prepare(args: argparse.Namespace) -> int:
     pull = client.get_pull(pr_number)
     files = client.list_pull_files(pr_number)
     comments = client.list_pull_comments(pr_number)
+    change_stats = build_change_stats(files)
+    review_plan = build_review_plan(change_stats)
     pr_description = str(pull.get("body") or pull.get("description") or "")
     language = detect_review_language(f"{pull.get('title') or ''}\n{pr_description}")
 
     review_files = []
+    prepared_files = []
+    sensitive_matches = []
+    sensitive_matches.extend(scan_text("PR title", str(pull.get("title") or "")))
+    sensitive_matches.extend(scan_text("PR description", pr_description))
+    sensitive_scan_files = []
     review_settings = settings["review"]
 
-    for file_info in files:
+    for file_index, file_info in enumerate(files, start=1):
         path = str(file_info.get("filename") or file_info.get("path") or "")
         patch, patch_meta = _normalize_patch_payload(file_info)
         position_map = parse_patch(patch)
+        file_matches, scanned_lines = scan_changed_file(
+            path=path,
+            patch=patch,
+            position_map=position_map,
+            file_index=file_index,
+        )
+        sensitive_matches.extend(file_matches)
+        sensitive_scan_files.append(
+            {
+                "path": path,
+                "status": file_info.get("status"),
+                "scanned_lines": scanned_lines,
+            }
+        )
+        prepared_files.append(
+            {
+                "file_info": file_info,
+                "path": path,
+                "patch": patch,
+                "patch_meta": patch_meta,
+                "position_map": position_map,
+            }
+        )
+
+    if sensitive_matches:
+        raise ReviewError(format_sensitive_scan_failure(sensitive_matches))
+
+    for prepared_file in prepared_files:
+        file_info = prepared_file["file_info"]
+        path = prepared_file["path"]
+        patch = prepared_file["patch"]
+        patch_meta = prepared_file["patch_meta"]
+        position_map = prepared_file["position_map"]
         local_file = repo_path / path if repo_path else None
         snippets = build_context_snippets(
             local_file=local_file,
@@ -142,9 +296,16 @@ def _prepare(args: argparse.Namespace) -> int:
             "local_path": str(repo_path) if repo_path else None,
             "available": bool(repo_path and repo_path.exists()),
         },
+        "change_stats": change_stats,
+        "review_plan": review_plan,
         "review_policy": {
             "need_to_resolve": bool(review_settings["need_to_resolve"]),
             "suggestion_limit_per_file": int(review_settings["suggestion_limit_per_file"]),
+        },
+        "sensitive_scan": {
+            "status": "passed",
+            "metadata_fields": ["PR title", "PR description"],
+            "files": sensitive_scan_files,
         },
         "files": review_files,
         "existing_comments": normalized_comments,
@@ -181,6 +342,8 @@ def _prepare(args: argparse.Namespace) -> int:
         "warnings": warnings,
         "file_count": len(review_files),
         "comment_count": len(normalized_comments),
+        "total_changed_lines": change_stats["total_changed_lines"],
+        "review_plan_mode": review_plan["mode"],
     }
     print(json.dumps(output, ensure_ascii=False, indent=2))
     return 0
@@ -329,7 +492,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     prepare_parser = subparsers.add_parser("prepare", help="Fetch PR data and build a review bundle.")
     prepare_parser.add_argument("pr_ref", help="PR number or GitCode PR URL.")
-    prepare_parser.set_defaults(func=_prepare)
+    prepare_parser.set_defaults(func=prepare)
 
     publish_parser = subparsers.add_parser("publish", help="Publish findings back to GitCode.")
     publish_parser.add_argument("--bundle", required=True, help="Path to bundle.json produced by prepare.")
