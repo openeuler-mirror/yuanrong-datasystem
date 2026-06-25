@@ -44,6 +44,7 @@
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -169,7 +170,10 @@ public:
      * @brief Set the Flags pointer for runtime configuration updates.
      * @param[in] flags Pointer to the Flags instance. Must outlive this WorkerOCServer.
      */
-    void SetFlags(Flags *flags) { runtimeFlags_ = flags; }
+    void SetFlags(Flags *flags)
+    {
+        runtimeFlags_ = flags;
+    }
 
     /**
      * @brief Apply runtime JSON config updates to modifiable worker flags.
@@ -476,10 +480,10 @@ private:
     void UpdateClusterInfoInRocksDb(const mvccpb::Event &event);
 
     /**
-     * @brief Construct cluster store.
+     * @brief Construct coordination backend.
      * @return Status of this call.
      */
-    Status ConstructClusterStore();
+    Status ConstructCoordinationBackend();
 
     /**
      * @brief Construct cluster info.
@@ -577,7 +581,7 @@ private:
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<EtcdClusterStore> clusterManagerStore_;
+    std::unique_ptr<topology::EtcdCoordinationBackend> clusterManagerStore_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
@@ -654,7 +658,7 @@ private:
 #endif
 
     /** Non-owning pointer to caller Flags; valid only between Init and Shutdown. */
-    Flags *runtimeFlags_{nullptr};
+    Flags *runtimeFlags_{ nullptr };
 };
 }  // namespace worker
 }  // namespace datasystem

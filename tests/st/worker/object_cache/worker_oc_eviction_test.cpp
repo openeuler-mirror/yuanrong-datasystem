@@ -24,6 +24,7 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/client/mmap/embedded_mmap_table.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -36,6 +37,7 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/object/buffer.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #define private public
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
@@ -80,7 +82,7 @@ static Status RetryCreate(std::shared_ptr<ObjectClient> client, const std::strin
 }
 
 static Status RetrySet(std::shared_ptr<KVClient> client, const std::string &objectKey, std::string &data,
-                          SetParam param)
+                       SetParam param)
 {
     Status rc;
     do {
@@ -305,9 +307,9 @@ public:
         std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
         HostPort workerAddr;
         cluster_->GetWorkerAddr(0, workerAddr);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), worker2Addr_, akSkManager_,
-                                                               workerStub),
-                                         "Create remote worker api failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            CreateRemoteWorkerApi(workerAddr.ToString(), worker2Addr_, akSkManager_, workerStub),
+            "Create remote worker api failed.");
         GetObjectRemoteReqPb reqPb;
         GetObjectRemoteRspPb rspPb;
         reqPb.set_object_key(objKey);
@@ -375,7 +377,7 @@ protected:
         eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, workerId, workerId);
         worker_ = std::make_unique<WorkerOCServiceImpl>(workerId, workerId, nullptr, nullptr, eviction_, nullptr,
                                                         etcdStore_.get());
-        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        clusterStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
         cm_ = std::make_unique<ClusterManager>(workerId, workerId, clusterStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
@@ -395,7 +397,7 @@ protected:
     std::shared_ptr<AkSkManager> akSkManager_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> eviction_;
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<EtcdClusterStore> clusterStore_;
+    std::unique_ptr<topology::EtcdCoordinationBackend> clusterStore_;
     std::shared_ptr<ThreadPool> memCpyThreadPool_;
 };
 
@@ -421,11 +423,11 @@ TEST_F(AsyncSendManagerWriteSpeedTest, TestAsyncWriteBigElement)
 {
     HostPort obsAddr;
     DS_ASSERT_OK(cluster_->GetOBSAddr(0, obsAddr));
-    FLAGS_l2_cache_type="obs";
-    FLAGS_obs_endpoint=obsAddr.ToString();
-    FLAGS_obs_access_key="3rtJpvkP4zowTDsx6XiE";
-    FLAGS_obs_secret_key="SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs";
-    FLAGS_obs_bucket="test";
+    FLAGS_l2_cache_type = "obs";
+    FLAGS_obs_endpoint = obsAddr.ToString();
+    FLAGS_obs_access_key = "3rtJpvkP4zowTDsx6XiE";
+    FLAGS_obs_secret_key = "SJx5Zecs7SL7I6Au9XpylG9LwPF29kMwIxisI5Xs";
+    FLAGS_obs_bucket = "test";
     FLAGS_l2_cache_async_write_rate_limit_mb = 1;
     FLAGS_l2_cache_async_write_queue_size = 10000;
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
@@ -617,13 +619,10 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEviction)
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     const bool oldEnableDistributedMaster = FLAGS_enable_distributed_master;
     FLAGS_enable_distributed_master = false;
-    Raii resetDistributedMaster([oldEnableDistributedMaster]() {
-        FLAGS_enable_distributed_master = oldEnableDistributedMaster;
-    });
+    Raii resetDistributedMaster(
+        [oldEnableDistributedMaster]() { FLAGS_enable_distributed_master = oldEnableDistributedMaster; });
     DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
-    Raii clearCheckConnection([]() {
-        (void)inject::Clear("ClusterManager.checkConnection");
-    });
+    Raii clearCheckConnection([]() { (void)inject::Clear("ClusterManager.checkConnection"); });
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
@@ -667,13 +666,10 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEvictionWithUnroutabl
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
     const bool oldEnableDistributedMaster = FLAGS_enable_distributed_master;
     FLAGS_enable_distributed_master = false;
-    Raii resetDistributedMaster([oldEnableDistributedMaster]() {
-        FLAGS_enable_distributed_master = oldEnableDistributedMaster;
-    });
+    Raii resetDistributedMaster(
+        [oldEnableDistributedMaster]() { FLAGS_enable_distributed_master = oldEnableDistributedMaster; });
     DS_ASSERT_OK(inject::Set("ClusterManager.checkConnection", "return(K_OK)"));
-    Raii clearCheckConnection([]() {
-        (void)inject::Clear("ClusterManager.checkConnection");
-    });
+    Raii clearCheckConnection([]() { (void)inject::Clear("ClusterManager.checkConnection"); });
     InitClusterManager(worker0Addr_);
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
     evictionManager.SetClusterManager(cm_.get());
@@ -691,9 +687,8 @@ TEST_F(EvictionManagerAndMasterTest, TestBatchRemoveMetaForEvictionWithUnroutabl
     DS_ASSERT_OK(CreateMeta(currentKey, 1, masterClient1, true));
     DS_ASSERT_OK(inject::Set("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
                              FormatString("call(%s)", unroutableKey)));
-    Raii clearMoveToEmptyMaster([]() {
-        (void)inject::Clear("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster");
-    });
+    Raii clearMoveToEmptyMaster(
+        []() { (void)inject::Clear("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster"); });
 
     WorkerOcEvictionManager::EvictDeletedObjects deletedObjects = {
         { currentKey, currentVersion },

@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 
 DS_DECLARE_string(etcd_address);

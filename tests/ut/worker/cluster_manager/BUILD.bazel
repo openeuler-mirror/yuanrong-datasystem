@@ -3,10 +3,10 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
-    name = "cluster_store_test",
-    srcs = ["cluster_store_test.cpp"],
+    name = "coordination_backend_test",
+    srcs = ["coordination_backend_test.cpp"],
     deps = [
-        "//src/datasystem/common/cluster:cluster_store",
+        "//src/datasystem/topology/coordination_backend:coordination_backend",
         "//third_party/protos/etcd:kv_cc_proto",
         "//tests/ut:ut_common",
     ],

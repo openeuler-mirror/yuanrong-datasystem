@@ -63,7 +63,7 @@
 - Public/internal C++ entrypoints:
   - `HashRing::InitWithEtcd()`
   - `HashRing::InitWithoutEtcd(const std::string &hashRing)`
-  - `HashRing::HandleRingEvent(const ClusterStoreEvent &, const std::string &prefix)`
+  - `HashRing::HandleRingEvent(const topology::CoordinationEvent &, const std::string &prefix)`
   - `HashRing::UpdateRing(const std::string &, int64_t version, bool forceUpdate = false)`
   - `HashRing::InspectAndProcessPeriodically()`
   - `HashRing::RemoveWorkers(const std::unordered_set<std::string> &workers)`

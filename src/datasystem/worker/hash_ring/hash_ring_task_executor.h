@@ -38,7 +38,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/hash_ring.pb.h"
-#include "datasystem/common/cluster/cluster_store.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 namespace datasystem {
@@ -55,7 +55,8 @@ using ScaleDownMigrationTaskInfo = std::unordered_map<std::string, MigrateScaleD
 
 class HashRingTaskExecutor {
 public:
-    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid, IClusterStore *clusterStore);
+    HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
+                         topology::ICoordinationBackend *clusterStore);
 
     ~HashRingTaskExecutor();
 
@@ -302,7 +303,7 @@ private:
 
     const std::string workerAddr_;
     const std::string workerUuid_;
-    IClusterStore *clusterStore_;
+    topology::ICoordinationBackend *clusterStore_;
 
     std::atomic<bool> exitFlag_{ false };
     std::shared_timed_mutex mutex_;  // protect the following variables

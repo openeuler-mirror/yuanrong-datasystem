@@ -39,7 +39,8 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/cluster/cluster_store.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/priority_queue.h"
@@ -72,8 +73,9 @@ public:
     /**
      * @brief Constructor
      */
-    ClusterManager(const HostPort &workerAddress, const HostPort &masterAddress, IClusterStore *clusterStore,
-                   std::shared_ptr<AkSkManager> akSkManager = nullptr, const int pqSize = 5000);
+    ClusterManager(const HostPort &workerAddress, const HostPort &masterAddress,
+                   topology::ICoordinationBackend *clusterStore, std::shared_ptr<AkSkManager> akSkManager = nullptr,
+                   const int pqSize = 5000);
 
     ~ClusterManager();
 
@@ -634,7 +636,7 @@ protected:
      */
     struct CmEvent {
         CmEvent() = delete;
-        CmEvent(ClusterStoreEvent &&evt, PrefixType prf) : event(std::move(evt)), prefix(prf)
+        CmEvent(topology::CoordinationEvent &&evt, PrefixType prf) : event(std::move(evt)), prefix(prf)
         {
         }
 
@@ -660,7 +662,7 @@ protected:
             s << ", event msg: " << event.ToString();
             return s.str();
         }
-        ClusterStoreEvent event;
+        topology::CoordinationEvent event;
         PrefixType prefix;
     };
 
@@ -693,7 +695,7 @@ protected:
      * @brief Feed priority queue with ETCD event by watch thread.
      * @param[in] event - event from Etcd call back
      */
-    void EnqueEvent(ClusterStoreEvent &&event);
+    void EnqueEvent(topology::CoordinationEvent &&event);
 
     /**
      * @brief Feed priority queue with ETCD event by watch thread.
@@ -707,14 +709,14 @@ protected:
      * @param[in] event etcd event
      * @return Status
      */
-    Status HandleRingEvent(const ClusterStoreEvent &event);
+    Status HandleRingEvent(const topology::CoordinationEvent &event);
 
     /**
      * @brief Called when etcd event is about /datasystem/cluster
      * @param[in] event etcd event
      * @return Status
      */
-    Status HandleClusterEvent(const ClusterStoreEvent &event);
+    Status HandleClusterEvent(const topology::CoordinationEvent &event);
 
     /**
      * @brief Called when Etcd lease renew fails
@@ -981,7 +983,7 @@ protected:
     // The timers that generate fake node removal event, used only in StartNodeUtilThread thread.
     std::unordered_map<std::string, TimerQueue::TimerImpl> nodeTableCompletionTimer_;
 
-    IClusterStore *clusterStore_;
+    topology::ICoordinationBackend *clusterStore_;
     mutable std::shared_timed_mutex mutex_;  // TbbNodeTable is not threadsafe for iterations
     std::unique_ptr<worker::HashRing> hashRing_{ nullptr };
 

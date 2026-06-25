@@ -31,12 +31,14 @@
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
@@ -57,7 +59,7 @@ void MakeObjectMetas(size_t createNum, std::unordered_map<std::string, ObjectMet
     }
 }
 
-constexpr static int ETCD_KEYS_NUM{40};
+constexpr static int ETCD_KEYS_NUM{ 40 };
 
 class ObjectMetaStoreEtcdTest : public ExternalClusterTest {
 public:
@@ -103,7 +105,7 @@ public:
         eviction_ = std::make_shared<object_cache::WorkerOcEvictionManager>(nullptr, addr, addr);
         worker_ = std::make_unique<object_cache::WorkerOCServiceImpl>(addr, addr, nullptr, nullptr, eviction_, nullptr,
                                                                       etcdStore_.get());
-        clusterStore_ = std::make_unique<EtcdClusterStore>(etcdStore_.get());
+        clusterStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
         cm_ = std::make_unique<ClusterManager>(addr, addr, clusterStore_.get(), nullptr);
         worker_->SetClusterManager(cm_.get());
         ClusterInfo clusterInfo;
@@ -152,9 +154,8 @@ public:
         for (const auto &item : keys) {
             std::string value;
             std::string key = item.second + "/" + workerIp + "_" + item.first;
-            ASSERT_EQ(
-                db_->Get(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
-                code);
+            ASSERT_EQ(db_->Get(std::string(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
+                      code);
         }
     }
 
@@ -164,8 +165,8 @@ public:
         for (const auto &item : keys) {
             std::string value;
             std::string key = item.second + "/" + item.first + "/" + std::to_string(version);
-            ASSERT_EQ(
-                db_->Get(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(), code);
+            ASSERT_EQ(db_->Get(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX, key, value).GetCode(),
+                      code);
         }
     }
 
@@ -174,7 +175,7 @@ protected:
     std::shared_ptr<ObjectMetaStore> objectMetaStore_;
     std::shared_ptr<EtcdStore> db_;
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<EtcdClusterStore> clusterStore_;
+    std::unique_ptr<topology::EtcdCoordinationBackend> clusterStore_;
     std::unique_ptr<ClusterManager> cm_;
     std::unique_ptr<object_cache::WorkerOCServiceImpl> worker_;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> eviction_;

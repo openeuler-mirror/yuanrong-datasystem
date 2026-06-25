@@ -24,7 +24,9 @@
 #include "common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 
 using namespace datasystem::worker;
 
@@ -85,9 +87,9 @@ protected:
             workerIds_[i] = addr.ToString();
             etcdStores_.emplace_back(std::make_unique<EtcdStore>(FLAGS_etcd_address));
             DS_ASSERT_OK(etcdStores_.back()->Init());
-            clusterStores_.emplace_back(std::make_unique<EtcdClusterStore>(etcdStores_.back().get()));
-            clusterManagers_.emplace_back(std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(),
-                                                                       nullptr, pqSize));
+            clusterStores_.emplace_back(std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_.back().get()));
+            clusterManagers_.emplace_back(
+                std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(), nullptr, pqSize));
             ClusterInfo clusterInfo;
             DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_.back().get(), clusterInfo));
             DS_ASSERT_OK(clusterManagers_.back()->Init(clusterInfo));
@@ -116,9 +118,8 @@ protected:
                 addr.ParseString("127.0.0.1:" + std::to_string(i));
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
-                clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
-                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(),
-                                                                   nullptr);
+                clusterStores_[i] = std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_[i].get());
+                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(), nullptr);
                 ClusterInfo clusterInfo;
                 DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
                 DS_ASSERT_OK(clusterManagers_[i]->Init(clusterInfo));
@@ -138,9 +139,8 @@ protected:
                 addr.ParseString("127.0.0.1:" + std::to_string(i));
                 etcdStores_[i] = std::make_unique<EtcdStore>(FLAGS_etcd_address);
                 DS_ASSERT_OK(etcdStores_[i]->Init());
-                clusterStores_[i] = std::make_unique<EtcdClusterStore>(etcdStores_[i].get());
-                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(),
-                                                                   nullptr);
+                clusterStores_[i] = std::make_unique<topology::EtcdCoordinationBackend>(etcdStores_[i].get());
+                clusterManagers_[i] = std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(), nullptr);
                 ClusterInfo clusterInfo;
                 DS_ASSERT_OK(ClusterManager::ConstructClusterInfoViaEtcd(etcdStores_[i].get(), clusterInfo));
                 DS_ASSERT_OK(clusterManagers_[i]->Init(clusterInfo));
@@ -152,7 +152,7 @@ protected:
     std::unique_ptr<EtcdStore> db_;
     std::vector<std::string> workerIds_;
     std::vector<std::unique_ptr<EtcdStore>> etcdStores_;
-    std::vector<std::unique_ptr<EtcdClusterStore>> clusterStores_;
+    std::vector<std::unique_ptr<topology::EtcdCoordinationBackend>> clusterStores_;
     std::vector<std::unique_ptr<ClusterManager>> clusterManagers_;
 };
 
@@ -258,7 +258,7 @@ TEST_F(ClusterManagerTest, NoProgressEarlyTermination)
         DS_ASSERT_OK(cm->CheckWaitNodeTableComplete());
     }
     ShutDownAllClusterManagers();
-    std::vector<size_t> restartIdxs = {0};
+    std::vector<size_t> restartIdxs = { 0 };
     inject::Set("ClusterManager.IfNeedTriggerReconciliation.noreconciliation", "return(K_OK)");
     DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.waitTime", "call(120)"));
     DS_ASSERT_OK(inject::Set("ClusterManager.CheckWaitNodeTableComplete.noProgressTimeout", "call(0)"));
@@ -267,9 +267,8 @@ TEST_F(ClusterManagerTest, NoProgressEarlyTermination)
     for (size_t i : restartIdxs) {
         DS_ASSERT_OK(clusterManagers_[i]->CheckWaitNodeTableComplete());
     }
-    auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                       std::chrono::steady_clock::now() - startTime)
-                       .count();
+    auto elapsed =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startTime).count();
     ASSERT_LT(elapsed, 15) << "WaitNodeTable should terminate early, but took " << elapsed << "s";
     ShutDownAllClusterManagers();
 }

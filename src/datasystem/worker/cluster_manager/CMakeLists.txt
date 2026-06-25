@@ -12,7 +12,7 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         worker_hash_ring
         worker_update_flag_check
         common_signal
-        cluster_store
+        coordination_backend
         etcdapi_proto
         )
 

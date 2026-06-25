@@ -50,7 +50,7 @@ static constexpr uint32_t MAX_SCALE_TASK_THREAD = 4;
 static const std::string HASH_RING_TASK_EXECUTOR = "HashRingTaskExecutor";
 
 HashRingTaskExecutor::HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
-                                           IClusterStore *clusterStore)
+                                           topology::ICoordinationBackend *clusterStore)
     : workerAddr_(workerAddr), workerUuid_(workerUuid), clusterStore_(clusterStore)
 {
     scaleThreadPool_ = std::make_unique<ThreadPool>(0, MAX_SCALE_TASK_THREAD, "HashRingScaleTask");
