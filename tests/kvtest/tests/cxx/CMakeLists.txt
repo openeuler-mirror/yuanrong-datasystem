@@ -65,4 +65,16 @@ target_include_directories(kvtest_tests PRIVATE
     ${KVTEST_ROOT}/src
 )
 
+# Optional NUMA support — match main CMakeLists.txt detection
+find_library(LIBNUMA_LIB numa)
+if(LIBNUMA_LIB)
+    include(CheckIncludeFile)
+    check_include_file(numa.h HAS_NUMA_H)
+    if(HAS_NUMA_H)
+        target_compile_definitions(kvtest_tests PRIVATE HAS_LIBNUMA=1)
+        target_link_libraries(kvtest_tests PRIVATE ${LIBNUMA_LIB})
+        message(STATUS "NUMA support enabled for tests: ${LIBNUMA_LIB}")
+    endif()
+endif()
+
 target_link_libraries(kvtest_tests PRIVATE pthread)

@@ -75,6 +75,7 @@ cd tests/kvtest
   "num_threads": 16,
   "metrics_interval_ms": 3000,
   "cpu_affinity": "",
+  "numa_node": -1,
   "nodes": [],
   "peers": []
 }
@@ -101,7 +102,8 @@ cd tests/kvtest
 | `num_threads` | int | 16 | 工作线程数（Pipeline 写入线程 / Benchmark 并发线程 / Cache 读取线程） |
 | `metrics_interval_ms` | int | 3000 | 指标刷新间隔（毫秒） |
 | `metrics_file` | string | 自动生成 | CSV 输出文件名，默认 `outputDir/latency_timeseries.csv` |
-| `cpu_affinity` | string | "" | CPU 亲和性，如 "0-7" 或 "0,2,4,6"，空 = 自动检测 |
+| `cpu_affinity` | string | "" | CPU 亲和性，如 "0-7" 或 "0,2,4,6"，空 = 自动检测。所有模式（Pipeline/Cache/Benchmark）均生效 |
+| `numa_node` | int | -1 | NUMA 节点绑定，-1=禁用，非负=绑定到指定 node。需链接 libnuma，未编译时自动回退到 `cpu_affinity` |
 | `nodes` | NodeInfo[] | [] | 集群节点列表（自动生成 peers） |
 | `peers` | string[] | [] | Peer 地址列表，如 `["http://host:port"]` |
 
@@ -133,7 +135,6 @@ cd tests/kvtest
 | `target_hit_rate` | double | 0.0 | 目标命中率，0 = 固定池大小，0.01~1.0 = 自动调整 |
 | `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（key_pool_size × 20） |
 | `inference_delay_ms` | int | 0 | 模拟推理延迟（毫秒），Cache miss 后的等待 |
-| `warmup_batch_size` | int | 100 | 预热每批 key 数量 |
 | `warmup_retry_count` | int | 3 | 预热阶段每个 key 的最大重试次数 |
 | `warmup_retry_delay_ms` | int | 1000 | 预热重试间隔（毫秒） |
 | `warmup_timeout_seconds` | int | 300 | Reader 等待所有 Writer 预热完成的超时 |

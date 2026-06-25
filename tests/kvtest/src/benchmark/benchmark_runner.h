@@ -96,9 +96,8 @@ PhaseResult RunMGetPhase(Client *client, int instanceId, int round, int startKey
         for (int i = offset; i < batchEnd; i++) {
             keys.push_back(MakeBenchKey(instanceId, round, startKey + i));
         }
-        std::vector<std::string> out;
         auto start = std::chrono::steady_clock::now();
-        bool ok = client->MGet(keys, out);
+        bool ok = client->MGetVerify(keys);
         auto end = std::chrono::steady_clock::now();
         if (ok) {
             result.successCount += keys.size();
@@ -184,9 +183,8 @@ PhaseResult RunGetPhase(Client *client, int instanceId, int round, int startKey,
     PhaseResult result;
     for (int i = 0; i < numKeys; i++) {
         std::string key = MakeBenchKey(instanceId, round, startKey + i);
-        std::string out;
         auto start = std::chrono::steady_clock::now();
-        bool ok = client->Get(key, out);
+        bool ok = client->GetVerify(key);
         auto end = std::chrono::steady_clock::now();
         if (ok) {
             result.successCount++;
@@ -212,16 +210,20 @@ PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey,
             keys.push_back(MakeBenchKey(instanceId, round, startKey + i));
         }
         bool ok = false;
-        auto start = std::chrono::steady_clock::now();
+        double delMs = 0;
         for (int attempt = 0; attempt < kMaxRetries; attempt++) {
-            if (client->Del(keys)) { ok = true; break; }
+            auto start = std::chrono::steady_clock::now();
+            if (client->Del(keys)) {
+                auto end = std::chrono::steady_clock::now();
+                delMs = std::chrono::duration<double, std::milli>(end - start).count();
+                ok = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        auto end = std::chrono::steady_clock::now();
         if (ok) {
             result.successCount += keys.size();
-            double ms = std::chrono::duration<double, std::milli>(end - start).count();
-            result.latenciesMs.push_back(ms / keys.size());
+            result.latenciesMs.push_back(delMs / keys.size());
         } else {
             SLOG_WARN("RunDelPhase: batch " << (offset / kBatchSize)
                       << " failed after " << kMaxRetries << " retries"

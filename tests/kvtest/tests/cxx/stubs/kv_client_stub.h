@@ -19,10 +19,9 @@ struct StubKVClient {
         return true;
     }
 
-    bool Get(const std::string &key, std::string &out) {
+    bool GetVerify(const std::string &key) {
         if (failGets) return false;
         getCount++;
-        out = "data";
         return true;
     }
 
@@ -51,11 +50,9 @@ struct StubKVClient {
         return true;
     }
 
-    bool MGet(const std::vector<std::string> &keys, std::vector<std::string> &out) {
+    bool MGetVerify(const std::vector<std::string> &keys) {
         if (failGets) return false;
         mgetCount += static_cast<int>(keys.size());
-        out.clear();
-        out.resize(keys.size(), "data");
         return true;
     }
 

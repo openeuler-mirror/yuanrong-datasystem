@@ -898,6 +898,12 @@ def cmd_gen_config(args):
         },
     }
 
+    # CPU / NUMA affinity (all modes)
+    if args.cpu_affinity:
+        cfg['cpu_affinity'] = args.cpu_affinity
+    if args.numa_node >= 0:
+        cfg['numa_node'] = args.numa_node
+
     # Mode-specific config fields
     if mode == 'benchmark':
         cfg['test_mode'] = args.test_mode
@@ -1037,6 +1043,11 @@ def _add_gen_config_args(p):
                    help='Benchmark total rounds (0 = infinite)')
     p.add_argument('--ttl', type=int, default=0,
                    help='TTL in seconds via set_param.ttl_second (default: 0, no expiry)')
+    # CPU / NUMA affinity
+    p.add_argument('--cpu-affinity', default='',
+                   help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
+    p.add_argument('--numa-node', type=int, default=-1,
+                   help='NUMA node to bind (default: -1, disabled); requires libnuma')
 
 
 def main():

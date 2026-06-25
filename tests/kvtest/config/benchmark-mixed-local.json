@@ -9,6 +9,8 @@
   "total_rounds": 10,
   "duration_seconds": 0,
   "num_threads": 16,
+  "cpu_affinity": "",
+  "numa_node": -1,
   "set_ratio": 0.5,
   "mixed_key_strategy": "read_prev",
   "data_sizes": [

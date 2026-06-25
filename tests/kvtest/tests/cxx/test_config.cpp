@@ -677,3 +677,78 @@ TEST(LoadConfig_MixedMode_ValidRatio) {
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
 }
+
+// --- CPU affinity config ---
+
+TEST(LoadConfig_CpuAffinity) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"cpu_affinity":"0-7"})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.cpuAffinity, std::string("0-7"));
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CpuAffinity_Default) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.cpuAffinity, std::string(""));
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_CpuAffinity_CommaList) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"cpu_affinity":"0,2,4,6"})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.cpuAffinity, std::string("0,2,4,6"));
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+// --- NUMA node config ---
+
+TEST(LoadConfig_NumaNode) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"numa_node":0})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numaNode, 0);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_NumaNode_Default) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numaNode, -1);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_NumaNode_Negative) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000,"numa_node":-1})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.numaNode, -1);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+// --- Benchmark mode with cpu_affinity + numa_node ---
+
+TEST(LoadConfig_BenchmarkWithAffinity) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "test_mode":"set_local","worker_memory_mb":4096,
+        "cpu_affinity":"0-3","numa_node":0
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.runMode, RunMode::BENCHMARK);
+    ASSERT_EQ(cfg.cpuAffinity, std::string("0-3"));
+    ASSERT_EQ(cfg.numaNode, 0);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}

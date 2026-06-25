@@ -105,7 +105,6 @@ Pool adjust: hit_rate=0.812 > target=0.8 → pool 158→166
 | `target_hit_rate` | double | 0.0 | 目标命中率，0 = 固定池大小，0.01~1.0 = 自动调整 |
 | `max_key_pool_size` | int | 0 | Key 池上限，0 = 自动（key_pool_size × 20） |
 | `inference_delay_ms` | int | 0 | 模拟推理延迟（毫秒），Cache miss 后的等待 |
-| `warmup_batch_size` | int | 100 | 预热每批 key 数量 |
 | `warmup_retry_count` | int | 3 | 预热阶段每个 key 的最大重试次数 |
 | `warmup_retry_delay_ms` | int | 1000 | 预热重试间隔（毫秒） |
 | `warmup_timeout_seconds` | int | 300 | Reader 等待所有 Writer 预热完成的超时 |

@@ -78,10 +78,10 @@ struct Config {
     std::vector<std::string> pipeline = {"setStringView"};
     std::vector<std::string> notifyPipeline = {"getBuffer"};
     std::string cpuAffinity;  // optional, e.g. "0-7" or "0,2,4,6", empty = auto-detect
+    int numaNode = -1;        // NUMA node to bind, -1 = disabled, non-negative = bind to that node
     // Cache mode fields
     int keyPoolSize = 0;             // 0 = disabled (normal pipeline mode)
     int inferenceDelayMs = 0;        // simulate inference delay on cache miss
-    int warmupBatchSize = 100;       // reserved: keys per warmup batch (currently individual writes)
     int warmupRetryCount = 3;        // retries per warmup key
     int warmupRetryDelayMs = 1000;   // delay between retries
     int warmupTimeoutSeconds = 300;  // Reader wait timeout for all Writer warmups

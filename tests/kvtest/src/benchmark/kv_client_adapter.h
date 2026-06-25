@@ -16,14 +16,10 @@ public:
         return rc.IsOk();
     }
 
-    bool Get(const std::string &key, std::string &out) {
+    bool GetVerify(const std::string &key) {
         datasystem::Optional<datasystem::Buffer> buf;
         auto rc = client_->Get(key, buf);
-        if (!rc.IsOk() || !buf) return false;
-        auto size = buf->GetSize();
-        out.assign(static_cast<const char *>(buf->ImmutableData()),
-                   size > 0 ? static_cast<size_t>(size) : 0);
-        return true;
+        return rc.IsOk() && buf.has_value();
     }
 
     bool CreateAndSet(const std::string &key, uint64_t size, const std::string &data) {
@@ -62,20 +58,12 @@ public:
         return rc.IsOk() && failedKeys.empty();
     }
 
-    bool MGet(const std::vector<std::string> &keys, std::vector<std::string> &out) {
-        out.clear();
-        out.resize(keys.size());
+    bool MGetVerify(const std::vector<std::string> &keys) {
         std::vector<datasystem::Optional<datasystem::Buffer>> buffers;
         auto rc = client_->Get(keys, buffers);
         if (!rc.IsOk()) return false;
-        for (size_t i = 0; i < buffers.size(); i++) {
-            if (buffers[i]) {
-                auto size = buffers[i]->GetSize();
-                out[i].assign(static_cast<const char*>(buffers[i]->ImmutableData()),
-                              size > 0 ? static_cast<size_t>(size) : 0);
-            } else {
-                return false;  // any missing buffer = failure
-            }
+        for (auto &b : buffers) {
+            if (!b) return false;
         }
         return true;
     }
@@ -83,7 +71,7 @@ public:
     bool Del(const std::vector<std::string> &keys) {
         std::vector<std::string> failedKeys;
         auto rc = client_->Del(keys, failedKeys);
-        return rc.IsOk();
+        return rc.IsOk() && failedKeys.empty();
     }
 
     datasystem::KVClient *RawClient() { return client_.get(); }
