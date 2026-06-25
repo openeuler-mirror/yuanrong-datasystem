@@ -42,13 +42,16 @@
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
 
-// Dispatch helper for dual-mode brpc/ZMQ stubs. Both stub_ and zmqStub_ derive
-// from RpcStubBase but are distinct concrete types, so a ternary expression on
-// the unique_ptrs fails to compile under GCC 14 (which is stricter than the
-// GCC 12 used when this code was originally written). Use an explicit branch
-// inside a lambda to keep the call sites readable.
-#define DS_OC_DISPATCH(method, ...) \
-    ([&]() { return stub_ ? stub_->method(__VA_ARGS__) : zmqStub_->method(__VA_ARGS__); }())
+// Dispatch helper for dual-mode brpc/ZMQ stubs. Both brpcSession_->stub and
+// zmqStub_ derive from RpcStubBase but are distinct concrete types. Use
+// std::atomic_load on the shared_ptr bundle so RecreateOCStub cannot race
+// with hot-path reads (F08 fix: C++ UB on unique_ptr assignment → atomic).
+#define DS_OC_DISPATCH(method, ...)                                         \
+    ([&]() {                                                                \
+        auto ds_oc_session = std::atomic_load(&brpcSession_);               \
+        return ds_oc_session ? ds_oc_session->stub->method(__VA_ARGS__)     \
+                             : zmqStub_->method(__VA_ARGS__);               \
+    }())
 
 namespace datasystem {
 namespace object_cache {
@@ -185,15 +188,17 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     }
     if (FLAGS_use_brpc) {
         HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
-        brpcChannel_ = std::make_unique<brpc::Channel>();
+        auto channel = std::make_shared<brpc::Channel>();
         brpc::ChannelOptions opts;
         opts.timeout_ms = requestTimeoutMs;
         opts.connect_timeout_ms = connectTimeoutMs;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_->Init(brpcAddr.ToString().c_str(), &opts) == 0,
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel->Init(brpcAddr.ToString().c_str(), &opts) == 0,
                                              StatusCode::K_RPC_UNAVAILABLE,
                                              FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
         (void)WaitForBrpcSocketAvailable(brpcAddr);
-        stub_ = std::make_unique<WorkerOCService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs);
+        auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
+        auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
+        std::atomic_store(&brpcSession_, session);
     } else {
         auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
         if (IsShmEnableByUDS()) {
@@ -273,20 +278,16 @@ void ClientWorkerRemoteApi::RecreateOCStub()
     // Recreate the OC service stub after hostPort_ changes (e.g., worker IP change).
     // Connect() only updates commonWorkerSession_, not stub_.
     //
-    // F08 note: stub_/brpcChannel_ replacement races with concurrent DS_OC_DISPATCH
-    // readers. std::unique_ptr assignment is not atomic, so in principle a reader
-    // could observe a transient null stub_ (UB). In practice RecreateOCStub is only
-    // called on worker IP change (rare, single-threaded caller path inside
-    // ClientWorkerRemoteApi), and the two-step "swap stub before channel" pattern
-    // above already prevents the dangling-channel case. A fully safe fix would
-    // require std::atomic<std::shared_ptr<...>> or a mutex on the dispatch hot path,
-    // which is invasive; tracked as follow-up if real UAF reports surface.
+    // The stub+channel are bundled in a shared_ptr<BrpcSession> accessed via
+    // atomic_load/atomic_store.  DS_OC_DISPATCH readers get a consistent snapshot;
+    // the old session's channel stays alive until all concurrent readers release
+    // their shared_ptr copies.
     int32_t stubTimeout = connectTimeoutMs_;
     if (clientDeadTimeoutMs_ > 0) {
         stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
     }
     if (FLAGS_use_brpc) {
-        auto newChannel = std::make_unique<brpc::Channel>();
+        auto newChannel = std::make_shared<brpc::Channel>();
         brpc::ChannelOptions opts;
         opts.timeout_ms = requestTimeoutMs_;
         opts.connect_timeout_ms = stubTimeout;
@@ -297,12 +298,10 @@ void ClientWorkerRemoteApi::RecreateOCStub()
             return;
         }
         (void)WaitForBrpcSocketAvailable(brpcAddr);
-        // Create the new stub pointing to the new channel before replacing brpcChannel_,
-        // so concurrent readers of stub_ never observe a stub whose raw channel pointer
-        // was made dangling by brpcChannel_ move-assignment destroying the old channel.
-        auto newStub = std::make_unique<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
-        stub_ = std::move(newStub);          // old stub destroyed while old channel still alive
-        brpcChannel_ = std::move(newChannel);  // old channel destroyed, new channel in place
+        // Bundle new stub and channel; atomic_store swaps both together.
+        auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
+        auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));
+        std::atomic_store(&brpcSession_, newSession);
     } else {
         auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
         if (IsShmEnableByUDS()) {
@@ -895,7 +894,8 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when sending H2D request.");
             VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
-            RETURN_IF_NOT_OK(stub_->Get(opts, req, rsp, piplnRh2dParam.payloads));
+            auto ds_oc_session = std::atomic_load(&brpcSession_);
+            RETURN_IF_NOT_OK(ds_oc_session->stub->Get(opts, req, rsp, piplnRh2dParam.payloads));
             return Status::OK();
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);

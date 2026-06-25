@@ -25,6 +25,7 @@
 
 #include <variant>
 
+#include "datasystem/common/rpc/brpc_server_stream_impl.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/server_writer_reader_base.h"
 #include "datasystem/common/rpc/zmq/zmq_server_stream_base.h"
@@ -48,6 +49,10 @@ public:
     {
     }
 
+    explicit ServerWriter(std::unique_ptr<BrpcServerWriterImpl<W>> &&impl) : pimpl_(std::move(impl))
+    {
+    }
+
     ~ServerWriter() = default;
 
     Status SendStatus(const Status &rc)
@@ -59,8 +64,9 @@ public:
     Status ReadPb(R &pb)
     {
         return std::visit(
-            overloaded{ [&pb](std::unique_ptr<ServerWriterImpl<W>> &pimpl) { return pimpl->ReadPb(pb); },
-                        [](auto &pimpl) { return Status(K_RUNTIME_ERROR, "Unexpected ReadPb function call."); }
+            overloaded{
+                [&pb](std::unique_ptr<ServerWriterImpl<W>> &pimpl) { return pimpl->ReadPb(pb); },
+                [&pb](std::unique_ptr<BrpcServerWriterImpl<W>> &pimpl) { return pimpl->ReadPb(pb); },
             },
             pimpl_);
     }
@@ -91,7 +97,8 @@ public:
     }
 
 private:
-    std::variant<std::unique_ptr<ServerWriterImpl<W>>> pimpl_;
+    std::variant<std::unique_ptr<ServerWriterImpl<W>>,
+                 std::unique_ptr<BrpcServerWriterImpl<W>>> pimpl_;
 };
 
 /**
@@ -104,13 +111,18 @@ public:
     {
     }
 
+    explicit ServerReader(std::unique_ptr<BrpcServerReaderImpl<R>> &&impl) : pimpl_(std::move(impl))
+    {
+    }
+
     ~ServerReader() = default;
 
     Status SendStatus(const Status &rc)
     {
         return std::visit(
-            overloaded{ [&rc](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
-                        [](auto &pimpl) { return Status(K_RUNTIME_ERROR, "Unexpected SendStatus function call."); }
+            overloaded{
+                [&rc](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
+                [&rc](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
             },
             pimpl_);
     }
@@ -129,8 +141,9 @@ public:
     Status WritePb(const W &pb)
     {
         return std::visit(
-            overloaded{ [&pb](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
-                        [](auto &pimpl) { return Status(K_RUNTIME_ERROR, "Unexpected WritePb function call."); }
+            overloaded{
+                [&pb](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
+                [&pb](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
             },
             pimpl_);
     }
@@ -138,8 +151,9 @@ public:
     Status SendPayload(std::vector<RpcMessage> &buffer)
     {
         return std::visit(
-            overloaded{ [&buffer](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
-                        [](auto &pimpl) { return Status(K_RUNTIME_ERROR, "Unexpected SendPayload function call."); }
+            overloaded{
+                [&buffer](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
+                [&buffer](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
             },
             pimpl_);
     }
@@ -155,7 +169,8 @@ public:
     }
 
 private:
-    std::variant<std::unique_ptr<ServerReaderImpl<R>>> pimpl_;
+    std::variant<std::unique_ptr<ServerReaderImpl<R>>,
+                 std::unique_ptr<BrpcServerReaderImpl<R>>> pimpl_;
 };
 
 /**

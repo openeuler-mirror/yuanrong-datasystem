@@ -19,7 +19,7 @@
  * Generates {ServiceName}_BrpcStub and {ServiceName}_BrpcGenericStub classes
  * that use brpc::Channel to call a brpc server.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 #include <google/protobuf/descriptor.h>
 
@@ -29,8 +29,8 @@ namespace datasystem {
 // Brpc client stub header
 // ============================================================================
 
-void ZmqRpcGenerator::CreateBrpcStubHeader(const google::protobuf::FileDescriptor &file,
-                                           compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateBrpcStubHeader(const google::protobuf::FileDescriptor &file,
+                                        compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".brpc.stub.pb.h"));
     io::Printer printer(outputFile.get(), '$');
@@ -48,8 +48,8 @@ void ZmqRpcGenerator::CreateBrpcStubHeader(const google::protobuf::FileDescripto
     printer.PrintRaw(ENDIF);
 }
 
-void ZmqRpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
-                                               const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
+                                            const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -74,6 +74,7 @@ void ZmqRpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
         "#include \"datasystem/common/rpc/brpc_async_context.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_unary_writer_reader.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_stream_writer_reader.h\"\n"
+        "#include \"datasystem/common/rpc/brpc_client_stream_impl.h\"\n"
         "#include \"datasystem/common/rpc/brpc_status_util.h\"\n"
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/common/rpc/rpc_options.h\"\n"
@@ -91,8 +92,8 @@ void ZmqRpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
     }
 }
 
-void ZmqRpcGenerator::GenerateBrpcStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                            const std::string &indent) const
+void RpcGenerator::GenerateBrpcStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                         const std::string &indent) const
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -132,14 +133,20 @@ void ZmqRpcGenerator::GenerateBrpcStubClass(io::Printer &printer, const google::
                      "        asyncCtx_.ForgetCall(tagId);\n"
                      "    }\n");
 
+    // P5 7.3: per-stub liveness probe used by GenericStub delegation.
+    printer.PrintRaw("    bool IsPeerAlive(uint32_t threshold) {\n"
+                     "        (void)threshold;\n"
+                     "        return channel_ != nullptr;\n"
+                     "    }\n");
+
     printer.PrintRaw("private:\n    brpc::Channel *channel_;\n    int32_t timeoutMs_;\n"
                      "    const ::google::protobuf::ServiceDescriptor *svcDesc_;\n"
                      "    ::datasystem::BrpcAsyncContext asyncCtx_;\n};\n");
 }
 
-void ZmqRpcGenerator::GenerateBrpcGenericStubClass(io::Printer &printer,
-                                                   const google::protobuf::ServiceDescriptor &svc,
-                                                   const std::string &indent) const
+void RpcGenerator::GenerateBrpcGenericStubClass(io::Printer &printer,
+                                                const google::protobuf::ServiceDescriptor &svc,
+                                                const std::string &indent) const
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -172,8 +179,8 @@ void ZmqRpcGenerator::GenerateBrpcGenericStubClass(io::Printer &printer,
 // Brpc client stub cpp
 // ============================================================================
 
-void ZmqRpcGenerator::CreateBrpcStubCpp(const google::protobuf::FileDescriptor &file,
-                                        compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateBrpcStubCpp(const google::protobuf::FileDescriptor &file,
+                                     compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".brpc.stub.pb.cc"));
     io::Printer printer(outputFile.get(), '$');
@@ -192,8 +199,8 @@ void ZmqRpcGenerator::CreateBrpcStubCpp(const google::protobuf::FileDescriptor &
     printer.PrintRaw(namespaceEnd);
 }
 
-void ZmqRpcGenerator::GenerateBrpcStubCppPrologue(io::Printer &printer,
-                                                  const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateBrpcStubCppPrologue(io::Printer &printer,
+                                               const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -211,9 +218,9 @@ void ZmqRpcGenerator::GenerateBrpcStubCppPrologue(io::Printer &printer,
 // Generic stub implementation (delegates to inner BrpcStub)
 // ============================================================================
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubApiDef(io::Printer &printer,
-                                                     const google::protobuf::ServiceDescriptor &svc,
-                                                     const std::string &indent)
+void RpcGenerator::ImplementBrpcGenericStubApiDef(io::Printer &printer,
+                                                  const google::protobuf::ServiceDescriptor &svc,
+                                                  const std::string &indent)
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -241,9 +248,9 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubApiDef(io::Printer &printer,
     }
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubConstructor(io::Printer &printer,
-                                                          const google::protobuf::ServiceDescriptor &svc,
-                                                          const std::string &indent)
+void RpcGenerator::ImplementBrpcGenericStubConstructor(io::Printer &printer,
+                                                       const google::protobuf::ServiceDescriptor &svc,
+                                                       const std::string &indent)
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -258,7 +265,7 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubConstructor(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer, const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer, const std::string &stub)
 {
     std::map<std::string, std::string> vars;
     vars["stub"] = stub;
@@ -269,8 +276,7 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer,
     const std::string isPeerAlive =
         "bool $stub$::IsPeerAlive(uint32_t threshold) {\n"
         "    (void)threshold;\n"
-        "    // health check via brpc (pending implementation)\n"
-        "    return true;\n"
+        "    return stub_->IsPeerAlive(threshold);\n"
         "}\n";
     const std::string cacheSession =
         "void $stub$::CacheSession(bool cache) {\n"
@@ -299,9 +305,9 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer,
 // BrpcStub inner implementation (direct brpc::Channel calls)
 // ============================================================================
 
-void ZmqRpcGenerator::ImplementBrpcStubApiDef(io::Printer &printer,
-                                              const google::protobuf::ServiceDescriptor &svc,
-                                              const std::string &indent)
+void RpcGenerator::ImplementBrpcStubApiDef(io::Printer &printer,
+                                           const google::protobuf::ServiceDescriptor &svc,
+                                           const std::string &indent)
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -329,11 +335,11 @@ void ZmqRpcGenerator::ImplementBrpcStubApiDef(io::Printer &printer,
 
 // --- Plain unary (no payloads, no sockets) ---
 
-void ZmqRpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
-                                                   const google::protobuf::MethodDescriptor &method,
-                                                   int methodIndex,
-                                                   const std::string &indent,
-                                                   const std::string &stub)
+void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
+                                                const google::protobuf::MethodDescriptor &method,
+                                                int methodIndex,
+                                                const std::string &indent,
+                                                const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -384,7 +390,7 @@ void ZmqRpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-std::string ZmqRpcGenerator::BuildSendPayloadFramingSnippet()
+std::string RpcGenerator::BuildSendPayloadFramingSnippet()
 {
     return
         "    // Write send payload to request attachment with framing\n"
@@ -399,7 +405,7 @@ std::string ZmqRpcGenerator::BuildSendPayloadFramingSnippet()
         "    }\n";
 }
 
-std::string ZmqRpcGenerator::BuildRecvPayloadFramingSnippet()
+std::string RpcGenerator::BuildRecvPayloadFramingSnippet()
 {
     return
         "    // Deserialize recv payload from response attachment\n"
@@ -425,11 +431,11 @@ std::string ZmqRpcGenerator::BuildRecvPayloadFramingSnippet()
 
 // --- Unary variant 2: returns ClientUnaryWriterReader wrapper ---
 
-void ZmqRpcGenerator::ImplementBrpcStubNoStreamDef2(io::Printer &printer,
-                                                    const google::protobuf::MethodDescriptor &method,
-                                                    int methodIndex,
-                                                    const std::string &indent,
-                                                    const std::string &stub)
+void RpcGenerator::ImplementBrpcStubNoStreamDef2(io::Printer &printer,
+                                                 const google::protobuf::MethodDescriptor &method,
+                                                 int methodIndex,
+                                                 const std::string &indent,
+                                                 const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -461,11 +467,11 @@ void ZmqRpcGenerator::ImplementBrpcStubNoStreamDef2(io::Printer &printer,
 
 // --- Short convenience wrapper ---
 
-void ZmqRpcGenerator::ImplBrpcStubNoStreamShortDef(io::Printer &printer,
-                                                   const google::protobuf::MethodDescriptor &method,
-                                                   int methodIndex,
-                                                   const std::string &indent,
-                                                   const std::string &stub)
+void RpcGenerator::ImplBrpcStubNoStreamShortDef(io::Printer &printer,
+                                                const google::protobuf::MethodDescriptor &method,
+                                                int methodIndex,
+                                                const std::string &indent,
+                                                const std::string &stub)
 {
     (void)methodIndex;
     (void)indent;
@@ -492,11 +498,11 @@ void ZmqRpcGenerator::ImplBrpcStubNoStreamShortDef(io::Printer &printer,
 
 // --- Async write ---
 
-void ZmqRpcGenerator::ImplementBrpcStubAsyncWriteDef(io::Printer &printer,
-                                                     const google::protobuf::MethodDescriptor &method,
-                                                     int methodIndex,
-                                                     const std::string &indent,
-                                                     const std::string &stub)
+void RpcGenerator::ImplementBrpcStubAsyncWriteDef(io::Printer &printer,
+                                                  const google::protobuf::MethodDescriptor &method,
+                                                  int methodIndex,
+                                                  const std::string &indent,
+                                                  const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -513,7 +519,7 @@ void ZmqRpcGenerator::ImplementBrpcStubAsyncWriteDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-std::string ZmqRpcGenerator::BuildAsyncWriteImpl(const google::protobuf::MethodDescriptor &method)
+std::string RpcGenerator::BuildAsyncWriteImpl(const google::protobuf::MethodDescriptor &method)
 {
     // AsyncWrite: allocate a tag, issue CallMethod with a Done closure, return immediately.
     // The response and controller live inside BrpcAsyncCall, owned by asyncCtx_ via shared_ptr.
@@ -548,14 +554,15 @@ std::string ZmqRpcGenerator::BuildAsyncWriteImpl(const google::protobuf::MethodD
     }
     impl +=
         "    // Heap-allocate response and request so they survive until AsyncRead consumes them.\n"
-        "    // Stored in call->response/call->request for cleanup in ForgetRequest / destructor.\n"
-        "    // Request is explicitly copied because brpc serializes the protobuf on a bthread\n"
-        "    // asynchronously; the caller's stack rq would dangle after AsyncWrite returns.\n"
-        "    call->response = new $outputTypeName$();\n"
-        "    call->request = new $inputTypeName$(rq);\n"
+        "    // Stored in call->response/call->request (unique_ptr) for cleanup in ForgetRequest\n"
+        "    // or destructor. Request is explicitly copied because brpc serializes the protobuf\n"
+        "    // on a bthread asynchronously; the caller's stack rq would dangle after AsyncWrite\n"
+        "    // returns.\n"
+        "    call->response = std::make_unique<$outputTypeName$>();\n"
+        "    call->request = std::make_unique<$inputTypeName$>(rq);\n"
         "    auto done = asyncCtx_.MakeDone(call);\n"
         "    channel_->CallMethod(svcDesc_->method($methodIndex$),\n"
-        "        &call->cntl, call->request, call->response, done);\n"
+        "        &call->cntl, call->request.get(), call->response.get(), done);\n"
         "    return ::datasystem::Status::OK();\n"
         "}\n"
         "::datasystem::Status $stub$::$methodName$AsyncWrite(const $inputTypeName$& rq,\n"
@@ -567,11 +574,11 @@ std::string ZmqRpcGenerator::BuildAsyncWriteImpl(const google::protobuf::MethodD
 
 // --- Async read ---
 
-void ZmqRpcGenerator::ImplementBrpcStubAsyncReadDef(io::Printer &printer,
-                                                    const google::protobuf::MethodDescriptor &method,
-                                                    int methodIndex,
-                                                    const std::string &indent,
-                                                    const std::string &stub)
+void RpcGenerator::ImplementBrpcStubAsyncReadDef(io::Printer &printer,
+                                                 const google::protobuf::MethodDescriptor &method,
+                                                 int methodIndex,
+                                                 const std::string &indent,
+                                                 const std::string &stub)
 {
     (void)indent;
     (void)methodIndex;
@@ -586,7 +593,7 @@ void ZmqRpcGenerator::ImplementBrpcStubAsyncReadDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-std::string ZmqRpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescriptor &method)
+std::string RpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescriptor &method)
 {
     // AsyncRead: look up tag, wait for RPC completion via cv, copy response, clean up.
     // If flags contains DONTWAIT, returns K_TRY_AGAIN if the RPC hasn't completed yet.
@@ -615,11 +622,9 @@ std::string ZmqRpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDe
         "            __LINE__, __FILE__,\n"
         "            \"Tag \" + std::to_string(tagId) + \" not found\");\n"
         "    }\n"
-        "    // Transfer response ownership to guard; null out the raw ptr so\n"
-        "    // ~BrpcAsyncCall doesn't double-delete.\n"
-        "    auto *typedResp = static_cast<$outputTypeName$*>(call->response);\n"
-        "    std::unique_ptr<google::protobuf::Message> respGuard(call->response);\n"
-        "    call->response = nullptr;\n"
+        "    // Transfer response ownership from call->response unique_ptr.\n"
+        "    auto respGuard = std::move(call->response);\n"
+        "    auto *typedResp = static_cast<$outputTypeName$*>(respGuard.get());\n"
         "    {\n"
         "        std::unique_lock<std::mutex> lock(call->mtx);\n"
         "        call->cv.wait(lock, [&call] { return call->completed; });\n"
@@ -641,7 +646,7 @@ std::string ZmqRpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDe
     return impl;
 }
 
-std::string ZmqRpcGenerator::BuildAsyncRecvPayloadFramingSnippet()
+std::string RpcGenerator::BuildAsyncRecvPayloadFramingSnippet()
 {
     return
         "    // Deserialize recv payload from response attachment (same wire format as sync).\n"
@@ -671,11 +676,11 @@ std::string ZmqRpcGenerator::BuildAsyncRecvPayloadFramingSnippet()
 
 // --- Bidi streaming ---
 
-void ZmqRpcGenerator::ImplementBrpcStubStreamingDef(io::Printer &printer,
-                                                    const google::protobuf::MethodDescriptor &method,
-                                                    int methodIndex,
-                                                    const std::string &indent,
-                                                    const std::string &stub)
+void RpcGenerator::ImplementBrpcStubStreamingDef(io::Printer &printer,
+                                                 const google::protobuf::MethodDescriptor &method,
+                                                 int methodIndex,
+                                                 const std::string &indent,
+                                                 const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -707,27 +712,30 @@ void ZmqRpcGenerator::ImplementBrpcStubStreamingDef(io::Printer &printer,
 
 // --- Client streaming ---
 
-void ZmqRpcGenerator::ImplementBrpcStubClientStreamingDef(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          int methodIndex,
-                                                          const std::string &indent,
-                                                          const std::string &stub)
+void RpcGenerator::ImplementBrpcStubClientStreamingDef(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       int methodIndex,
+                                                       const std::string &indent,
+                                                       const std::string &stub)
 {
     (void)indent;
-    (void)methodIndex;
     std::map<std::string, std::string> vars;
     vars["stub"] = stub;
     vars["methodName"] = method.name();
     vars["inputTypeName"] = method.input_type()->name();
+    vars["methodIndex"] = std::to_string(methodIndex);
 
+    // Client-streaming (stream->unary): client writes N messages via
+    // BrpcClientWriterImpl, wrapped in ClientWriter.
     std::string impl =
         "::datasystem::Status $stub$::$methodName$(const ::datasystem::RpcOptions &opt,\n"
         "    std::unique_ptr<datasystem::ClientWriter<$inputTypeName$>> *out) {\n"
-        "    (void)opt;\n"
-        "    (void)out;\n"
-        "    return ::datasystem::Status(::datasystem::StatusCode::K_NOT_SUPPORTED,\n"
-        "                                __LINE__, __FILE__,\n"
-        "                                \"Client-streaming not yet supported for brpc\");\n"
+        "    int32_t tmo = timeoutMs_;\n"
+        "    if (opt.GetTimeout() > 0) { tmo = opt.GetTimeout(); }\n"
+        "    auto impl = std::make_unique<datasystem::BrpcClientWriterImpl<$inputTypeName$>>(\n"
+        "        channel_, svcDesc_->method($methodIndex$), tmo);\n"
+        "    *out = std::make_unique<datasystem::ClientWriter<$inputTypeName$>>(std::move(impl));\n"
+        "    return ::datasystem::Status::OK();\n"
         "}\n"
         "::datasystem::Status $stub$::$methodName$("
         "std::unique_ptr<datasystem::ClientWriter<$inputTypeName$>> *out) {\n"
@@ -738,33 +746,38 @@ void ZmqRpcGenerator::ImplementBrpcStubClientStreamingDef(io::Printer &printer,
 
 // --- Server streaming ---
 
-void ZmqRpcGenerator::ImplementBrpcStubServerStreamingDef(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          int methodIndex,
-                                                          const std::string &indent,
-                                                          const std::string &stub)
+void RpcGenerator::ImplementBrpcStubServerStreamingDef(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       int methodIndex,
+                                                       const std::string &indent,
+                                                       const std::string &stub)
 {
     (void)indent;
-    (void)methodIndex;
     std::map<std::string, std::string> vars;
     vars["stub"] = stub;
     vars["methodName"] = method.name();
     vars["inputTypeName"] = method.input_type()->name();
     vars["outputTypeName"] = method.output_type()->name();
+    vars["methodIndex"] = std::to_string(methodIndex);
     vars["optSendPayload1"] = HasPayloadSendOption(method)
         ? ", const std::vector<::datasystem::MemView> &payload" : "";
     vars["optSendPayload2"] = HasPayloadSendOption(method) ? ", payload" : "";
 
+    // Server-streaming (unary->stream): client sends request, receives N
+    // responses via BrpcClientReaderImpl wrapped in ClientReader.
     std::string impl =
         "::datasystem::Status $stub$::$methodName$(const ::datasystem::RpcOptions &opt,\n"
         "    std::unique_ptr<datasystem::ClientReader<$outputTypeName$>> *out,\n"
         "    const $inputTypeName$& rq$optSendPayload1$) {\n"
-        "    (void)opt;\n"
-        "    (void)out;\n"
-        "    (void)rq;\n"
-        "    return ::datasystem::Status(::datasystem::StatusCode::K_NOT_SUPPORTED,\n"
-        "                                __LINE__, __FILE__,\n"
-        "                                \"Server-streaming not yet supported for brpc\");\n"
+        "    int32_t tmo = timeoutMs_;\n"
+        "    if (opt.GetTimeout() > 0) { tmo = opt.GetTimeout(); }\n"
+        "    auto impl =\n"
+        "        std::make_unique<datasystem::BrpcClientReaderImpl<$outputTypeName$>>(\n"
+        "            channel_, svcDesc_->method($methodIndex$), tmo);\n"
+        "    ::datasystem::Status st = impl->Write(rq);\n"
+        "    if (st.IsError()) { return st; }\n"
+        "    *out = std::make_unique<datasystem::ClientReader<$outputTypeName$>>(std::move(impl));\n"
+        "    return ::datasystem::Status::OK();\n"
         "}\n"
         "::datasystem::Status $stub$::$methodName$("
         "std::unique_ptr<datasystem::ClientReader<$outputTypeName$>> *out,\n"
@@ -778,10 +791,10 @@ void ZmqRpcGenerator::ImplementBrpcStubServerStreamingDef(io::Printer &printer,
 // Generic stub delegation implementations
 // ============================================================================
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubNoStreamDef(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          const std::string &indent,
-                                                          const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubNoStreamDef(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       const std::string &indent,
+                                                       const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -805,10 +818,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubNoStreamDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubNoStreamDef2(io::Printer &printer,
-                                                           const google::protobuf::MethodDescriptor &method,
-                                                           const std::string &indent,
-                                                           const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubNoStreamDef2(io::Printer &printer,
+                                                        const google::protobuf::MethodDescriptor &method,
+                                                        const std::string &indent,
+                                                        const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -830,10 +843,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubNoStreamDef2(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplBrpcGenericStubNoStreamShortDef(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          const std::string &indent,
-                                                          const std::string &stub)
+void RpcGenerator::ImplBrpcGenericStubNoStreamShortDef(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       const std::string &indent,
+                                                       const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -857,10 +870,10 @@ void ZmqRpcGenerator::ImplBrpcGenericStubNoStreamShortDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubAsyncWriteDef(io::Printer &printer,
-                                                            const google::protobuf::MethodDescriptor &method,
-                                                            const std::string &indent,
-                                                            const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubAsyncWriteDef(io::Printer &printer,
+                                                         const google::protobuf::MethodDescriptor &method,
+                                                         const std::string &indent,
+                                                         const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -883,10 +896,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubAsyncWriteDef(io::Printer &printer
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubAsyncReadDef(io::Printer &printer,
-                                                           const google::protobuf::MethodDescriptor &method,
-                                                           const std::string &indent,
-                                                           const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubAsyncReadDef(io::Printer &printer,
+                                                        const google::protobuf::MethodDescriptor &method,
+                                                        const std::string &indent,
+                                                        const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -906,10 +919,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubAsyncReadDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubStreamingDef(io::Printer &printer,
-                                                           const google::protobuf::MethodDescriptor &method,
-                                                           const std::string &indent,
-                                                           const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubStreamingDef(io::Printer &printer,
+                                                        const google::protobuf::MethodDescriptor &method,
+                                                        const std::string &indent,
+                                                        const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -931,10 +944,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubStreamingDef(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubClientStreamingDef(io::Printer &printer,
-                                                                 const google::protobuf::MethodDescriptor &method,
-                                                                 const std::string &indent,
-                                                                 const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubClientStreamingDef(io::Printer &printer,
+                                                              const google::protobuf::MethodDescriptor &method,
+                                                              const std::string &indent,
+                                                              const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -954,10 +967,10 @@ void ZmqRpcGenerator::ImplementBrpcGenericStubClientStreamingDef(io::Printer &pr
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcGenericStubServerStreamingDef(io::Printer &printer,
-                                                                 const google::protobuf::MethodDescriptor &method,
-                                                                 const std::string &indent,
-                                                                 const std::string &stub)
+void RpcGenerator::ImplementBrpcGenericStubServerStreamingDef(io::Printer &printer,
+                                                              const google::protobuf::MethodDescriptor &method,
+                                                              const std::string &indent,
+                                                              const std::string &stub)
 {
     (void)indent;
     std::map<std::string, std::string> vars;

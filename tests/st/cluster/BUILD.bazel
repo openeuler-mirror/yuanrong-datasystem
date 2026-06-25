@@ -3,6 +3,7 @@ load("//bazel:build_defs.bzl", "ds_cc_test_library")
 package(default_visibility = ["//visibility:public"])
 
 exports_files(["common.cpp"])
+exports_files(["mock_obs_service.py"])
 
 # st_cluster 需要将 tests/st/ 加入 include 路径，以支持 "cluster/xxx.h" 风格的 include
 cc_library(

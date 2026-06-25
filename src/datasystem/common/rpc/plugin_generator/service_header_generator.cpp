@@ -17,12 +17,12 @@
 /**
  * Description: Service header generator.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 namespace datasystem {
 
-void ZmqRpcGenerator::CreateServiceHeader(const google::protobuf::FileDescriptor &file,
-                                          compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateServiceHeader(const google::protobuf::FileDescriptor &file,
+                                       compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".service.rpc.pb.h"));
     io::Printer printer(outputFile.get(), '$');
@@ -39,8 +39,8 @@ void ZmqRpcGenerator::CreateServiceHeader(const google::protobuf::FileDescriptor
     printer.PrintRaw(ENDIF);
 }
 
-void ZmqRpcGenerator::GenerateServiceClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                           const std::string &indent) const
+void RpcGenerator::GenerateServiceClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                        const std::string &indent) const
 {
     const std::string &svcName = svc.name();
     std::map<std::string, std::string> vars;
@@ -88,7 +88,7 @@ void ZmqRpcGenerator::GenerateServiceClass(io::Printer &printer, const google::p
     printer.PrintRaw(impl3);
 }
 
-void ZmqRpcGenerator::GenerateServicePrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateServicePrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -126,7 +126,7 @@ void ZmqRpcGenerator::GenerateServicePrologue(io::Printer &printer, const google
     printer.PrintRaw("#include <string>\n");
 }
 
-void ZmqRpcGenerator::GenerateMethodClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
+void RpcGenerator::GenerateMethodClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
 {
     for (auto j = 0; j < svc.method_count(); ++j) {
         if (svc.method(j) == nullptr) {
@@ -156,7 +156,7 @@ void ZmqRpcGenerator::GenerateMethodClass(io::Printer &printer, const google::pr
     }
 }
 
-void ZmqRpcGenerator::ListVirtualFunctions(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
+void RpcGenerator::ListVirtualFunctions(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc)
 {
     for (auto j = 0; j < svc.method_count(); ++j) {
         if (svc.method(j) == nullptr) {
@@ -196,7 +196,7 @@ void ZmqRpcGenerator::ListVirtualFunctions(io::Printer &printer, const google::p
     }
 }
 
-void ZmqRpcGenerator::ImplementZmqCallMethodDecl(io::Printer &printer)
+void RpcGenerator::ImplementZmqCallMethodDecl(io::Printer &printer)
 {
     printer.PrintRaw(
         "    ::datasystem::Status CallMethod(std::shared_ptr<::datasystem::ZmqServerMsgQueRef> sock, "

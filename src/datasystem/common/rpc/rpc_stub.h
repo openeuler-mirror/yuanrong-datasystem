@@ -20,6 +20,9 @@
 #ifndef DATASYSTEM_COMMON_RPC_STUB_H
 #define DATASYSTEM_COMMON_RPC_STUB_H
 
+#include <variant>
+
+#include "datasystem/common/rpc/brpc_client_stream_impl.h"
 #include "datasystem/common/rpc/client_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/rpc_options.h"
@@ -99,6 +102,8 @@ class ClientWriter {
 public:
     explicit ClientWriter(std::unique_ptr<ClientWriterImpl<W>> &&impl);
 
+    explicit ClientWriter(std::unique_ptr<BrpcClientWriterImpl<W>> &&impl);
+
     ~ClientWriter();
 
     Status Write(const W &pb);
@@ -129,13 +134,16 @@ public:
     Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
 
 private:
-    std::unique_ptr<ClientWriterImpl<W>> pimpl_;
+    std::variant<std::unique_ptr<ClientWriterImpl<W>>,
+                 std::unique_ptr<BrpcClientWriterImpl<W>>> pimpl_;
 };
 
 template <typename R>
 class ClientReader {
 public:
     explicit ClientReader(std::unique_ptr<ClientReaderImpl<R>> &&impl);
+
+    explicit ClientReader(std::unique_ptr<BrpcClientReaderImpl<R>> &&impl);
 
     ~ClientReader();
 
@@ -167,7 +175,8 @@ public:
     Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
 
 private:
-    std::unique_ptr<ClientReaderImpl<R>> pimpl_;
+    std::variant<std::unique_ptr<ClientReaderImpl<R>>,
+                 std::unique_ptr<BrpcClientReaderImpl<R>>> pimpl_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_STUB_H

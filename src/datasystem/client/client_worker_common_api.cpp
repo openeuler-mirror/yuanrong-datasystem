@@ -328,27 +328,11 @@ void ClientWorkerRemoteCommonApi::SetRpcTimeout(int32_t timeout)
 Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs, uint64_t fastTransportSize,
                                          int32_t initAttemptTimeoutMs)
 {
-    // SDK entry: honor the DS_USE_BRPC env var so Python SDK users (and C++ SDK
-    // users who don't want to touch gflags directly) can toggle ZMQ/brpc without
-    // code changes. Idempotent — static local init runs exactly once even under
-    // concurrent Init() calls (C++11 magic statics). Env var wins over the gflag
-    // default (false) but a C++ user who sets FLAGS_use_brpc explicitly in main()
-    // before Init() will still be overridden here; that's intentional — env var
-    // is the SDK-user-facing knob. Accepted values: "1", "true", "TRUE" → brpc;
-    // any other value (including "0"/"false") → ZMQ.
-    static const bool brpcEnvApplied = []() {
-        if (const char *env = std::getenv("DS_USE_BRPC")) {
-            std::string val(env);
-            bool useBrpc = (val == "1" || val == "true" || val == "TRUE");
-            if (useBrpc != FLAGS_use_brpc) {
-                LOG(INFO) << "SDK: DS_USE_BRPC=" << val
-                          << " overrides FLAGS_use_brpc default; now FLAGS_use_brpc=" << useBrpc;
-                FLAGS_use_brpc = useBrpc;
-            }
-        }
-        return true;
-    }();
-    (void)brpcEnvApplied;
+    // FLAGS_use_brpc default reads DATASYSTEM_USE_BRPC env var via GetBoolFromEnv,
+    // so both SDK (Python + C++) and worker processes pick it up at startup.
+    // Accepted values: "1", "true", "TRUE" → brpc; any other value → ZMQ.
+    LOG_FIRST_N(INFO, 1) << "SDK: FLAGS_use_brpc=" << FLAGS_use_brpc
+                          << " (from DATASYSTEM_USE_BRPC env or gflag default)";
 
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,

@@ -215,9 +215,18 @@ private:
     mutable std::mutex mtx_;
     std::unordered_map<int, uint8_t *> waitRespMap_;
     std::shared_ptr<ShmCircularQueue> decreaseRPCQ_{ nullptr };
-    std::unique_ptr<WorkerOCService_BrpcGenericStub> stub_;
+    // Atomic shared_ptr bundle: stub and channel are swapped together so that
+    // concurrent DS_OC_DISPATCH readers can never observe a stub whose raw
+    // channel pointer was freed by a concurrent RecreateOCStub.
+    struct BrpcSession {
+        BrpcSession(std::shared_ptr<WorkerOCService_BrpcGenericStub> s,
+                    std::shared_ptr<brpc::Channel> c)
+            : stub(std::move(s)), channel(std::move(c)) {}
+        std::shared_ptr<WorkerOCService_BrpcGenericStub> stub;
+        std::shared_ptr<brpc::Channel> channel;
+    };
+    std::shared_ptr<BrpcSession> brpcSession_;
     std::unique_ptr<WorkerOCService_Stub> zmqStub_;
-    std::unique_ptr<brpc::Channel> brpcChannel_;
     std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{ 0 };
 
     // for pipeline rh2d receive queue

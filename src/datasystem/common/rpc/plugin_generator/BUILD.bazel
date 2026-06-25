@@ -33,10 +33,10 @@ ds_cc_library(
         "service_header_generator.cpp",
         "stub_cpp_generator.cpp",
         "stub_header_generator.cpp",
-        "zmq_rpc_generator.cpp",
+        "rpc_generator.cpp",
     ],
     hdrs = [
-        "zmq_rpc_generator.h",
+        "rpc_generator.h",
     ],
     deps = [
         "//src/datasystem/common/util:strings_util",

@@ -36,41 +36,53 @@ ClientWriter<W>::ClientWriter(std::unique_ptr<ClientWriterImpl<W>> &&impl)
 }
 
 template <typename W>
+ClientWriter<W>::ClientWriter(std::unique_ptr<BrpcClientWriterImpl<W>> &&impl)
+{
+    pimpl_ = std::move(impl);
+}
+
+template <typename W>
 ClientWriter<W>::~ClientWriter() = default;
 
 template <typename W>
 Status ClientWriter<W>::Write(const W &pb)
 {
-    return pimpl_->Write(pb);
+    return std::visit([&pb](auto &p) { return p->Write(pb); }, pimpl_);
 }
 
 template <typename W>
 template <typename R>
 Status ClientWriter<W>::Read(R &pb)
 {
-    return pimpl_->Read(pb);
+    return std::visit([&pb](auto &p) { return p->Read(pb); }, pimpl_);
 }
 
 template <typename W>
 Status ClientWriter<W>::Finish()
 {
-    return pimpl_->Finish();
+    return std::visit([](auto &p) { return p->Finish(); }, pimpl_);
 }
 
 template <typename W>
 Status ClientWriter<W>::SendPayload(const std::vector<MemView> &payload)
 {
-    return pimpl_->SendPayload(payload);
+    return std::visit([&payload](auto &p) { return p->SendPayload(payload); }, pimpl_);
 }
 
 template <typename W>
 Status ClientWriter<W>::ReceivePayload(std::vector<RpcMessage> &recvBuffer)
 {
-    return pimpl_->ReceivePayload(recvBuffer);
+    return std::visit([&recvBuffer](auto &p) { return p->ReceivePayload(recvBuffer); }, pimpl_);
 }
 
 template <typename R>
 ClientReader<R>::ClientReader(std::unique_ptr<ClientReaderImpl<R>> &&impl)
+{
+    pimpl_ = std::move(impl);
+}
+
+template <typename R>
+ClientReader<R>::ClientReader(std::unique_ptr<BrpcClientReaderImpl<R>> &&impl)
 {
     pimpl_ = std::move(impl);
 }
@@ -81,32 +93,32 @@ ClientReader<R>::~ClientReader() = default;
 template <typename R>
 Status ClientReader<R>::Read(R &pb)
 {
-    return pimpl_->Read(pb);
+    return std::visit([&pb](auto &p) { return p->Read(pb); }, pimpl_);
 }
 
 template <typename R>
 template <typename W>
 Status ClientReader<R>::Write(const W &pb)
 {
-    return pimpl_->Write(pb);
+    return std::visit([&pb](auto &p) { return p->Write(pb); }, pimpl_);
 }
 
 template <typename R>
 Status ClientReader<R>::SendPayload(const std::vector<MemView> &payload)
 {
-    return pimpl_->SendPayload(payload);
+    return std::visit([&payload](auto &p) { return p->SendPayload(payload); }, pimpl_);
 }
 
 template <typename R>
 Status ClientReader<R>::ReceivePayload(std::vector<RpcMessage> &recvBuffer)
 {
-    return pimpl_->ReceivePayload(recvBuffer);
+    return std::visit([&recvBuffer](auto &p) { return p->ReceivePayload(recvBuffer); }, pimpl_);
 }
 
 template <typename R>
 Status ClientReader<R>::Finish()
 {
-    return pimpl_->Finish();
+    return std::visit([](auto &p) { return p->Finish(); }, pimpl_);
 }
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_CLIENT_STREAM_BASE_COMMON_H

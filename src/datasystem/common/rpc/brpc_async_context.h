@@ -26,6 +26,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_BRPC_ASYNC_CONTEXT_H
 #define DATASYSTEM_COMMON_RPC_BRPC_ASYNC_CONTEXT_H
 
+#include <chrono>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -35,6 +36,8 @@
 #include <brpc/controller.h>
 #include <google/protobuf/message.h>
 
+#include "datasystem/common/log/log.h"
+
 namespace datasystem {
 
 /**
@@ -43,40 +46,25 @@ namespace datasystem {
  * Done closure and AsyncRead have released their references.
  */
 struct BrpcAsyncCall {
-    BrpcAsyncCall() : completed(false), failed(false), response(nullptr), request(nullptr) {}
-    ~BrpcAsyncCall()
-    {
-        // F11 note (ownership protocol):
-        // - response/request are raw pointers allocated by the plugin generator
-        //   (AsyncWrite method body, see brpc_stub_generator.cpp).
-        // - AsyncRead adopts response into a unique_ptr guard (consumes ownership).
-        // - This destructor is a safety net for the rare path where neither
-        //   AsyncRead nor brpc Done consumed the message (ForgetRequest while
-        //   in-flight, or stub destruction with pending calls).
-        // A full refactor to unique_ptr members would require coordinated
-        // changes in the plugin generator (release() on the AsyncWrite side,
-        // reset() on the AsyncRead side). Tracked as follow-up — the current
-        // safety net delete works correctly as long as every allocation site
-        // uses `new` (which the generator guarantees).
-        delete response;
-        delete request;
-    }
+    BrpcAsyncCall() : completed(false), failed(false), createdAt(std::chrono::steady_clock::now()) {}
+    ~BrpcAsyncCall() = default;
 
     std::mutex mtx;
     std::condition_variable cv;
     bool completed;
     bool failed;
+    std::chrono::steady_clock::time_point createdAt;
     int errorCode = 0;
     std::string errorText;
     brpc::Controller cntl;
-    // Owned by BrpcAsyncCall: allocated in generated AsyncWrite, consumed in AsyncRead.
-    // AsyncRead uses a unique_ptr guard to delete it; this destructor is a safety net for
-    // ForgetRequest or stub destruction while calls are still in-flight.
-    google::protobuf::Message *response;
+    // Owned by BrpcAsyncCall: allocated by generated AsyncWrite,
+    // consumed (moved-from) by AsyncRead. unique_ptr guarantees cleanup
+    // for ForgetRequest or stub destruction while calls are in-flight.
+    std::unique_ptr<google::protobuf::Message> response;
     // Heap-allocated copy of the request protobuf, passed to brpc::Channel::CallMethod.
     // brpc serializes the request asynchronously on a bthread; the pointer must outlive
     // AsyncWrite's stack frame. Owned by BrpcAsyncCall.
-    google::protobuf::Message *request;
+    std::unique_ptr<google::protobuf::Message> request;
     // Snapshot of cntl.response_attachment() taken in OnRpcDone under lock, so that
     // AsyncRead can read it safely without accessing cntl after Done returns.
     butil::IOBuf responseAttachment;
@@ -159,9 +147,30 @@ public:
     {
         std::lock_guard<std::mutex> lock(mapMtx_);
         pendingCalls_.erase(tagId);
+        CleanupExpiredLocked();
     }
 
 private:
+    static constexpr auto kPendingCallTtl = std::chrono::minutes(5);
+    static constexpr size_t kCleanupLogInterval = 100;
+
+    /// Remove entries older than kPendingCallTtl (called under mapMtx_).
+    void CleanupExpiredLocked()
+    {
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = pendingCalls_.begin(); it != pendingCalls_.end();) {
+            if (now - it->second->createdAt > kPendingCallTtl) {
+                LOG_EVERY_N(WARNING, kCleanupLogInterval) << "BrpcAsyncContext: expiring stale pending call tag="
+                                          << it->first << " (age="
+                                          << std::chrono::duration_cast<std::chrono::seconds>(
+                                                 now - it->second->createdAt).count()
+                                          << "s) — AsyncRead never called";
+                it = pendingCalls_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     /**
      * Called by brpc when the async RPC completes (runs on bthread).
      * Signals the condition variable so AsyncRead can proceed.
@@ -179,12 +188,10 @@ private:
             call->completed = true;
             call->cv.notify_one();
         }
-        // The shared_ptr<BrpcAsyncCall> captured by this closure is the same
-        // one stored in pendingCalls_. When this closure (NewCallback) self-
-        // deletes after Run(), it drops its ref. If AsyncRead also holds a ref,
-        // the call lives until both release. If AsyncRead never comes (orphan),
-        // the pendingCalls_ entry keeps the ref — that's the leak path tracked
-        // as follow-up. A TTL-based cleanup is the planned fix.
+        // The shared_ptr<BrpcAsyncCall> is also held by pendingCalls_.
+        // When this closure self-deletes after Run(), it drops its ref.
+        // Orphaned calls (AsyncRead never invoked) are cleaned up by
+        // CleanupExpiredLocked (5-minute TTL, piggybacked on ForgetCall).
     }
 
     std::mutex mapMtx_;

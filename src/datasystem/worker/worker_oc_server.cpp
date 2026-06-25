@@ -293,6 +293,22 @@ WorkerOCServer::~WorkerOCServer()
         clientsExitChecker_->join();
         clientsExitChecker_.reset();
     }
+
+    // Stop brpc server and drain bthread handlers BEFORE destroying adapters.
+    // C++ destroys derived-class members before running the base-class destructor,
+    // so without this explicit call, brpc adapters (unique_ptr members of
+    // WorkerOCServer) would be freed while bthread handlers may still reference
+    // them via brpc service dispatch — causing use-after-free in
+    // TenantAuthManager, GetImpl, Stream, etc.
+    // The normal Shutdown() path calls CommonServer::Shutdown() → RpcServer::Shutdown()
+    // → StopBrpcServer() before adapter destruction. The destructor path (abnormal
+    // exit, exception unwind) must replicate this ordering.
+    // StopBrpcServer() is idempotent (resets brpcServer_ after Stop+Join), so calling
+    // it here has no effect when ~RpcServer() later calls StopBrpcServer() again.
+    if (rpcServer_) {
+        rpcServer_->Shutdown();
+    }
+
     builder_ = RpcServer::Builder();
     objCacheMasterSvc_.reset();
     objCacheWorkerWkSvc_.reset();
@@ -634,7 +650,7 @@ void WorkerOCServer::CreateWorkerServices()
     using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
     LOG(INFO) << "Start create worker services";
 
-    // Some classes need back pointer to the clusterManager so that they can perform their own health checks or other
+    // Some classes need back pointer to the etcdCM so that they can perform their own health checks or other
     // cluster-related tasks.
     // create WorkerServiceImpl
     workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, masterAddr_, DFT_TIMEOUT_MULT, this, akSkManager_);
@@ -1035,8 +1051,8 @@ Status WorkerOCServer::Init()
     clusterManagerStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    clusterManager_ =
-        std::make_unique<ClusterManager>(hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
+    clusterManager_ = std::make_unique<ClusterManager>(
+        hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 
@@ -1061,6 +1077,18 @@ Status WorkerOCServer::Init()
 
     // after setting ETCD cluster manager, it time to initialize all services
     RETURN_IF_NOT_OK(InitializeAllServices(clusterInfo));
+
+    // Start brpc server now that all brpc adapter services have been registered
+    // via AddBrpcService() in InitializeAllServices().
+    // BuildAndStart() in CommonServer::Init() skips brpc start because services
+    // are added later via AddBrpcService() calls. See the comment in
+    // rpc_server.cpp BuildAndStart() for details.
+    if (FLAGS_use_brpc && rpcServer_) {
+        int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
+            "Failed to start brpc server");
+    }
     RETURN_IF_NOT_OK(InitSlotRecovery());
 
     HashRingEvent::DataMigrationReady::GetInstance().AddSubscriber(WORKER_OC_SERVER, [this]() {

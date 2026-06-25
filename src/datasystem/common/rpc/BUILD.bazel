@@ -187,6 +187,8 @@ ds_cc_library(
 ds_cc_library(
     name = "rpc_stub",
     hdrs = [
+        "brpc_client_stream_impl.h",
+        "brpc_status_util.h",
         "client_writer_reader_base.h",
         "rpc_stub.h",
         "rpc_stub_base.h",
@@ -197,6 +199,8 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:meta_zmq_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 
@@ -221,6 +225,7 @@ ds_cc_library(
     name = "rpc_unary_client_impl",
     hdrs = [
         "brpc_async_context.h",
+        "brpc_client_stream_impl.h",
         "brpc_client_stream_writer_reader.h",
         "brpc_client_unary_writer_reader.h",
         "brpc_status_util.h",
@@ -247,6 +252,7 @@ ds_cc_library(
 ds_cc_library(
     name = "rpc_server_stream_base",
     hdrs = [
+        "brpc_server_stream_impl.h",
         "rpc_server_stream_base.h",
     ],
     deps = [
@@ -254,6 +260,8 @@ ds_cc_library(
         ":server_writer_reader_base",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc/zmq:zmq_server_stream_base",
+        "@com_github_apache_brpc//:brpc",
+        "@com_google_protobuf//:protobuf",
     ],
 )
 

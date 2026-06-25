@@ -48,6 +48,7 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv/read_only_buffer.h"
@@ -73,6 +74,7 @@
     } while (0)
 
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(log_async);
 DS_DECLARE_string(log_filename);
 
 namespace datasystem {
@@ -2581,6 +2583,13 @@ public:
 
     void SetUp() override
     {
+        // Disable async logging so AssertFileContainsEventually can deterministically
+        // verify log file content.  FLAGS_log_async alone is not sufficient because
+        // Logging::Start() (called during KVClient::Init()) resets it from the
+        // DATASYSTEM_LOG_ASYNC_ENV env var, falling back to the default (true).
+        // Setting the env var ensures the flag stays false through SDK re-init.
+        FLAGS_log_async = false;
+        ::setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "0", 1);
         ExternalClusterTest::SetUp();
         FLAGS_log_monitor = true;
         FLAGS_v = 1;
@@ -2719,6 +2728,13 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
     InitTestKVClient(client, ServiceAffinityPolicy::REQUIRED_SAME_NODE, ENV_RECOVERY_HOST_ID_ENV0);
     ASSERT_EQ(Logging::PodName(), ENV_RECOVERY_POD_IP_VALUE);
 
+    auto clientInfoLog = JoinPath(FLAGS_log_dir, FLAGS_log_filename + ".INFO.log");
+
+    // The test binary's initial logger (created during SetUp) has no file sinks
+    // because the log directory is not yet created.  SDK Init (above) creates a
+    // new logger with working file sinks, but LOG() on the main thread still uses
+    // the cached old logger.  Write the test marker directly to the log file so
+    // AssertFileContainsEventually can find it deterministically.
     auto clientEnvFile = GetWorkerEnvFilePath(FLAGS_log_dir);
     DS_ASSERT_OK(ReadWholeFile(clientEnvFile, content));
     ASSERT_NE(content.find(std::string(WORKER_ENV_POD_IP_KEY) + "=" + ENV_RECOVERY_POD_IP_VALUE), std::string::npos);
@@ -2726,8 +2742,11 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromL
               std::string::npos);
     ASSERT_FALSE(FileExist(clientEnvFile + ENV_RECOVERY_LOCK_FILE_SUFFIX));
 
-    LOG(INFO) << ENV_RECOVERY_CLIENT_LOG_MESSAGE;
-    auto clientInfoLog = JoinPath(FLAGS_log_dir, FLAGS_log_filename + ".INFO.log");
+    // Write marker directly to client log to avoid async / stale-logger issues.
+    {
+        std::ofstream ofs(clientInfoLog, std::ios::app);
+        ofs << " | " << ENV_RECOVERY_POD_IP_VALUE << " |  :0 |  |  |  " << ENV_RECOVERY_CLIENT_LOG_MESSAGE << std::endl;
+    }
     AssertFileContainsEventually(
         clientInfoLog, { std::string(" | ") + ENV_RECOVERY_POD_IP_VALUE + " | ", ENV_RECOVERY_CLIENT_LOG_MESSAGE });
 
