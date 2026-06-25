@@ -50,6 +50,18 @@ target_link_libraries(kvtest PRIVATE
     ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so
     pthread)
 
+# Optional NUMA support — check both header and library for consistency
+include(CheckIncludeFile)
+check_include_file(numa.h HAS_NUMA_H)
+find_library(LIBNUMA_LIB numa)
+if(HAS_NUMA_H AND LIBNUMA_LIB)
+    target_compile_definitions(kvtest PRIVATE HAS_LIBNUMA=1)
+    target_link_libraries(kvtest PRIVATE ${LIBNUMA_LIB})
+    message(STATUS "NUMA support enabled: ${LIBNUMA_LIB}")
+else()
+    message(STATUS "NUMA not found — numa_node config will be ignored")
+endif()
+
 # Statically link libstdc++ and libgcc so the binary runs on systems with
 # older GCC (e.g. openEuler 22.04 with GCC 10 / GLIBCXX_3.4.29).
 target_link_options(kvtest PRIVATE -static-libstdc++ -static-libgcc)

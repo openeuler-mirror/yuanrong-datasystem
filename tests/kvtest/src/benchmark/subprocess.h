@@ -1,5 +1,6 @@
 #pragma once
 #include "common/config.h"
+#include "common/cpu_affinity.h"
 #include "common/simple_log.h"
 #include "benchmark/benchmark_runner.h"
 #include "benchmark/kv_client_adapter.h"
@@ -254,13 +255,24 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
 
     SLOG_INFO("Child process started, role=" << roleName << ", pid=" << getpid());
 
+    // 1.5 Apply CPU/NUMA affinity (same logic as RunServerMode)
+    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode);
+
     // Disable SDK-internal thread pools. Benchmark children already use
     // RunPhaseMultiThread; nested SDK pools (ParallelFor, parallel memcpy)
     // cause SIGSEGV when multiple threads call batch APIs concurrently.
-    setenv("CLIENT_MEMORY_COPY_THREAD_NUM", "0", 1);
-    setenv("CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY", "0", 1);
-    setenv("CLIENT_MEMCOPY_PARALLEL_THRESHOLD", "2147483647", 1);
-    setenv("CLIENT_PARALLEL_THREAD_MIN_NUM", "0", 1);
+    if (setenv("CLIENT_MEMORY_COPY_THREAD_NUM", "0", 1) != 0) {
+        SLOG_INFO("Child WARNING: failed to set CLIENT_MEMORY_COPY_THREAD_NUM");
+    }
+    if (setenv("CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY", "0", 1) != 0) {
+        SLOG_INFO("Child WARNING: failed to set CLIENT_MEMORY_COPY_THREAD_NUM_PER_KEY");
+    }
+    if (setenv("CLIENT_MEMCOPY_PARALLEL_THRESHOLD", "2147483647", 1) != 0) {
+        SLOG_INFO("Child WARNING: failed to set CLIENT_MEMCOPY_PARALLEL_THRESHOLD");
+    }
+    if (setenv("CLIENT_PARALLEL_THREAD_MIN_NUM", "0", 1) != 0) {
+        SLOG_INFO("Child WARNING: failed to set CLIENT_PARALLEL_THREAD_MIN_NUM");
+    }
 
     // 2. Create KVClient for this role
     auto client = CreateClientForRole(role, cfg);
@@ -304,6 +316,9 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
             result = RunMSetPhase(&adapter, cfg.instanceId, cmd.round, 0,
                                   keysPerRound, cfg.msetBatchSize, data);
         } else if (phase == CMD_RUN_MGET) {
+            // MGet is a batch API; the SDK does not support concurrent MGet
+            // calls from multiple threads. Run on a single thread, processing
+            // all keys in batches of cfg.mgetBatchSize.
             result = RunMGetPhase(&adapter, cfg.instanceId, cmd.round, 0,
                                   keysPerRound, cfg.mgetBatchSize);
         } else {
@@ -324,7 +339,7 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     SLOG_INFO("Child " << roleName << " waiting 3s for in-flight operations to complete...");
     std::this_thread::sleep_for(std::chrono::seconds(3));
     SLOG_INFO("Child " << roleName << " exiting");
-    _exit(0);
+    exit(0);
 }
 
 // --- Parent-side helpers ---

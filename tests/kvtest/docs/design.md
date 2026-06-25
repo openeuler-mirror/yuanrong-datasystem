@@ -148,7 +148,7 @@ graph TB
     subgraph "基础层"
         config["config.h/.cpp<br/>JSON 解析 + 校验"]
         threadpool["thread_pool.h<br/>通用线程池"]
-        cpu["cpu_affinity.h<br/>CPU 绑核"]
+        cpu["cpu_affinity.h<br/>CPU/NUMA 绑核"]
         slog["simple_log.h<br/>线程安全日志"]
         json["nlohmann_json.hpp (vendor)"]
     end
@@ -702,16 +702,33 @@ VerifyPatternData(data, size, senderId):
 
 Writer 按 `instanceId` 生成 pattern data，Reader 收到通知后按 `sender` 生成相同的 pattern 进行比对。无需传递数据内容即可验证跨实例一致性。
 
-### 3.6 CPU 绑核
+### 3.6 CPU / NUMA 绑核
 
 **文件**: `src/common/cpu_affinity.h`
 
-进程级绑核，在 main() 创建任何线程之前执行：
+进程级绑核，在 `RunServerMode` 和 `ChildProcessMain`（Benchmark 子进程）创建任何线程之前执行。
+
+**NUMA 绑定**（需链接 `libnuma`，通过 `__has_include(<numa.h>)` 自动检测）：
+
+1. `config.numaNode >= 0` → `ApplyNumaAffinity(node)` 调用 `numa_run_on_node(node)`
+   - 同时设置 CPU 亲和性 + 本地内存分配策略
+   - 失败 → 回退到 CPU 绑核
+
+**CPU 绑定**（`numa_node` 不可用或未配置时）：
 
 1. `config.cpuAffinity` 非空 → `ParseCpuList` 解析
-2. 否则 → `sched_getaffinity` 自动检测容器可用 CPU
-3. 调用 `sched_setaffinity` 设置进程亲和性
-4. 后续所有子线程（Pipeline、NotifyPool、HttpServer）自动继承
+2. 否则 → `GetAvailableCpus()` 通过 `sched_getaffinity` 自动检测容器可用 CPU
+3. 调用 `ApplyProcessAffinity(cpus)` → `sched_setaffinity` 设置进程亲和性
+4. 后续所有子线程（Pipeline、NotifyPool、HttpServer / Benchmark 子进程）自动继承
+
+**API 一览：**
+
+| 函数 | 作用 |
+|------|------|
+| `ParseCpuList(s)` | 解析 `"0-7"` / `"0,2,4,6"` / `"0-3,7,10-12"`，含边界校验、反转交换 |
+| `GetAvailableCpus()` | 通过 `sched_getaffinity` 获取当前可用 CPU 列表 |
+| `ApplyProcessAffinity(cpus)` | `sched_setaffinity` 进程级 CPU 绑定 |
+| `ApplyNumaAffinity(node)` | `numa_run_on_node(node)` 绑定 NUMA 节点（CPU + 内存） |
 
 **ParseCpuList** 支持格式：`"0-7"`、`"0,2,4,6"`、`"0-3,7,10-12"`
 
@@ -762,7 +779,8 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `role` | string | "writer" | "writer" / "reader" | 实例角色 |
 | `pipeline` | string[] | ["setStringView"] | 合法 Op 名 | Writer Pipeline 操作序列 |
 | `notify_pipeline` | string[] | ["getBuffer"] | 合法 Op 名 | Reader Pipeline 操作序列 |
-| `cpu_affinity` | string | "" | - | CPU 绑核（空=自动检测） |
+| `cpu_affinity` | string | "" | - | CPU 绑核（空=自动检测，所有模式生效） |
+| `numa_node` | int | -1 | - | NUMA 节点绑定，-1=禁用。需 libnuma，不可用时回退到 `cpu_affinity` |
 | `nodes` | array | [] | - | 节点列表（自动生成 peers） |
 | `peers` | string[] | [] | - | 对端地址列表（覆盖 nodes） |
 
@@ -996,7 +1014,7 @@ python3 deploy_worker.py exec -p my-worker -c "cat /tmp/metrics.csv"
 | `src/common/config.h/.cpp` | Config 结构体、JSON 解析、参数校验 |
 | `src/common/simple_log.h` | 线程安全日志宏（避免 spdlog 符号冲突） |
 | `src/common/thread_pool.h` | 通用线程池（Submit/Stop/QueueSize） |
-| `src/common/cpu_affinity.h` | CPU 绑核工具函数（ParseCpuList/GetAvailableCpus/ApplyProcessAffinity） |
+| `src/common/cpu_affinity.h` | CPU/NUMA 绑核工具函数（ParseCpuList/GetAvailableCpus/ApplyProcessAffinity/ApplyNumaAffinity） |
 | `src/pipeline/kv_worker.h/.cpp` | KVWorker 类：Pipeline 主循环、QPS 控制、Peer 通知 |
 | `src/pipeline/cache_reader.h/.cpp` | CacheReader 类：Reader 端缓存读取与回填 |
 | `src/pipeline/pipeline.h/.cpp` | PipelineContext、10 种 Op 实现、Op 注册表、执行引擎 |

@@ -8,6 +8,8 @@
   "total_rounds": 10,
   "duration_seconds": 0,
   "num_threads": 16,
+  "cpu_affinity": "",
+  "numa_node": -1,
   "mset_batch_size": 8,
   "data_sizes": [
     "1MB"

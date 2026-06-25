@@ -37,6 +37,8 @@ static void SignalHandler(int sig) {
 
 static int RunBenchmarkMode(Config &cfg) {
     SLOG_INFO("Benchmark mode: test_mode=" << static_cast<int>(cfg.testMode));
+    std::signal(SIGTERM, SignalHandler);
+    std::signal(SIGINT, SignalHandler);
     signal(SIGPIPE, SIG_IGN);
 
     // Calculate params before forking (no KVClient/SD needed)
@@ -309,8 +311,11 @@ static int RunBenchmarkMode(Config &cfg) {
             ResultMsg finalDelRes{};
             SLOG_INFO("read_prev final cleanup: deleting round " << lastRound);
             if (SendCommand(children[delChildIdx], CMD_RUN_DEL, lastRound)) {
-                RecvResult(children[delChildIdx], finalDelRes);
-                stats.totalDel += finalDelRes.successCount;
+                if (!RecvResult(children[delChildIdx], finalDelRes)) {
+                    SLOG_ERROR("read_prev final cleanup del phase failed (pipe error)");
+                } else {
+                    stats.totalDel += finalDelRes.successCount;
+                }
             }
         }
         // independent: delete pre-populated round 0 keys
@@ -318,8 +323,11 @@ static int RunBenchmarkMode(Config &cfg) {
             ResultMsg finalDelRes{};
             SLOG_INFO("independent final cleanup: deleting pre-populated round 0");
             if (SendCommand(children[delChildIdx], CMD_RUN_DEL, 0)) {
-                RecvResult(children[delChildIdx], finalDelRes);
-                stats.totalDel += finalDelRes.successCount;
+                if (!RecvResult(children[delChildIdx], finalDelRes)) {
+                    SLOG_ERROR("independent final cleanup del phase failed (pipe error)");
+                } else {
+                    stats.totalDel += finalDelRes.successCount;
+                }
             }
         }
     }
@@ -343,24 +351,8 @@ static int RunServerMode(const Config &cfg) {
     std::cerr << "kvtest v" BUILD_VERSION << std::endl;
     std::cerr << "Output directory: " << cfg.outputDir << std::endl;
 
-    // Apply CPU affinity before creating any threads
-    std::vector<int> cpus;
-    if (!cfg.cpuAffinity.empty()) {
-        cpus = ParseCpuList(cfg.cpuAffinity);
-    }
-    if (cpus.empty()) {
-        cpus = GetAvailableCpus();
-    }
-    if (!cpus.empty() && !ApplyProcessAffinity(cpus)) {
-        std::cerr << "WARNING: failed to set CPU affinity" << std::endl;
-    }
-    std::string cpuList;
-    for (size_t i = 0; i < cpus.size() && i < 32; i++) {
-        if (i > 0) cpuList += ",";
-        cpuList += std::to_string(cpus[i]);
-    }
-    if (cpus.size() > 32) cpuList += ",...";
-    std::cerr << "CPU affinity: " << cpus.size() << " CPUs [" << cpuList << "]" << std::endl;
+    // Apply CPU/NUMA affinity before creating any threads
+    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode);
 
     std::cerr << "Initializing ServiceDiscovery..." << std::endl;
 

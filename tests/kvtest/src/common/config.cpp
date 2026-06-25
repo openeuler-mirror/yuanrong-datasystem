@@ -146,9 +146,9 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("mset_batch_size")) cfg.msetBatchSize = j["mset_batch_size"];
         if (j.contains("mget_batch_size")) cfg.mgetBatchSize = j["mget_batch_size"];
         if (j.contains("cpu_affinity")) cfg.cpuAffinity = j["cpu_affinity"].get<std::string>();
+        if (j.contains("numa_node")) cfg.numaNode = j["numa_node"].get<int>();
         if (j.contains("key_pool_size")) cfg.keyPoolSize = j["key_pool_size"];
         if (j.contains("inference_delay_ms")) cfg.inferenceDelayMs = j["inference_delay_ms"];
-        if (j.contains("warmup_batch_size")) cfg.warmupBatchSize = j["warmup_batch_size"];
         if (j.contains("warmup_retry_count")) cfg.warmupRetryCount = j["warmup_retry_count"];
         if (j.contains("warmup_retry_delay_ms")) cfg.warmupRetryDelayMs = j["warmup_retry_delay_ms"];
         if (j.contains("warmup_timeout_seconds")) cfg.warmupTimeoutSeconds = j["warmup_timeout_seconds"];

@@ -1,6 +1,8 @@
 #include "test_harness.h"
 #include "common/cpu_affinity.h"
 
+// --- ParseCpuList ---
+
 TEST(ParseCpuList_Single) {
     auto cpus = ParseCpuList("3");
     ASSERT_EQ(cpus.size(), 1u);
@@ -47,3 +49,57 @@ TEST(ParseCpuList_InvalidChars) {
     ASSERT_EQ(cpus.size(), 0u);
 }
 
+TEST(ParseCpuList_NegativeIgnored) {
+    auto cpus = ParseCpuList("-1,0,1");
+    ASSERT_EQ(cpus.size(), 2u);
+    ASSERT_EQ(cpus[0], 0);
+    ASSERT_EQ(cpus[1], 1);
+}
+
+TEST(ParseCpuList_Whitespace) {
+    auto cpus = ParseCpuList(" 0 , 1 ");
+    ASSERT_EQ(cpus.size(), 2u);
+    ASSERT_EQ(cpus[0], 0);
+    ASSERT_EQ(cpus[1], 1);
+}
+
+// --- GetAvailableCpus ---
+
+TEST(GetAvailableCpus_NonEmpty) {
+    auto cpus = GetAvailableCpus();
+    ASSERT_TRUE(cpus.size() > 0u);
+}
+
+// --- ApplyProcessAffinity ---
+
+TEST(ApplyProcessAffinity_WithAvailableCpus) {
+    auto cpus = GetAvailableCpus();
+    ASSERT_TRUE(ApplyProcessAffinity(cpus));
+}
+
+TEST(ApplyProcessAffinity_SingleCpu) {
+    auto cpus = GetAvailableCpus();
+    ASSERT_TRUE(cpus.size() > 0u);
+    ASSERT_TRUE(ApplyProcessAffinity({cpus[0]}));
+}
+
+TEST(ApplyProcessAffinity_EmptyList) {
+    ASSERT_FALSE(ApplyProcessAffinity({}));
+}
+
+// --- ApplyNumaAffinity ---
+
+#ifdef HAS_LIBNUMA
+TEST(ApplyNumaAffinity_Node0_IfAvailable) {
+    if (numa_available() >= 0) {
+        ASSERT_TRUE(ApplyNumaAffinity(0));
+    }
+}
+
+TEST(ApplyNumaAffinity_OutOfRangeNode) {
+    if (numa_available() >= 0) {
+        int maxNode = numa_max_node();
+        ASSERT_FALSE(ApplyNumaAffinity(maxNode + 100));
+    }
+}
+#endif

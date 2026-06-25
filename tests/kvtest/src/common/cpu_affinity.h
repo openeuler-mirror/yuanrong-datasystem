@@ -1,9 +1,18 @@
 #pragma once
+#include <iostream>
 #include <sched.h>
 #include <thread>
 #include <sstream>
 #include <string>
 #include <vector>
+
+// HAS_LIBNUMA may be defined by CMake (preferred) or auto-detected below
+#ifndef HAS_LIBNUMA
+#if __has_include(<numa.h>)
+#include <numa.h>
+#define HAS_LIBNUMA 1
+#endif
+#endif
 
 static std::vector<int> ParseCpuList(const std::string &s) {
     std::vector<int> result;
@@ -52,3 +61,34 @@ static bool ApplyProcessAffinity(const std::vector<int> &cpus) {
     }
     return sched_setaffinity(0, sizeof(mask), &mask) == 0;
 }
+
+// Unified affinity application from config values. Shared by RunServerMode
+// and ChildProcessMain to avoid duplicating the NUMA-then-CPU fallback logic.
+static void ApplyAffinityFromConfig(const std::string &cpuAffinity, int numaNode) {
+#ifdef HAS_LIBNUMA
+    if (numaNode >= 0 && ApplyNumaAffinity(numaNode)) {
+        return;
+    }
+#else
+    (void)numaNode;
+#endif
+
+    std::vector<int> cpus;
+    if (!cpuAffinity.empty()) {
+        cpus = ParseCpuList(cpuAffinity);
+    }
+    if (cpus.empty()) {
+        cpus = GetAvailableCpus();
+    }
+    if (!ApplyProcessAffinity(cpus)) {
+        std::cerr << "WARNING: ApplyProcessAffinity failed" << std::endl;
+    }
+}
+
+
+#ifdef HAS_LIBNUMA
+static bool ApplyNumaAffinity(int node) {
+    if (numa_available() < 0) return false;
+    return numa_run_on_node(node) == 0;
+}
+#endif

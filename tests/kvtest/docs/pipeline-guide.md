@@ -232,9 +232,19 @@ LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH ./kvtest config/writer1.json
 
 ### 3.6 CPU 亲和性绑定
 
+进程级 CPU 绑核，在创建任何线程之前执行：
+
 ```json
 {"cpu_affinity": "0-7"}
 ```
+
+NUMA 节点绑定（同时绑定 CPU + 本地内存，需 `libnuma`）：
+
+```json
+{"numa_node": 0}
+```
+
+`numa_node` 优先级高于 `cpu_affinity`。NUMA 不可用时自动回退到 CPU 绑核。
 
 ### 3.7 通知节流
 
