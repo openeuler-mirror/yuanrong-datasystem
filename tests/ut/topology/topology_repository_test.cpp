@@ -137,6 +137,12 @@ TEST(TopologyRepositoryTest, RejectsInvalidTopologyCodecInputs)
     topology.workers = { { "..", WorkerTopologyState::ACTIVE, { 1 } } };
     EXPECT_EQ(codec.EncodeTopology(topology, bytes).GetCode(), K_INVALID);
 
+    topology.workers = {
+        { WORKER_A, WorkerTopologyState::ACTIVE, { 1 } },
+        { WORKER_A, WorkerTopologyState::JOINING, { 2 } },
+    };
+    EXPECT_EQ(codec.EncodeTopology(topology, bytes).GetCode(), K_INVALID);
+
     HashRingPb ring = MakeRing();
     (*ring.mutable_workers())[WORKER_A].set_state(static_cast<WorkerPb::StatePb>(99));
     TopologyDescriptor decoded;

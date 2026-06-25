@@ -17,10 +17,11 @@
 /**
  * Description: Topology module model types.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H
-#define DATASYSTEM_COMMON_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H
+#ifndef DATASYSTEM_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H
+#define DATASYSTEM_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,8 @@ namespace datasystem {
 namespace topology {
 
 using Revision = int64_t;
+using AlgorithmId = std::string;
+using PlacementPolicyId = std::string;
 using TaskId = std::string;
 using WorkerAddress = std::string;
 using WorkerId = std::string;
@@ -52,6 +55,47 @@ struct TopologyDescriptor {
     int64_t version{ 0 };
     bool clusterHasInit{ true };
     std::vector<TopologyWorker> workers;
+};
+
+enum class PlacementPolicyMatchType {
+    CATCH_ALL,
+    EXACT_KEY,
+    PREFIX,
+    SUFFIX,
+    NAMESPACE,
+    CUSTOM,
+};
+
+struct PlacementPolicyRule {
+    PlacementPolicyId policyId;
+    PlacementPolicyMatchType matchType{ PlacementPolicyMatchType::CATCH_ALL };
+    std::string matchPattern;
+    uint32_t priority{ 0 };
+    AlgorithmId algorithmId;
+    std::string algorithmOptions;
+};
+
+struct PlacementUnit {
+    AlgorithmId algorithmId;
+    std::string unitType;
+    std::string opaqueUnit;
+};
+
+struct LogicalOwner {
+    WorkerId workerId;
+    int64_t topologyVersion{ 0 };
+};
+
+struct AlgorithmRoutingState {
+    virtual ~AlgorithmRoutingState() = default;
+
+    AlgorithmId algorithmId;
+    int64_t topologyVersion{ 0 };
+};
+
+struct RouteContext {
+    std::string objectKey;
+    std::string namespaceId;
 };
 
 struct TokenRange {
@@ -103,4 +147,4 @@ struct TopologyWatchEvent {
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H
+#endif  // DATASYSTEM_TOPOLOGY_MODEL_TOPOLOGY_TYPES_H

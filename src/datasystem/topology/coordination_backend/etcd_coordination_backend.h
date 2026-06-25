@@ -21,7 +21,7 @@
 #define DATASYSTEM_TOPOLOGY_COORDINATION_BACKEND_ETCD_COORDINATION_BACKEND_H
 
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 
 namespace datasystem {
 namespace topology {

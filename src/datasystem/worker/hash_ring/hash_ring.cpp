@@ -1212,9 +1212,8 @@ std::vector<topology::RoutingOwnerEntry> HashRing::BuildRoutingOwnersNoLock() co
     for (auto iter = tokenMap_.begin(); iter != tokenMap_.end(); ++iter) {
         auto workerUuidIter = workerAddr2UuidMap_.find(iter->second);
         if (workerUuidIter != workerAddr2UuidMap_.end()) {
-            owners.emplace_back(
-                topology::RoutingOwnerEntry{ topology::PlacementUnit{ prev->first, iter->first },
-                                             workerUuidIter->second });
+            owners.emplace_back(topology::RoutingOwnerEntry{ topology::RoutingRange{ prev->first, iter->first },
+                                                             workerUuidIter->second });
         }
         prev = iter;
     }
@@ -1234,9 +1233,8 @@ void HashRing::FillRedirectHintsNoLock(topology::RoutingSnapshotFacts &facts) co
             targetWorkerId = workerIdIter->second;
         }
         for (const auto &range : addNodeInfo.second.changed_ranges()) {
-            facts.redirectHints.emplace_back(
-                topology::RoutingRedirectHint{ topology::PlacementUnit{ range.from(), range.end() }, targetWorkerId,
-                                               targetAddress });
+            facts.redirectHints.emplace_back(topology::RoutingRedirectHint{
+                topology::RoutingRange{ range.from(), range.end() }, targetWorkerId, targetAddress });
         }
     }
 }
@@ -1246,7 +1244,7 @@ void HashRing::FillLocalOwnedRangesNoLock(topology::RoutingSnapshotFacts &facts)
     const auto localRanges = BuildHashRangeForWorkerNoLock(workerAddr_);
     facts.localOwnedRanges.reserve(localRanges.size());
     for (const auto &range : localRanges) {
-        facts.localOwnedRanges.emplace_back(topology::PlacementUnit{ range.first, range.second });
+        facts.localOwnedRanges.emplace_back(topology::RoutingRange{ range.first, range.second });
     }
 }
 

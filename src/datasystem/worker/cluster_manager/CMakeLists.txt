@@ -12,7 +12,7 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         ds_master
         worker_object_protos
         worker_hash_ring
-        worker_topology_runtime
+        topology
         worker_update_flag_check
         common_signal
         coordination_backend

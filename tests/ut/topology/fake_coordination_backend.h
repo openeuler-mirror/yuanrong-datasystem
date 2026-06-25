@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef DATASYSTEM_TESTS_UT_COMMON_TOPOLOGY_FAKE_CLUSTER_STORE_H
-#define DATASYSTEM_TESTS_UT_COMMON_TOPOLOGY_FAKE_CLUSTER_STORE_H
+#ifndef DATASYSTEM_TESTS_UT_TOPOLOGY_FAKE_COORDINATION_BACKEND_H
+#define DATASYSTEM_TESTS_UT_TOPOLOGY_FAKE_COORDINATION_BACKEND_H
 
 #include <cstdint>
 #include <functional>
@@ -27,7 +27,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 
 namespace datasystem {
 namespace topology {
@@ -262,4 +262,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_TESTS_UT_COMMON_TOPOLOGY_FAKE_CLUSTER_STORE_H
+#endif  // DATASYSTEM_TESTS_UT_TOPOLOGY_FAKE_COORDINATION_BACKEND_H

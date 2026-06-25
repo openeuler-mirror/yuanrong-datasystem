@@ -17,15 +17,15 @@
 /**
  * Description: R0 worker locator.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_ROUTING_WORKER_LOCATOR_H
-#define DATASYSTEM_WORKER_TOPOLOGY_ROUTING_WORKER_LOCATOR_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_WORKER_LOCATOR_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_WORKER_LOCATOR_H
 
 #include <memory>
 #include <vector>
 
-#include "datasystem/worker/topology/membership/worker_directory.h"
-#include "datasystem/worker/topology/routing/routing_cache.h"
-#include "datasystem/worker/topology/routing/routing_view.h"
+#include "datasystem/topology/routing/placement_directory.h"
+#include "datasystem/topology/routing/routing_cache.h"
+#include "datasystem/topology/routing/routing_view.h"
 
 namespace datasystem {
 namespace topology {
@@ -61,7 +61,7 @@ public:
 
 class WorkerLocator final : public IWorkerLocator {
 public:
-    WorkerLocator(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IWorkerDirectory> directory);
+    WorkerLocator(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IPlacementDirectory> directory);
     ~WorkerLocator() override = default;
 
     Status LocateMetaOwner(const std::string &objectKey, const RouteOptions &options, IRoutingCache *cache,
@@ -101,21 +101,21 @@ private:
      * @brief Build a route decision pointing at the centralized master for centralized mode.
      * @param[in] objectKey Business object key.
      * @param[in] options Route options; when requireAvailableTarget is set the master must be READY in the local
-     * worker directory.
+     * placement directory.
      * @param[out] decision Route decision with the master endpoint set as owner.
      * @return K_OK on success, K_RPC_UNAVAILABLE when requireAvailableTarget rejects a non-READY master, otherwise the
      * parse status of the master address.
      *
-     * The master is resolved through the worker directory (published under its address string) so the centralized and
-     * distributed paths share the same local availability semantics.
+     * The master is resolved through the placement directory (published under its address string) so the centralized
+     * and distributed paths share the same local availability semantics.
      */
     Status LocateCentralizedMaster(const std::string &objectKey, const RouteOptions &options,
                                    RouteDecision &decision) const;
 
     std::shared_ptr<IRoutingView> routingView_;
-    std::shared_ptr<IWorkerDirectory> directory_;
+    std::shared_ptr<IPlacementDirectory> directory_;
 };
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_ROUTING_WORKER_LOCATOR_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_WORKER_LOCATOR_H

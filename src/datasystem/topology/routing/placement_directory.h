@@ -15,36 +15,36 @@
  */
 
 /**
- * Description: R0 worker directory snapshot.
+ * Description: R0 placement directory snapshot.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
-#define DATASYSTEM_WORKER_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_DIRECTORY_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_DIRECTORY_H
 
 #include <memory>
 #include <shared_mutex>
 #include <unordered_map>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/topology/runtime/placement_types.h"
+#include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
 namespace topology {
 
-struct WorkerDirectorySnapshot {
-    WorkerDirectorySnapshot() : localAddress()
+struct PlacementDirectorySnapshot {
+    PlacementDirectorySnapshot() : localAddress()
     {
     }
 
     int64_t version = -1;
     std::string localWorkerId;
     HostPort localAddress;
-    std::unordered_map<std::string, WorkerEndpoint> workers;
+    std::unordered_map<std::string, PlacementEndpoint> workers;
     std::unordered_map<std::string, std::string> workerIdsByAddress;
 };
 
-class IWorkerDirectory {
+class IPlacementDirectory {
 public:
-    virtual ~IWorkerDirectory() = default;
+    virtual ~IPlacementDirectory() = default;
 
     /**
      * @brief Resolve a worker endpoint from the local immutable directory snapshot.
@@ -55,7 +55,7 @@ public:
      * Request threads only read local snapshot state. This method must not perform RPC probing, repository/backend IO,
      * CAS/List/Watch, task scan, migration, recovery, cleanup, or success-path logging.
      */
-    virtual Status ResolveWorker(const std::string &workerId, WorkerEndpoint &endpoint) const = 0;
+    virtual Status ResolveWorker(const std::string &workerId, PlacementEndpoint &endpoint) const = 0;
 
     /**
      * @brief Resolve a worker endpoint by worker address from the local immutable directory snapshot.
@@ -63,36 +63,36 @@ public:
      * @param[out] endpoint Resolved endpoint.
      * @return K_OK if found, K_NOT_READY if directory is not published, K_NOT_FOUND if worker is absent.
      */
-    virtual Status ResolveWorkerByAddress(const std::string &workerAddress, WorkerEndpoint &endpoint) const = 0;
+    virtual Status ResolveWorkerByAddress(const std::string &workerAddress, PlacementEndpoint &endpoint) const = 0;
 
     /**
      * @brief Return local worker identity from the local immutable directory snapshot.
      * @param[out] endpoint Local worker endpoint.
      * @return K_OK if found, K_NOT_READY if directory is not published, K_NOT_FOUND if local worker is absent.
      */
-    virtual Status GetLocalWorker(WorkerEndpoint &endpoint) const = 0;
+    virtual Status GetLocalWorker(PlacementEndpoint &endpoint) const = 0;
 };
 
-class WorkerDirectory final : public IWorkerDirectory {
+class PlacementDirectory final : public IPlacementDirectory {
 public:
-    WorkerDirectory() = default;
-    ~WorkerDirectory() override = default;
+    PlacementDirectory() = default;
+    ~PlacementDirectory() override = default;
 
-    Status ResolveWorker(const std::string &workerId, WorkerEndpoint &endpoint) const override;
-    Status ResolveWorkerByAddress(const std::string &workerAddress, WorkerEndpoint &endpoint) const override;
-    Status GetLocalWorker(WorkerEndpoint &endpoint) const override;
+    Status ResolveWorker(const std::string &workerId, PlacementEndpoint &endpoint) const override;
+    Status ResolveWorkerByAddress(const std::string &workerAddress, PlacementEndpoint &endpoint) const override;
+    Status GetLocalWorker(PlacementEndpoint &endpoint) const override;
 
     /**
-     * @brief Publish an immutable worker directory snapshot.
+     * @brief Publish an immutable placement directory snapshot.
      * @param[in] snapshot Fully constructed directory snapshot.
      */
-    void Publish(std::shared_ptr<const WorkerDirectorySnapshot> snapshot);
+    void Publish(std::shared_ptr<const PlacementDirectorySnapshot> snapshot);
 
 private:
     mutable std::shared_timed_mutex mutex_;
-    std::shared_ptr<const WorkerDirectorySnapshot> snapshot_;
+    std::shared_ptr<const PlacementDirectorySnapshot> snapshot_;
 };
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_DIRECTORY_H

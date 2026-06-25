@@ -42,9 +42,9 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 #include "datasystem/worker/hash_ring/hash_ring_health_check.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring_task_executor.h"
-#include "datasystem/worker/topology/routing/routing_view.h"
+#include "datasystem/topology/routing/routing_view.h"
 
 namespace datasystem {
 namespace worker {
@@ -412,7 +412,7 @@ public:
     Status GetWorkerAddrByUuidForMetadata(const std::string &workerUuid, HostPort &workerAddr);
 
     /**
-     * @brief Copy hash-ring worker uuid/address state for worker directory publication.
+     * @brief Copy hash-ring worker uuid/address state for placement directory publication.
      * @param[out] version Current local routing version.
      * @param[out] localWorkerUuid Local worker uuid.
      * @param[out] workerUuid2AddrMap Worker uuid to worker address map.

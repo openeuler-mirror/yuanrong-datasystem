@@ -13,6 +13,23 @@ ds_cc_test_library(
     ],
 )
 
+ds_cc_test_library(
+    name = "topology_testing",
+    srcs = [
+        "testing/fake_topology_change_requester.cpp",
+        "testing/fake_topology_repository.cpp",
+        "testing/fake_worker_directory.cpp",
+    ],
+    hdrs = [
+        "testing/fake_topology_change_requester.h",
+        "testing/fake_topology_repository.h",
+        "testing/fake_worker_directory.h",
+    ],
+    deps = [
+        "//src/datasystem/topology:topology",
+    ],
+)
+
 ds_cc_test(
     name = "topology_repository_test",
     srcs = ["topology_repository_test.cpp"],
@@ -71,12 +88,75 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "algorithm_registry_test",
+    srcs = ["algorithm_registry_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "placement_policy_engine_test",
+    srcs = ["placement_policy_engine_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "hash_algorithm_test",
+    srcs = ["hash_algorithm_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "placement_runtime_test",
+    srcs = ["placement_runtime_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_fake_integration_test",
+    srcs = ["topology_fake_integration_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_memory_scale_module_test",
+    srcs = ["topology_memory_scale_module_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
 test_suite(
     name = "all_topology_tests",
     tests = [
+        "algorithm_registry_test",
         "cluster_membership_test",
         "cluster_registry_test",
+        "hash_algorithm_test",
+        "placement_runtime_test",
+        "placement_policy_engine_test",
+        "topology_fake_integration_test",
         "topology_change_handler_test",
+        "topology_memory_scale_module_test",
         "topology_repository_test",
         "worker_directory_test",
     ],

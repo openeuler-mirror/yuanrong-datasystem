@@ -17,8 +17,8 @@
 /**
  * Description: Local membership snapshot manager for common topology.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H
-#define DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H
+#ifndef DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H
+#define DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H
 
 #include <memory>
 #include <mutex>
@@ -37,7 +37,7 @@ enum class MembershipRuntimeState {
     STOPPED,
 };
 
-class ClusterMembership final : public IMembershipSnapshotProvider {
+class ClusterMembership final : public IWorkerDirectory {
 public:
     ClusterMembership(IClusterRegistry &registry, WorkerId localWorkerId);
     ~ClusterMembership() override;
@@ -71,6 +71,9 @@ public:
      * @return K_OK when available; K_NOT_READY before first rebuild or after Stop.
      */
     Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
+    Status GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const override;
+    Status GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const override;
+    Status ListReadyWorkers(std::vector<WorkerRecord> &workers) const override;
 
     /**
      * @brief Build a local scale-in request from the latest snapshot.
@@ -102,4 +105,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H
+#endif  // DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_MEMBERSHIP_H

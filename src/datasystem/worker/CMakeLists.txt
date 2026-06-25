@@ -8,7 +8,6 @@ target_link_libraries(worker_update_flag_check PRIVATE ${WORKER_UPDATE_FLAG_CHEC
 
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
-add_subdirectory(topology)
 add_subdirectory(hash_ring)
 add_subdirectory(client_manager)
 add_subdirectory(cluster_manager)

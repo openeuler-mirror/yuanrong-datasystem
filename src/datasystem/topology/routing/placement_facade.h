@@ -17,14 +17,14 @@
 /**
  * Description: B0 placement facade.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_FACADE_H
-#define DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_FACADE_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_FACADE_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_FACADE_H
 
 #include <memory>
 #include <vector>
 
-#include "datasystem/worker/topology/routing/redirect_policy.h"
-#include "datasystem/worker/topology/routing/worker_locator.h"
+#include "datasystem/topology/routing/redirect_policy.h"
+#include "datasystem/topology/routing/worker_locator.h"
 
 namespace datasystem {
 namespace topology {
@@ -104,4 +104,4 @@ private:
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_FACADE_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_FACADE_H

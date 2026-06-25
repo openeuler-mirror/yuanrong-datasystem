@@ -83,7 +83,7 @@ static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;         // terminate wait ear
 static const std::string ETCD_CLUSTER_SUBSCRIBER = "ClusterManager";
 
 namespace {
-worker::HashRange ToHashRange(const std::vector<topology::PlacementUnit> &units)
+worker::HashRange ToHashRange(const std::vector<topology::RoutingRange> &units)
 {
     worker::HashRange ranges;
     ranges.reserve(units.size());
@@ -100,11 +100,11 @@ Status LoadRoutingSnapshot(const std::shared_ptr<topology::IRoutingView> &routin
     return routingView->GetSnapshot(snapshot);
 }
 
-Status ResolveWorkerAddress(const std::shared_ptr<topology::IWorkerDirectory> &directory,
+Status ResolveWorkerAddress(const std::shared_ptr<topology::IPlacementDirectory> &directory,
                             const std::string &workerId, std::string &address)
 {
-    CHECK_FAIL_RETURN_STATUS(directory != nullptr, K_NOT_READY, "Worker directory is not provided.");
-    topology::WorkerEndpoint endpoint;
+    CHECK_FAIL_RETURN_STATUS(directory != nullptr, K_NOT_READY, "Placement directory is not provided.");
+    topology::PlacementEndpoint endpoint;
     RETURN_IF_NOT_OK(directory->ResolveWorker(workerId, endpoint));
     CHECK_FAIL_RETURN_STATUS(!endpoint.address.Empty(), K_NOT_FOUND, "Worker endpoint address is empty.");
     address = endpoint.address.ToString();
@@ -142,11 +142,10 @@ ClusterManager::ClusterManager(const HostPort &workerAddress, const HostPort &ma
       akSkManager_(std::move(akSkManager))
 {
     hashRing_ = std::make_unique<worker::HashRing>(workerAddress.ToString(), clusterStore_);
-    workerDirectory_ = std::make_shared<topology::WorkerDirectory>();
+    placementDirectory_ = std::make_shared<topology::PlacementDirectory>();
     routingView_ = hashRing_->GetRoutingView();
-    auto workerLocator = std::make_shared<topology::WorkerLocator>(routingView_, workerDirectory_);
-    auto redirectPolicy =
-        std::make_shared<topology::RedirectPolicy>(routingView_, workerDirectory_, workerLocator);
+    auto workerLocator = std::make_shared<topology::WorkerLocator>(routingView_, placementDirectory_);
+    auto redirectPolicy = std::make_shared<topology::RedirectPolicy>(routingView_, placementDirectory_, workerLocator);
     placementFacade_ = std::make_shared<topology::PlacementFacade>(workerLocator, redirectPolicy);
     eventPq_ = std::make_unique<PriorityQueue<std::unique_ptr<CmEvent>, CmEventCmp>>(pqSize);
     workerWaitPost_ = std::make_unique<WaitPost>();
@@ -243,6 +242,7 @@ Status ClusterManager::LocateMetaOwner(const std::string &objKey, bool requireAv
     topology::RouteOptions options;
     options.centralizedMode = IsCentralized();
     options.requireAvailableTarget = requireAvailableTarget;
+    options.masterAddress = masterAddress_;
     topology::RouteDecision decision;
     RETURN_IF_NOT_OK(placementFacade_->LocateMetaOwner(objKey, options, decision));
     metaAddrInfo = decision.ToMetaAddrInfo();
@@ -256,6 +256,7 @@ bool ClusterManager::EvaluateRedirect(const std::string &key, std::string &newAd
     }
     topology::RouteOptions options;
     options.centralizedMode = IsCentralized();
+    options.masterAddress = masterAddress_;
     topology::RedirectDecision decision;
     if (placementFacade_->EvaluateRedirect(key, options, decision).IsError()
         || decision.action != topology::RedirectAction::REDIRECT) {
@@ -323,7 +324,7 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
     } else {
         RETURN_IF_NOT_OK(hashRing_->InitWithoutEtcd(clusterInfo.localHashRing[0].second));
     }
-    PublishWorkerDirectorySnapshot();
+    PublishPlacementDirectorySnapshot();
 
     if (masterAddress_.Empty()) {
         // The master address was not provided at the beginning. HashRing selected one of the nodes as master.
@@ -642,11 +643,11 @@ Status ClusterManager::DequeEventCallHandler(bool &isHandleEvent)
             RETURN_IF_NOT_OK(HandleClusterEvent(toProcess->event));
             // Display the list of nodes to the log now that the handling of cluster event has completed
             LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
-            PublishWorkerDirectorySnapshot();
+            PublishPlacementDirectorySnapshot();
             break;
         case PrefixType::RING:
             RETURN_IF_NOT_OK(HandleRingEvent(toProcess->event));
-            PublishWorkerDirectorySnapshot();
+            PublishPlacementDirectorySnapshot();
             break;
         default:
             LOG(WARNING) << "No handler for ETCD event " << toProcess->ToString();
@@ -698,14 +699,14 @@ Status ClusterManager::HandleClusterEvent(const topology::CoordinationEvent &eve
     return rc;
 }
 
-void ClusterManager::PublishWorkerDirectorySnapshot()
+void ClusterManager::PublishPlacementDirectorySnapshot()
 {
     int64_t version = -1;
     std::string localWorkerUuid;
     std::map<std::string, HostPort> workerUuid2AddrMap;
     hashRing_->GetWorkerUuidAddressMapSnapshot(version, localWorkerUuid, workerUuid2AddrMap);
 
-    auto snapshot = std::make_shared<topology::WorkerDirectorySnapshot>();
+    auto snapshot = std::make_shared<topology::PlacementDirectorySnapshot>();
     snapshot->version = version;
     snapshot->localWorkerId = std::move(localWorkerUuid);
     snapshot->localAddress = workerAddress_;
@@ -720,11 +721,11 @@ void ClusterManager::PublishWorkerDirectorySnapshot()
                                                             : topology::WorkerAvailability::NOT_READY;
             }
             snapshot->workers.emplace(worker.first,
-                                      topology::WorkerEndpoint{ worker.first, worker.second, availability });
+                                      topology::PlacementEndpoint{ worker.first, worker.second, availability });
             snapshot->workerIdsByAddress.emplace(worker.second.ToString(), worker.first);
         }
         // Publish the centralized master under its address string so the routing locator can resolve it through the
-        // worker directory and honor requireAvailableTarget, unifying the centralized and distributed availability
+        // placement directory and honor requireAvailableTarget, unifying the centralized and distributed availability
         // checks.
         const std::string masterId = masterAddress_.ToString();
         if (!masterId.empty()) {
@@ -734,11 +735,11 @@ void ClusterManager::PublishWorkerDirectorySnapshot()
                 availability = accessor->second->IsActive() ? topology::WorkerAvailability::READY
                                                             : topology::WorkerAvailability::NOT_READY;
             }
-            snapshot->workers.emplace(masterId, topology::WorkerEndpoint{ masterId, masterAddress_, availability });
+            snapshot->workers.emplace(masterId, topology::PlacementEndpoint{ masterId, masterAddress_, availability });
             snapshot->workerIdsByAddress.emplace(masterAddress_.ToString(), masterId);
         }
     }
-    workerDirectory_->Publish(std::move(snapshot));
+    placementDirectory_->Publish(std::move(snapshot));
 }
 
 Status ClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey, ClusterNode *recoverNode,
@@ -784,13 +785,13 @@ Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowDirec
     INJECT_POINT("ClusterManager.checkConnection");
     auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
     workerOperationTimeCost.Append("CheckConnection wait", elapsedMs);
-    topology::WorkerEndpoint endpoint;
-    auto rc = workerDirectory_->ResolveWorkerByAddress(nodeAddr.ToString(), endpoint);
+    topology::PlacementEndpoint endpoint;
+    auto rc = placementDirectory_->ResolveWorkerByAddress(nodeAddr.ToString(), endpoint);
     if (rc.IsError()) {
         if (allowDirectoryLag && IsDirectoryLagStatus(rc)) {
             return Status::OK();
         }
-        std::string errMsg = "The node " + nodeAddr.ToString() + " could not be found in worker directory.";
+        std::string errMsg = "The node " + nodeAddr.ToString() + " could not be found in placement directory.";
         LOG(INFO) << errMsg;
         RETURN_STATUS(rc.GetCode(), errMsg);
     }
@@ -820,7 +821,7 @@ std::set<std::string> ClusterManager::GetValidWorkersInHashRing() const
     }
     for (const auto &workerId : snapshot->ValidWorkerIds()) {
         std::string workerAddr;
-        if (ResolveWorkerAddress(workerDirectory_, workerId, workerAddr).IsOk()) {
+        if (ResolveWorkerAddress(placementDirectory_, workerId, workerAddr).IsOk()) {
             workers.emplace(std::move(workerAddr));
         }
     }
@@ -835,8 +836,8 @@ std::set<std::string> ClusterManager::GetActiveWorkersInHashRing() const
         return activeWorkers;
     }
     for (const auto &workerId : snapshot->ActiveWorkerIds()) {
-        topology::WorkerEndpoint endpoint;
-        if (workerDirectory_->ResolveWorker(workerId, endpoint).IsOk()
+        topology::PlacementEndpoint endpoint;
+        if (placementDirectory_->ResolveWorker(workerId, endpoint).IsOk()
             && endpoint.availability == topology::WorkerAvailability::READY) {
             activeWorkers.emplace(endpoint.address.ToString());
         }
@@ -851,8 +852,8 @@ bool ClusterManager::CheckReceiveMigrateInfo()
 
 std::string ClusterManager::GetLocalWorkerUuid() const
 {
-    topology::WorkerEndpoint endpoint;
-    if (workerDirectory_->GetLocalWorker(endpoint).IsError()) {
+    topology::PlacementEndpoint endpoint;
+    if (placementDirectory_->GetLocalWorker(endpoint).IsError()) {
         return "";
     }
     return endpoint.workerId;
@@ -860,13 +861,13 @@ std::string ClusterManager::GetLocalWorkerUuid() const
 
 Status ClusterManager::GetStandbyWorker(std::string &standbyWorker)
 {
-    topology::WorkerEndpoint localWorker;
-    RETURN_IF_NOT_OK(workerDirectory_->GetLocalWorker(localWorker));
+    topology::PlacementEndpoint localWorker;
+    RETURN_IF_NOT_OK(placementDirectory_->GetLocalWorker(localWorker));
     std::shared_ptr<const topology::RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(LoadRoutingSnapshot(routingView_, snapshot));
     std::string standbyWorkerId;
     RETURN_IF_NOT_OK(snapshot->GetStandbyWorkerId(localWorker.workerId, standbyWorkerId));
-    return ResolveWorkerAddress(workerDirectory_, standbyWorkerId, standbyWorker);
+    return ResolveWorkerAddress(placementDirectory_, standbyWorkerId, standbyWorker);
 }
 
 Status ClusterManager::GetActiveWorkers(uint32_t num, std::vector<std::string> &activeWorkers)
@@ -877,15 +878,15 @@ Status ClusterManager::GetActiveWorkers(uint32_t num, std::vector<std::string> &
     }
     std::shared_ptr<const topology::RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(LoadRoutingSnapshot(routingView_, snapshot));
-    topology::WorkerEndpoint localWorker;
-    (void)workerDirectory_->GetLocalWorker(localWorker);
+    topology::PlacementEndpoint localWorker;
+    (void)placementDirectory_->GetLocalWorker(localWorker);
     for (const auto &workerId : snapshot->WorkerOrder()) {
         if (workerId == localWorker.workerId
             || snapshot->ActiveWorkerIds().find(workerId) == snapshot->ActiveWorkerIds().end()) {
             continue;
         }
-        topology::WorkerEndpoint endpoint;
-        if (workerDirectory_->ResolveWorker(workerId, endpoint).IsOk()
+        topology::PlacementEndpoint endpoint;
+        if (placementDirectory_->ResolveWorker(workerId, endpoint).IsOk()
             && endpoint.availability == topology::WorkerAvailability::READY) {
             activeWorkers.emplace_back(endpoint.address.ToString());
             if (activeWorkers.size() >= num) {
@@ -898,13 +899,13 @@ Status ClusterManager::GetActiveWorkers(uint32_t num, std::vector<std::string> &
 
 Status ClusterManager::GetStandbyWorkerByAddr(const std::string &workerAddr, std::string &nextWorker)
 {
-    topology::WorkerEndpoint endpoint;
-    RETURN_IF_NOT_OK(workerDirectory_->ResolveWorkerByAddress(workerAddr, endpoint));
+    topology::PlacementEndpoint endpoint;
+    RETURN_IF_NOT_OK(placementDirectory_->ResolveWorkerByAddress(workerAddr, endpoint));
     std::shared_ptr<const topology::RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(LoadRoutingSnapshot(routingView_, snapshot));
     std::string nextWorkerId;
     RETURN_IF_NOT_OK(snapshot->GetStandbyWorkerId(endpoint.workerId, nextWorkerId));
-    return ResolveWorkerAddress(workerDirectory_, nextWorkerId, nextWorker);
+    return ResolveWorkerAddress(placementDirectory_, nextWorkerId, nextWorker);
 }
 
 void ClusterManager::WaitWorkerReadyIfNeed()
@@ -1119,7 +1120,7 @@ void ClusterManager::DemoteTimedOutNodes()
     NotifySlotRecovery(failedNode);
     LOG_IF(INFO, !failedNode.empty()) << "After demote timeout nodes: " << NodesToString();
     if (!failedNode.empty()) {
-        PublishWorkerDirectorySnapshot();
+        PublishPlacementDirectorySnapshot();
     }
 }
 
@@ -1206,7 +1207,7 @@ void ClusterManager::CleanupWorker(const std::string &workerAddr, bool isFailed)
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
     // 3. clear workerapi
     EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
-    PublishWorkerDirectorySnapshot();
+    PublishPlacementDirectorySnapshot();
 }
 
 Status ClusterManager::IfNeedTriggerReconciliation(const HostPort &address, int64_t timestamp, bool sync, bool isDRst)
@@ -1306,6 +1307,7 @@ Status ClusterManager::LocateMetaOwnersBatch(const std::vector<std::string> &obj
     topology::RouteOptions options;
     options.centralizedMode = IsCentralized();
     options.requireAvailableTarget = true;
+    options.masterAddress = masterAddress_;
     return placementFacade_->LocateMetaOwnersBatch(objectKeys, options, decision);
 }
 
@@ -1426,10 +1428,10 @@ Status ClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &addres
     constexpr int intervalMs = 100;
     auto realRetryTimeMs = reqTimeoutDuration.CalcRemainingTime();
     Timer timer;
-    Status status(K_NOT_READY, "Worker directory snapshot is not ready.");
+    Status status(K_NOT_READY, "Placement directory snapshot is not ready.");
     while (timer.ElapsedMilliSecond() < realRetryTimeMs) {
-        topology::WorkerEndpoint endpoint;
-        status = workerDirectory_->ResolveWorkerByAddress(address, endpoint);
+        topology::PlacementEndpoint endpoint;
+        status = placementDirectory_->ResolveWorkerByAddress(address, endpoint);
         if (status.IsOk()) {
             dbName = endpoint.workerId;
             masterAddr = endpoint.address;
@@ -1447,8 +1449,8 @@ Status ClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std::ve
         dbNames.emplace_back("");
         return Status::OK();
     }
-    topology::WorkerEndpoint endpoint;
-    RETURN_IF_NOT_OK(workerDirectory_->ResolveWorkerByAddress(address.ToString(), endpoint));
+    topology::PlacementEndpoint endpoint;
+    RETURN_IF_NOT_OK(placementDirectory_->ResolveWorkerByAddress(address.ToString(), endpoint));
     dbNames.emplace_back(endpoint.workerId);
     return Status::OK();
 }
@@ -1723,8 +1725,8 @@ bool ClusterManager::CheckEtcdStateWhenNetworkFailed()
 
 std::string ClusterManager::GetWorkerIdByWorkerAddr(const std::string &address) const
 {
-    topology::WorkerEndpoint endpoint;
-    LOG_IF_ERROR(workerDirectory_->ResolveWorkerByAddress(address, endpoint), "Cannot find workerid of " + address);
+    topology::PlacementEndpoint endpoint;
+    LOG_IF_ERROR(placementDirectory_->ResolveWorkerByAddress(address, endpoint), "Cannot find workerid of " + address);
     return endpoint.workerId;
 }
 

@@ -31,11 +31,8 @@ set(DS_UT_DEPEND_LIBS
         master_object_cache
         worker_object_cache
         worker_hash_ring
-        worker_topology_membership
-        worker_topology_routing
-        worker_topology_runtime
-        worker_client_manager
         topology
+        worker_client_manager
         datasystem_worker_static
         )
 

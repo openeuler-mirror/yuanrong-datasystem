@@ -17,12 +17,12 @@
 /**
  * Description: Cluster table registry for topology membership.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H
-#define DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H
+#ifndef DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H
+#define DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H
 
 #include <string>
 
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/membership/membership_types.h"
 
 namespace datasystem {
@@ -90,4 +90,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H
+#endif  // DATASYSTEM_TOPOLOGY_MEMBERSHIP_CLUSTER_REGISTRY_H

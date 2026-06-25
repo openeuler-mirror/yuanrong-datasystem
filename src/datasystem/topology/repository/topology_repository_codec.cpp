@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <map>
+#include <unordered_set>
 #include <utility>
 
 #include "datasystem/common/util/status_helper.h"
@@ -86,19 +87,6 @@ Status EncodeState(WorkerTopologyState state, WorkerPb::StatePb &statePb)
     }
 }
 
-bool IsKnownState(WorkerTopologyState state)
-{
-    switch (state) {
-        case WorkerTopologyState::INITIAL:
-        case WorkerTopologyState::JOINING:
-        case WorkerTopologyState::ACTIVE:
-        case WorkerTopologyState::LEAVING:
-            return true;
-        default:
-            return false;
-    }
-}
-
 Status DecodeState(WorkerPb::StatePb statePb, WorkerTopologyState &state)
 {
     switch (statePb) {
@@ -123,9 +111,11 @@ Status ValidateTopology(const TopologyDescriptor &topology)
 {
     CHECK_FAIL_RETURN_STATUS(topology.version >= 0, K_INVALID, "invalid topology version");
     CHECK_FAIL_RETURN_STATUS(!topology.workers.empty(), K_INVALID, "empty topology workers");
+    std::unordered_set<WorkerId> workerIds;
+    workerIds.reserve(topology.workers.size());
     for (const auto &worker : topology.workers) {
         RETURN_IF_NOT_OK(ValidateAtom(worker.workerId, "worker id"));
-        CHECK_FAIL_RETURN_STATUS(IsKnownState(worker.state), K_INVALID, "invalid topology worker state");
+        CHECK_FAIL_RETURN_STATUS(workerIds.insert(worker.workerId).second, K_INVALID, "duplicated topology worker id");
     }
     return Status::OK();
 }

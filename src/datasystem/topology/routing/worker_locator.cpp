@@ -17,21 +17,18 @@
 /**
  * Description: R0 worker locator.
  */
-#include "datasystem/worker/topology/routing/worker_locator.h"
+#include "datasystem/topology/routing/worker_locator.h"
 
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/hash_algorithm.h"
-#include "datasystem/common/util/gflag/flags.h"
 #include "datasystem/common/util/status_helper.h"
-
-DS_DECLARE_string(master_address);
 
 namespace datasystem {
 namespace topology {
 
-WorkerLocator::WorkerLocator(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IWorkerDirectory> directory)
+WorkerLocator::WorkerLocator(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IPlacementDirectory> directory)
     : routingView_(std::move(routingView)), directory_(std::move(directory))
 {
 }
@@ -41,11 +38,11 @@ Status WorkerLocator::LocateMetaOwner(const std::string &objectKey, const RouteO
 {
     decision = RouteDecision{};
     decision.objectKeyHash = MurmurHash3_32(objectKey);
+    CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Worker locator placement directory is not set.");
     if (options.centralizedMode) {
         return LocateCentralizedMaster(objectKey, options, decision);
     }
-    CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr && directory_ != nullptr, K_INVALID,
-                             "Worker locator dependencies are not set.");
+    CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr, K_INVALID, "Worker locator routing view is not set.");
 
     std::shared_ptr<const RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(routingView_->GetSnapshot(snapshot));
@@ -70,8 +67,8 @@ Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &obje
         }
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr && directory_ != nullptr, K_INVALID,
-                             "Worker locator dependencies are not set.");
+    CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Worker locator placement directory is not set.");
+    CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr, K_INVALID, "Worker locator routing view is not set.");
 
     std::shared_ptr<const RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(routingView_->GetSnapshot(snapshot));
@@ -127,7 +124,7 @@ Status WorkerLocator::ResolveOwner(const RoutingOwnerEntry &entry, const RouteOp
 {
     RETURN_IF_NOT_OK(directory_->ResolveWorker(entry.ownerWorkerId, decision.ownerEndpoint));
     if (options.requireAvailableTarget && decision.ownerEndpoint.availability != WorkerAvailability::READY) {
-        RETURN_STATUS(K_RPC_UNAVAILABLE, "Route target is not available in local worker directory.");
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "Route target is not available in local placement directory.");
     }
     return Status::OK();
 }
@@ -135,20 +132,22 @@ Status WorkerLocator::ResolveOwner(const RoutingOwnerEntry &entry, const RouteOp
 Status WorkerLocator::LocateCentralizedMaster(const std::string &objectKey, const RouteOptions &options,
                                               RouteDecision &decision) const
 {
+    CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Worker locator placement directory is not set.");
     decision = RouteDecision{};
     decision.objectKeyHash = MurmurHash3_32(objectKey);
+    CHECK_FAIL_RETURN_STATUS(!options.masterAddress.Empty(), K_INVALID, "Centralized master address is empty.");
     decision.ownerEndpoint.availability = WorkerAvailability::READY;
-    RETURN_IF_NOT_OK(decision.ownerEndpoint.address.ParseString(FLAGS_master_address));
+    decision.ownerEndpoint.address = options.masterAddress;
     INJECT_POINT("WorkerLocator.LocateCentralizedMaster.skipDirectoryCheck");
-    decision.ownerWorkerId = FLAGS_master_address;
+    decision.ownerWorkerId = options.masterAddress.ToString();
     if (!decision.ownerWorkerId.empty()) {
-        WorkerEndpoint resolved;
+        PlacementEndpoint resolved;
         if (directory_->ResolveWorker(decision.ownerWorkerId, resolved).IsOk()) {
             decision.ownerEndpoint.availability = resolved.availability;
         }
     }
     if (options.requireAvailableTarget && decision.ownerEndpoint.availability != WorkerAvailability::READY) {
-        RETURN_STATUS(K_RPC_UNAVAILABLE, "Centralized master is not available in local worker directory.");
+        RETURN_STATUS(K_RPC_UNAVAILABLE, "Centralized master is not available in local placement directory.");
     }
     return Status::OK();
 }

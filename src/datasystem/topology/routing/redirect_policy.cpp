@@ -17,19 +17,17 @@
 /**
  * Description: Master metadata response redirect policy.
  */
-#include "datasystem/worker/topology/routing/redirect_policy.h"
+#include "datasystem/topology/routing/redirect_policy.h"
 
 #include <utility>
 
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/status_helper.h"
 
-DS_DECLARE_string(master_address);
-
 namespace datasystem {
 namespace topology {
 namespace {
-bool IsSameWorker(const WorkerEndpoint &lhs, const WorkerEndpoint &rhs)
+bool IsSameWorker(const PlacementEndpoint &lhs, const PlacementEndpoint &rhs)
 {
     if (!lhs.workerId.empty() && !rhs.workerId.empty()) {
         return lhs.workerId == rhs.workerId;
@@ -38,8 +36,8 @@ bool IsSameWorker(const WorkerEndpoint &lhs, const WorkerEndpoint &rhs)
 }
 }  // namespace
 
-RedirectPolicy::RedirectPolicy(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IWorkerDirectory> directory,
-                               std::shared_ptr<IWorkerLocator> locator)
+RedirectPolicy::RedirectPolicy(std::shared_ptr<IRoutingView> routingView,
+                               std::shared_ptr<IPlacementDirectory> directory, std::shared_ptr<IWorkerLocator> locator)
     : routingView_(std::move(routingView)), directory_(std::move(directory)), locator_(std::move(locator))
 {
 }
@@ -51,23 +49,24 @@ Status RedirectPolicy::Evaluate(const std::string &objectKey, const RouteOptions
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "Redirect object key is empty.");
     CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Redirect policy directory is not set.");
     if (options.centralizedMode) {
-        return EvaluateCentralized(decision);
+        return EvaluateCentralized(options, decision);
     }
 
-    WorkerEndpoint targetEndpoint;
+    PlacementEndpoint targetEndpoint;
     RETURN_IF_NOT_OK(ResolveRedirectTarget(objectKey, targetEndpoint));
     return FinishDecision(targetEndpoint, decision);
 }
 
-Status RedirectPolicy::EvaluateCentralized(RedirectDecision &decision) const
+Status RedirectPolicy::EvaluateCentralized(const RouteOptions &options, RedirectDecision &decision) const
 {
-    WorkerEndpoint targetEndpoint;
+    PlacementEndpoint targetEndpoint;
+    CHECK_FAIL_RETURN_STATUS(!options.masterAddress.Empty(), K_INVALID, "Centralized master address is empty.");
     targetEndpoint.availability = WorkerAvailability::READY;
-    RETURN_IF_NOT_OK(targetEndpoint.address.ParseString(FLAGS_master_address));
+    targetEndpoint.address = options.masterAddress;
     return FinishDecision(targetEndpoint, decision);
 }
 
-Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, WorkerEndpoint &targetEndpoint) const
+Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, PlacementEndpoint &targetEndpoint) const
 {
     CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr && locator_ != nullptr, K_INVALID,
                              "Redirect policy dependencies are not set.");
@@ -91,7 +90,7 @@ Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, Worke
 }
 
 Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_ptr<const RoutingSnapshot> &snapshot,
-                                         WorkerEndpoint &targetEndpoint, bool &hasHint) const
+                                         PlacementEndpoint &targetEndpoint, bool &hasHint) const
 {
     hasHint = false;
     RoutingRedirectHint hint;
@@ -99,9 +98,9 @@ Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_
         return Status::OK();
     }
 
-    targetEndpoint = WorkerEndpoint{ hint.targetWorkerId, hint.targetAddress, WorkerAvailability::NOT_READY };
+    targetEndpoint = PlacementEndpoint{ hint.targetWorkerId, hint.targetAddress, WorkerAvailability::NOT_READY };
     if (!hint.targetWorkerId.empty()) {
-        WorkerEndpoint resolvedEndpoint;
+        PlacementEndpoint resolvedEndpoint;
         if (directory_->ResolveWorker(hint.targetWorkerId, resolvedEndpoint).IsOk()) {
             targetEndpoint = resolvedEndpoint;
         }
@@ -111,9 +110,9 @@ Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_
     return Status::OK();
 }
 
-Status RedirectPolicy::FinishDecision(const WorkerEndpoint &targetEndpoint, RedirectDecision &decision) const
+Status RedirectPolicy::FinishDecision(const PlacementEndpoint &targetEndpoint, RedirectDecision &decision) const
 {
-    WorkerEndpoint localWorker;
+    PlacementEndpoint localWorker;
     RETURN_IF_NOT_OK(directory_->GetLocalWorker(localWorker));
     CHECK_FAIL_RETURN_STATUS(!targetEndpoint.address.Empty(), K_INVALID, "Redirect target address is empty.");
     decision.targetEndpoint = targetEndpoint;

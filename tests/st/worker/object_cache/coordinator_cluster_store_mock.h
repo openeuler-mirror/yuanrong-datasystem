@@ -38,7 +38,7 @@
 #include "datasystem/common/coordinator/watch_registry.h"
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
