@@ -1,7 +1,10 @@
 #include "acl_test_utils.h"
 
+#include <cstdlib>
 #include <dlfcn.h>
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "datasystem/transfer_engine/status_helper.h"
@@ -59,6 +62,29 @@ AclApi &GetAclApi()
     return api;
 }
 
+int32_t ResolveAclMallocPolicy()
+{
+    constexpr int32_t kHugeFirst = 0;
+    constexpr int32_t kHugeOnly = 1;
+    constexpr int32_t kNormalOnly = 2;
+
+    const char *env = std::getenv("TRANSFER_ENGINE_ACL_MALLOC_POLICY");
+    if (env == nullptr || env[0] == '\0') {
+        return kHugeFirst;
+    }
+    std::string value(env);
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    if (value == "huge_only" || value == "huge-only" || value == "1") {
+        return kHugeOnly;
+    }
+    if (value == "normal_only" || value == "normal-only" || value == "2") {
+        return kNormalOnly;
+    }
+    return kHugeFirst;
+}
+
 }  // namespace
 
 Result EnsureAclInitialized()
@@ -97,7 +123,7 @@ Result AclMalloc(size_t size, void **devPtr)
     if (!api.initError.empty()) {
         return TE_MAKE_STATUS(ErrorCode::kNotReady, api.initError);
     }
-    const int rc = api.aclMalloc(devPtr, size, 0);
+    const int rc = api.aclMalloc(devPtr, size, ResolveAclMallocPolicy());
     if (rc != 0) {
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "aclrtMalloc failed, rc=" + std::to_string(rc));
     }

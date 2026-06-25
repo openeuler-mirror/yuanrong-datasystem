@@ -41,8 +41,22 @@ public:
     Result Finalize();
 
 private:
-    Result BuildConnectionIfNeeded(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId);
-    Result BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId);
+    Result BuildConnectionIfNeeded(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
+                                   uint64_t *ownerMemGeneration);
+    Result BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
+                               uint64_t *ownerMemGeneration);
+    Result InitializeBackendLocked(const std::string &protocol);
+    Result StartControlServerLocked();
+    Result TryReuseCachedConnection(const std::string &peerHost, uint16_t peerPort, int32_t cachedOwnerDeviceId,
+                                    uint64_t cachedOwnerMemGeneration, int32_t *ownerDeviceId,
+                                    uint64_t *ownerMemGeneration, bool *reused);
+    Result ExchangeRootInfoForConnection(const std::string &peerHost, uint16_t peerPort, const std::string &rootInfo,
+                                         ExchangeRootInfoResponse *exchangeRsp);
+    Result InitRequesterRecvForConnection(const std::string &peerHost, uint16_t peerPort,
+                                          const std::string &rootInfo,
+                                          const ExchangeRootInfoResponse &exchangeRsp);
+    Result WaitOwnerReadyAndCache(const std::string &peerHost, uint16_t peerPort, int32_t ownerDeviceId,
+                                  uint64_t *ownerMemGeneration);
     std::string CreateRootInfo() const;
 
     std::string localHost_;
@@ -52,6 +66,7 @@ private:
     uint64_t nextRequestId_ = 1;
     bool initialized_ = false;
     bool finalizing_ = false;
+    bool backendInjected_ = false;
     uint64_t inFlightSyncReads_ = 0;
 
     std::mutex apiMutex_;

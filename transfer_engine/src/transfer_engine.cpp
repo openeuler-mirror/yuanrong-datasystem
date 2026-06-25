@@ -1,9 +1,14 @@
 #include "datasystem/transfer_engine/transfer_engine.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 #include <functional>
+#include <iomanip>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 #include "internal/connection/connection_manager.h"
 #include "internal/control_plane/control_plane.h"
@@ -14,6 +19,9 @@
 #include "internal/runtime/acl_runtime_helper.h"
 #ifdef TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY
 #include "internal/backend/ascend/p2p_transfer_backend.h"
+#endif
+#ifdef TRANSFER_ENGINE_ENABLE_HIXL
+#include "internal/backend/ascend/hixl_d2d_backend.h"
 #endif
 #include "internal/memory/registered_memory_table.h"
 #include "datasystem/transfer_engine/status_helper.h"
@@ -26,6 +34,87 @@ constexpr int32_t kConnReadyRetryCount = 50;
 constexpr int32_t kConnReadyRetryIntervalMs = 10;
 constexpr uint64_t kDefaultRecvWaitTimeoutMs = 10000;
 constexpr int32_t kDefaultRpcThreads = 8;
+constexpr int32_t K_MAX_HIXL_GENERATION_RETRY = 2;
+constexpr uint64_t K_MAX_TCP_PORT = 65535;
+constexpr uint64_t K_DECIMAL_BASE = 10;
+
+std::string ToLowerAscii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+std::string GetEnvString(const char *name)
+{
+    const char *value = std::getenv(name);
+    return value == nullptr ? std::string() : std::string(value);
+}
+
+class ScopeExit final {
+public:
+    explicit ScopeExit(std::function<void()> fn) : fn_(std::move(fn))
+    {
+    }
+
+    ~ScopeExit()
+    {
+        if (fn_) {
+            fn_();
+        }
+    }
+
+    ScopeExit(const ScopeExit &) = delete;
+    ScopeExit &operator=(const ScopeExit &) = delete;
+
+private:
+    std::function<void()> fn_;
+};
+
+Result ResolveBackendKind(const std::string &protocol, std::string &backendKind)
+{
+    const std::string envBackend = ToLowerAscii(GetEnvString("TRANSFER_ENGINE_BACKEND"));
+    if (!envBackend.empty()) {
+        TE_CHECK_OR_RETURN(envBackend == "p2p" || envBackend == "hixl", ErrorCode::kInvalid,
+                           "TRANSFER_ENGINE_BACKEND should be p2p or hixl");
+        backendKind = envBackend;
+        return Result::OK();
+    }
+
+    const std::string protocolLower = ToLowerAscii(protocol);
+    if (protocolLower.empty() || protocolLower == "ascend" || protocolLower == "p2p") {
+        backendKind = "p2p";
+        return Result::OK();
+    }
+    if (protocolLower == "hixl" || protocolLower == "d2d_hixl" || protocolLower == "hccs_hixl") {
+        backendKind = "hixl";
+        return Result::OK();
+    }
+    return TE_MAKE_STATUS(ErrorCode::kInvalid, "unsupported transfer engine protocol: " + protocol);
+}
+
+Result CreateBackendByKind(const std::string &backendKind, std::shared_ptr<IDataPlaneBackend> &backend)
+{
+    if (backendKind == "p2p") {
+#ifdef TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY
+        backend = std::make_shared<P2PTransferBackend>();
+#else
+        backend = std::make_shared<MockDataPlaneBackend>();
+#endif
+        return Result::OK();
+    }
+    if (backendKind == "hixl") {
+#ifdef TRANSFER_ENGINE_ENABLE_HIXL
+        backend = std::make_shared<HixlD2DBackend>();
+        return Result::OK();
+#else
+        return TE_MAKE_STATUS(ErrorCode::kNotSupported,
+                              "hixl backend is not compiled; configure with -DTRANSFER_ENGINE_ENABLE_HIXL=ON");
+#endif
+    }
+    return TE_MAKE_STATUS(ErrorCode::kInvalid, "unknown backend kind: " + backendKind);
+}
 
 Result RpcCodeToStatus(int32_t code, const std::string &msg)
 {
@@ -73,8 +162,8 @@ Result ParseTargetHostname(const std::string &targetHostname, std::string *peerH
     uint64_t portValue = 0;
     for (char c : portStr) {
         TE_CHECK_OR_RETURN(c >= '0' && c <= '9', ErrorCode::kInvalid, "targetHostname port is invalid");
-        portValue = portValue * 10 + static_cast<uint64_t>(c - '0');
-        TE_CHECK_OR_RETURN(portValue <= 65535, ErrorCode::kInvalid, "targetHostname port is invalid");
+        portValue = portValue * K_DECIMAL_BASE + static_cast<uint64_t>(c - '0');
+        TE_CHECK_OR_RETURN(portValue <= K_MAX_TCP_PORT, ErrorCode::kInvalid, "targetHostname port is invalid");
     }
     TE_CHECK_OR_RETURN(portValue > 0, ErrorCode::kInvalid, "targetHostname port should be positive");
 
@@ -110,16 +199,24 @@ Result ParseDeviceId(const std::string &deviceName, int32_t *deviceId)
 
 class TransferEngineState {
 public:
-    std::unordered_map<std::string, int32_t> endpointOwnerDeviceCache;
+    struct EndpointCacheEntry {
+        int32_t ownerDeviceId = -1;
+        uint64_t ownerMemGeneration = 0;
+    };
+
+    std::unordered_map<std::string, EndpointCacheEntry> endpointOwnerDeviceCache;
 };
 
 TransferEngine::TransferEngine()
-#ifdef TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY
-    : TransferEngine(std::make_shared<P2PTransferBackend>())
-#else
-    : TransferEngine(std::make_shared<MockDataPlaneBackend>())
-#endif
+    : connMgr_(std::make_shared<ConnectionManager>()),
+      registeredMemory_(std::make_shared<RegisteredMemoryTable>()),
+      backend_(nullptr),
+      controlService_(nullptr),
+      controlClient_(std::make_shared<SocketControlClient>()),
+      controlServer_(std::make_shared<SocketControlServer>()),
+      state_(std::make_unique<TransferEngineState>())
 {
+    backendInjected_ = false;
 }
 
 TransferEngine::TransferEngine(std::shared_ptr<IDataPlaneBackend> backend)
@@ -131,6 +228,7 @@ TransferEngine::TransferEngine(std::shared_ptr<IDataPlaneBackend> backend)
       controlServer_(std::make_shared<SocketControlServer>()),
       state_(std::make_unique<TransferEngineState>())
 {
+    backendInjected_ = true;
 }
 
 TransferEngine::~TransferEngine()
@@ -150,24 +248,14 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
 
     std::lock_guard<std::mutex> lock(apiMutex_);
     TE_CHECK_OR_RETURN(!initialized_, ErrorCode::kInvalid, "transfer engine already initialized");
-    TE_CHECK_OR_RETURN(backend_ != nullptr, ErrorCode::kInvalid, "backend is null");
-    TE_LOG_INFO << "transfer engine initialize start"
-              << ", local_hostname=" << localHostname << ", protocol=" << protocol
-              << ", device_name=" << deviceName << ", local_host=" << localHost << ", local_port=" << localPort
-              << ", device_id=" << deviceId
-              << ", rpc_threads=" << kDefaultRpcThreads;
 
     localHost_ = localHost;
     localPort_ = localPort;
     deviceId_ = deviceId;
     rpcThreads_ = kDefaultRpcThreads;
-    controlService_ = CreateTransferControlService(localHost_, localPort_, deviceId_, connMgr_, registeredMemory_,
-                                                   backend_);
-    Result startRc = controlServer_->Start(localHost_, localPort_, controlService_, rpcThreads_);
+    TE_RETURN_IF_ERROR(InitializeBackendLocked(protocol));
+    Result startRc = StartControlServerLocked();
     if (startRc.IsError()) {
-        TE_LOG_ERROR << "control server start failed"
-                   << ", local_host=" << localHost_ << ", local_port=" << localPort_
-                   << ", device_id=" << deviceId_ << ", reason=" << startRc.ToString();
         return startRc;
     }
 
@@ -175,6 +263,56 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
     TE_LOG_INFO << "transfer engine initialize success"
               << ", local_host=" << localHost_ << ", local_port=" << localPort_
               << ", device_id=" << deviceId_;
+    return Result::OK();
+}
+
+Result TransferEngine::InitializeBackendLocked(const std::string &protocol)
+{
+    std::string selectedBackendKind;
+    TE_RETURN_IF_ERROR(ResolveBackendKind(protocol, selectedBackendKind));
+    if (!backendInjected_) {
+        std::shared_ptr<IDataPlaneBackend> selectedBackend;
+        TE_RETURN_IF_ERROR(CreateBackendByKind(selectedBackendKind, selectedBackend));
+        backend_ = std::move(selectedBackend);
+    }
+    TE_CHECK_OR_RETURN(backend_ != nullptr, ErrorCode::kInvalid, "backend is null");
+    if (backendInjected_) {
+        TE_CHECK_OR_RETURN(selectedBackendKind == backend_->BackendKind(), ErrorCode::kNotSupported,
+                           "injected backend kind does not match requested protocol/backend");
+    }
+
+    TE_LOG_INFO << "transfer engine initialize start"
+              << ", protocol=" << protocol
+              << ", local_host=" << localHost_ << ", local_port=" << localPort_
+              << ", device_id=" << deviceId_
+              << ", backend=" << backend_->BackendKind()
+              << ", backend_injected=" << backendInjected_
+              << ", rpc_threads=" << kDefaultRpcThreads;
+
+    Result backendInitRc = backend_->InitializeLocal(localHost_, localPort_, deviceId_);
+    if (backendInitRc.IsError()) {
+        TE_LOG_ERROR << "backend initialize failed"
+                   << ", backend=" << backend_->BackendKind()
+                   << ", local_host=" << localHost_ << ", local_port=" << localPort_
+                   << ", device_id=" << deviceId_ << ", reason=" << backendInitRc.ToString();
+        return backendInitRc;
+    }
+    return Result::OK();
+}
+
+Result TransferEngine::StartControlServerLocked()
+{
+    controlService_ = CreateTransferControlService(localHost_, localPort_, deviceId_, connMgr_, registeredMemory_,
+                                                   backend_);
+    Result startRc = controlServer_->Start(localHost_, localPort_, controlService_, rpcThreads_);
+    if (startRc.IsError()) {
+        TE_LOG_ERROR << "control server start failed"
+                   << ", local_host=" << localHost_ << ", local_port=" << localPort_
+                   << ", device_id=" << deviceId_ << ", reason=" << startRc.ToString();
+        controlService_.reset();
+        backend_->FinalizeLocal();
+        return startRc;
+    }
     return Result::OK();
 }
 
@@ -199,21 +337,41 @@ Result TransferEngine::BatchRegisterMemory(const std::vector<uintptr_t> &bufferA
 
     std::lock_guard<std::mutex> lock(apiMutex_);
     TE_CHECK_OR_RETURN(initialized_, ErrorCode::kNotReady, "transfer engine not initialized");
+    TE_CHECK_OR_RETURN(!finalizing_, ErrorCode::kNotReady, "transfer engine is finalizing");
     TE_CHECK_OR_RETURN(deviceId_ >= 0, ErrorCode::kNotReady, "device_id is invalid");
 
-    std::vector<uint64_t> addedBaseAddrs;
-    addedBaseAddrs.reserve(bufferAddrs.size());
+    std::vector<RegisteredRegion> addedRegions;
+    std::vector<RegisteredRegion> backendRegisteredRegions;
+    addedRegions.reserve(bufferAddrs.size());
+    backendRegisteredRegions.reserve(bufferAddrs.size());
     for (size_t i = 0; i < bufferAddrs.size(); ++i) {
         TE_CHECK_OR_RETURN(bufferAddrs[i] > 0, ErrorCode::kInvalid, "bufferAddr should be positive");
         TE_CHECK_OR_RETURN(lengths[i] > 0, ErrorCode::kInvalid, "length should be positive");
         RegisteredRegion region{ static_cast<uint64_t>(bufferAddrs[i]), static_cast<uint64_t>(lengths[i]), deviceId_ };
+        RegisteredRegion existing;
+        TE_CHECK_OR_RETURN(!registeredMemory_->FindRegionByBaseAddr(region.baseAddr, &existing),
+                           ErrorCode::kInvalid, "region is already registered");
+        Result backendRegRc = backend_->RegisterLocalMemory(region.baseAddr, region.length);
+        if (backendRegRc.IsError()) {
+            for (auto it = backendRegisteredRegions.rbegin(); it != backendRegisteredRegions.rend(); ++it) {
+                (void)backend_->UnregisterLocalMemory(it->baseAddr, it->length);
+            }
+            for (const auto &added : addedRegions) {
+                (void)registeredMemory_->RemoveByBaseAddr(added.baseAddr);
+            }
+            return backendRegRc;
+        }
+        backendRegisteredRegions.push_back(region);
         if (!registeredMemory_->AddRegion(region)) {
-            for (uint64_t addr : addedBaseAddrs) {
-                (void)registeredMemory_->RemoveByBaseAddr(addr);
+            for (auto it = backendRegisteredRegions.rbegin(); it != backendRegisteredRegions.rend(); ++it) {
+                (void)backend_->UnregisterLocalMemory(it->baseAddr, it->length);
+            }
+            for (const auto &added : addedRegions) {
+                (void)registeredMemory_->RemoveByBaseAddr(added.baseAddr);
             }
             return Result(ErrorCode::kInvalid, "failed to add registered region");
         }
-        addedBaseAddrs.push_back(region.baseAddr);
+        addedRegions.push_back(region);
     }
 
     TE_LOG_INFO << "batch register memory success"
@@ -230,11 +388,29 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
 {
     std::lock_guard<std::mutex> lock(apiMutex_);
     TE_CHECK_OR_RETURN(initialized_, ErrorCode::kNotReady, "transfer engine not initialized");
+    TE_CHECK_OR_RETURN(!finalizing_, ErrorCode::kNotReady, "transfer engine is finalizing");
     TE_CHECK_OR_RETURN(!bufferAddrs.empty(), ErrorCode::kInvalid, "bufferAddrs is empty");
     for (size_t i = 0; i < bufferAddrs.size(); ++i) {
         TE_CHECK_OR_RETURN(bufferAddrs[i] > 0, ErrorCode::kInvalid, "bufferAddr should be positive");
-        TE_CHECK_OR_RETURN(registeredMemory_->RemoveByBaseAddr(static_cast<uint64_t>(bufferAddrs[i])),
+        RegisteredRegion region;
+        TE_CHECK_OR_RETURN(registeredMemory_->FindRegionByBaseAddr(static_cast<uint64_t>(bufferAddrs[i]), &region),
                            ErrorCode::kNotFound, "region is not registered");
+        auto removeRc = registeredMemory_->RemoveByBaseAddrIfNoActiveLease(region.baseAddr);
+        if (removeRc == RegisteredMemoryTable::RemoveResult::K_BUSY) {
+            return Result(ErrorCode::kNotReady, "region has active read lease");
+        }
+        TE_CHECK_OR_RETURN(removeRc == RegisteredMemoryTable::RemoveResult::K_REMOVED,
+                           ErrorCode::kNotFound, "region is not registered");
+        Result backendRc = backend_->UnregisterLocalMemory(region.baseAddr, region.length);
+        if (backendRc.IsError()) {
+            if (!registeredMemory_->AddRegion(region)) {
+                TE_LOG_ERROR << "restore registered region failed after backend unregister failure"
+                             << ", base_addr=0x" << std::hex << region.baseAddr << std::dec
+                             << ", length=" << region.length
+                             << ", backend_error=" << backendRc.ToString();
+            }
+            return backendRc;
+        }
     }
     TE_LOG_INFO << "batch unregister memory success, count=" << bufferAddrs.size();
     return Result::OK();
@@ -279,24 +455,153 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
         nextRequestId_ += static_cast<uint64_t>(buffers.size());
         ++inFlightSyncReads_;
     }
-    auto finishGuard = std::unique_ptr<void, std::function<void(void *)>>(
-        reinterpret_cast<void *>(1), [this](void *) {
-            std::lock_guard<std::mutex> lock(apiMutex_);
-            if (inFlightSyncReads_ > 0) {
-                --inFlightSyncReads_;
-            }
-            if (finalizing_ && inFlightSyncReads_ == 0) {
-                apiCv_.notify_all();
-            }
-        });
+    ScopeExit finishGuard([this]() {
+        std::lock_guard<std::mutex> lock(apiMutex_);
+        if (inFlightSyncReads_ > 0) {
+            --inFlightSyncReads_;
+        }
+        if (finalizing_ && inFlightSyncReads_ == 0) {
+            apiCv_.notify_all();
+        }
+    });
 
-    TE_LOG_DEBUG << "batch sync read begin"
+    TE_VLOG_1 << "batch sync read begin"
               << ", item_count=" << buffers.size() << ", target_hostname=" << targetHostname
               << ", peer=" << peerHost << ":" << peerPort
-              << ", request_id_start=" << requestIdStart;
+              << ", request_id_start=" << requestIdStart
+              << ", backend=" << backend_->BackendKind();
+
+    if (backend_->SupportsReceiverDrivenRead()) {
+        std::vector<TransferMemoryRegion> destRegions;
+        destRegions.reserve(buffers.size());
+        for (size_t i = 0; i < buffers.size(); ++i) {
+            destRegions.push_back(TransferMemoryRegion{ static_cast<uint64_t>(buffers[i]),
+                                                         static_cast<uint64_t>(lengths[i]) });
+        }
+        const uint64_t localMemGenerationBefore = backend_->MemoryGeneration();
+        Result prepareRc = backend_->PrepareReadDestinations(destRegions);
+        if (prepareRc.IsError()) {
+            return prepareRc;
+        }
+        if (backend_->MemoryGeneration() != localMemGenerationBefore) {
+            std::lock_guard<std::mutex> lock(endpointCacheMutex_);
+            state_->endpointOwnerDeviceCache.clear();
+        }
+
+        for (int32_t attempt = 0; attempt < K_MAX_HIXL_GENERATION_RETRY; ++attempt) {
+            int32_t ownerDeviceId = -1;
+            uint64_t ownerMemGeneration = 0;
+            Result connRc = BuildConnectionIfNeeded(peerHost, peerPort, &ownerDeviceId, &ownerMemGeneration);
+            if (connRc.IsError()) {
+                TE_LOG_ERROR << "batch sync read build hixl connection failed, reason=" << connRc.ToString();
+                return connRc;
+            }
+
+            ConnectionSpec spec;
+            spec.localHost = localHostSnapshot;
+            spec.localPort = localPortSnapshot;
+            spec.localDeviceId = deviceIdSnapshot;
+            spec.peerHost = peerHost;
+            spec.peerPort = peerPort;
+            spec.peerDeviceId = ownerDeviceId;
+
+            BatchReadTriggerRequest req;
+            req.requesterHost = localHostSnapshot;
+            req.requesterPort = localPortSnapshot;
+            req.requesterDeviceId = deviceIdSnapshot;
+            req.ownerDeviceId = ownerDeviceId;
+            req.items.reserve(buffers.size());
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                BatchReadItem one;
+                one.requestId = requestIdStart + static_cast<uint64_t>(i);
+                one.remoteAddr = static_cast<uint64_t>(peerBufferAddresses[i]);
+                one.length = static_cast<uint64_t>(lengths[i]);
+                req.items.push_back(one);
+            }
+
+            BatchReadTriggerResponse rsp;
+            Result triggerRc = controlClient_->BatchReadTrigger(peerHost, peerPort, req, &rsp);
+            if (triggerRc.IsError()) {
+                TE_LOG_ERROR << "batch sync read hixl trigger rpc failed, reason=" << triggerRc.ToString();
+                backend_->AbortConnection(spec);
+                ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
+                connMgr_->MarkStale(key);
+                return triggerRc;
+            }
+            Result rpcStatus = RpcCodeToStatus(rsp.code, rsp.msg);
+            if (rpcStatus.IsError()) {
+                TE_LOG_ERROR << "batch sync read hixl trigger rejected, failed_item_index=" << rsp.failedItemIndex
+                           << ", reason=" << rsp.msg;
+                backend_->AbortConnection(spec);
+                ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
+                connMgr_->MarkStale(key);
+                return rpcStatus;
+            }
+
+            auto releaseLease = [this, &rsp, &peerHost, peerPort, &localHostSnapshot, localPortSnapshot,
+                                 deviceIdSnapshot]() {
+                if (rsp.readLeaseId == 0) {
+                    return;
+                }
+                ReleaseReadLeaseRequest releaseReq;
+                releaseReq.readLeaseId = rsp.readLeaseId;
+                releaseReq.requesterHost = localHostSnapshot;
+                releaseReq.requesterPort = localPortSnapshot;
+                releaseReq.requesterDeviceId = deviceIdSnapshot;
+                ReleaseReadLeaseResponse releaseRsp;
+                Result releaseRc = controlClient_->ReleaseReadLease(peerHost, peerPort, releaseReq, &releaseRsp);
+                if (releaseRc.IsError()) {
+                    TE_LOG_WARNING << "release hixl read lease rpc failed"
+                                 << ", read_lease_id=" << rsp.readLeaseId
+                                 << ", reason=" << releaseRc.ToString();
+                }
+            };
+
+            if (rsp.ownerMemGeneration != ownerMemGeneration) {
+                releaseLease();
+                backend_->AbortConnection(spec);
+                ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
+                connMgr_->MarkStale(key);
+                {
+                    std::lock_guard<std::mutex> lock(endpointCacheMutex_);
+                    state_->endpointOwnerDeviceCache.erase(peerHost + ":" + std::to_string(peerPort));
+                }
+                TE_LOG_WARNING << "hixl owner memory generation changed during read authorization"
+                             << ", cached_generation=" << ownerMemGeneration
+                             << ", trigger_generation=" << rsp.ownerMemGeneration
+                             << ", attempt=" << attempt;
+                continue;
+            }
+
+            std::vector<TransferReadOp> ops;
+            ops.reserve(buffers.size());
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                ops.push_back(TransferReadOp{ static_cast<uint64_t>(buffers[i]),
+                                              static_cast<uint64_t>(peerBufferAddresses[i]),
+                                              static_cast<uint64_t>(lengths[i]) });
+            }
+            // Use the backend-configured HIXL transfer timeout.
+            Result readRc = backend_->TransferSyncRead(spec, ops, 0);
+            releaseLease();
+            if (readRc.IsError()) {
+                backend_->AbortConnection(spec);
+                ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
+                connMgr_->MarkStale(key);
+                TE_LOG_ERROR << "hixl transfer sync read failed, reason=" << readRc.ToString();
+                return readRc;
+            }
+            TE_LOG_INFO << "hixl batch sync read success"
+                      << ", item_count=" << buffers.size()
+                      << ", target_hostname=" << targetHostname
+                      << ", owner_mem_generation=" << ownerMemGeneration;
+            return Result::OK();
+        }
+        return TE_MAKE_STATUS(ErrorCode::kNotReady, "owner memory generation keeps changing during hixl read");
+    }
 
     int32_t ownerDeviceId = -1;
-    Result connRc = BuildConnectionIfNeeded(peerHost, peerPort, &ownerDeviceId);
+    uint64_t ownerMemGeneration = 0;
+    Result connRc = BuildConnectionIfNeeded(peerHost, peerPort, &ownerDeviceId, &ownerMemGeneration);
     if (connRc.IsError()) {
         TE_LOG_ERROR << "batch sync read build connection failed, reason=" << connRc.ToString();
         return connRc;
@@ -377,6 +682,7 @@ Result TransferEngine::Finalize()
         if (!initialized_) {
             return Result::OK();
         }
+        TE_CHECK_OR_RETURN(!finalizing_, ErrorCode::kNotReady, "transfer engine is finalizing");
         TE_LOG_INFO << "transfer engine finalize start"
                   << ", local_host=" << localHost_ << ", local_port=" << localPort_
                   << ", device_id=" << deviceId_ << ", inflight_sync_reads=" << inFlightSyncReads_;
@@ -386,6 +692,15 @@ Result TransferEngine::Finalize()
 
     if (controlServer_ != nullptr) {
         controlServer_->Stop();
+    }
+    std::shared_ptr<ITransferControlService> controlServiceToStop;
+    {
+        std::lock_guard<std::mutex> lock(apiMutex_);
+        controlServiceToStop = std::move(controlService_);
+    }
+    controlServiceToStop.reset();
+    if (backend_ != nullptr) {
+        backend_->FinalizeLocal();
     }
     {
         std::lock_guard<std::mutex> lock(apiMutex_);
@@ -400,60 +715,87 @@ Result TransferEngine::Finalize()
         deviceId_ = -1;
         rpcThreads_ = 0;
         nextRequestId_ = 1;
-        controlService_.reset();
     }
     TE_LOG_INFO << "transfer engine finalize success";
     internal::FlushLogs();
     return Result::OK();
 }
 
-Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId)
+Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
+                                               uint64_t *ownerMemGeneration)
 {
     TE_CHECK_PTR_OR_RETURN(ownerDeviceId);
+    TE_CHECK_PTR_OR_RETURN(ownerMemGeneration);
     const std::string endpoint = peerHost + ":" + std::to_string(peerPort);
-    int32_t cachedOwnerDeviceId = -1;
+    TransferEngineState::EndpointCacheEntry cached;
     {
         std::lock_guard<std::mutex> lock(endpointCacheMutex_);
         const auto cacheIter = state_->endpointOwnerDeviceCache.find(endpoint);
         if (cacheIter != state_->endpointOwnerDeviceCache.end()) {
-            cachedOwnerDeviceId = cacheIter->second;
+            cached = cacheIter->second;
         }
     }
-    if (cachedOwnerDeviceId >= 0) {
-        ConnectionKey key{ deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
-        if (connMgr_->HasReadyConnection(key)) {
-            TE_LOG_DEBUG << "reuse cached connection"
-                      << ", peer=" << peerHost << ":" << peerPort
-                      << ", owner_device_id=" << cachedOwnerDeviceId;
-            QueryConnReadyRequest queryReq;
-            queryReq.requesterHost = localHost_;
-            queryReq.requesterPort = localPort_;
-            queryReq.requesterDeviceId = deviceId_;
-            queryReq.ownerDeviceId = cachedOwnerDeviceId;
+    if (cached.ownerDeviceId < 0) {
+        return BuildConnectionOnce(peerHost, peerPort, ownerDeviceId, ownerMemGeneration);
+    }
 
-            QueryConnReadyResponse queryRsp;
-            Result queryRc = controlClient_->QueryConnReady(peerHost, peerPort, queryReq, &queryRsp);
-            if (queryRc.IsOk()) {
-                Result rpcStatus = RpcCodeToStatus(queryRsp.code, queryRsp.msg);
-                if (rpcStatus.IsOk() && queryRsp.ready) {
-                    *ownerDeviceId = cachedOwnerDeviceId;
-                    return Result::OK();
-                }
-            }
-            TE_LOG_WARNING << "cached connection stale, rebuilding"
-                         << ", peer=" << peerHost << ":" << peerPort
-                         << ", owner_device_id=" << cachedOwnerDeviceId;
-            connMgr_->MarkStale(key);
-            std::lock_guard<std::mutex> lock(endpointCacheMutex_);
-            state_->endpointOwnerDeviceCache.erase(endpoint);
-        }
+    bool reused = false;
+    TE_RETURN_IF_ERROR(TryReuseCachedConnection(peerHost, peerPort, cached.ownerDeviceId, cached.ownerMemGeneration,
+                                                ownerDeviceId, ownerMemGeneration, &reused));
+    if (reused) {
+        return Result::OK();
     }
-    return BuildConnectionOnce(peerHost, peerPort, ownerDeviceId);
+    return BuildConnectionOnce(peerHost, peerPort, ownerDeviceId, ownerMemGeneration);
 }
 
-Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId)
+Result TransferEngine::TryReuseCachedConnection(const std::string &peerHost, uint16_t peerPort,
+                                                int32_t cachedOwnerDeviceId, uint64_t cachedOwnerMemGeneration,
+                                                int32_t *ownerDeviceId, uint64_t *ownerMemGeneration, bool *reused)
+{
+    TE_CHECK_PTR_OR_RETURN(reused);
+    *reused = false;
+    ConnectionKey key{ deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
+    if (!connMgr_->HasReadyConnection(key)) {
+        return Result::OK();
+    }
+    TE_VLOG_1 << "reuse cached connection"
+              << ", peer=" << peerHost << ":" << peerPort
+              << ", owner_device_id=" << cachedOwnerDeviceId
+              << ", owner_mem_generation=" << cachedOwnerMemGeneration;
+    QueryConnReadyRequest queryReq;
+    queryReq.requesterHost = localHost_;
+    queryReq.requesterPort = localPort_;
+    queryReq.requesterDeviceId = deviceId_;
+    queryReq.ownerDeviceId = cachedOwnerDeviceId;
+
+    QueryConnReadyResponse queryRsp;
+    Result queryRc = controlClient_->QueryConnReady(peerHost, peerPort, queryReq, &queryRsp);
+    if (queryRc.IsOk()) {
+        Result rpcStatus = RpcCodeToStatus(queryRsp.code, queryRsp.msg);
+        const bool generationMatches =
+            !backend_->SupportsReceiverDrivenRead() || queryRsp.ownerMemGeneration == cachedOwnerMemGeneration;
+        if (rpcStatus.IsOk() && queryRsp.ready && generationMatches) {
+            *ownerDeviceId = cachedOwnerDeviceId;
+            *ownerMemGeneration = queryRsp.ownerMemGeneration;
+            *reused = true;
+            return Result::OK();
+        }
+    }
+    TE_LOG_WARNING << "cached connection stale, rebuilding"
+                 << ", peer=" << peerHost << ":" << peerPort
+                 << ", owner_device_id=" << cachedOwnerDeviceId
+                 << ", cached_owner_mem_generation=" << cachedOwnerMemGeneration;
+    connMgr_->MarkStale(key);
+    std::lock_guard<std::mutex> lock(endpointCacheMutex_);
+    state_->endpointOwnerDeviceCache.erase(peerHost + ":" + std::to_string(peerPort));
+    return Result::OK();
+}
+
+Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t peerPort, int32_t *ownerDeviceId,
+                                           uint64_t *ownerMemGeneration)
 {
     TE_CHECK_PTR_OR_RETURN(ownerDeviceId);
+    TE_CHECK_PTR_OR_RETURN(ownerMemGeneration);
     std::lock_guard<std::mutex> lock(chainMutex_);
     TE_LOG_INFO << "build connection start"
               << ", peer=" << peerHost << ":" << peerPort << ", device_id=" << deviceId_;
@@ -467,29 +809,59 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
         return createRootRc;
     }
 
+    ExchangeRootInfoResponse exchangeRsp;
+    TE_RETURN_IF_ERROR(ExchangeRootInfoForConnection(peerHost, peerPort, rootInfo, &exchangeRsp));
+    TE_RETURN_IF_ERROR(InitRequesterRecvForConnection(peerHost, peerPort, rootInfo, exchangeRsp));
+    TE_RETURN_IF_ERROR(WaitOwnerReadyAndCache(peerHost, peerPort, exchangeRsp.ownerDeviceId, ownerMemGeneration));
+    *ownerDeviceId = exchangeRsp.ownerDeviceId;
+    return Result::OK();
+}
+
+Result TransferEngine::ExchangeRootInfoForConnection(const std::string &peerHost, uint16_t peerPort,
+                                                     const std::string &rootInfo,
+                                                     ExchangeRootInfoResponse *exchangeRsp)
+{
+    TE_CHECK_PTR_OR_RETURN(exchangeRsp);
     ExchangeRootInfoRequest exchangeReq;
     exchangeReq.requesterHost = localHost_;
     exchangeReq.requesterPort = localPort_;
     exchangeReq.requesterDeviceId = deviceId_;
     exchangeReq.ownerDeviceId = -1;
     exchangeReq.rootInfo = rootInfo;
+    exchangeReq.backendKind = backend_->BackendKind();
+    exchangeReq.hixlRoutePolicy = backend_->RoutePolicy();
 
-    ExchangeRootInfoResponse exchangeRsp;
-    Result exchangeRc = controlClient_->ExchangeRootInfo(peerHost, peerPort, exchangeReq, &exchangeRsp);
+    Result exchangeRc = controlClient_->ExchangeRootInfo(peerHost, peerPort, exchangeReq, exchangeRsp);
     if (exchangeRc.IsError()) {
         TE_LOG_ERROR << "build connection exchange root info rpc failed"
                    << ", peer=" << peerHost << ":" << peerPort << ", reason=" << exchangeRc.ToString();
         return exchangeRc;
     }
-    Result exchangeRpcStatus = RpcCodeToStatus(exchangeRsp.code, exchangeRsp.msg);
+    Result exchangeRpcStatus = RpcCodeToStatus(exchangeRsp->code, exchangeRsp->msg);
     if (exchangeRpcStatus.IsError()) {
         TE_LOG_ERROR << "build connection exchange root info rejected"
-                   << ", peer=" << peerHost << ":" << peerPort << ", rsp_code=" << exchangeRsp.code
-                   << ", rsp_msg=" << exchangeRsp.msg;
+                   << ", peer=" << peerHost << ":" << peerPort << ", rsp_code=" << exchangeRsp->code
+                   << ", rsp_msg=" << exchangeRsp->msg;
         return exchangeRpcStatus;
     }
-    TE_CHECK_OR_RETURN(exchangeRsp.ownerDeviceId >= 0, ErrorCode::kRuntimeError, "owner_device_id is invalid");
+    TE_CHECK_OR_RETURN(exchangeRsp->ownerDeviceId >= 0, ErrorCode::kRuntimeError, "owner_device_id is invalid");
+    if (!exchangeRsp->backendKind.empty()) {
+        TE_CHECK_OR_RETURN(exchangeRsp->backendKind == backend_->BackendKind(), ErrorCode::kNotSupported,
+                           "owner backend kind mismatch");
+    }
+    if (backend_->SupportsReceiverDrivenRead()) {
+        TE_CHECK_OR_RETURN(exchangeRsp->hixlRoutePolicy == backend_->RoutePolicy(), ErrorCode::kNotSupported,
+                           "owner hixl route policy mismatch");
+        TE_CHECK_OR_RETURN(!exchangeRsp->requesterInitRootInfo.empty(), ErrorCode::kInvalid,
+                           "owner did not return requester init root info");
+    }
+    return Result::OK();
+}
 
+Result TransferEngine::InitRequesterRecvForConnection(const std::string &peerHost, uint16_t peerPort,
+                                                      const std::string &rootInfo,
+                                                      const ExchangeRootInfoResponse &exchangeRsp)
+{
     ConnectionSpec spec;
     spec.localHost = localHost_;
     spec.localPort = localPort_;
@@ -497,33 +869,44 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     spec.peerHost = peerHost;
     spec.peerPort = peerPort;
     spec.peerDeviceId = exchangeRsp.ownerDeviceId;
-    Result initRecvRc = backend_->InitRecv(spec, rootInfo);
+    const std::string &requesterInitRootInfo =
+        exchangeRsp.requesterInitRootInfo.empty() ? rootInfo : exchangeRsp.requesterInitRootInfo;
+    Result initRecvRc = backend_->InitRecv(spec, requesterInitRootInfo);
     if (initRecvRc.IsError()) {
         TE_LOG_ERROR << "build connection init recv failed"
                    << ", peer=" << peerHost << ":" << peerPort
-                   << ", owner_device_id=" << exchangeRsp.ownerDeviceId << ", reason=" << initRecvRc.ToString();
+                   << ", owner_device_id=" << exchangeRsp.ownerDeviceId
+                   << ", reason=" << initRecvRc.ToString();
         return initRecvRc;
     }
 
     ConnectionKey key{ deviceId_, peerHost, peerPort, exchangeRsp.ownerDeviceId };
     connMgr_->MarkRequesterRecvReady(key);
+    return Result::OK();
+}
 
+Result TransferEngine::WaitOwnerReadyAndCache(const std::string &peerHost, uint16_t peerPort, int32_t ownerDeviceId,
+                                              uint64_t *ownerMemGeneration)
+{
+    TE_CHECK_PTR_OR_RETURN(ownerMemGeneration);
     QueryConnReadyRequest queryReq;
     queryReq.requesterHost = localHost_;
     queryReq.requesterPort = localPort_;
     queryReq.requesterDeviceId = deviceId_;
-    queryReq.ownerDeviceId = exchangeRsp.ownerDeviceId;
+    queryReq.ownerDeviceId = ownerDeviceId;
 
+    ConnectionKey key{ deviceId_, peerHost, peerPort, ownerDeviceId };
     QueryConnReadyResponse queryRsp;
     for (int32_t i = 0; i < kConnReadyRetryCount; ++i) {
         TE_RETURN_IF_ERROR(controlClient_->QueryConnReady(peerHost, peerPort, queryReq, &queryRsp));
         TE_RETURN_IF_ERROR(RpcCodeToStatus(queryRsp.code, queryRsp.msg));
         if (queryRsp.ready) {
             connMgr_->MarkOwnerSendReady(key);
-            *ownerDeviceId = exchangeRsp.ownerDeviceId;
+            *ownerMemGeneration = queryRsp.ownerMemGeneration;
             {
                 std::lock_guard<std::mutex> lock(endpointCacheMutex_);
-                state_->endpointOwnerDeviceCache[peerHost + ":" + std::to_string(peerPort)] = exchangeRsp.ownerDeviceId;
+                state_->endpointOwnerDeviceCache[peerHost + ":" + std::to_string(peerPort)] =
+                    TransferEngineState::EndpointCacheEntry{ ownerDeviceId, queryRsp.ownerMemGeneration };
             }
             return Result::OK();
         }
@@ -533,12 +916,12 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     connMgr_->MarkStale(key);
     TE_LOG_WARNING << "build connection timeout waiting owner ready"
                  << ", peer=" << peerHost << ":" << peerPort
-                 << ", owner_device_id=" << exchangeRsp.ownerDeviceId
+                 << ", owner_device_id=" << ownerDeviceId
                  << ", retry_count=" << kConnReadyRetryCount;
     return TE_MAKE_STATUS(ErrorCode::kNotReady,
                           "connection is not ready, peer=" + peerHost + ":" + std::to_string(peerPort) +
                               ", device_id=" + std::to_string(deviceId_) +
-                              ", owner_device_id=" + std::to_string(exchangeRsp.ownerDeviceId));
+                              ", owner_device_id=" + std::to_string(ownerDeviceId));
 }
 
 std::string TransferEngine::CreateRootInfo() const

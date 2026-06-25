@@ -69,6 +69,16 @@ public:
         return Result::OK();
     }
 
+    Result ReleaseReadLease(const ReleaseReadLeaseRequest &, ReleaseReadLeaseResponse *rsp) override
+    {
+        if (rsp == nullptr) {
+            return Result(ErrorCode::kRuntimeError, "rsp is null");
+        }
+        rsp->code = 0;
+        rsp->msg = "ok_release";
+        return Result::OK();
+    }
+
     int32_t ownerDeviceId = 7;
     std::atomic<int32_t> exchangeCallCount {0};
     std::atomic<int32_t> queryCallCount {0};

@@ -59,6 +59,16 @@ public:
         rsp->failedItemIndex = -1;
         return Result::OK();
     }
+
+    Result ReleaseReadLease(const ReleaseReadLeaseRequest &, ReleaseReadLeaseResponse *rsp) override
+    {
+        if (rsp == nullptr) {
+            return Result(ErrorCode::kRuntimeError, "rsp is null");
+        }
+        rsp->code = 0;
+        rsp->msg = "release_ok";
+        return Result::OK();
+    }
 };
 
 // 中文说明：验证 control_plane_codec 对 Exchange 请求的编解码能保持字段一致。
@@ -70,6 +80,8 @@ TEST(ControlPlaneCodecLltTest, ExchangeReqRoundTrip)
     in.requesterDeviceId = 3;
     in.ownerDeviceId = -1;
     in.rootInfo = std::string("ab\0cd", 5);
+    in.backendKind = "hixl";
+    in.hixlRoutePolicy = "hccs";
 
     const auto payload = EncodeExchangeReq(in);
     ExchangeRootInfoRequest out;
@@ -79,6 +91,88 @@ TEST(ControlPlaneCodecLltTest, ExchangeReqRoundTrip)
     EXPECT_EQ(out.requesterDeviceId, in.requesterDeviceId);
     EXPECT_EQ(out.ownerDeviceId, in.ownerDeviceId);
     EXPECT_EQ(out.rootInfo, in.rootInfo);
+    EXPECT_EQ(out.backendKind, in.backendKind);
+    EXPECT_EQ(out.hixlRoutePolicy, in.hixlRoutePolicy);
+}
+
+// 中文说明：验证 HIXL 扩展控制面字段和 read lease RPC 的编解码。
+TEST(ControlPlaneCodecLltTest, HixlExchangeAndQueryMessagesRoundTrip)
+{
+    ExchangeRootInfoResponse exchangeIn;
+    exchangeIn.code = 0;
+    exchangeIn.msg = "ok";
+    exchangeIn.ownerDeviceId = 2;
+    exchangeIn.requesterInitRootInfo = "owner_endpoint";
+    exchangeIn.backendKind = "hixl";
+    exchangeIn.hixlRoutePolicy = "roce";
+    exchangeIn.ownerMemGeneration = 42;
+    ExchangeRootInfoResponse exchangeOut;
+    ASSERT_TRUE(DecodeExchangeRsp(EncodeExchangeRsp(exchangeIn), &exchangeOut));
+    EXPECT_EQ(exchangeOut.requesterInitRootInfo, exchangeIn.requesterInitRootInfo);
+    EXPECT_EQ(exchangeOut.backendKind, exchangeIn.backendKind);
+    EXPECT_EQ(exchangeOut.hixlRoutePolicy, exchangeIn.hixlRoutePolicy);
+    EXPECT_EQ(exchangeOut.ownerMemGeneration, exchangeIn.ownerMemGeneration);
+
+    QueryConnReadyResponse queryIn;
+    queryIn.code = 0;
+    queryIn.msg = "ready";
+    queryIn.ready = true;
+    queryIn.ownerMemGeneration = 43;
+    QueryConnReadyResponse queryOut;
+    ASSERT_TRUE(DecodeQueryRsp(EncodeQueryRsp(queryIn), &queryOut));
+    EXPECT_TRUE(queryOut.ready);
+    EXPECT_EQ(queryOut.ownerMemGeneration, queryIn.ownerMemGeneration);
+}
+
+TEST(ControlPlaneCodecLltTest, HixlBatchReadAndLeaseMessagesRoundTrip)
+{
+    BatchReadTriggerResponse batchIn;
+    batchIn.code = 0;
+    batchIn.msg = "accepted";
+    batchIn.failedItemIndex = -1;
+    batchIn.readLeaseId = 1001;
+    batchIn.ownerMemGeneration = 44;
+    BatchReadTriggerResponse batchOut;
+    ASSERT_TRUE(DecodeBatchReadRsp(EncodeBatchReadRsp(batchIn), &batchOut));
+    EXPECT_EQ(batchOut.readLeaseId, batchIn.readLeaseId);
+    EXPECT_EQ(batchOut.ownerMemGeneration, batchIn.ownerMemGeneration);
+
+    ReleaseReadLeaseRequest releaseReqIn;
+    releaseReqIn.readLeaseId = 1001;
+    releaseReqIn.requesterHost = "127.0.0.1";
+    releaseReqIn.requesterPort = 23456;
+    releaseReqIn.requesterDeviceId = 1;
+    ReleaseReadLeaseRequest releaseReqOut;
+    ASSERT_TRUE(DecodeReleaseReadLeaseReq(EncodeReleaseReadLeaseReq(releaseReqIn), &releaseReqOut));
+    EXPECT_EQ(releaseReqOut.readLeaseId, releaseReqIn.readLeaseId);
+    EXPECT_EQ(releaseReqOut.requesterHost, releaseReqIn.requesterHost);
+    EXPECT_EQ(releaseReqOut.requesterPort, releaseReqIn.requesterPort);
+
+    ReleaseReadLeaseResponse releaseRspIn;
+    releaseRspIn.code = 0;
+    releaseRspIn.msg = "released";
+    ReleaseReadLeaseResponse releaseRspOut;
+    ASSERT_TRUE(DecodeReleaseReadLeaseRsp(EncodeReleaseReadLeaseRsp(releaseRspIn), &releaseRspOut));
+    EXPECT_EQ(releaseRspOut.msg, releaseRspIn.msg);
+}
+
+TEST(ControlPlaneCodecLltTest, BatchReadReqRejectsTruncatedLargeItemCount)
+{
+    BatchReadTriggerRequest req;
+    req.requesterHost = "10.0.0.7";
+    req.requesterPort = 18888;
+    req.requesterDeviceId = 2;
+    req.ownerDeviceId = 7;
+
+    std::vector<uint8_t> payload = EncodeBatchReadReq(req);
+    ASSERT_GE(payload.size(), sizeof(uint32_t));
+    for (size_t i = payload.size() - sizeof(uint32_t); i < payload.size(); ++i) {
+        payload[i] = 0xff;
+    }
+
+    BatchReadTriggerRequest decoded;
+    EXPECT_FALSE(DecodeBatchReadReq(payload, &decoded));
+    EXPECT_TRUE(decoded.items.empty());
 }
 
 // 中文说明：验证 socket_rpc_transport 的帧收发，确保方法号和 payload 能正确传输。

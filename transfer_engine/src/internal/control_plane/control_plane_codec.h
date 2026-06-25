@@ -15,6 +15,7 @@ enum class RpcMethod : uint8_t {
     kQueryConnReady = 2,
     kReadTrigger = 3,
     kBatchReadTrigger = 4,
+    kReleaseReadLease = 5,
 };
 
 std::vector<uint8_t> EncodeExchangeReq(const ExchangeRootInfoRequest &req);
@@ -36,6 +37,11 @@ std::vector<uint8_t> EncodeBatchReadReq(const BatchReadTriggerRequest &req);
 bool DecodeBatchReadReq(const std::vector<uint8_t> &in, BatchReadTriggerRequest *req);
 std::vector<uint8_t> EncodeBatchReadRsp(const BatchReadTriggerResponse &rsp);
 bool DecodeBatchReadRsp(const std::vector<uint8_t> &in, BatchReadTriggerResponse *rsp);
+
+std::vector<uint8_t> EncodeReleaseReadLeaseReq(const ReleaseReadLeaseRequest &req);
+bool DecodeReleaseReadLeaseReq(const std::vector<uint8_t> &in, ReleaseReadLeaseRequest *req);
+std::vector<uint8_t> EncodeReleaseReadLeaseRsp(const ReleaseReadLeaseResponse &rsp);
+bool DecodeReleaseReadLeaseRsp(const std::vector<uint8_t> &in, ReleaseReadLeaseResponse *rsp);
 
 Result MakeServerErrorPayload(const std::string &msg, std::vector<uint8_t> *payload);
 
