@@ -45,7 +45,6 @@ class HashRingEvent : public EventNotifier {
         VOLUNTARY_SCALE_DOWN_FINISH,
         SCALEUP_FINISH,
         DATA_MIGRATION_READY,
-        NEED_REDIRECT,
         LOCAL_CLEAR_DATA_WITHOUT_META,
         LOCAL_CLEAR_DATA_WITHOUT_META_FINISH,
     };
@@ -95,7 +94,6 @@ public:
         EventSubscribers<GET_NEED_CHANGE_REPLICATION_DB_NAME, std::function<void(const std::string &)>>;
     using ScaleupFinish = EventSubscribers<SCALEUP_FINISH, std::function<void(const std::string &)>>;
     using DataMigrationReady = EventSubscribers<DATA_MIGRATION_READY, std::function<Status(void)>>;
-    using CheckNeedRedirect = EventSubscribers<NEED_REDIRECT, std::function<void(const std::string &, HostPort &, bool &)>>;
 };
 }  // namespace datasystem
 #endif
