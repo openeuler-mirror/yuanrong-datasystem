@@ -2,6 +2,7 @@
 """Batch start/stop datasystem workers in k8s Pods."""
 
 import argparse
+import base64
 import glob
 import json
 import os
@@ -104,14 +105,23 @@ def upload_procmon(pod, namespace, remote_dir='/tmp', timeout=DEFAULT_TIMEOUT):
 
 
 def start_procmon(pod, namespace, worker_pid, remote_dir='/tmp',
-                  interval=1, timeout=DEFAULT_TIMEOUT):
-    """Start procmon monitoring for a worker process."""
+                  interval=1, timeout=30):
+    """Start procmon monitoring for a worker process.
+
+    Uses procmon.py --background for proper daemonization (os.fork +
+    os.setsid). The parent prints the child PID to stdout and exits,
+    so kubectl exec returns immediately. The child runs in a new session,
+    fully detached from the kubectl exec session.
+    """
     cmd = (f'cd {remote_dir} && '
-           f'(nohup python3 procmon.py --pid {worker_pid} -i {interval} '
-           f'--output resource_monitor.log </dev/null & echo $!)')
+           f'python3 procmon.py --pid {worker_pid} -i {interval} '
+           f'--output resource_monitor.log --background')
     try:
-        result = kubectl_exec(pod['name'], namespace, cmd, timeout=timeout)
-        return result.stdout.strip() if result.returncode == 0 else None
+        result = kubectl_exec(pod['name'], namespace, cmd, check=False, timeout=timeout)
+        pid = result.stdout.strip()
+        if pid and pid.isdigit():
+            return pid
+        return None
     except Exception:
         return None
 
@@ -474,14 +484,16 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
 
         print(f'  {pod_name} ({pod_ip}) -> found {len(log_files)} log files')
 
-        # Collect each log file using cat
+        # Collect each log file using base64 to safely transfer binary/non-UTF-8 content.
+        # kubectl_exec uses text=True which fails on non-UTF-8 bytes in log files.
         for remote_path in log_files:
             try:
                 fname = os.path.basename(remote_path)
                 local_path = os.path.join(local_pod_dir, fname)
-                result = kubectl_exec(pod_name, namespace, f'cat {remote_path}', check=True, timeout=timeout)
-                with open(local_path, 'w', encoding='utf-8') as f:
-                    f.write(result.stdout)
+                result = kubectl_exec(pod_name, namespace, f'base64 {remote_path}', check=True, timeout=timeout)
+                content = base64.b64decode(result.stdout)
+                with open(local_path, 'wb') as f:
+                    f.write(content)
             except Exception as e:
                 print(f'    {os.path.basename(remote_path)} -> FAILED: {e}')
 
@@ -501,10 +513,11 @@ def collect_logs_from_pod(pod, namespace, log_dir, local_dir,
                 continue
             procmon_log = f'{pdir}/resource_monitor.log'
             try:
-                result = kubectl_exec(pod_name, namespace, f'cat {procmon_log}', check=True, timeout=timeout)
+                result = kubectl_exec(pod_name, namespace, f'base64 {procmon_log}', check=True, timeout=timeout)
+                content = base64.b64decode(result.stdout)
                 local_path = os.path.join(local_pod_dir, 'resource_monitor.log')
-                with open(local_path, 'w', encoding='utf-8') as f:
-                    f.write(result.stdout)
+                with open(local_path, 'wb') as f:
+                    f.write(content)
             except Exception:
                 pass
 

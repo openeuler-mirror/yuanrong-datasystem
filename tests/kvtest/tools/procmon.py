@@ -52,6 +52,39 @@ def format_mb(bytes_val):
     return f"{bytes_val / (1024 * 1024):.1f}"
 
 
+def _daemonize():
+    """Fork into background. Parent prints child PID to stdout and exits.
+
+    Child creates a new session (os.setsid) and redirects stdin/stdout/stderr
+    to /dev/null so it does not hold the caller's pipe open. This lets
+    kubectl exec / ssh return immediately instead of hanging until timeout.
+
+    Use --output to capture monitoring data to a file. To debug procmon
+    startup errors, run without --background so stderr stays visible.
+    """
+    devnull = os.open('/dev/null', os.O_RDWR)
+    os.dup2(devnull, 0)
+
+    try:
+        pid = os.fork()
+    except OSError as e:
+        # fork may fail with EAGAIN (RLIMIT_NPROC) or ENOMEM. Do not continue:
+        # stdout is still the caller's pipe, so falling through would mix
+        # monitoring output into the caller's stream.
+        os.close(devnull)
+        print(f'procmon: fork failed: {e}', file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    if pid > 0:
+        print(pid, flush=True)
+        os._exit(0)
+
+    os.setsid()
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Monitor process CPU and memory usage")
     parser.add_argument("-p", "--process", help="Process name to find and monitor")
@@ -59,10 +92,21 @@ def main():
     parser.add_argument("-i", "--interval", type=float, default=1, help="Sample interval in seconds (default: 1)")
     parser.add_argument("-d", "--duration", type=float, default=0, help="Monitor duration in seconds, 0=until exit/Ctrl+C (default: 0)")
     parser.add_argument("-o", "--output", help="Write output to this file in real-time (default: stdout)")
+    parser.add_argument("--background", action="store_true",
+                        help="Daemonize: fork into background, print child PID to "
+                             "stdout, parent exits. Requires --output. Lets the "
+                             "caller (kubectl exec, ssh) return immediately instead "
+                             "of waiting for timeout.")
     args = parser.parse_args()
 
     if not args.process and not args.pid:
         parser.error("Either --process or --pid is required")
+
+    if args.background and not args.output:
+        parser.error("--output is required when --background is used")
+
+    if args.background:
+        _daemonize()
 
     clock_ticks = os.sysconf("SC_CLK_TCK")
 

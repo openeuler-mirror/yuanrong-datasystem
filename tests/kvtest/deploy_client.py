@@ -430,13 +430,19 @@ class Deployer:
                 else:
                     print(f'{tag} stdout empty — binary may have crashed before any output')
 
-            # Step 9: Start procmon
+            # Step 9: Start procmon (--background: parent prints PID and exits,
+            # kubectl exec / ssh returns immediately without timeout hack)
             if self.enable_procmon and pid:
                 procmon_cmd = (
                     f"cd {self.remote_work_dir} && "
-                    f"nohup python3 procmon.py --pid {pid} -i 1"
-                    f" --output resource_monitor.log </dev/null & disown")
-                self.run_on(node, procmon_cmd, check=False, allow_timeout=True)
+                    f"python3 procmon.py --pid {pid} -i 1"
+                    f" --output resource_monitor.log --background")
+                procmon_result = self.run_on(node, procmon_cmd, check=False, timeout=10)
+                procmon_pid = procmon_result.stdout.strip() if procmon_result.returncode == 0 else ''
+                if procmon_pid.isdigit():
+                    print(f'{tag} procmon started (pid={procmon_pid})')
+                else:
+                    print(f'{tag} WARNING: procmon start may have failed')
 
             print(f'  {target} -> OK')
             return True
@@ -496,9 +502,15 @@ class Deployer:
 
         def stop_one(node):
             target = self._exec_target(node)
-            # Check if kvtest process exists before trying HTTP stop
-            r = self.run_on(node, 'pgrep -x kvtest', check=False, timeout=5)
-            if r.returncode != 0 or not r.stdout.strip():
+            # Check if kvtest process exists before trying HTTP stop.
+            # kubectl exec can be slow under load; treat timeout as
+            # "process may exist" so we still attempt HTTP stop.
+            try:
+                r = self.run_on(node, 'pgrep -x kvtest', check=False, timeout=10)
+            except subprocess.TimeoutExpired:
+                print(f'  {target} -> pgrep timed out, assuming process alive')
+                r = None
+            if r is not None and (r.returncode != 0 or not r.stdout.strip()):
                 print(f'  {target} -> no kvtest process, skipped')
                 return (target, None)
             if http_stop(node):
@@ -510,7 +522,11 @@ class Deployer:
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
             futures = [pool.submit(stop_one, n) for n in self.nodes]
             for future in as_completed(futures):
-                target, result = future.result()
+                try:
+                    target, result = future.result()
+                except Exception as e:
+                    print(f'  ERROR during stop: {e}')
+                    continue
                 if result is None:
                     pass
                 elif result is True:
@@ -614,8 +630,8 @@ class Deployer:
         ok = sum(1 for r in results if r)
         print(f'\nClean result: {ok}/{len(results)}')
 
-    def do_collect(self, sdk_log_dir='/root/.datasystem/logs'):
-        collect_dir = 'collected'
+    def do_collect(self, sdk_log_dir='/root/.datasystem/logs', output_dir='collected'):
+        collect_dir = output_dir
         results = []
 
         # Phase 1: trigger summary generation on running instances
@@ -839,7 +855,7 @@ def cmd_gen_config(args):
                 'namespace': args.namespace,
                 'instance_id': i,
                 'role': 'writer' if is_writer else 'reader',
-                'pipeline': writer_pipeline if is_writer else [],
+                'pipeline': writer_pipeline if is_writer else notify_pipeline,
                 'notify_pipeline': notify_pipeline,
             }
             if args.batch_keys_count > 1:
@@ -868,7 +884,7 @@ def cmd_gen_config(args):
             for i, node in enumerate(nodes):
                 is_writer = i in writer_indices
                 node['role'] = 'writer' if is_writer else 'reader'
-                node['pipeline'] = writer_pipeline if is_writer else []
+                node['pipeline'] = writer_pipeline if is_writer else notify_pipeline
                 node['notify_pipeline'] = notify_pipeline
                 if args.batch_keys_count > 1:
                     node['batch_keys_count'] = args.batch_keys_count
@@ -929,6 +945,7 @@ def cmd_gen_config(args):
         cfg['pipeline'] = writer_pipeline
         cfg['notify_pipeline'] = notify_pipeline
         cfg['target_qps'] = args.target_qps
+        cfg['notify_count'] = args.notify_count
         if args.batch_keys_count > 1:
             cfg['batch_keys_count'] = args.batch_keys_count
         if args.ttl > 0:
@@ -997,6 +1014,8 @@ def _add_gen_config_args(p):
                    help='batch_keys_count for batch ops (default: 1)')
     p.add_argument('--target-qps', type=int, default=100,
                    help='Target QPS, 0=unlimited (default: 100)')
+    p.add_argument('--notify-count', type=int, default=10,
+                   help='Number of peers to notify per write (default: 10)')
     p.add_argument('--data-sizes', default='1MB',
                    help='Comma-separated data sizes, e.g. "1MB,512KB" (default: 1MB)')
     p.add_argument('--num-threads', type=int, default=16,
@@ -1074,9 +1093,11 @@ def main():
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
 
     # collect
-    p = sub.add_parser('collect', help='Collect output files and SDK logs to collected/', parents=[shared])
+    p = sub.add_parser('collect', help='Collect output files and SDK logs', parents=[shared])
     p.add_argument('deploy_json')
     p.add_argument('config_template', nargs='?', default='config/config.json.example')
+    p.add_argument('-o', '--output', default='collected',
+                   help='Local output directory (default: collected)')
     p.add_argument('--sdk-log-dir', default='/root/.datasystem/logs',
                    help='SDK log directory on remote nodes (default: /root/.datasystem/logs)')
 
@@ -1113,7 +1134,7 @@ def main():
     elif args.command == 'stop':
         deployer.do_stop()
     elif args.command == 'collect':
-        deployer.do_collect(args.sdk_log_dir)
+        deployer.do_collect(args.sdk_log_dir, args.output)
     elif args.command == 'clean':
         deployer.do_clean()
 
