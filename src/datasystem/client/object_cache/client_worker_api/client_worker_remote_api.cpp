@@ -526,6 +526,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         auto *handle = static_cast<const UrmaManager::BufferHandle *>(getParam.ubPreAllocHandle);
         UrmaRemoteAddrPb urmaInfo;
         RETURN_IF_NOT_OK(UrmaManager::Instance().FillRemoteAddr(*handle, urmaInfo));
+        req.set_ub_buffer_size(handle->GetSegmentSize());
         *req.mutable_urma_info() = urmaInfo;
     } else {
         RETURN_IF_NOT_OK(PrepareGetUrmaBuffer(getParam, req, ubBufferHandle, ubBufferPtr, ubBufferSize));
