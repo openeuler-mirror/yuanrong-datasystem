@@ -5,6 +5,10 @@
       vtable?for?datasystem::*;
       typeinfo?for?datasystem::*;
       typeinfo?name?for?datasystem::*;
+      # brpc/butil symbols required by dynamic_deps consumers (libds_client_py.so)
+      logging::*;
+      # absl symbols required in debug builds (LOG(FATAL)/CHECK use absl internals)
+      absl::*;
     };
     _ZTI*;        # 显式导出所有 RTTI 符号
     _ZTV*;        # 显式导出所有虚表符号（如果 Buffer 有虚函数）
