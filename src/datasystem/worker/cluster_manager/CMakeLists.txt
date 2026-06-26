@@ -7,6 +7,8 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         common_util
         common_ak_sk
         common_etcd
+        common_log
+        common_coordinator_store
         ds_master
         worker_object_protos
         worker_hash_ring

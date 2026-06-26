@@ -129,6 +129,16 @@ Status CoordinatorStore::WatchRange(const std::string &key, const std::string &r
     return Status::OK();
 }
 
+Status CoordinatorStore::CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds)
+{
+    RETURN_IF_NOT_OK(CheckInitialized());
+    for (auto watchId : watchIds) {
+        RETURN_IF_NOT_OK(watchRegistry_->Cancel(watchId, watcherAddr));
+        watchDispatcher_->RemoveChannel(watchId);
+    }
+    return Status::OK();
+}
+
 Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs)
 {
     RETURN_IF_NOT_OK(CheckInitialized());

@@ -59,11 +59,12 @@ public:
     int64_t Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr);
 
     /**
-     * @brief Cancel a watcher.
+     * @brief Cancel a watcher only when it belongs to the watcher address.
      * @param[in] watchId The watch ID to cancel.
+     * @param[in] watcherAddr Expected watcher address.
      * @return Status of the operation.
      */
-    Status Cancel(int64_t watchId);
+    Status Cancel(int64_t watchId, const std::string &watcherAddr);
 
     /**
      * @brief Find all watchers matching a given mutation key.

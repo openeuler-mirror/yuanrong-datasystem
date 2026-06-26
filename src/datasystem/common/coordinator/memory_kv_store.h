@@ -45,11 +45,12 @@ public:
      * @param[in] key The key.
      * @param[in] value The value.
      * @param[in] ttlMs TTL in milliseconds. 0 means no expiration.
-     * @param[in] expectedVersion Expected version for CAS. 0 means no check.
+     * @param[in] expectedVersion Expected version for CAS. COORDINATOR_NO_VERSION_CHECK means no check.
+     * COORDINATOR_KEY_NOT_EXISTS_VERSION means the key must not exist.
      * @param[out] version The new version after put.
      * @param[out] revision The new global revision after put.
      * @param[out] ttlGeneration TTL generation after this mutation.
-     * @return Status of the operation. K_INVALID if version mismatch.
+     * @return Status of the operation. K_INVALID if version mismatch or key already exists.
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                int64_t &version, int64_t &revision, uint64_t &ttlGeneration);

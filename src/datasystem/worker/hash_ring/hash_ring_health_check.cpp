@@ -35,6 +35,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/hash_ring/hash_ring_tools.h"
@@ -146,7 +147,7 @@ Status HashRingHealthCheck::DoHealthCheck(bool checkRetry, bool checkFix)
             return Status::OK();
         }
         RETURN_IF_NOT_OK(hashRing_->clusterStore_->CAS(
-            ETCD_RING_PREFIX, "",
+            HASHRING_TABLE, "",
             [&newRing, &ring](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb oldRing;
                 if (!oldRing.ParseFromString(oldValue)) {
@@ -186,7 +187,7 @@ Status HashRingHealthCheck::TryGetAndParseHashRingPb(HashRingPb &ring, std::stri
     std::string errInfo;
     do {
         RangeSearchResult res;
-        Status rc = hashRing_->clusterStore_->Get(ETCD_RING_PREFIX, "", res);
+        Status rc = hashRing_->clusterStore_->Get(HASHRING_TABLE, "", res);
         if (rc.IsOk()) {
             value = std::move(res.value);
             version = res.modRevision;
@@ -215,7 +216,7 @@ Status HashRingHealthCheck::TryGetAndParseHashRingPb(HashRingPb &ring, std::stri
     if (FLAGS_enable_hash_ring_self_healing) {
         LOG(INFO) << "try init empty hash ring.";
         RETURN_IF_NOT_OK(hashRing_->clusterStore_->CAS(
-            ETCD_RING_PREFIX, "",
+            HASHRING_TABLE, "",
             [](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
                 HashRingPb oldRing;
                 if (!oldValue.empty() && oldRing.ParseFromString(oldValue)) {
@@ -413,9 +414,7 @@ bool HashRingHealthCheck::CheckWorkerInLeavingState(bool, HashRingPb &ring)
             const auto &changedRanges = info.second.changed_ranges();
             auto iter = std::find_if(
                 changedRanges.begin(), changedRanges.end(),
-                [&worker](const ChangeNodePb::RangePb &range) {
-                    return worker.first == range.workerid();
-                });
+                [&worker](const ChangeNodePb::RangePb &range) { return worker.first == range.workerid(); });
             if (iter != changedRanges.end()) {
                 isSrcNode = true;
             }

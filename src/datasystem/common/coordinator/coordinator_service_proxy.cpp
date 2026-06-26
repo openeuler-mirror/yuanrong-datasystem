@@ -68,6 +68,13 @@ Status CoordinatorServiceProxyImpl::WatchRange(const std::string &key, const std
     return CoordinatorServiceProxyNotImplemented();
 }
 
+Status CoordinatorServiceProxyImpl::CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds)
+{
+    (void)watcherAddr;
+    (void)watchIds;
+    return CoordinatorServiceProxyNotImplemented();
+}
+
 Status CoordinatorServiceProxyImpl::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs)
 {
     (void)key;

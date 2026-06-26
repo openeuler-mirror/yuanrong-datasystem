@@ -70,7 +70,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 ### Coordinator backend skeleton
 
-- Verified from source during the P0 coordinator contract addition:
+- Verified from source during the coordinator contract and cluster-store adapter additions:
   - `src/datasystem/protos/coordinator.proto` defines lightweight KV, watch, and keepalive RPC contracts for future coordinator integration; all coordinator response messages reserve `RedirectInfo redirect_info` for future leader redirection.
   - `src/datasystem/coordinator/coordinator_service_impl.h` defines the coordinator-side RPC service skeleton and inherits from generated `CoordinatorService`.
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h` defines the worker-side watch RPC service skeleton and inherits from generated `CoordinatorWatchService`.

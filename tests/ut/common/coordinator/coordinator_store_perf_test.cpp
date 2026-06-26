@@ -233,7 +233,8 @@ void RunWarmUp()
     auto stats = MeasureScenario("WarmUp", WARM_UP_OPS, [&fixture](size_t i) {
         int64_t version = 0;
         int64_t revision = 0;
-        return fixture.Store().Put("/perf/warm-up/" + std::to_string(i), "v", 0, 0, version, revision);
+        return fixture.Store().Put("/perf/warm-up/" + std::to_string(i), "v", 0, COORDINATOR_NO_VERSION_CHECK, version,
+                                   revision);
     });
     PrintStats(stats);
 }
@@ -244,7 +245,8 @@ PerfStats MeasurePutNoWatchNoTtl()
     return MeasureScenario("PutNoWatchNoTtl", PERF_OPS, [&fixture](size_t i) {
         int64_t version = 0;
         int64_t revision = 0;
-        return fixture.Store().Put("/perf/no-watch/" + std::to_string(i), "v", 0, 0, version, revision);
+        return fixture.Store().Put("/perf/no-watch/" + std::to_string(i), "v", 0, COORDINATOR_NO_VERSION_CHECK, version,
+                                   revision);
     });
 }
 
@@ -255,7 +257,8 @@ PerfStats MeasurePutWithWatchers(int watcherCount)
     auto stats = MeasureScenario("PutWith" + std::to_string(watcherCount) + "Watchers", PERF_OPS, [&fixture](size_t i) {
         int64_t version = 0;
         int64_t revision = 0;
-        return fixture.Store().Put("/perf/watch/" + std::to_string(i), "v", 0, 0, version, revision);
+        return fixture.Store().Put("/perf/watch/" + std::to_string(i), "v", 0, COORDINATOR_NO_VERSION_CHECK, version,
+                                   revision);
     });
     EXPECT_TRUE(fixture.Dispatcher().WaitNotifiedAtLeast(static_cast<size_t>(watcherCount) * PERF_OPS,
                                                          WATCH_NOTIFY_TIMEOUT_MS));
@@ -268,7 +271,8 @@ PerfStats MeasurePutWithTtl()
     return MeasureScenario("PutWithTtl", PERF_OPS, [&fixture](size_t i) {
         int64_t version = 0;
         int64_t revision = 0;
-        return fixture.Store().Put("/perf/ttl/" + std::to_string(i), "v", PERF_TTL_MS, 0, version, revision);
+        return fixture.Store().Put("/perf/ttl/" + std::to_string(i), "v", PERF_TTL_MS, COORDINATOR_NO_VERSION_CHECK,
+                                   version, revision);
     });
 }
 
@@ -277,7 +281,7 @@ PerfStats MeasureRangeSingleKey()
     PerfStoreFixture fixture;
     int64_t version = 0;
     int64_t revision = 0;
-    Status status = fixture.Store().Put("/perf/range/key", "v", 0, 0, version, revision);
+    Status status = fixture.Store().Put("/perf/range/key", "v", 0, COORDINATOR_NO_VERSION_CHECK, version, revision);
     EXPECT_TRUE(status.IsOk()) << status.ToString();
     if (status.IsError()) {
         return PerfStats{ "RangeSingleKey", 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0 };
@@ -297,7 +301,8 @@ PerfStats MeasureDeleteSingleKey()
     for (int i = 0; i < WARM_UP_OPS + PERF_OPS; ++i) {
         int64_t version = 0;
         int64_t revision = 0;
-        Status status = fixture.Store().Put("/perf/delete/" + std::to_string(i), "v", 0, 0, version, revision);
+        Status status = fixture.Store().Put("/perf/delete/" + std::to_string(i), "v", 0, COORDINATOR_NO_VERSION_CHECK,
+                                            version, revision);
         EXPECT_TRUE(status.IsOk()) << status.ToString();
         if (status.IsError()) {
             return PerfStats{ "DeleteSingleKey", 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0 };

@@ -32,6 +32,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/util/container_util.h"
@@ -84,12 +85,11 @@ Status HashRing::InitMasterAddress()
     if (!FLAGS_master_address.empty()) {
         return Status::OK();
     }
-    // ETCD_MASTER_ADDRESS_TABLE was created in ETCD cluster manager.
-    Status status = clusterStore_->CAS(ETCD_MASTER_ADDRESS_TABLE, MASTER_ADDRESS_KEY, "", workerAddr_);
+    Status status = clusterStore_->CAS(MASTER_ADDRESS_TABLE, MASTER_ADDRESS_KEY, "", workerAddr_);
     if (status.IsError()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            clusterStore_->Get(ETCD_MASTER_ADDRESS_TABLE, MASTER_ADDRESS_KEY, FLAGS_master_address),
-            "Failed to get master address from etcd, and cas error:" + status.ToString());
+            clusterStore_->Get(MASTER_ADDRESS_TABLE, MASTER_ADDRESS_KEY, FLAGS_master_address),
+            "Failed to get master address from store, and cas error:" + status.ToString());
     } else {
         FLAGS_master_address = workerAddr_;
     }
@@ -160,7 +160,7 @@ Status HashRing::InitWithEtcd()
     std::string oldVersionRingVal;
     TryGetOldRing(oldVersionRingVal);
     RangeSearchResult res;
-    while (status = clusterStore_->CAS(ETCD_RING_PREFIX, "",
+    while (status = clusterStore_->CAS(HASHRING_TABLE, "",
                                        std::bind(&HashRing::InitRing, this, std::placeholders::_1,
                                                  std::placeholders::_2, std::placeholders::_3, oldVersionRingVal),
                                        res),
@@ -174,7 +174,7 @@ Status HashRing::InitWithEtcd()
 
     // Use metastore_address if specified, otherwise use etcd_address
     const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
-    (void)clusterStore_->Delete(ETCD_RING_PREFIX, backendAddress);
+    (void)clusterStore_->Delete(HASHRING_TABLE, backendAddress);
     // reset the state for centralized master scenario
     // In the centralized master scenario, we don't use the hash ring, but we still need to set uuid to etcd to
     // distinguish the startup state like what we do in HashRing::InitRing above. This state will be used in etcd
@@ -213,7 +213,7 @@ void HashRing::TryGetOldRing(std::string &oldVersionRingVal)
     // Use metastore_address if specified, otherwise use etcd_address
     const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
     while (!exitFlag_) {
-        auto status = clusterStore_->Get(ETCD_RING_PREFIX, backendAddress, oldVersionRingVal);
+        auto status = clusterStore_->Get(HASHRING_TABLE, backendAddress, oldVersionRingVal);
         if (status.GetCode() == K_NOT_FOUND || status.IsOk()) {
             break;
         } else {
@@ -323,7 +323,7 @@ void HashRing::TryFirstInit()
     // first init, generate all hash tokens.
     VLOG(LOG_LEVEL) << "Trying to generate hash tokens.";
     auto status = clusterStore_->CAS(
-        ETCD_RING_PREFIX, "",
+        HASHRING_TABLE, "",
         [this](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
             HashRingPb oldRing;
             if (!oldRing.ParseFromString(oldValue)) {
@@ -429,7 +429,7 @@ void HashRing::GenerateVoluntaryScaleDownChangingInfo()
         newValue = std::make_unique<std::string>(oldRing.SerializeAsString());
         return Status::OK();
     };
-    HASH_RING_LOG_IF_ERROR(clusterStore_->CAS(ETCD_RING_PREFIX, "", funcHandler), " generate voluntary info failed");
+    HASH_RING_LOG_IF_ERROR(clusterStore_->CAS(HASHRING_TABLE, "", funcHandler), " generate voluntary info failed");
     return;
 }
 
@@ -601,7 +601,7 @@ Status HashRing::AddNode(const HashRingPb &currRing)
     }
     RangeSearchResult res;
     RETURN_IF_NOT_OK(clusterStore_->CAS(
-        ETCD_RING_PREFIX, "",
+        HASHRING_TABLE, "",
         [&newRing, &currRing](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
             HashRingPb oldRing;
             if (!oldRing.ParseFromString(oldValue)) {
@@ -1519,7 +1519,7 @@ Status HashRing::RemoveWorker(const std::string &workerAddr, const std::unordere
     VLOG(1) << "Try to write the scale down task of " << workerAddr << " into etcd";
     RangeSearchResult res;
     auto ret = clusterStore_->CAS(
-        ETCD_RING_PREFIX, "",
+        HASHRING_TABLE, "",
         [this, &workerAddr](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
             HashRingPb currRing;
             if (!currRing.ParseFromString(oldValue)) {
@@ -1789,7 +1789,7 @@ Status HashRing::VoluntaryScaleDown()
         return Status::OK();
     };
 
-    return clusterStore_->CAS(ETCD_RING_PREFIX, "", funcHandler);
+    return clusterStore_->CAS(HASHRING_TABLE, "", funcHandler);
 }
 
 bool HashRing::EnableAutoDelDeadNode() const

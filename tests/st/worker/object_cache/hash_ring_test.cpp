@@ -25,6 +25,8 @@
 #include <thread>
 
 #include "common.h"
+#include "coordinator_cluster_store_mock.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/container_util.h"
@@ -32,6 +34,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/worker_cli.h"
@@ -235,9 +238,9 @@ void HashRingTest::InitTestEtcdInstance()
     LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
     db_ = std::make_unique<EtcdStore>(etcdAddress);
     if ((db_ != nullptr) && (db_->Init().IsOk())) {
-        db_->DropTable(ETCD_RING_PREFIX);
+        db_->DropTable(HASHRING_TABLE);
         // We don't check rc here. If table to drop does not exist, it's fine.
-        (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+        (void)db_->CreateTable(HASHRING_TABLE, HASHRING_TABLE);
     }
 }
 
@@ -246,7 +249,7 @@ void HashRingTest::PutRingToEtcd(const std::string &jsonRing)
     HashRingPb hashRing;
     auto rc = google::protobuf::util::JsonStringToMessage(jsonRing, &hashRing);
     ASSERT_TRUE(rc.ok()) << rc.ToString();
-    ASSERT_EQ(db_->Put(ETCD_RING_PREFIX, "", hashRing.SerializeAsString()), Status::OK());
+    ASSERT_EQ(db_->Put(HASHRING_TABLE, "", hashRing.SerializeAsString()), Status::OK());
 }
 
 void HashRingTest::CheckRingInEtcd(const std::string &jsonRing, int timeoutMs)
@@ -259,7 +262,7 @@ void HashRingTest::CheckRingInEtcd(const std::string &jsonRing, int timeoutMs)
     HashRingPb currRing;
     while (timer.ElapsedMilliSecond() < timeoutMs) {
         std::string ringStr;
-        (void)db_->Get(ETCD_RING_PREFIX, "", ringStr);
+        (void)db_->Get(HASHRING_TABLE, "", ringStr);
         if (!currRing.ParseFromString(ringStr)) {
             continue;
         }
@@ -511,7 +514,7 @@ TEST_F(HashRingTest, InitInDifferentState)
     InsertWorker(ringPb, "127.0.0.1:22746",
                  MakeWorkerPb({ 196852666, 554766608, 912680549, 1270594490 }, WorkerPb::JOINING));
     InsertWorker(ringPb, "127.0.0.1:33333", MakeWorkerPb({}, WorkerPb::INITIAL));
-    ASSERT_EQ(db_->Put(ETCD_RING_PREFIX, "", ringPb.SerializeAsString()), Status::OK());
+    ASSERT_EQ(db_->Put(HASHRING_TABLE, "", ringPb.SerializeAsString()), Status::OK());
 
     HostPort master;
     auto activeRestartRing = ConstructAndGetRing("127.0.0.1:42753");
@@ -620,17 +623,17 @@ TEST_F(HashRingTest, RestartDonotModify)
     InsertWorker(ringPb, "127.0.0.1:0", MakeWorkerPb({ 357913941, 1431655764, 2505397587, 3579139410 }));
     InsertWorker(ringPb, "127.0.0.1:1", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
     InsertWorker(ringPb, "127.0.0.1:2", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 4294967292 }));
-    DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ringPb.SerializeAsString()));
+    DS_ASSERT_OK(db_->Put(HASHRING_TABLE, "", ringPb.SerializeAsString()));
 
     RangeSearchResult oldRes;
-    DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", oldRes));
+    DS_ASSERT_OK(db_->Get(HASHRING_TABLE, "", oldRes));
 
     constexpr uint32_t workerNum = 3;
     InitRing(workerNum);
     CheckAllRunning();
 
     RangeSearchResult newRes;
-    DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", newRes));
+    DS_ASSERT_OK(db_->Get(HASHRING_TABLE, "", newRes));
     ASSERT_EQ(oldRes.modRevision, newRes.modRevision);
 }
 
@@ -968,7 +971,7 @@ TEST_F(HashRingTest, CasRetry)
     while (timer.ElapsedMilliSecond() < 10000) {  // timeout is 10000 ms
         std::string ringStr;
         std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 200ms
-        (void)db_->Get(ETCD_RING_PREFIX, "", ringStr);
+        (void)db_->Get(HASHRING_TABLE, "", ringStr);
         if (!ring.ParseFromString(ringStr)) {
             continue;
         }
@@ -999,7 +1002,7 @@ TEST_F(HashRingTest, HashRingToJsonFile)
     }
     ring.mutable_workers()->insert({ "127.0.0.1:9999", workerPb });
     ring.set_cluster_has_init(true);
-    DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ring.SerializeAsString()));
+    DS_ASSERT_OK(db_->Put(HASHRING_TABLE, "", ring.SerializeAsString()));
     auto ringPath = GetTestCaseDataDir() + "/ring.json";
     DS_ASSERT_OK(cli::SaveHashRingToFile(ringPath));
     std::string jsonStr;
@@ -1069,11 +1072,428 @@ TEST_F(HashRingTest, LoadHashRingFromJsonFile)
     DS_ASSERT_OK(cli::UpdateHashRingFromFile(ringPath));
     HashRingPb ring;
     std::string ringRaw;
-    DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", ringRaw));
+    DS_ASSERT_OK(db_->Get(HASHRING_TABLE, "", ringRaw));
     ASSERT_TRUE(ring.ParseFromString(ringRaw));
     const size_t workerCount = 3;
     ASSERT_EQ(ring.workers_size(), workerCount);
     ASSERT_EQ(ring.add_node_info_size(), 1);
+}
+
+class CoordinatorHashRingTest : public ExternalClusterTest {
+protected:
+    CoordinatorHashRingTest() = default;
+
+    ~CoordinatorHashRingTest() = default;
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 0;
+        opts.numMasters = 0;
+        opts.numWorkers = 0;
+        FLAGS_v = 1;
+        FLAGS_add_node_wait_time_s = DEFAULT_ADD_NODE_WAIT_TIME_S;
+    }
+
+    void SetUp() override
+    {
+        ExternalClusterTest::SetUp();
+        FLAGS_etcd_address = "coordinator_mock";
+        coordinatorProxy_ = std::make_unique<CoordinatorServiceProxyMock>();
+    }
+
+    void TearDown() override
+    {
+        exit_ = true;
+        for (auto &future : futures_) {
+            if (future.valid()) {
+                (void)future.get();
+            }
+        }
+        futures_.clear();
+        for (auto &cm : clusterManagers_) {
+            if (cm) {
+                cm->Shutdown();
+                cm.reset();
+            }
+        }
+        if (coordinatorProxy_) {
+            for (auto &store : clusterStores_) {
+                if (store) {
+                    coordinatorProxy_->UnregisterWatcherHandler(store->GetWatcherAddr());
+                }
+            }
+        }
+        clusterStores_.clear();
+        threadPool_.reset();
+        coordinatorProxy_.reset();
+        ExternalClusterTest::TearDown();
+    }
+
+    void RegisterCoordinatorWatcher(topology::CoordinationBackend *store)
+    {
+        coordinatorProxy_->RegisterWatcherHandler(
+            store->GetWatcherAddr(),
+            [store](topology::CoordinationEvent &&event) { store->HandleWatchEvent(std::move(event)); });
+    }
+
+    void InitRing(uint32_t workerNum)
+    {
+        rings_.resize(workerNum);
+        workerIds_.resize(workerNum);
+        clusterStores_.resize(workerNum);
+        threadPool_ = std::make_unique<ThreadPool>(workerNum);
+        for (uint32_t i = 0; i < workerNum; i++) {
+            HostPort addr;
+            addr.ParseString("127.0.0.1:" + std::to_string(i));
+            workerIds_[i] = addr.ToString();
+            clusterStores_[i] =
+                std::make_unique<topology::CoordinationBackend>(coordinatorProxy_.get(), addr.ToString());
+            RegisterCoordinatorWatcher(clusterStores_[i].get());
+            clusterManagers_.emplace_back(
+                std::make_unique<ClusterManager>(addr, addr, clusterStores_[i].get(), nullptr));
+            rings_[i] = static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing());
+            futures_.emplace_back(threadPool_->Submit([this, i]() {
+                ClusterInfo clusterInfo;
+                RETURN_IF_NOT_OK(ConstructClusterInfoViaCoordinator(clusterStores_[i].get(), clusterInfo));
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManagers_[i]->Init(clusterInfo), "coordinator cm init failed.");
+                clusterManagers_[i]->SetWorkerReady();
+                while (!this->rings_[i]->IsRunning() && !this->exit_.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+                }
+                return Status::OK();
+            }));
+        }
+    }
+
+    TestHashRing *ConstructAndGetRing(const std::string &addrStr)
+    {
+        HostPort addr;
+        addr.ParseString(addrStr);
+        clusterStores_.emplace_back(
+            std::make_unique<topology::CoordinationBackend>(coordinatorProxy_.get(), addr.ToString()));
+        RegisterCoordinatorWatcher(clusterStores_.back().get());
+        clusterManagers_.emplace_back(
+            std::make_unique<ClusterManager>(addr, addr, clusterStores_.back().get(), nullptr));
+        rings_.emplace_back(static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing()));
+        ClusterInfo clusterInfo;
+        DS_EXPECT_OK(ConstructClusterInfoViaCoordinator(clusterStores_.back().get(), clusterInfo));
+        DS_EXPECT_OK(clusterManagers_.back()->Init(clusterInfo));
+        clusterManagers_.back()->SetWorkerReady();
+        return static_cast<TestHashRing *>(clusterManagers_.back()->GetHashRing());
+    }
+
+    void CheckAllRunning()
+    {
+        for (auto &future : futures_) {
+            auto status = future.get();
+            EXPECT_EQ(status, Status::OK());
+        }
+        futures_.clear();
+    }
+
+    void CheckAllRunningAndTokens(const std::vector<uint32_t> &expectTokens)
+    {
+        CheckAllRunning();
+        for (auto ring : rings_) {
+            ASSERT_TRUE(ring->IsRunning());
+            std::vector<uint32_t> outTokens = ring->GetHashTokens();
+            EXPECT_EQ(outTokens, expectTokens);
+        }
+    }
+
+    void WaitAllRingsConverged(size_t expectTokenNum, int timeoutMs)
+    {
+        Timer timer;
+        while (timer.ElapsedMilliSecond() < timeoutMs) {
+            bool allConverged = true;
+            for (auto ring : rings_) {
+                if (ring == nullptr || ring->GetHashTokens().size() != expectTokenNum) {
+                    allConverged = false;
+                    break;
+                }
+            }
+            if (allConverged) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+        }
+        ASSERT_TRUE(false) << "Coordinator hash rings did not converge to " << expectTokenNum << " tokens.";
+    }
+
+    void CheckRange(const std::vector<std::vector<Range>> &workerRange)
+    {
+        for (size_t i = 0; i < workerRange.size(); i++) {
+            for (size_t j = 0; j < workerRange[i].size(); j++) {
+                int start = workerRange[i][j].start;
+                int end = workerRange[i][j].end;
+                std::string &workerId = workerIds_[i];
+                auto &ring = rings_[i];
+                std::string addr;
+                DS_ASSERT_OK(ring->GetPrimaryWorkerAddr(start, addr));
+                EXPECT_EQ(addr, workerId);
+                DS_ASSERT_OK(ring->GetPrimaryWorkerAddr(end - 1, addr));
+                EXPECT_EQ(addr, workerId);
+                if (end < std::numeric_limits<int>::max()) {
+                    DS_ASSERT_OK(ring->GetPrimaryWorkerAddr(end, addr));
+                    EXPECT_NE(addr, workerId);
+                }
+            }
+        }
+    }
+
+    void RestartRing(int workerIndex)
+    {
+        CHECK_LT(workerIndex, static_cast<int>(rings_.size()));
+        CHECK_EQ(rings_.size(), workerIds_.size());
+        rings_[workerIndex] = nullptr;
+        clusterManagers_[workerIndex].reset();
+        if (clusterStores_[workerIndex] != nullptr) {
+            coordinatorProxy_->UnregisterWatcherHandler(clusterStores_[workerIndex]->GetWatcherAddr());
+        }
+        clusterStores_[workerIndex].reset();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+
+        HostPort addr;
+        addr.ParseString("127.0.0.1:" + std::to_string(workerIndex));
+        clusterStores_[workerIndex] =
+            std::make_unique<topology::CoordinationBackend>(coordinatorProxy_.get(), addr.ToString());
+        RegisterCoordinatorWatcher(clusterStores_[workerIndex].get());
+        clusterManagers_[workerIndex] =
+            std::make_unique<ClusterManager>(addr, addr, clusterStores_[workerIndex].get(), nullptr);
+        ClusterInfo clusterInfo;
+        DS_ASSERT_OK(ConstructClusterInfoViaCoordinator(clusterStores_[workerIndex].get(), clusterInfo));
+        DS_ASSERT_OK(clusterManagers_[workerIndex]->Init(clusterInfo));
+        clusterManagers_[workerIndex]->SetWorkerReady();
+        rings_[workerIndex] = static_cast<TestHashRing *>(clusterManagers_[workerIndex]->GetHashRing());
+        futures_.emplace_back(threadPool_->Submit([this, workerIndex]() {
+            while (!this->rings_[workerIndex]->IsRunning() && !this->exit_.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+            }
+            return Status::OK();
+        }));
+    }
+
+    void PutRing(const HashRingPb &ringPb)
+    {
+        const std::string ringData = ringPb.SerializeAsString();
+        int64_t version = 0;
+        int64_t revision = 0;
+        DS_ASSERT_OK(coordinatorProxy_->Put(std::string(HASHRING_TABLE) + "/", ringData, 0,
+                                            COORDINATOR_NO_VERSION_CHECK, version, revision));
+    }
+
+    void PutRingToCoordinator(const std::string &jsonRing)
+    {
+        HashRingPb hashRing;
+        auto rc = google::protobuf::util::JsonStringToMessage(jsonRing, &hashRing);
+        ASSERT_TRUE(rc.ok()) << rc.ToString();
+        PutRing(hashRing);
+    }
+
+    void CheckRingInCoordinator(const std::string &jsonRing, int timeoutMs)
+    {
+        HashRingPb hashRing;
+        auto rc = google::protobuf::util::JsonStringToMessage(jsonRing, &hashRing);
+        ASSERT_TRUE(rc.ok()) << rc.ToString();
+
+        topology::CoordinationBackend store(coordinatorProxy_.get(), "127.0.0.1:0");
+        Timer timer;
+        HashRingPb currRing;
+        while (timer.ElapsedMilliSecond() < timeoutMs) {
+            std::string ringStr;
+            (void)store.Get(HASHRING_TABLE, "", ringStr);
+            if (!currRing.ParseFromString(ringStr)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            if (google::protobuf::util::MessageDifferencer::Equals(hashRing, currRing)) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        ASSERT_TRUE(false) << "The ring in coordinator is not as expected in " << timeoutMs << "ms."
+                           << "hashring:" << currRing.DebugString();
+    }
+
+    std::unique_ptr<CoordinatorServiceProxyMock> coordinatorProxy_;
+    std::vector<std::unique_ptr<ClusterManager>> clusterManagers_;
+    std::vector<std::unique_ptr<topology::CoordinationBackend>> clusterStores_;
+    std::unique_ptr<ThreadPool> threadPool_{ nullptr };
+    std::vector<std::future<Status>> futures_;
+    std::vector<TestHashRing *> rings_;
+    std::vector<std::string> workerIds_;
+    std::atomic<bool> exit_{ false };
+    std::vector<uint32_t> threeWorkerFourVirtualNodeRingTokens_{ 357913941,  715827882,  1073741823, 1431655764,
+                                                                 1789569705, 2147483646, 2505397587, 2863311528,
+                                                                 3221225469, 3579139410, 3937053351, 4294967292 };
+    std::vector<std::vector<Range>> threeWorkerFourVirtualNodeWorkerRange_{ { { 4294967292, 357913941 },
+                                                                              { 1073741823, 1431655764 },
+                                                                              { 2147483646, 2505397587 },
+                                                                              { 3221225469, 3579139410 } },
+                                                                            { { 357913941, 715827882 },
+                                                                              { 1431655764, 1789569705 },
+                                                                              { 2505397587, 2863311528 },
+                                                                              { 3579139410, 3937053351 } },
+                                                                            { { 715827882, 1073741823 },
+                                                                              { 1789569705, 2147483646 },
+                                                                              { 2863311528, 3221225469 },
+                                                                              { 3937053351, 4294967292 } } };
+};
+
+TEST_F(CoordinatorHashRingTest, SetInitWorkerNumBeforeStart)
+{
+    InitRing(HASH_RING_NUM_THREE);
+    CheckAllRunningAndTokens(threeWorkerFourVirtualNodeRingTokens_);
+    CheckRange(threeWorkerFourVirtualNodeWorkerRange_);
+}
+
+TEST_F(CoordinatorHashRingTest, WillNotChangeWhenRestartWorker)
+{
+    InitRing(HASH_RING_NUM_THREE);
+    CheckAllRunningAndTokens(threeWorkerFourVirtualNodeRingTokens_);
+    std::vector<std::string> beforeRestart;
+    for (auto ring : rings_) {
+        beforeRestart.emplace_back(ring->GetLocalWorkerUuid());
+    }
+    RestartRing(0);
+    CheckAllRunningAndTokens(threeWorkerFourVirtualNodeRingTokens_);
+    for (int i = 0; i < HASH_RING_NUM_THREE; i++) {
+        ASSERT_EQ(rings_[i]->GetLocalWorkerUuid(), beforeRestart[i]);
+    }
+}
+
+TEST_F(CoordinatorHashRingTest, AddNodeToWorkingRing)
+{
+    FLAGS_add_node_wait_time_s = 0;
+    datasystem::inject::Set("HashRing.SubmitScaleUpTask.skip", "return(1)");
+
+    InitRing(HASH_RING_NUM_TWO);
+    CheckAllRunning();
+
+    auto newWorker = "127.0.0.1:4";
+    TestHashRing *ring = ConstructAndGetRing(newWorker);
+    auto future = threadPool_->Submit([this, ring]() {
+        while (!ring->IsRunning() && !this->exit_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(CHECK_INTERVAL_MS));
+        }
+        return Status::OK();
+    });
+    ASSERT_EQ(future.get(), Status::OK());
+    WaitAllRingsConverged(12U, 10'000);
+
+    EXPECT_EQ(rings_[0]->GetHashTokens(), ring->GetHashTokens());
+    EXPECT_EQ(rings_[0]->GetHashTokens().size(), 12U);
+}
+
+TEST_F(CoordinatorHashRingTest, InitInDifferentState)
+{
+    HashRingPb ringPb;
+    ringPb.set_cluster_id("");
+    ringPb.set_cluster_has_init(true);
+    InsertWorker(ringPb, "127.0.0.1:19562", MakeWorkerPb({ 357913941, 1431655764, 2505397587, 3579139410 }));
+    InsertWorker(ringPb, "127.0.0.1:25428", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
+    InsertWorker(ringPb, "127.0.0.1:42753", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 3221225469 }));
+    InsertWorker(ringPb, "127.0.0.1:22746",
+                 MakeWorkerPb({ 196852666, 554766608, 912680549, 1270594490 }, WorkerPb::JOINING));
+    InsertWorker(ringPb, "127.0.0.1:33333", MakeWorkerPb({}, WorkerPb::INITIAL));
+    PutRing(ringPb);
+
+    HostPort master;
+    auto activeRestartRing = ConstructAndGetRing("127.0.0.1:42753");
+    ASSERT_TRUE(activeRestartRing->IsRunning());
+    DS_ASSERT_OK(activeRestartRing->GetMasterAddr("redirect_test_4", master));
+    ASSERT_EQ(master.ToString(), "127.0.0.1:19562");
+
+    auto newRing = ConstructAndGetRing("127.0.0.1:44444");
+    ASSERT_FALSE(newRing->IsRunning());
+    ASSERT_TRUE(newRing->IsWorkable());
+    DS_ASSERT_OK(newRing->GetMasterAddr("redirect_test_4", master));
+    ASSERT_EQ(master.ToString(), "127.0.0.1:19562");
+
+    auto initRestartRing = ConstructAndGetRing("127.0.0.1:33333");
+    ASSERT_FALSE(initRestartRing->IsRunning());
+    ASSERT_TRUE(initRestartRing->IsWorkable());
+    DS_ASSERT_OK(initRestartRing->GetMasterAddr("redirect_test_4", master));
+    ASSERT_EQ(master.ToString(), "127.0.0.1:19562");
+
+    auto joiningRestartRing = ConstructAndGetRing("127.0.0.1:22746");
+    ASSERT_FALSE(joiningRestartRing->IsRunning());
+    ASSERT_TRUE(joiningRestartRing->IsWorkable());
+    DS_ASSERT_OK(joiningRestartRing->GetMasterAddr("redirect_test_4", master));
+    ASSERT_EQ(master.ToString(), "127.0.0.1:19562");
+}
+
+TEST_F(CoordinatorHashRingTest, GetPrimaryWorker)
+{
+    InitRing(HASH_RING_NUM_THREE);
+    inject::Set("HashRing.UpdateRing.sleep", "sleep(2000)");
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    std::string userDataKey{ "userDataKey" };
+    CheckAllRunning();
+    for (auto &ring : rings_) {
+        std::string outWorkerAddr;
+        ring->GetPrimaryWorkerAddr(userDataKey, outWorkerAddr);
+        EXPECT_EQ(outWorkerAddr, "127.0.0.1:0");
+    }
+}
+
+TEST_F(CoordinatorHashRingTest, LEVEL1_10Worker)
+{
+    constexpr uint32_t workerNum = 10;
+    InitRing(workerNum);
+    CheckAllRunning();
+}
+
+TEST_F(CoordinatorHashRingTest, RestartDonotModify)
+{
+    HashRingPb ringPb;
+    ringPb.set_cluster_has_init(true);
+    InsertWorker(ringPb, "127.0.0.1:0", MakeWorkerPb({ 357913941, 1431655764, 2505397587, 3579139410 }));
+    InsertWorker(ringPb, "127.0.0.1:1", MakeWorkerPb({ 715827882, 1789569705, 2863311528, 3937053351 }));
+    InsertWorker(ringPb, "127.0.0.1:2", MakeWorkerPb({ 1073741823, 2147483646, 3221225469, 4294967292 }));
+    PutRing(ringPb);
+
+    topology::CoordinationBackend store(coordinatorProxy_.get(), "127.0.0.1:0");
+    RangeSearchResult oldRes;
+    DS_ASSERT_OK(store.Get(HASHRING_TABLE, "", oldRes));
+
+    InitRing(HASH_RING_NUM_THREE);
+    CheckAllRunning();
+
+    RangeSearchResult newRes;
+    DS_ASSERT_OK(store.Get(HASHRING_TABLE, "", newRes));
+    ASSERT_EQ(oldRes.modRevision, newRes.modRevision);
+}
+
+TEST_F(CoordinatorHashRingTest, StartRingDuringScalingDown)
+{
+    FLAGS_add_node_wait_time_s = 0;
+    std::string hashRingJsonStr = R"({
+        "clusterHasInit": true,
+        "workers": {
+            "127.0.0.1:0": {"hashTokens": [90000, 270000], "workerUuid": "dXVpZDA=", "state": "ACTIVE"},
+            "127.0.0.1:1": {"hashTokens": [60000, 120000], "workerUuid": "dXVpZDE=", "state": "ACTIVE"}
+        },
+        "delNodeInfo": {
+            "127.0.0.1:0": {"changedRanges": [{"workerId": "not-exist-worker", "from": 120000, "end": 180000}]}
+        }
+    })";
+    PutRingToCoordinator(hashRingJsonStr);
+    InitRing(HASH_RING_NUM_TWO);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    ASSERT_FALSE(rings_[0]->IsRunning());
+
+    hashRingJsonStr = R"({
+        "clusterHasInit": true,
+        "workers": {
+            "127.0.0.1:1": {"hashTokens": [90000, 270000], "workerUuid": "dXVpZDA=", "state": "ACTIVE"}
+        }
+    })";
+    PutRingToCoordinator(hashRingJsonStr);
+
+    CheckAllRunning();
+    ASSERT_TRUE(Validator::ValidateUuid("WorkerUuid", rings_[0]->GetLocalWorkerUuid()));
 }
 
 }  // namespace st

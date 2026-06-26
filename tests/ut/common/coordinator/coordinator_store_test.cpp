@@ -254,6 +254,108 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreSupportsPutRangeCasAndDelete)
     ASSERT_EQ(events[2]->type, WatchEvent::Type::DELETE);
 }
 
+TEST_F(CoordinatorStoreTest, MemoryKvStorePutWithZeroVersionRequiresMissingKey)
+{
+    MemoryKvStore store;
+    std::vector<std::shared_ptr<WatchEvent>> events;
+    store.SetMutationCallback([&events](std::shared_ptr<WatchEvent> event) { events.push_back(std::move(event)); });
+
+    int64_t version = 0;
+    int64_t revision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/cas/create", "1", 0, 0, version, revision, ttlGeneration));
+    ASSERT_EQ(version, 1);
+
+    int64_t overwriteVersion = 0;
+    int64_t overwriteRevision = 0;
+    uint64_t overwriteTtlGeneration = 0;
+    auto status = store.Put("/cas/create", "2", 0, 0, overwriteVersion, overwriteRevision, overwriteTtlGeneration);
+    ASSERT_EQ(status.GetCode(), K_INVALID);
+
+    std::vector<KeyValueEntry> kvs;
+    int64_t rangeRevision = 0;
+    store.Range("/cas/create", "", kvs, rangeRevision);
+    ASSERT_EQ(kvs.size(), 1ul);
+    ASSERT_EQ(kvs[0].value, "1");
+    ASSERT_EQ(events.size(), 1ul);
+    ASSERT_EQ(events[0]->type, WatchEvent::Type::PUT);
+}
+
+TEST_F(CoordinatorStoreTest, MemoryKvStorePutWithoutVersionCheckCreatesAndOverwrites)
+{
+    MemoryKvStore store;
+
+    int64_t version = 0;
+    int64_t revision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/put/no-check", "1", 0, COORDINATOR_NO_VERSION_CHECK, version, revision, ttlGeneration));
+    ASSERT_EQ(version, 1);
+
+    DS_ASSERT_OK(store.Put("/put/no-check", "2", 0, COORDINATOR_NO_VERSION_CHECK, version, revision, ttlGeneration));
+    ASSERT_EQ(version, 2);
+
+    std::vector<KeyValueEntry> kvs;
+    int64_t rangeRevision = 0;
+    store.Range("/put/no-check", "", kvs, rangeRevision);
+    ASSERT_EQ(kvs.size(), 1ul);
+    ASSERT_EQ(kvs[0].value, "2");
+}
+
+TEST_F(CoordinatorStoreTest, CoordinatorStorePutPropagatesExpectedVersionSemantics)
+{
+    int64_t version = 0;
+    int64_t revision = 0;
+    DS_ASSERT_OK(store_->Put("/coordinator/cas", "1", 0, 0, version, revision));
+    ASSERT_EQ(version, 1);
+
+    int64_t overwriteVersion = 0;
+    int64_t overwriteRevision = 0;
+    auto status = store_->Put("/coordinator/cas", "2", 0, 0, overwriteVersion, overwriteRevision);
+    ASSERT_EQ(status.GetCode(), K_INVALID);
+
+    DS_ASSERT_OK(store_->Put("/coordinator/cas", "2", 0, COORDINATOR_NO_VERSION_CHECK, version, revision));
+    ASSERT_EQ(version, 2);
+
+    std::vector<KeyValueEntry> kvs;
+    int64_t rangeRevision = 0;
+    DS_ASSERT_OK(store_->Range("/coordinator/cas", "", kvs, rangeRevision));
+    ASSERT_EQ(kvs.size(), 1ul);
+    ASSERT_EQ(kvs[0].value, "2");
+}
+
+TEST_F(CoordinatorStoreTest, CoordinatorStoreCreateIfAbsentAllowsOnlyOneConcurrentWriter)
+{
+    constexpr int THREAD_COUNT = 8;
+    std::atomic<int> successCount{ 0 };
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < THREAD_COUNT; ++i) {
+        threads.emplace_back([this, i, &successCount] {
+            int64_t version = 0;
+            int64_t revision = 0;
+            auto status = store_->Put("/coordinator/create-once", std::to_string(i), 0, 0, version, revision);
+            if (status.IsOk()) {
+                ASSERT_EQ(version, 1);
+                successCount.fetch_add(1);
+            } else {
+                ASSERT_EQ(status.GetCode(), K_INVALID);
+            }
+        });
+    }
+
+    for (auto &thread : threads) {
+        thread.join();
+    }
+
+    ASSERT_EQ(successCount.load(), 1);
+
+    std::vector<KeyValueEntry> kvs;
+    int64_t rangeRevision = 0;
+    DS_ASSERT_OK(store_->Range("/coordinator/create-once", "", kvs, rangeRevision));
+    ASSERT_EQ(kvs.size(), 1ul);
+    ASSERT_EQ(kvs[0].version, 1);
+}
+
 TEST_F(CoordinatorStoreTest, WatchRegistryMatchesSingleKeyAndRange)
 {
     WatchRegistry registry;
@@ -273,7 +375,7 @@ TEST_F(CoordinatorStoreTest, WatchRegistryMatchesSingleKeyAndRange)
     ASSERT_NE(std::find(ids.begin(), ids.end(), range), ids.end());
     ASSERT_EQ(std::find(ids.begin(), ids.end(), outside), ids.end());
 
-    DS_ASSERT_OK(registry.Cancel(single));
+    DS_ASSERT_OK(registry.Cancel(single, "single"));
     matched.clear();
     registry.MatchWatchers("/ring/1/key", matched);
     ASSERT_EQ(matched.size(), 1ul);
@@ -292,7 +394,7 @@ TEST_F(CoordinatorStoreTest, WatchRegistryHandlesGroupedRangeAndHighFrequencyCan
     }
 
     for (int i = 0; i < WATCHER_COUNT; i += 2) {
-        DS_ASSERT_OK(registry.Cancel(watchIds[i]));
+        DS_ASSERT_OK(registry.Cancel(watchIds[i], "addr" + std::to_string(i)));
     }
 
     std::vector<std::shared_ptr<WatcherEntry>> matched;
@@ -737,7 +839,7 @@ TEST_F(CoordinatorStoreTest, WatchRegistryHandlesGroupedSingleKeyAndHighFrequenc
     }
 
     for (int i = 0; i < WATCHER_COUNT; i += 2) {
-        DS_ASSERT_OK(registry.Cancel(watchIds[i]));
+        DS_ASSERT_OK(registry.Cancel(watchIds[i], "addr" + std::to_string(i)));
     }
 
     std::vector<std::shared_ptr<WatcherEntry>> matched;
@@ -785,7 +887,8 @@ TEST_F(CoordinatorStoreTest, TtlExpirationUsesRevisionToAvoidDeletingNewerValue)
 
     int64_t newRevision = 0;
     uint64_t newTtlGeneration = 0;
-    DS_ASSERT_OK(memStore->Put("/ttl/race", "new", 100, 0, version, newRevision, newTtlGeneration));
+    DS_ASSERT_OK(
+        memStore->Put("/ttl/race", "new", 100, COORDINATOR_NO_VERSION_CHECK, version, newRevision, newTtlGeneration));
     DS_ASSERT_OK(manager.Schedule("/ttl/race", 100, newRevision, newTtlGeneration));
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -1107,9 +1210,9 @@ TEST_F(CoordinatorStoreTest, ConcurrentWatchRegistrationAndEventsAreSafe)
     }
 
     std::vector<std::thread> cancelThreads;
-    for (auto watchId : watchIds) {
-        cancelThreads.emplace_back([this, watchId] {
-            DS_ASSERT_OK(registry_->Cancel(watchId));
+    for (int i = 0; i < WATCHER_COUNT; ++i) {
+        cancelThreads.emplace_back([this, watchId = watchIds[i], watcherAddr = "addr" + std::to_string(i)] {
+            DS_ASSERT_OK(registry_->Cancel(watchId, watcherAddr));
             dispatcher_->RemoveChannel(watchId);
         });
     }
@@ -1231,8 +1334,8 @@ TEST_F(CoordinatorStoreTest, WatchRegistryCancelUnknownReturnsErrorAndLastCancel
     WatchRegistry registry;
     int64_t watchId = registry.Register("/registry/key", "", "addr");
 
-    ASSERT_TRUE(registry.Cancel(watchId + 1).IsError());
-    DS_ASSERT_OK(registry.Cancel(watchId));
+    ASSERT_TRUE(registry.Cancel(watchId + 1, "addr").IsError());
+    DS_ASSERT_OK(registry.Cancel(watchId, "addr"));
 
     std::vector<std::shared_ptr<WatcherEntry>> matched;
     registry.MatchWatchers("/registry/key", matched);

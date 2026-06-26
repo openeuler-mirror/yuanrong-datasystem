@@ -35,6 +35,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -272,7 +273,7 @@ bool ClusterManager::IsPreLeaving(const std::string &workerAddr)
 Status ClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs)
 {
     std::vector<std::pair<std::string, std::string>> activeNodes;
-    RETURN_IF_NOT_OK(clusterStore_->GetAll(ETCD_CLUSTER_TABLE, activeNodes));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(CLUSTER_TABLE, activeNodes));
     nodeAddrs.clear();
     nodeAddrs.resize(activeNodes.size());
     for (size_t i = 0; i < activeNodes.size(); ++i) {
@@ -300,8 +301,8 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
         "invalid heartbeat_interval_ms.");
 
     // 2. Get prefix, otherwise the later background thread will have data race on these strings.
-    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(ETCD_RING_PREFIX, ringPrefix_));
-    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(ETCD_CLUSTER_TABLE, clusterPrefix_));
+    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(HASHRING_TABLE, ringPrefix_));
+    RETURN_IF_NOT_OK(clusterStore_->GetStorePrefix(CLUSTER_TABLE, clusterPrefix_));
 
     // 3. Launch the background thread, as the hashring relies on it to become RUNNING. We want to start hashring
     // as early as possible. Also, cluster manager needs this thread to to add nodes to its node table.
@@ -315,7 +316,7 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
     // The watch thread will enqueue the events in priority queue and the background thread will fetch the events
     // and handle them.
     RETURN_IF_NOT_OK(clusterStore_->WatchEvents(
-        { { ETCD_RING_PREFIX, "", clusterInfo.revision }, { ETCD_CLUSTER_TABLE, "", clusterInfo.revision } }));
+        { { HASHRING_TABLE, "", clusterInfo.revision }, { CLUSTER_TABLE, "", clusterInfo.revision } }));
     // 5. Since the background and watch threads are up, it is time to initialize the hashring.
     if (clusterInfo.etcdAvailable) {
         RETURN_IF_NOT_OK(hashRing_->InitWithEtcd());
@@ -335,8 +336,8 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
 
     bool isRestart = false;
     RETURN_IF_NOT_OK(IsRestart(isRestart));
-    RETURN_IF_NOT_OK(clusterStore_->InitKeepAlive(ETCD_CLUSTER_TABLE, workerAddress_.ToString(), isRestart,
-                                                  isEtcdAvailableWhenStart_));
+    RETURN_IF_NOT_OK(
+        clusterStore_->InitKeepAlive(CLUSTER_TABLE, workerAddress_.ToString(), isRestart, isEtcdAvailableWhenStart_));
 
     // Display the final list of nodes that were set up into the log
     LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
@@ -581,9 +582,9 @@ void ClusterManager::EnqueEvent(topology::CoordinationEvent &&event)
     Timer timer;
     const int maxEnqueueTimeMs = 100;
     const int logEveryN = 30;
-    if (key.find(ETCD_CLUSTER_TABLE) != std::string::npos) {
+    if (key.find(clusterPrefix_) != std::string::npos) {
         rc = eventPq_->EmplaceBack(new CmEvent(std::move(event), PrefixType::CLUSTER));
-    } else if (key.find(ETCD_RING_PREFIX) != std::string::npos) {
+    } else if (key.find(ringPrefix_) != std::string::npos) {
         rc = eventPq_->EmplaceBack(new CmEvent(std::move(event), PrefixType::RING));
     } else {
         LOG(ERROR) << "Event of PrefixType::OTHER, no need to enqueue and handle it.";
@@ -680,7 +681,7 @@ Status ClusterManager::HandleClusterEvent(const topology::CoordinationEvent &eve
     }
 
     // Remove /TableName/ from key to get IP and port
-    nodeHostPortStr.erase(0, nodeHostPortStr.find(ETCD_CLUSTER_TABLE) + strlen(ETCD_CLUSTER_TABLE) + 1);
+    nodeHostPortStr.erase(0, nodeHostPortStr.find(clusterPrefix_) + clusterPrefix_.size() + 1);
     HostPort eventNodeKey;
     RETURN_IF_NOT_OK(eventNodeKey.ParseString(nodeHostPortStr));
     auto eventNode = std::make_unique<ClusterNode>(nodeTimestamp, additionEventType);
@@ -973,7 +974,7 @@ void ClusterManager::GetToBeCleanNodes(const std::unordered_map<std::string, std
         }
         // check the nodes that not found in hash ring
         RangeSearchResult res;
-        auto status = clusterStore_->Get(ETCD_CLUSTER_TABLE, orphanNode, res, timeoutMs);
+        auto status = clusterStore_->Get(CLUSTER_TABLE, orphanNode, res, timeoutMs);
 
         typename TbbNodeTable::const_accessor accessor;
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
@@ -1467,7 +1468,7 @@ std::set<std::string> ClusterManager::GetNodesInTable()
 void ClusterManager::CompleteNodeTableWithFakeNode()
 {
     // Assume that a cluster consists of nodeA, nodeB and nodeC. When the cluster restarts after node_timeout_s, the
-    // ETCD_CLUSTER_TABLE in etcd will be empty and SetupInitialClusterNodes cannot get any value.
+    // cluster table in the metadata store will be empty and SetupInitialClusterNodes cannot get any value.
     // If nodeC fails to be pulled up when cluster restarts, the cluster node table will miss nodeC. In this case, nodeC
     // is in hash ring but cannot be scaled down due to lack of the timeout event of nodeC triggered.
     // To solve it, we will complete the node table with fake event at first. If nodeC cannot be pulled up in time, we
@@ -1504,7 +1505,7 @@ Status ClusterManager::WaitNodeJoinToTable()
 {
     using namespace std::chrono;
     std::vector<std::pair<std::string, std::string>> localAzValue;
-    RETURN_IF_NOT_OK(clusterStore_->GetAll(ETCD_CLUSTER_TABLE, localAzValue));
+    RETURN_IF_NOT_OK(clusterStore_->GetAll(CLUSTER_TABLE, localAzValue));
     auto initClusterTableNum = localAzValue.size();
     LOG(INFO) << "Start waiting for nodes to join the table, expect nodes num: " << initClusterTableNum;
     auto start = GetSteadyClockTimeStampUs();
@@ -1749,17 +1750,16 @@ Status ClusterManager::GetHashRingWorkerNum(int &workerNum) const
 
 Status ClusterManager::CreateEtcdStoreTable(EtcdStore *etcdStore)
 {
-    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX), K_DUPLICATED);
-    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)),
-                            K_DUPLICATED);
-    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(ETCD_MASTER_ADDRESS_TABLE, ETCD_MASTER_ADDRESS_TABLE), K_DUPLICATED);
+    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(HASHRING_TABLE, HASHRING_TABLE), K_DUPLICATED);
+    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(CLUSTER_TABLE, "/" + std::string(CLUSTER_TABLE)), K_DUPLICATED);
+    RETURN_IF_NOT_OK_EXCEPT(etcdStore->CreateTable(MASTER_ADDRESS_TABLE, MASTER_ADDRESS_TABLE), K_DUPLICATED);
     return Status::OK();
 }
 
 Status ClusterManager::ConstructClusterInfoViaEtcd(EtcdStore *etcdStore, ClusterInfo &clusterInfo)
 {
     RETURN_IF_NOT_OK(CreateEtcdStoreTable(etcdStore));
-    RETURN_IF_NOT_OK(etcdStore->GetAll(ETCD_CLUSTER_TABLE, clusterInfo.workers, clusterInfo.revision));
+    RETURN_IF_NOT_OK(etcdStore->GetAll(CLUSTER_TABLE, clusterInfo.workers, clusterInfo.revision));
     return Status::OK();
 }
 

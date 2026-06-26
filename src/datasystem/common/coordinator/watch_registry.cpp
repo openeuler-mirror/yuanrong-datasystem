@@ -64,12 +64,15 @@ int64_t WatchRegistry::Register(const std::string &key, const std::string &range
     return watchId;
 }
 
-Status WatchRegistry::Cancel(int64_t watchId)
+Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
 {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     auto it = watchers_.find(watchId);
     if (it == watchers_.end()) {
         return Status(StatusCode::K_NOT_FOUND, "watch not found");
+    }
+    if (!watcherAddr.empty() && it->second->watcherAddr != watcherAddr) {
+        return Status(StatusCode::K_INVALID, "watcher address does not match watch ID");
     }
 
     it->second->active = false;

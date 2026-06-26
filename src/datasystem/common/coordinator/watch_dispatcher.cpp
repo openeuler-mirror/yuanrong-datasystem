@@ -324,7 +324,7 @@ WatchDispatcher::HandleResult WatchDispatcher::HandleChannelEvents(const std::sh
         return HandleResult::RETRY_LATER;
     }
     if (needReWatch) {
-        RemoveRewatchRequiredWatcher(channel->watchId);
+        RemoveRewatchRequiredWatcher(channel->watchId, channel->watcherAddr);
         return HandleResult::NONE;
     }
     {
@@ -340,13 +340,13 @@ WatchDispatcher::HandleResult WatchDispatcher::HandleChannelEvents(const std::sh
     return HandleResult::READY_AGAIN;
 }
 
-void WatchDispatcher::RemoveRewatchRequiredWatcher(int64_t watchId)
+void WatchDispatcher::RemoveRewatchRequiredWatcher(int64_t watchId, const std::string &watcherAddr)
 {
     if (watchRegistry_ != nullptr) {
-        Status status = watchRegistry_->Cancel(watchId);
+        Status status = watchRegistry_->Cancel(watchId, watcherAddr);
         if (status.IsError()) {
             LOG(WARNING) << "Failed to cancel rewatch-required watcher from registry, watchId=" << watchId
-                         << ", status=" << status.ToString();
+                         << ", watcherAddr=" << watcherAddr << ", status=" << status.ToString();
         }
     }
     RemoveChannel(watchId);

@@ -30,7 +30,11 @@ Status MemoryKvStore::Put(const std::string &key, const std::string &value, int6
         auto it = data_.find(key);
         bool exists = (it != data_.end());
 
-        if (expectedVersion != 0) {
+        if (expectedVersion == COORDINATOR_KEY_NOT_EXISTS_VERSION) {
+            if (exists) {
+                return Status(StatusCode::K_INVALID, "key already exists for CAS");
+            }
+        } else if (expectedVersion != COORDINATOR_NO_VERSION_CHECK) {
             if (!exists) {
                 return Status(StatusCode::K_NOT_FOUND, "key not found for CAS");
             }
