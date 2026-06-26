@@ -157,12 +157,14 @@ static int RunBenchmarkMode(Config &cfg) {
             if (elapsed >= maxDurationMs) break;
         }
 
-        auto roundStart = std::chrono::steady_clock::now();
         SLOG_INFO("Round " << round << " starting");
 
         ResultMsg setRes{};
         ResultMsg getRes{};
         ResultMsg delRes{};
+        double setPhaseMs = 0;
+        double getPhaseMs = 0;
+        double delPhaseMs = 0;
 
         if (isMixedMode) {
             // --- Mixed mode: concurrent set+get via dual child processes ---
@@ -183,7 +185,8 @@ static int RunBenchmarkMode(Config &cfg) {
                 }
             }
 
-            // Collect results
+            // Collect results — measure concurrent phase elapsed time
+            auto mixedStart = std::chrono::steady_clock::now();
             if (!RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("Set result failed (pipe error) in round " << round);
                 break;
@@ -194,52 +197,71 @@ static int RunBenchmarkMode(Config &cfg) {
                     break;
                 }
             }
+            auto mixedEnd = std::chrono::steady_clock::now();
+            double mixedMs = std::chrono::duration<double, std::milli>(mixedEnd - mixedStart).count();
+            setPhaseMs = mixedMs;
+            if (!skipGet) getPhaseMs = mixedMs;
 
             stats.totalSet += setRes.successCount;
             stats.totalGet += getRes.successCount;
         } else if (isMGetMode) {
             // --- MGet mode: sequential MSet -> MGet (matching GET_* pattern) ---
             // MSet phase (write data first)
+            auto msetStart = std::chrono::steady_clock::now();
             if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round, numSetThreads) ||
                 !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
                 break;
             }
+            auto msetEnd = std::chrono::steady_clock::now();
+            setPhaseMs = std::chrono::duration<double, std::milli>(msetEnd - msetStart).count();
             stats.totalSet += setRes.successCount;
 
             // MGet phase (read after write completes)
+            auto mgetStart = std::chrono::steady_clock::now();
             if (!SendCommand(children[getChildIdx], CMD_RUN_MGET, round, numGetThreads) ||
                 !RecvResult(children[getChildIdx], getRes)) {
                 SLOG_ERROR("MGet phase failed (pipe error) in round " << round);
                 break;
             }
+            auto mgetEnd = std::chrono::steady_clock::now();
+            getPhaseMs = std::chrono::duration<double, std::milli>(mgetEnd - mgetStart).count();
             stats.totalGet += getRes.successCount;
         } else if (isMSetMode) {
             // --- MSet mode: MSet only (write-only, no get phase) ---
+            auto msetStart = std::chrono::steady_clock::now();
             if (!SendCommand(children[setChildIdx], CMD_RUN_MSET, round) ||
                 !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("MSet phase failed (pipe error) in round " << round);
                 break;
             }
+            auto msetEnd = std::chrono::steady_clock::now();
+            setPhaseMs = std::chrono::duration<double, std::milli>(msetEnd - msetStart).count();
             stats.totalSet += setRes.successCount;
         } else {
             // --- Sequential mode: set -> get -> del ---
             // Set phase
+            auto setStart = std::chrono::steady_clock::now();
             if (!SendCommand(children[setChildIdx], CMD_RUN_SET, round) ||
                 !RecvResult(children[setChildIdx], setRes)) {
                 SLOG_ERROR("Set phase failed (pipe error) in round " << round);
                 break;
             }
+            auto setEnd = std::chrono::steady_clock::now();
+            setPhaseMs = std::chrono::duration<double, std::milli>(setEnd - setStart).count();
             stats.totalSet += setRes.successCount;
 
             // Get phase
             if (isGetMode) {
                 size_t getIdx = (getChildIdx != SIZE_MAX) ? getChildIdx : setChildIdx;
+                auto getStart = std::chrono::steady_clock::now();
                 if (!SendCommand(children[getIdx], CMD_RUN_GET, round) ||
                     !RecvResult(children[getIdx], getRes)) {
                     SLOG_ERROR("Get phase failed (pipe error) in round " << round);
                     break;
                 }
+                auto getEnd = std::chrono::steady_clock::now();
+                getPhaseMs = std::chrono::duration<double, std::milli>(getEnd - getStart).count();
                 stats.totalGet += getRes.successCount;
             }
         }
@@ -254,40 +276,48 @@ static int RunBenchmarkMode(Config &cfg) {
                 delRound = round - 1;  // delete previous round's keys
             }
             if (delRound >= startRound) {
+                auto delStart = std::chrono::steady_clock::now();
                 if (!SendCommand(children[delChildIdx], CMD_RUN_DEL, delRound) ||
                     !RecvResult(children[delChildIdx], delRes)) {
                     SLOG_ERROR("Del phase failed (pipe error) in round " << round);
                     break;
                 }
+                auto delEnd = std::chrono::steady_clock::now();
+                delPhaseMs = std::chrono::duration<double, std::milli>(delEnd - delStart).count();
                 stats.totalDel += delRes.successCount;
             }
         }
 
-        auto roundEnd = std::chrono::steady_clock::now();
-        double roundTotalMs = std::chrono::duration<double, std::milli>(roundEnd - roundStart).count();
+        double dataSizeBytes = static_cast<double>(dataSize);
 
         // Record set metrics
         {
-            double qps = roundTotalMs > 0 ? setRes.successCount * 1000.0 / roundTotalMs : 0;
-            benchMetrics.RecordPhase(round, "set", setRes.successCount,
-                setRes.avgMs, setRes.p50Ms, setRes.p90Ms, setRes.p99Ms,
-                setRes.maxMs, setRes.totalLatMs, qps);
+            double qps = setPhaseMs > 0 ? setRes.successCount * 1000.0 / setPhaseMs : 0;
+            double mbps = setPhaseMs > 0 ? (setRes.successCount * dataSizeBytes) / (setPhaseMs * 1024.0) : 0;
+            benchMetrics.RecordPhase(round, "set", setRes.successCount, setRes.failureCount,
+                setRes.avgMs, setRes.minMs, setRes.p50Ms, setRes.p90Ms, setRes.p99Ms,
+                setRes.p999Ms, setRes.p9999Ms, setRes.maxMs, setRes.totalLatMs,
+                setPhaseMs, qps, mbps);
         }
 
         // Record get metrics (mixed mode always has get; sequential only if isGetMode)
         if (isMixedMode || isGetMode) {
-            double qps = roundTotalMs > 0 ? getRes.successCount * 1000.0 / roundTotalMs : 0;
-            benchMetrics.RecordPhase(round, "get", getRes.successCount,
-                getRes.avgMs, getRes.p50Ms, getRes.p90Ms, getRes.p99Ms,
-                getRes.maxMs, getRes.totalLatMs, qps);
+            double qps = getPhaseMs > 0 ? getRes.successCount * 1000.0 / getPhaseMs : 0;
+            double mbps = getPhaseMs > 0 ? (getRes.successCount * dataSizeBytes) / (getPhaseMs * 1024.0) : 0;
+            benchMetrics.RecordPhase(round, "get", getRes.successCount, getRes.failureCount,
+                getRes.avgMs, getRes.minMs, getRes.p50Ms, getRes.p90Ms, getRes.p99Ms,
+                getRes.p999Ms, getRes.p9999Ms, getRes.maxMs, getRes.totalLatMs,
+                getPhaseMs, qps, mbps);
         }
 
         // Record del metrics
         if (cfg.cleanupMethod == "del") {
-            double qps = roundTotalMs > 0 ? delRes.successCount * 1000.0 / roundTotalMs : 0;
-            benchMetrics.RecordPhase(round, "del", delRes.successCount,
-                delRes.avgMs, delRes.p50Ms, delRes.p90Ms, delRes.p99Ms,
-                delRes.maxMs, delRes.totalLatMs, qps);
+            double qps = delPhaseMs > 0 ? delRes.successCount * 1000.0 / delPhaseMs : 0;
+            double mbps = delPhaseMs > 0 ? (delRes.successCount * dataSizeBytes) / (delPhaseMs * 1024.0) : 0;
+            benchMetrics.RecordPhase(round, "del", delRes.successCount, delRes.failureCount,
+                delRes.avgMs, delRes.minMs, delRes.p50Ms, delRes.p90Ms, delRes.p99Ms,
+                delRes.p999Ms, delRes.p9999Ms, delRes.maxMs, delRes.totalLatMs,
+                delPhaseMs, qps, mbps);
         }
 
         stats.roundsCompleted++;
@@ -299,7 +329,7 @@ static int RunBenchmarkMode(Config &cfg) {
 
         SLOG_INFO("Round " << round << " complete: set=" << setRes.successCount
                   << " get=" << getRes.successCount << " del=" << delRes.successCount
-                  << " roundMs=" << roundTotalMs);
+                  << " setMs=" << setPhaseMs << " getMs=" << getPhaseMs << " delMs=" << delPhaseMs);
     }
 
     // --- Final cleanup for delayed-deletion strategies ---

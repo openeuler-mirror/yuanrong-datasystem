@@ -36,11 +36,14 @@ struct CmdMsg {
 
 struct ResultMsg {
     int32_t successCount = 0;
-    int32_t reserved = 0;   // alignment padding / future use
+    int32_t failureCount = 0;
     double avgMs = 0;
+    double minMs = 0;
     double p50Ms = 0;
     double p90Ms = 0;
     double p99Ms = 0;
+    double p999Ms = 0;
+    double p9999Ms = 0;
     double maxMs = 0;
     double totalLatMs = 0;
 };
@@ -211,6 +214,7 @@ inline PhaseResult RunPhaseMultiThread(
     PhaseResult merged;
     for (auto &r : threadResults) {
         merged.successCount += r.successCount;
+        merged.failureCount += r.failureCount;
         merged.latenciesMs.insert(merged.latenciesMs.end(),
                                   r.latenciesMs.begin(), r.latenciesMs.end());
     }
@@ -220,13 +224,17 @@ inline PhaseResult RunPhaseMultiThread(
 inline ResultMsg PhaseResultToMsg(const PhaseResult &result) {
     ResultMsg msg{};
     msg.successCount = result.successCount;
+    msg.failureCount = result.failureCount;
     if (result.latenciesMs.empty()) return msg;
 
     auto pct = ComputePercentiles(result.latenciesMs);
     msg.avgMs = pct.avg;
+    msg.minMs = pct.min;
     msg.p50Ms = pct.p50;
     msg.p90Ms = pct.p90;
     msg.p99Ms = pct.p99;
+    msg.p999Ms = pct.p999;
+    msg.p9999Ms = pct.p9999;
     msg.maxMs = pct.max;
 
     double total = 0;

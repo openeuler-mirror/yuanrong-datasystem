@@ -264,11 +264,11 @@ TEST(BenchmarkMetrics_RecordAndFlush) {
     std::filesystem::create_directories(dir);
     {
         BenchmarkMetrics bm(dir);
-        bm.RecordPhase(0, "set", 100, 3.2, 2.8, 4.1, 5.8, 12.1, 320.0, 31250.0);
-        bm.RecordPhase(0, "get", 100, 1.1, 0.9, 1.5, 2.3, 5.2, 110.0, 90909.0);
-        bm.RecordPhase(1, "set", 100, 3.0, 2.6, 3.8, 5.5, 11.0, 300.0, 33333.0);
+        bm.RecordPhase(0, "set", 100, 0, 3.2, 1.0, 2.8, 4.1, 5.8, 11.5, 12.0, 12.1, 320.0, 3.2, 31250.0, 29.8);
+        bm.RecordPhase(0, "get", 100, 0, 1.1, 0.3, 0.9, 1.5, 2.3, 4.8, 5.1, 5.2, 110.0, 1.1, 90909.0, 86.8);
+        bm.RecordPhase(1, "set", 100, 0, 3.0, 0.9, 2.6, 3.8, 5.5, 10.2, 10.8, 11.0, 300.0, 3.0, 33333.0, 31.8);
         bm.Flush();
-        bm.RecordPhase(1, "get", 100, 1.0, 0.8, 1.4, 2.1, 4.8, 100.0, 100000.0);
+        bm.RecordPhase(1, "get", 100, 0, 1.0, 0.2, 0.8, 1.4, 2.1, 4.3, 4.6, 4.8, 100.0, 1.0, 100000.0, 95.4);
         bm.Flush();
     }
     std::string csvPath = dir + "/benchmark_phases.csv";

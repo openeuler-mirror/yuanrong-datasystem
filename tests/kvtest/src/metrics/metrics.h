@@ -85,21 +85,30 @@ struct BenchmarkPhaseRecord {
     int round;
     std::string phase;  // "set", "get", "del"
     int ops;
+    int failures;
     double avgMs;
+    double minMs;
     double p50Ms;
     double p90Ms;
     double p99Ms;
+    double p999Ms;
+    double p9999Ms;
     double maxMs;
     double totalMs;
+    double phaseElapsedMs;
     double qps;
+    double throughputMBs;
 };
 
 class BenchmarkMetrics {
 public:
     explicit BenchmarkMetrics(const std::string &outputDir);
     void RecordPhase(int round, const std::string &phase, int ops,
-                     double avgMs, double p50Ms, double p90Ms, double p99Ms,
-                     double maxMs, double totalMs, double qps);
+                     int failures, double avgMs, double minMs,
+                     double p50Ms, double p90Ms, double p99Ms,
+                     double p999Ms, double p9999Ms, double maxMs,
+                     double totalMs, double phaseElapsedMs,
+                     double qps, double throughputMBs);
     void Flush();
 private:
     std::string csvPath_;

@@ -126,6 +126,7 @@ TEST(BenchmarkWorker_SetPhase_Failure) {
     client.failSets = true;
     auto result = RunSetPhase(&client, 0, 0, 0, 4, "string_view", "data");
     ASSERT_EQ(result.successCount, 0);
+    ASSERT_EQ(result.failureCount, 4);
     ASSERT_EQ(result.latenciesMs.size(), 0u);
 }
 
@@ -144,13 +145,17 @@ TEST(ComputePercentiles_Basic) {
     std::vector<double> lat = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0};
     auto p = ComputePercentiles(std::move(lat));
     ASSERT_EQ(p.avg, 5.5);
+    ASSERT_EQ(p.min, 1.0);
     // nearest-rank: ceil(pct/100 * N) - 1
     // p50: ceil(0.5*10)-1 = 5-1 = 4 → lat[4] = 5.0
     // p90: ceil(0.9*10)-1 = 9-1 = 8 → lat[8] = 9.0
     // p99: ceil(0.99*10)-1 = 10-1 = 9 → lat[9] = 10.0
+    // p999/p9999: ceil(0.999*10)/ceil(0.9999*10)-1 = 10-1 = 9 → lat[9] = 10.0
     ASSERT_EQ(p.p50, 5.0);
     ASSERT_EQ(p.p90, 9.0);
     ASSERT_EQ(p.p99, 10.0);
+    ASSERT_EQ(p.p999, 10.0);
+    ASSERT_EQ(p.p9999, 10.0);
     ASSERT_EQ(p.max, 10.0);
 }
 
@@ -158,13 +163,20 @@ TEST(ComputePercentiles_Single) {
     std::vector<double> lat = {3.14};
     auto p = ComputePercentiles(std::move(lat));
     ASSERT_EQ(p.avg, 3.14);
+    ASSERT_EQ(p.min, 3.14);
     ASSERT_EQ(p.p50, 3.14);
+    ASSERT_EQ(p.p99, 3.14);
+    ASSERT_EQ(p.p999, 3.14);
     ASSERT_EQ(p.max, 3.14);
 }
 
 TEST(ComputePercentiles_Empty) {
     auto p = ComputePercentiles({});
     ASSERT_EQ(p.avg, 0);
+    ASSERT_EQ(p.min, 0);
+    ASSERT_EQ(p.p50, 0);
+    ASSERT_EQ(p.p99, 0);
+    ASSERT_EQ(p.p999, 0);
     ASSERT_EQ(p.max, 0);
 }
 
@@ -243,6 +255,7 @@ TEST(BenchmarkWorker_MSetPhase_Failure) {
     client.failSets = true;
     auto result = RunMSetPhase(&client, 0, 0, 0, 6, 3, "data");
     ASSERT_EQ(result.successCount, 0);
+    ASSERT_EQ(result.failureCount, 2);
     ASSERT_EQ(result.latenciesMs.size(), 0u);
 }
 
@@ -265,6 +278,7 @@ TEST(BenchmarkWorker_MGetPhase_Failure) {
     client.failGets = true;
     auto result = RunMGetPhase(&client, 0, 0, 0, 6, 3);
     ASSERT_EQ(result.successCount, 0);
+    ASSERT_EQ(result.failureCount, 2);
     ASSERT_EQ(result.latenciesMs.size(), 0u);
 }
 
