@@ -541,54 +541,6 @@ TEST_F(HashRingTest, InitInDifferentState)
     ASSERT_EQ(master.ToString(), "127.0.0.1:19562");  // hash ring service is ready
 }
 
-TEST_F(HashRingTest, LEVEL1_TestNeedRedirect)
-{
-    constexpr int waitTime = 3;
-    FLAGS_add_node_wait_time_s = waitTime;
-
-    datasystem::inject::Set("HashRing.SubmitScaleUpTask.skip", "return(10)");
-    datasystem::inject::Set("MurmurHash3", "100*return()");
-
-    InitTestEtcdInstance();
-    InitRing(HASH_RING_NUM_TWO);
-    for (auto &future : futures_) {
-        auto status = future.get();
-        ASSERT_EQ(status, Status::OK());
-    }
-    futures_.clear();
-
-    std::string key = "a_key_hash_to_1073741824";  // expect on worker0, will migrate to worker2 later
-    HostPort masterAddr;
-    std::string dbName;
-    DS_ASSERT_OK(rings_[0]->GetMasterAddr(key, masterAddr));
-    EXPECT_EQ(masterAddr.ToString(), "127.0.0.1:0");
-    EXPECT_FALSE(rings_[0]->NeedRedirect(key, masterAddr));
-
-    auto newWorker = "127.0.0.1:4";
-    auto ring = ConstructAndGetRing(newWorker);
-    auto future = threadPool_->Submit([this, ring, newWorker]() {
-        while (!ring->IsRunning() && !this->exit_.load()) {
-            sleep(1);
-        }
-        LOG(INFO) << newWorker << " finished init and is running ?" << ring->IsRunning();
-        return Status::OK();
-    });
-
-    // wait for less than HashRing.SubmitScaleUpTask.skip sleep time, expect node is migrating.
-    using namespace std::chrono_literals;
-    future.wait_for(5s);
-    // hit the migrating branch, redirect successfully
-    EXPECT_TRUE(rings_[0]->NeedRedirect(key, masterAddr));
-    EXPECT_EQ(masterAddr.ToString(), newWorker);
-
-    // new node has joined.
-    auto status = future.get();
-    ASSERT_EQ(status, Status::OK());
-    // hit the branch of rehash after migration, redirect successfully
-    EXPECT_TRUE(rings_[0]->NeedRedirect(key, masterAddr));
-    EXPECT_EQ(masterAddr.ToString(), newWorker);
-}
-
 TEST_F(HashRingTest, GetPrimaryWorker)
 {
     InitTestEtcdInstance();

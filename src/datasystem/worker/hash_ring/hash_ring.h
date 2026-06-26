@@ -199,14 +199,6 @@ public:
     Status UpdateRing(const std::string &newSerializedRingInfo, int64_t version, bool forceUpdate = false);
 
     /**
-     * @brief Check if the master of objKey is changed. If yes, return the new master address.
-     * @param[in] objKey ObjKey to be checked.
-     * @param[out] masterAddr The changed master address.
-     * @return Return true if the master of objKey is changed.
-     */
-    bool NeedRedirect(const std::string &objKey, HostPort &masterAddr);
-
-    /**
      * @brief Check whether this local node restarted or not. We should make sure this method is called
      * after HashRing::Init().
      * @param[out] isRestart

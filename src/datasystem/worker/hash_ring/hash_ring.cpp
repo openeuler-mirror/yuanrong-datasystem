@@ -1271,40 +1271,6 @@ void HashRing::FillWorkerIdsNoLock(topology::RoutingSnapshotFacts &facts) const
     }
 }
 
-bool HashRing::NeedRedirect(const std::string &objKey, HostPort &masterAddr)
-{
-    if (IsCentralized()) {
-        return false;
-    }
-    // check if in add_node_info, return new node if true
-    {
-        HashRange ranges;
-        std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-        for (auto &i : ringInfo_.add_node_info()) {
-            for (auto &r : i.second.changed_ranges()) {
-                ranges.emplace_back(r.from(), r.end());
-            }
-            if (IsInRange(ranges, objKey)) {
-                LOG_IF_ERROR(masterAddr.ParseString(i.first), "parse failed: " + i.first);
-                VLOG(1) << "adding node, return new master: " << masterAddr.ToString();
-                return true;
-            }
-            ranges.clear();
-        }
-    }
-
-    // check if hash master has changed or not due to a possible scale-up finished.
-    HostPort currMetaAddr;
-    auto status = GetMasterAddr(objKey, currMetaAddr);
-    if (status.IsError() || currMetaAddr.ToString() == workerAddr_) {
-        LOG_IF_ERROR(status, "The server fails to check the master address and does not redirect.");
-        return false;
-    }
-    VLOG(1) << "add node finish, return new master";
-    masterAddr = currMetaAddr;
-    return true;
-}
-
 Status HashRing::GetWorkerAddrByUuidForAddressing(const std::string &workerUuid, HostPort &workerAddr)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
