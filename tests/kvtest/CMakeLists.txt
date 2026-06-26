@@ -50,11 +50,9 @@ target_link_libraries(kvtest PRIVATE
     ${DATASYSTEM_SDK_DIR}/lib/libdatasystem.so
     pthread)
 
-# Optional NUMA support — check both header and library for consistency
-include(CheckIncludeFile)
-check_include_file(numa.h HAS_NUMA_H)
+# Optional NUMA support — link libnuma if available (header detection by __has_include)
 find_library(LIBNUMA_LIB numa)
-if(HAS_NUMA_H AND LIBNUMA_LIB)
+if(LIBNUMA_LIB)
     target_compile_definitions(kvtest PRIVATE HAS_LIBNUMA=1)
     target_link_libraries(kvtest PRIVATE ${LIBNUMA_LIB})
     message(STATUS "NUMA support enabled: ${LIBNUMA_LIB}")

@@ -386,23 +386,28 @@ BenchmarkMetrics::BenchmarkMetrics(const std::string &outputDir)
     : csvPath_(outputDir + "/benchmark_phases.csv") {}
 
 void BenchmarkMetrics::RecordPhase(int round, const std::string &phase, int ops,
-                                    double avgMs, double p50Ms, double p90Ms,
-                                    double p99Ms, double maxMs, double totalMs,
-                                    double qps) {
-    records_.push_back({round, phase, ops, avgMs, p50Ms, p90Ms, p99Ms, maxMs, totalMs, qps});
+                                    int failures, double avgMs, double minMs,
+                                    double p50Ms, double p90Ms, double p99Ms,
+                                    double p999Ms, double p9999Ms, double maxMs,
+                                    double totalMs, double phaseElapsedMs,
+                                    double qps, double throughputMBs) {
+    records_.push_back({round, phase, ops, failures, avgMs, minMs, p50Ms, p90Ms,
+                        p99Ms, p999Ms, p9999Ms, maxMs, totalMs, phaseElapsedMs,
+                        qps, throughputMBs});
 }
 
 void BenchmarkMetrics::Flush() {
     auto mode = headerWritten_ ? std::ios::app : std::ios::trunc;
     std::ofstream f(csvPath_, mode);
     if (!headerWritten_) {
-        f << "round,phase,ops,avg_ms,p50_ms,p90_ms,p99_ms,max_ms,total_ms,qps\n";
+        f << "round,phase,ops,avg_ms,min_ms,p50_ms,p90_ms,p99_ms,p99.9_ms,p99.99_ms,max_ms,total_ms,qps\n";
         headerWritten_ = true;
     }
     for (auto &r : records_) {
         f << r.round << "," << r.phase << "," << r.ops << ","
-           << r.avgMs << "," << r.p50Ms << "," << r.p90Ms << ","
-           << r.p99Ms << "," << r.maxMs << "," << r.totalMs << "," << r.qps << "\n";
+           << r.avgMs << "," << r.minMs << "," << r.p50Ms << "," << r.p90Ms << ","
+           << r.p99Ms << "," << r.p999Ms << "," << r.p9999Ms << ","
+           << r.maxMs << "," << r.totalMs << "," << r.qps << "\n";
     }
     records_.clear();
     f.close();

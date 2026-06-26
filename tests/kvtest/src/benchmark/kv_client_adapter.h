@@ -19,7 +19,7 @@ public:
     bool GetVerify(const std::string &key) {
         datasystem::Optional<datasystem::Buffer> buf;
         auto rc = client_->Get(key, buf);
-        return rc.IsOk() && bool(buf);
+        return rc.IsOk();
     }
 
     bool CreateAndSet(const std::string &key, uint64_t size, const std::string &data) {

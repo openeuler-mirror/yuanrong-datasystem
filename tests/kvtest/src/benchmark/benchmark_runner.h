@@ -21,15 +21,19 @@ std::pair<int, int> ThreadKeyRange(int totalKeys, int numThreads, int threadId);
 // Per-phase result with per-request latency tracking
 struct PhaseResult {
     int successCount = 0;
+    int failureCount = 0;
     std::vector<double> latenciesMs;  // per-request latency for successful ops
 };
 
 // Compute percentiles from a sorted latency vector
 struct Percentiles {
     double avg = 0;
+    double min = 0;
     double p50 = 0;
     double p90 = 0;
     double p99 = 0;
+    double p999 = 0;
+    double p9999 = 0;
     double max = 0;
 };
 
@@ -40,6 +44,7 @@ inline Percentiles ComputePercentiles(std::vector<double> latencies) {
     for (auto v : latencies) sum += v;
     p.avg = sum / latencies.size();
     std::sort(latencies.begin(), latencies.end());
+    p.min = latencies.front();
     auto rank = [&](double pct) -> double {
         size_t idx = static_cast<size_t>(std::ceil(pct / 100.0 * latencies.size()));
         return latencies[std::min(idx, latencies.size()) - 1];
@@ -47,6 +52,8 @@ inline Percentiles ComputePercentiles(std::vector<double> latencies) {
     p.p50 = rank(50);
     p.p90 = rank(90);
     p.p99 = rank(99);
+    p.p999 = rank(99.9);
+    p.p9999 = rank(99.99);
     p.max = latencies.back();
     return p;
 }
@@ -80,6 +87,8 @@ PhaseResult RunMSetPhase(Client *client, int instanceId, int round, int startKey
             result.successCount += keys.size();
             double ms = std::chrono::duration<double, std::milli>(end - start).count();
             result.latenciesMs.push_back(ms);
+        } else {
+            result.failureCount++;
         }
     }
     return result;
@@ -103,6 +112,8 @@ PhaseResult RunMGetPhase(Client *client, int instanceId, int round, int startKey
             result.successCount += keys.size();
             double ms = std::chrono::duration<double, std::milli>(end - start).count();
             result.latenciesMs.push_back(ms);
+        } else {
+            result.failureCount++;
         }
     }
     return result;
@@ -173,6 +184,8 @@ PhaseResult RunSetPhase(Client *client, int instanceId, int round, int startKey,
             result.successCount++;
             double ms = std::chrono::duration<double, std::milli>(end - start).count();
             result.latenciesMs.push_back(ms);
+        } else {
+            result.failureCount++;
         }
     }
     return result;
@@ -190,6 +203,8 @@ PhaseResult RunGetPhase(Client *client, int instanceId, int round, int startKey,
             result.successCount++;
             double ms = std::chrono::duration<double, std::milli>(end - start).count();
             result.latenciesMs.push_back(ms);
+        } else {
+            result.failureCount++;
         }
     }
     return result;
@@ -225,6 +240,7 @@ PhaseResult RunDelPhase(Client *client, int instanceId, int round, int startKey,
             result.successCount += keys.size();
             result.latenciesMs.push_back(delMs / keys.size());
         } else {
+            result.failureCount++;
             SLOG_WARN("RunDelPhase: batch " << (offset / kBatchSize)
                       << " failed after " << kMaxRetries << " retries"
                       << " (round=" << round << ", keys=" << keys.size() << ")");
