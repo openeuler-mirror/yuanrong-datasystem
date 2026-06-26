@@ -26,15 +26,12 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/common/util/hash_algorithm.h"
-#include "datasystem/common/util/gflag/flags.h"
-#include "datasystem/worker/topology/membership/worker_directory.h"
-#include "datasystem/worker/topology/routing/redirect_policy.h"
-#include "datasystem/worker/topology/routing/routing_cache.h"
-#include "datasystem/worker/topology/routing/routing_view.h"
-#include "datasystem/worker/topology/routing/worker_locator.h"
-#include "datasystem/worker/topology/runtime/placement_facade.h"
-
-DS_DECLARE_string(master_address);
+#include "datasystem/topology/routing/placement_directory.h"
+#include "datasystem/topology/routing/redirect_policy.h"
+#include "datasystem/topology/routing/routing_cache.h"
+#include "datasystem/topology/routing/routing_view.h"
+#include "datasystem/topology/routing/worker_locator.h"
+#include "datasystem/topology/routing/placement_facade.h"
 
 namespace datasystem {
 namespace topology {
@@ -53,8 +50,8 @@ HostPort MakeAddr(int port)
 std::shared_ptr<RoutingSnapshot> MakeSnapshot()
 {
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ 0, 100 }, WORKER_A },
-        { PlacementUnit{ 100, 200 }, WORKER_B },
+        { RoutingRange{ 0, 100 }, WORKER_A },
+        { RoutingRange{ 100, 200 }, WORKER_B },
     };
     return std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners));
 }
@@ -62,20 +59,20 @@ std::shared_ptr<RoutingSnapshot> MakeSnapshot()
 std::shared_ptr<RoutingSnapshot> MakeSingleOwnerSnapshot(uint32_t hash, const std::string &workerId)
 {
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ hash - 1, hash }, workerId },
+        { RoutingRange{ hash - 1, hash }, workerId },
     };
     return std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners));
 }
 
-std::shared_ptr<WorkerDirectorySnapshot> MakeDirectory(
+std::shared_ptr<PlacementDirectorySnapshot> MakeDirectory(
     WorkerAvailability workerBAvailability = WorkerAvailability::READY)
 {
-    auto snapshot = std::make_shared<WorkerDirectorySnapshot>();
+    auto snapshot = std::make_shared<PlacementDirectorySnapshot>();
     snapshot->version = VERSION_1;
     snapshot->localWorkerId = WORKER_A;
     snapshot->localAddress = MakeAddr(1111);
-    snapshot->workers.emplace(WORKER_A, WorkerEndpoint{ WORKER_A, MakeAddr(1111), WorkerAvailability::READY });
-    snapshot->workers.emplace(WORKER_B, WorkerEndpoint{ WORKER_B, MakeAddr(2222), workerBAvailability });
+    snapshot->workers.emplace(WORKER_A, PlacementEndpoint{ WORKER_A, MakeAddr(1111), WorkerAvailability::READY });
+    snapshot->workers.emplace(WORKER_B, PlacementEndpoint{ WORKER_B, MakeAddr(2222), workerBAvailability });
     snapshot->workerIdsByAddress.emplace(MakeAddr(1111).ToString(), WORKER_A);
     snapshot->workerIdsByAddress.emplace(MakeAddr(2222).ToString(), WORKER_B);
     return snapshot;
@@ -103,8 +100,8 @@ TEST(PlacementRuntimeTest, RoutingSnapshotLocateNormalRange)
 TEST(PlacementRuntimeTest, RoutingSnapshotLocateWrappedRange)
 {
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ 300, 100 }, WORKER_A },
-        { PlacementUnit{ 100, 300 }, WORKER_B },
+        { RoutingRange{ 300, 100 }, WORKER_A },
+        { RoutingRange{ 100, 300 }, WORKER_B },
     };
     RoutingSnapshot snapshot(VERSION_1, std::move(owners));
 
@@ -135,24 +132,24 @@ TEST(PlacementRuntimeTest, RoutingViewNotReady)
     EXPECT_EQ(status.GetCode(), K_NOT_READY);
 }
 
-TEST(PlacementRuntimeTest, WorkerDirectoryResolveMissing)
+TEST(PlacementRuntimeTest, PlacementDirectoryResolveMissing)
 {
-    WorkerDirectory directory;
+    PlacementDirectory directory;
     directory.Publish(MakeDirectory());
 
-    WorkerEndpoint endpoint;
+    PlacementEndpoint endpoint;
     auto status = directory.ResolveWorker("missing-worker", endpoint);
     EXPECT_EQ(status.GetCode(), K_NOT_FOUND);
 }
 
-TEST(PlacementRuntimeTest, WorkerDirectoryNotReadyThenLocal)
+TEST(PlacementRuntimeTest, PlacementDirectoryNotReadyThenLocal)
 {
-    WorkerDirectory directory;
+    PlacementDirectory directory;
 
-    WorkerEndpoint resolved;
+    PlacementEndpoint resolved;
     EXPECT_EQ(directory.ResolveWorker(WORKER_A, resolved).GetCode(), K_NOT_READY);
 
-    WorkerEndpoint local;
+    PlacementEndpoint local;
     EXPECT_EQ(directory.GetLocalWorker(local).GetCode(), K_NOT_READY);
 
     directory.Publish(MakeDirectory());
@@ -161,12 +158,12 @@ TEST(PlacementRuntimeTest, WorkerDirectoryNotReadyThenLocal)
     EXPECT_EQ(local.availability, WorkerAvailability::READY);
 }
 
-TEST(PlacementRuntimeTest, WorkerDirectoryResolveByAddress)
+TEST(PlacementRuntimeTest, PlacementDirectoryResolveByAddress)
 {
-    WorkerDirectory directory;
+    PlacementDirectory directory;
     directory.Publish(MakeDirectory(WorkerAvailability::NOT_READY));
 
-    WorkerEndpoint endpoint;
+    PlacementEndpoint endpoint;
     EXPECT_TRUE(directory.ResolveWorkerByAddress(MakeAddr(2222).ToString(), endpoint).IsOk());
     EXPECT_EQ(endpoint.workerId, WORKER_B);
     EXPECT_EQ(endpoint.availability, WorkerAvailability::NOT_READY);
@@ -177,13 +174,13 @@ TEST(PlacementRuntimeTest, WorkerDirectoryResolveByAddress)
 TEST(PlacementRuntimeTest, RoutingSnapshotTopologyFacts)
 {
     RoutingSnapshotFacts facts;
-    facts.localOwnedRanges = { PlacementUnit{ 10, 20 } };
+    facts.localOwnedRanges = { RoutingRange{ 10, 20 } };
     facts.workerOrder = { WORKER_A, WORKER_B };
     facts.validWorkerIds = { WORKER_A, WORKER_B };
     facts.activeWorkerIds = { WORKER_A };
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ 10, 20 }, WORKER_A },
-        { PlacementUnit{ 20, 30 }, WORKER_B },
+        { RoutingRange{ 10, 20 }, WORKER_A },
+        { RoutingRange{ 20, 30 }, WORKER_B },
     };
 
     RoutingSnapshot snapshot(VERSION_1, std::move(owners), std::move(facts));
@@ -212,18 +209,18 @@ TEST(PlacementRuntimeTest, RoutingCacheVersionMismatchMiss)
 
 TEST(PlacementRuntimeTest, LocateMetaOwnerCentralizedMaster)
 {
-    const std::string masterAddr = "127.0.0.1:9999";
-    FLAGS_master_address = masterAddr;
+    const HostPort masterAddr = MakeAddr(9999);
     auto routingView = std::make_shared<RoutingView>();
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     WorkerLocator locator(routingView, directory);
 
     RouteDecision decision;
     RouteOptions options;
     options.centralizedMode = true;
+    options.masterAddress = masterAddr;
     EXPECT_TRUE(locator.LocateMetaOwner("any-key", options, nullptr, decision).IsOk());
     EXPECT_FALSE(decision.ownerEndpoint.address.Empty());
-    EXPECT_EQ(decision.ownerEndpoint.address.ToString(), masterAddr);
+    EXPECT_EQ(decision.ownerEndpoint.address, masterAddr);
     EXPECT_EQ(decision.ownerEndpoint.availability, WorkerAvailability::READY);
 
     BatchRouteDecision batch;
@@ -233,13 +230,25 @@ TEST(PlacementRuntimeTest, LocateMetaOwnerCentralizedMaster)
     EXPECT_EQ(batch.perKeyDecision.size(), keys.size());
 }
 
+TEST(PlacementRuntimeTest, LocateMetaOwnerCentralizedMasterRequiresAddress)
+{
+    auto routingView = std::make_shared<RoutingView>();
+    auto directory = std::make_shared<PlacementDirectory>();
+    WorkerLocator locator(routingView, directory);
+
+    RouteDecision decision;
+    RouteOptions options;
+    options.centralizedMode = true;
+    EXPECT_EQ(locator.LocateMetaOwner("any-key", options, nullptr, decision).GetCode(), K_INVALID);
+}
+
 TEST(PlacementRuntimeTest, LocateMetaOwnerRequireAvailableTarget)
 {
     const std::string key = "key-for-unavailable-worker";
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory(WorkerAvailability::NOT_READY));
     WorkerLocator locator(routingView, directory);
 
@@ -256,7 +265,7 @@ TEST(PlacementRuntimeTest, LocateMetaOwnersBatchPartialFailure)
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     auto dirSnapshot = MakeDirectory();
     dirSnapshot->workers.erase(WORKER_B);
     directory->Publish(dirSnapshot);
@@ -282,14 +291,14 @@ TEST(PlacementRuntimeTest, LocateMetaOwnersBatchGroupsByEndpoint)
     const uint32_t lowerHash = std::min(hashA, hashB);
     const uint32_t higherHash = std::max(hashA, hashB);
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ lowerHash - 1, lowerHash }, WORKER_A },
-        { PlacementUnit{ lowerHash, higherHash }, WORKER_B },
+        { RoutingRange{ lowerHash - 1, lowerHash }, WORKER_A },
+        { RoutingRange{ lowerHash, higherHash }, WORKER_B },
     };
     const std::string &expectedOwnerA = hashA < hashB ? WORKER_A : WORKER_B;
     const std::string &expectedOwnerB = hashA < hashB ? WORKER_B : WORKER_A;
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners)));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     WorkerLocator locator(routingView, directory);
 
@@ -328,7 +337,7 @@ TEST(PlacementRuntimeTest, RedirectServeLocal)
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_A));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     RedirectPolicy policy(routingView, directory, locator);
@@ -345,7 +354,7 @@ TEST(PlacementRuntimeTest, RedirectTargetUnavailableStillRedirects)
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory(WorkerAvailability::NOT_READY));
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     RedirectPolicy policy(routingView, directory, locator);
@@ -362,14 +371,14 @@ TEST(PlacementRuntimeTest, RedirectScaleUpInFlightRange)
     const std::string key = "redirect-in-flight-key";
     const uint32_t hash = MurmurHash3_32(key);
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ hash - 1, hash }, WORKER_A },
+        { RoutingRange{ hash - 1, hash }, WORKER_A },
     };
     std::vector<RoutingRedirectHint> hints{
-        { PlacementUnit{ hash - 1, hash }, WORKER_B, MakeAddr(2222) },
+        { RoutingRange{ hash - 1, hash }, WORKER_B, MakeAddr(2222) },
     };
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners), std::move(hints)));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     auto redirectPolicy = std::make_shared<RedirectPolicy>(routingView, directory, locator);
@@ -391,14 +400,14 @@ TEST(PlacementRuntimeTest, LocateMetaOwnerDoesNotUseRedirectHint)
     const std::string key = "locate-with-redirect-hint-key";
     const uint32_t hash = MurmurHash3_32(key);
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ hash - 1, hash }, WORKER_A },
+        { RoutingRange{ hash - 1, hash }, WORKER_A },
     };
     std::vector<RoutingRedirectHint> hints{
-        { PlacementUnit{ hash - 1, hash }, WORKER_B, MakeAddr(2222) },
+        { RoutingRange{ hash - 1, hash }, WORKER_B, MakeAddr(2222) },
     };
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners), std::move(hints)));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     WorkerLocator locator(routingView, directory);
 
@@ -415,7 +424,7 @@ TEST(PlacementRuntimeTest, RedirectScaleUpFinished)
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_B));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     auto redirectPolicy = std::make_shared<RedirectPolicy>(routingView, directory, locator);
@@ -431,11 +440,10 @@ TEST(PlacementRuntimeTest, RedirectScaleUpFinished)
 
 TEST(PlacementRuntimeTest, RedirectEvaluateCentralized)
 {
-    const std::string masterAddr = "127.0.0.1:9999";
-    FLAGS_master_address = masterAddr;
+    const HostPort masterAddr = MakeAddr(9999);
     // The centralized master differs from the local worker, so the policy redirects to it.
     auto routingView = std::make_shared<RoutingView>();
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     RedirectPolicy policy(routingView, directory, locator);
@@ -443,9 +451,30 @@ TEST(PlacementRuntimeTest, RedirectEvaluateCentralized)
     RedirectDecision decision;
     RouteOptions options;
     options.centralizedMode = true;
+    options.masterAddress = masterAddr;
     EXPECT_TRUE(policy.Evaluate("any-key", options, decision).IsOk());
     EXPECT_EQ(decision.action, RedirectAction::REDIRECT);
-    EXPECT_EQ(decision.targetEndpoint.address.ToString(), masterAddr);
+    EXPECT_EQ(decision.targetEndpoint.address, masterAddr);
+    EXPECT_TRUE(decision.targetEndpoint.workerId.empty());
+}
+
+TEST(PlacementRuntimeTest, RedirectEvaluateCentralizedLocalMasterServesLocalByAddress)
+{
+    const HostPort masterAddr = MakeAddr(1111);
+    auto routingView = std::make_shared<RoutingView>();
+    auto directory = std::make_shared<PlacementDirectory>();
+    directory->Publish(MakeDirectory());
+    auto locator = std::make_shared<WorkerLocator>(routingView, directory);
+    RedirectPolicy policy(routingView, directory, locator);
+
+    RedirectDecision decision;
+    RouteOptions options;
+    options.centralizedMode = true;
+    options.masterAddress = masterAddr;
+    EXPECT_TRUE(policy.Evaluate("any-key", options, decision).IsOk());
+    EXPECT_EQ(decision.action, RedirectAction::SERVE_LOCAL);
+    EXPECT_EQ(decision.targetEndpoint.address, masterAddr);
+    EXPECT_TRUE(decision.targetEndpoint.workerId.empty());
 }
 
 TEST(PlacementRuntimeTest, PlacementFacadeQueryLocalPlacement)
@@ -454,7 +483,7 @@ TEST(PlacementRuntimeTest, PlacementFacadeQueryLocalPlacement)
     const uint32_t hash = MurmurHash3_32(key);
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(MakeSingleOwnerSnapshot(hash, WORKER_A));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     auto redirectPolicy = std::make_shared<RedirectPolicy>(routingView, directory, locator);
@@ -478,11 +507,11 @@ TEST(PlacementRuntimeTest, RedirectHintWorkerMissingFallsBackToRawAddress)
     const uint32_t hash = MurmurHash3_32(key);
     const std::string unknownWorker = "worker-unknown";
     const HostPort hintAddr = MakeAddr(3333);
-    std::vector<RoutingOwnerEntry> owners{ { PlacementUnit{ hash - 1, hash }, WORKER_A } };
-    std::vector<RoutingRedirectHint> hints{ { PlacementUnit{ hash - 1, hash }, unknownWorker, hintAddr } };
+    std::vector<RoutingOwnerEntry> owners{ { RoutingRange{ hash - 1, hash }, WORKER_A } };
+    std::vector<RoutingRedirectHint> hints{ { RoutingRange{ hash - 1, hash }, unknownWorker, hintAddr } };
     auto routingView = std::make_shared<RoutingView>();
     routingView->Publish(std::make_shared<RoutingSnapshot>(VERSION_1, std::move(owners), std::move(hints)));
-    auto directory = std::make_shared<WorkerDirectory>();
+    auto directory = std::make_shared<PlacementDirectory>();
     directory->Publish(MakeDirectory());
     auto locator = std::make_shared<WorkerLocator>(routingView, directory);
     RedirectPolicy policy(routingView, directory, locator);
@@ -498,21 +527,21 @@ TEST(PlacementRuntimeTest, RedirectHintWorkerMissingFallsBackToRawAddress)
 
 // Directory has a local identity/address but no entry for it in the workers map: GetLocalWorker must
 // synthesize a NOT_READY endpoint from the local address rather than fail.
-TEST(PlacementRuntimeTest, WorkerDirectoryLocalWorkerFallsBackToAddress)
+TEST(PlacementRuntimeTest, PlacementDirectoryLocalWorkerFallsBackToAddress)
 {
     const std::string localWorker = "worker-local-only";
     const HostPort localAddr = MakeAddr(4321);
-    auto snapshot = std::make_shared<WorkerDirectorySnapshot>();
+    auto snapshot = std::make_shared<PlacementDirectorySnapshot>();
     snapshot->version = VERSION_1;
     snapshot->localWorkerId = localWorker;
     snapshot->localAddress = localAddr;
     // workers map intentionally omits localWorker so the fallback branch is exercised.
-    snapshot->workers.emplace(WORKER_B, WorkerEndpoint{ WORKER_B, MakeAddr(2222), WorkerAvailability::READY });
+    snapshot->workers.emplace(WORKER_B, PlacementEndpoint{ WORKER_B, MakeAddr(2222), WorkerAvailability::READY });
 
-    WorkerDirectory directory;
+    PlacementDirectory directory;
     directory.Publish(snapshot);
 
-    WorkerEndpoint endpoint;
+    PlacementEndpoint endpoint;
     EXPECT_TRUE(directory.GetLocalWorker(endpoint).IsOk());
     EXPECT_EQ(endpoint.workerId, localWorker);
     EXPECT_EQ(endpoint.address, localAddr);
@@ -523,8 +552,8 @@ TEST(PlacementRuntimeTest, WorkerDirectoryLocalWorkerFallsBackToAddress)
 TEST(PlacementRuntimeTest, RoutingSnapshotLocateGapReturnsNotFound)
 {
     std::vector<RoutingOwnerEntry> owners{
-        { PlacementUnit{ 10, 100 }, WORKER_A },
-        { PlacementUnit{ 200, 300 }, WORKER_B },
+        { RoutingRange{ 10, 100 }, WORKER_A },
+        { RoutingRange{ 200, 300 }, WORKER_B },
     };
     RoutingSnapshot snapshot(VERSION_1, std::move(owners));
 
@@ -536,14 +565,14 @@ TEST(PlacementRuntimeTest, RoutingSnapshotLocateGapReturnsNotFound)
 // A wrapped redirect hint range must match hashes that span the 0 boundary.
 TEST(PlacementRuntimeTest, FindRedirectHintWrappedRangeMatches)
 {
-    std::vector<RoutingOwnerEntry> owners{ { PlacementUnit{ 0, 100 }, WORKER_A } };
-    std::vector<RoutingRedirectHint> hints{ { PlacementUnit{ 300, 100 }, WORKER_B, MakeAddr(2222) } };
+    std::vector<RoutingOwnerEntry> owners{ { RoutingRange{ 0, 100 }, WORKER_A } };
+    std::vector<RoutingRedirectHint> hints{ { RoutingRange{ 300, 100 }, WORKER_B, MakeAddr(2222) } };
     RoutingSnapshot snapshot(VERSION_1, std::move(owners), std::move(hints));
 
     RoutingRedirectHint hint;
-    EXPECT_TRUE(snapshot.FindRedirectHint(50, hint));   // 50 is in (300, 100] across the wrap.
+    EXPECT_TRUE(snapshot.FindRedirectHint(50, hint));  // 50 is in (300, 100] across the wrap.
     EXPECT_EQ(hint.targetWorkerId, WORKER_B);
-    EXPECT_FALSE(snapshot.FindRedirectHint(200, hint)); // 200 is outside the wrapped hint.
+    EXPECT_FALSE(snapshot.FindRedirectHint(200, hint));  // 200 is outside the wrapped hint.
 }
 
 }  // namespace

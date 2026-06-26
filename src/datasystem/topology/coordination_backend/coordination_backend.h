@@ -33,11 +33,62 @@
 
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/common/kvstore/etcd/etcd_watch.h"
+#include "datasystem/common/kvstore/etcd/grpc_session.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace topology {
+
+enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE };
+
+struct CoordinationEvent {
+    CoordinationEventType type;
+    std::string key;
+    std::string value;
+    int64_t version = 0;
+    int64_t revision = 0;
+
+    std::string ToString() const;
+};
+
+struct WatchKey {
+    std::string tableName;
+    std::string key;
+    int64_t startRevision = 0;
+};
+
+class ICoordinationBackend {
+public:
+    using EventHandler = std::function<void(CoordinationEvent &&event)>;
+    using ProcessFunction = std::function<Status(const std::string &, std::unique_ptr<std::string> &, bool &)>;
+
+    virtual ~ICoordinationBackend() = default;
+
+    virtual Status GetAll(const std::string &tableName,
+                          std::vector<std::pair<std::string, std::string>> &outKeyValues) = 0;
+    virtual Status Get(const std::string &tableName, const std::string &key, std::string &value) = 0;
+    virtual Status Get(const std::string &tableName, const std::string &key, RangeSearchResult &res,
+                       int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) = 0;
+    virtual Status CAS(const std::string &tableName, const std::string &key, const ProcessFunction &processFunc,
+                       RangeSearchResult &res) = 0;
+    virtual Status CAS(const std::string &tableName, const std::string &key, const ProcessFunction &processFunc) = 0;
+    virtual Status CAS(const std::string &tableName, const std::string &key, const std::string &oldValue,
+                       const std::string &newValue) = 0;
+    virtual Status Delete(const std::string &tableName, const std::string &key) = 0;
+    virtual Status WatchEvents(const std::vector<WatchKey> &watchKeys) = 0;
+    virtual Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
+                                 bool isStoreAvailableWhenStart) = 0;
+    virtual Status UpdateNodeState(const std::string &state) = 0;
+    virtual Status GetStorePrefix(const std::string &tableName, std::string &prefix) = 0;
+    virtual Status InformReconciliationDone(const HostPort &workerAddr) = 0;
+    virtual bool IsKeepAliveTimeout() = 0;
+    virtual bool IsCreateFirstLease() = 0;
+    virtual void SetEventHandler(EventHandler &&eventHandler) = 0;
+    virtual void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) = 0;
+};
+
 class CoordinationBackend : public ICoordinationBackend {
 public:
     CoordinationBackend(ICoordinatorServiceProxy *proxy, std::string watcherAddr);

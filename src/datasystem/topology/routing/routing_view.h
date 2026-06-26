@@ -17,14 +17,14 @@
 /**
  * Description: R0 routing snapshot view.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_VIEW_H
-#define DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_VIEW_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_VIEW_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_VIEW_H
 
 #include <memory>
 #include <shared_mutex>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/topology/routing/routing_snapshot.h"
+#include "datasystem/topology/routing/routing_snapshot.h"
 
 namespace datasystem {
 namespace topology {
@@ -66,4 +66,4 @@ private:
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_VIEW_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_VIEW_H

@@ -6,6 +6,8 @@ ds_cc_test(
     name = "coordination_backend_test",
     srcs = ["coordination_backend_test.cpp"],
     deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
         "//third_party/protos/etcd:kv_cc_proto",
         "//tests/ut:ut_common",

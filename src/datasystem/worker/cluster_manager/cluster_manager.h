@@ -41,7 +41,7 @@
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/queue/priority_queue.h"
@@ -54,8 +54,8 @@
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
-#include "datasystem/worker/topology/membership/worker_directory.h"
-#include "datasystem/worker/topology/runtime/placement_facade.h"
+#include "datasystem/topology/routing/placement_directory.h"
+#include "datasystem/topology/routing/placement_facade.h"
 
 namespace datasystem {
 struct ClusterInfo {
@@ -162,7 +162,7 @@ public:
      * @brief Check rpc network status between the caller node and target node
      * @param[in] nodeAddr The HostPort of the node to check
      * @param[in] allowDirectoryLag Whether to tolerate a target that is present in routing but not yet confirmed by the
-     * local worker-directory membership snapshot.
+     * local placement directory snapshot.
      * @return Status of the call
      */
     Status CheckConnection(const HostPort &nodeAddr, bool allowDirectoryLag = false);
@@ -177,12 +177,12 @@ public:
     }
 
     /**
-     * @brief Return the immutable worker directory published by cluster-manager node events.
-     * @return Worker directory for R0 request read path.
+     * @brief Return the immutable placement directory published by cluster-manager node events.
+     * @return Placement directory for R0 request read path.
      */
-    std::shared_ptr<topology::IWorkerDirectory> GetWorkerDirectory() const
+    std::shared_ptr<topology::IPlacementDirectory> GetPlacementDirectory() const
     {
-        return workerDirectory_;
+        return placementDirectory_;
     }
 
     /**
@@ -207,7 +207,7 @@ public:
     /**
      * @brief Locate the metadata owner endpoint for one object key via the placement read path.
      * @param[in] objKey Business object key.
-     * @param[in] requireAvailableTarget Whether the owner must be READY in the local worker directory.
+     * @param[in] requireAvailableTarget Whether the owner must be READY in the local placement directory.
      * @param[out] metaAddrInfo Resolved owner endpoint and worker id as a MetaAddrInfo.
      * @return K_OK on success; K_NOT_READY if no routing snapshot or facade is available; K_NOT_FOUND if the owner
      * endpoint is absent; K_RPC_UNAVAILABLE when requireAvailableTarget rejects a non-READY owner.
@@ -224,7 +224,7 @@ public:
      * @return True when the policy decides to REDIRECT (newAddr filled), false for SERVE_LOCAL or when the local
      * routing state cannot evaluate the request.
      *
-     * Serves master metadata response filling. Only reads local immutable snapshots and worker-directory facts;
+     * Serves master metadata response filling. Only reads local immutable snapshots and placement-directory facts;
      * does not scan tasks, wait for topology progress, or access the backend.
      */
     bool EvaluateRedirect(const std::string &key, std::string &newAddr);
@@ -823,7 +823,7 @@ protected:
             flushed = true;
         }
         if (flushed) {
-            PublishWorkerDirectorySnapshot();
+            PublishPlacementDirectorySnapshot();
         }
         return Status::OK();
     }
@@ -881,12 +881,12 @@ protected:
                                    const topology::BatchRouteDecision &decision, MetaAddrInfo &metaAddrInfo) const;
 
     /**
-     * @brief Publish an immutable R0 worker directory snapshot from hash-ring worker facts and cluster node state.
+     * @brief Publish an immutable R0 placement directory snapshot from hash-ring worker facts and cluster node state.
      *
      * This method only reads local memory and swaps a shared pointer. It must not perform RPC probing, repository IO,
      * CAS/List/Watch, task scan, migration, recovery, or cleanup.
      */
-    void PublishWorkerDirectorySnapshot();
+    void PublishPlacementDirectorySnapshot();
 
     using TbbNodeTable = tbb::concurrent_hash_map<HostPort, std::unique_ptr<ClusterNode>, HashCompare>;
 
@@ -907,7 +907,7 @@ protected:
     std::unordered_map<std::string, TimerQueue::TimerImpl> nodeTableCompletionTimer_;
 
     topology::ICoordinationBackend *clusterStore_;
-    std::shared_ptr<topology::WorkerDirectory> workerDirectory_;
+    std::shared_ptr<topology::PlacementDirectory> placementDirectory_;
     std::shared_ptr<topology::IRoutingView> routingView_;
     std::shared_ptr<topology::IPlacementFacade> placementFacade_;
     mutable std::shared_timed_mutex mutex_;  // TbbNodeTable is not threadsafe for iterations

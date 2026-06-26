@@ -15,28 +15,31 @@
  */
 
 /**
- * Description: R0 routing snapshot view.
+ * Description: Request-local R0 routing cache.
  */
-#include "datasystem/worker/topology/routing/routing_view.h"
-
-#include <mutex>
-#include <utility>
+#include "datasystem/topology/routing/routing_cache.h"
 
 namespace datasystem {
 namespace topology {
 
-Status RoutingView::GetSnapshot(std::shared_ptr<const RoutingSnapshot> &snapshot) const
+RoutingCache::RoutingCache(size_t reserve)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    snapshot = snapshot_;
-    CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_NOT_READY, "Routing snapshot is not published.");
-    return Status::OK();
+    cache_.reserve(reserve);
 }
 
-void RoutingView::Publish(std::shared_ptr<const RoutingSnapshot> snapshot)
+bool RoutingCache::Lookup(const RouteCacheKey &key, RouteDecision &decision)
 {
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    snapshot_ = std::move(snapshot);
+    auto iter = cache_.find(key);
+    if (iter == cache_.end()) {
+        return false;
+    }
+    decision = iter->second;
+    return true;
+}
+
+void RoutingCache::Store(const RouteCacheKey &key, const RouteDecision &decision)
+{
+    cache_[key] = decision;
 }
 
 }  // namespace topology

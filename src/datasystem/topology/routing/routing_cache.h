@@ -17,13 +17,13 @@
 /**
  * Description: Request-local R0 routing cache.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_CACHE_H
-#define DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_CACHE_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_CACHE_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_CACHE_H
 
 #include <cstddef>
 #include <unordered_map>
 
-#include "datasystem/worker/topology/runtime/placement_types.h"
+#include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
 namespace topology {
@@ -78,4 +78,4 @@ private:
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_CACHE_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_CACHE_H

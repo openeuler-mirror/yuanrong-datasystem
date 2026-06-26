@@ -81,6 +81,40 @@ Status ClusterMembership::GetSnapshot(std::shared_ptr<const MembershipSnapshot> 
     return Status::OK();
 }
 
+Status ClusterMembership::GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const
+{
+    record = {};
+    std::shared_ptr<const MembershipSnapshot> snapshot;
+    RETURN_IF_NOT_OK(GetSnapshot(snapshot));
+    auto iter = snapshot->workers.find(workerId);
+    CHECK_FAIL_RETURN_STATUS(iter != snapshot->workers.end(), K_NOT_FOUND, "worker is absent from membership snapshot");
+    record = iter->second;
+    return Status::OK();
+}
+
+Status ClusterMembership::GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const
+{
+    endpoint = {};
+    WorkerRecord record;
+    RETURN_IF_NOT_OK(GetWorkerRecord(workerId, record));
+    CHECK_FAIL_RETURN_STATUS(record.serviceState == WorkerServiceState::READY, K_NOT_FOUND, "worker is not ready");
+    endpoint = record.endpoint;
+    return Status::OK();
+}
+
+Status ClusterMembership::ListReadyWorkers(std::vector<WorkerRecord> &workers) const
+{
+    workers.clear();
+    std::shared_ptr<const MembershipSnapshot> snapshot;
+    RETURN_IF_NOT_OK(GetSnapshot(snapshot));
+    for (const auto &entry : snapshot->workers) {
+        if (entry.second.serviceState == WorkerServiceState::READY) {
+            workers.push_back(entry.second);
+        }
+    }
+    return Status::OK();
+}
+
 Status ClusterMembership::BuildLocalScaleInRequest(ScaleInReason reason, ScaleInRequest &request,
                                                    Revision &observedRevision) const
 {

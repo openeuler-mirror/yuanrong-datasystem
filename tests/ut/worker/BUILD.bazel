@@ -48,6 +48,7 @@ ds_cc_test(
     srcs = ["object_cache/node_selector_test.cpp"],
     deps = [
         "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/topology:topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",

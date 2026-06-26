@@ -17,12 +17,12 @@
 /**
  * Description: Worker-facing topology repository.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
-#define DATASYSTEM_COMMON_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
+#ifndef DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
+#define DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
 
 #include <vector>
 
-#include "datasystem/topology/coordination_backend/i_coordination_backend.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/model/topology_types.h"
 #include "datasystem/topology/repository/topology_repository_codec.h"
 
@@ -109,4 +109,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
+#endif  // DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H

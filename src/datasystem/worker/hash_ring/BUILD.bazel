@@ -46,7 +46,7 @@ ds_cc_library(
         "//src/datasystem/worker/hash_ring:hash_ring_allocator",
         "//src/datasystem/worker/hash_ring:hash_ring_event",
         "//src/datasystem/worker/hash_ring:hash_ring_tools",
-        "//src/datasystem/worker/topology:worker_topology_routing",
+        "//src/datasystem/topology:topology",
         "//src/datasystem/protos:object_posix_cc_proto",
         "@com_google_protobuf//:protobuf",
     ],

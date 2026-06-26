@@ -17,7 +17,7 @@
 /**
  * Description: B0 placement facade.
  */
-#include "datasystem/worker/topology/runtime/placement_facade.h"
+#include "datasystem/topology/routing/placement_facade.h"
 
 #include <algorithm>
 #include <utility>
@@ -30,15 +30,14 @@ namespace topology {
 namespace {
 bool ContainsHash(const Range &range, uint32_t hash)
 {
-    return PlacementUnit{ range.first, range.second }.Contains(hash);
+    return RoutingRange{ range.first, range.second }.Contains(hash);
 }
 
 }  // namespace
 
 PlacementFacade::PlacementFacade(std::shared_ptr<IWorkerLocator> locator,
                                  std::shared_ptr<IRedirectPolicy> redirectPolicy)
-    : locator_(std::move(locator)),
-      redirectPolicy_(std::move(redirectPolicy))
+    : locator_(std::move(locator)), redirectPolicy_(std::move(redirectPolicy))
 {
 }
 

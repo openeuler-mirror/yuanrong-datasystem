@@ -9,7 +9,7 @@ set(WORKER_HASH_RING_DEPEND_LIBS
         coordination_backend
         posix_protos
         worker_health_check
-        worker_topology_routing
+        topology
         )
 
 add_library(worker_hash_ring STATIC ${HASH_RING_SRCS})

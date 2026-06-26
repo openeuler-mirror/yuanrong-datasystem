@@ -17,8 +17,8 @@
 /**
  * Description: Topology change request boundary for worker lifecycle.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
-#define DATASYSTEM_COMMON_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
+#ifndef DATASYSTEM_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
+#define DATASYSTEM_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
 
 #include "datasystem/topology/membership/cluster_membership.h"
 #include "datasystem/topology/membership/membership_types.h"
@@ -65,4 +65,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
+#endif  // DATASYSTEM_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H

@@ -17,8 +17,8 @@
 /**
  * Description: B0/R0 placement boundary DTOs.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_TYPES_H
-#define DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_TYPES_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_TYPES_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_TYPES_H
 
 #include <cstdint>
 #include <string>
@@ -33,7 +33,7 @@
 namespace datasystem {
 namespace topology {
 
-struct PlacementUnit {
+struct RoutingRange {
     uint32_t rangeBegin = 0;
     uint32_t rangeEnd = 0;
 
@@ -60,12 +60,12 @@ enum class WorkerAvailability {
     UNCONFIRMED,
 };
 
-struct WorkerEndpoint {
-    WorkerEndpoint() : address()
+struct PlacementEndpoint {
+    PlacementEndpoint() : address()
     {
     }
 
-    WorkerEndpoint(std::string workerId, HostPort address, WorkerAvailability availability)
+    PlacementEndpoint(std::string workerId, HostPort address, WorkerAvailability availability)
         : workerId(std::move(workerId)), address(std::move(address)), availability(availability)
     {
     }
@@ -83,6 +83,7 @@ struct WorkerEndpoint {
 struct RouteOptions {
     bool requireAvailableTarget = false;
     bool centralizedMode = false;
+    HostPort masterAddress;
 };
 
 struct RouteDecision {
@@ -90,9 +91,9 @@ struct RouteDecision {
 
     uint32_t objectKeyHash = 0;
     int64_t routingVersion = -1;
-    PlacementUnit placementUnit;
+    RoutingRange placementUnit;
     std::string ownerWorkerId;
-    WorkerEndpoint ownerEndpoint;
+    PlacementEndpoint ownerEndpoint;
 
     MetaAddrInfo ToMetaAddrInfo() const
     {
@@ -118,7 +119,7 @@ struct LocalPlacementQuery {
 struct LocalPlacementDecision {
     uint32_t objectKeyHash = 0;
     int64_t routingVersion = -1;
-    PlacementUnit placementUnit;
+    RoutingRange placementUnit;
 };
 
 enum class RedirectAction {
@@ -130,9 +131,9 @@ struct RedirectDecision {
     RedirectDecision() = default;
 
     RedirectAction action = RedirectAction::SERVE_LOCAL;
-    WorkerEndpoint targetEndpoint;
+    PlacementEndpoint targetEndpoint;
 };
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_RUNTIME_PLACEMENT_TYPES_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_TYPES_H

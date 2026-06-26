@@ -15,41 +15,46 @@
  */
 
 /**
- * Description: Worker directory tests.
+ * Description: Cluster membership worker directory view tests.
  */
-#include "datasystem/topology/membership/worker_directory.h"
+#include "datasystem/topology/membership/cluster_membership.h"
 
-#include <memory>
 #include <string>
+#include <utility>
 
 #include "gtest/gtest.h"
 
-#include "datasystem/common/util/status_helper.h"
 #include "tests/ut/common.h"
 
 namespace datasystem {
 namespace topology {
 namespace {
 
-class FakeSnapshotProvider final : public IMembershipSnapshotProvider {
+class DirectoryRegistry final : public IClusterRegistry {
 public:
-    Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override
+    Status ListWorkers(MembershipSnapshot &snapshot) override
     {
-        ++callCount;
+        ++listCount;
         snapshot = snapshot_;
-        CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_NOT_READY, "snapshot is not ready");
         return Status::OK();
     }
 
-    void SetSnapshot(std::shared_ptr<const MembershipSnapshot> snapshot)
+    Status HandleWorkerEvent(const CoordinationEvent &event, WorkerWatchEvent &typed) override
+    {
+        (void)event;
+        (void)typed;
+        return Status(K_RUNTIME_ERROR, "watch is unused");
+    }
+
+    void SetSnapshot(MembershipSnapshot snapshot)
     {
         snapshot_ = std::move(snapshot);
     }
 
-    mutable uint64_t callCount{ 0 };
+    uint64_t listCount{ 0 };
 
 private:
-    std::shared_ptr<const MembershipSnapshot> snapshot_;
+    MembershipSnapshot snapshot_;
 };
 
 WorkerRecord MakeRecord(const std::string &workerId, WorkerServiceState state)
@@ -66,8 +71,9 @@ WorkerRecord MakeRecord(const std::string &workerId, WorkerServiceState state)
 
 TEST(WorkerDirectoryTest, SnapshotUnavailableReturnsNotReady)
 {
-    FakeSnapshotProvider provider;
-    WorkerDirectory directory(provider);
+    DirectoryRegistry registry;
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+    IWorkerDirectory &directory = membership;
 
     std::shared_ptr<const MembershipSnapshot> snapshot;
     EXPECT_EQ(directory.GetSnapshot(snapshot).GetCode(), K_NOT_READY);
@@ -77,19 +83,21 @@ TEST(WorkerDirectoryTest, SnapshotUnavailableReturnsNotReady)
     EXPECT_EQ(directory.GetReadyEndpoint("127.0.0.1:7001", endpoint).GetCode(), K_NOT_READY);
     std::vector<WorkerRecord> workers;
     EXPECT_EQ(directory.ListReadyWorkers(workers).GetCode(), K_NOT_READY);
-    EXPECT_EQ(provider.callCount, 4ul);
+    EXPECT_EQ(registry.listCount, 0ul);
 }
 
 TEST(WorkerDirectoryTest, ReadsOnlyImmutableSnapshot)
 {
-    auto snapshot = std::make_shared<MembershipSnapshot>();
-    snapshot->revision = 10;
-    snapshot->workers.emplace("127.0.0.1:7001", MakeRecord("127.0.0.1:7001", WorkerServiceState::READY));
-    snapshot->workers.emplace("127.0.0.1:7002", MakeRecord("127.0.0.1:7002", WorkerServiceState::START));
+    MembershipSnapshot snapshot;
+    snapshot.revision = 10;
+    snapshot.workers.emplace("127.0.0.1:7001", MakeRecord("127.0.0.1:7001", WorkerServiceState::READY));
+    snapshot.workers.emplace("127.0.0.1:7002", MakeRecord("127.0.0.1:7002", WorkerServiceState::START));
 
-    FakeSnapshotProvider provider;
-    provider.SetSnapshot(snapshot);
-    WorkerDirectory directory(provider);
+    DirectoryRegistry registry;
+    registry.SetSnapshot(std::move(snapshot));
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+    DS_ASSERT_OK(membership.Rebuild());
+    IWorkerDirectory &directory = membership;
 
     WorkerRecord record;
     DS_ASSERT_OK(directory.GetWorkerRecord("127.0.0.1:7001", record));
@@ -106,7 +114,7 @@ TEST(WorkerDirectoryTest, ReadsOnlyImmutableSnapshot)
     DS_ASSERT_OK(directory.ListReadyWorkers(workers));
     ASSERT_EQ(workers.size(), 1ul);
     EXPECT_EQ(workers[0].workerId, "127.0.0.1:7001");
-    EXPECT_GE(provider.callCount, 4ul);
+    EXPECT_EQ(registry.listCount, 1ul);
 }
 
 }  // namespace

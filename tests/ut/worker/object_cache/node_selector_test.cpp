@@ -35,7 +35,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
-#include "datasystem/worker/topology/routing/routing_view.h"
+#include "datasystem/topology/routing/routing_view.h"
 #include "eviction_manager_common.h"
 
 using namespace ::testing;
@@ -80,7 +80,7 @@ public:
 
     void PublishStandbyTopology(const std::vector<std::string> &workerAddrs)
     {
-        auto directory = std::make_shared<topology::WorkerDirectorySnapshot>();
+        auto directory = std::make_shared<topology::PlacementDirectorySnapshot>();
         directory->version = 1;
         directory->localWorkerId = workerAddress_.ToString();
         directory->localAddress = workerAddress_;
@@ -91,13 +91,13 @@ public:
             HostPort hostPort;
             DS_ASSERT_OK(hostPort.ParseString(workerAddr));
             directory->workers.emplace(
-                workerAddr, topology::WorkerEndpoint{ workerAddr, hostPort, topology::WorkerAvailability::READY });
+                workerAddr, topology::PlacementEndpoint{ workerAddr, hostPort, topology::WorkerAvailability::READY });
             directory->workerIdsByAddress.emplace(workerAddr, workerAddr);
             facts.workerOrder.emplace_back(workerAddr);
             facts.validWorkerIds.emplace(workerAddr);
             facts.activeWorkerIds.emplace(workerAddr);
         }
-        workerDirectory_->Publish(std::move(directory));
+        placementDirectory_->Publish(std::move(directory));
 
         auto routingView = std::dynamic_pointer_cast<topology::RoutingView>(routingView_);
         ASSERT_NE(routingView, nullptr);
@@ -528,8 +528,8 @@ TEST_F(NodeSelectorTest, TestGetStandbyWorkerPreFiveInExclude)
     excludeNodes.emplace(workerAddress2);
     excludeNodes.emplace(workerAddress3);
     excludeNodes.emplace(workerAddress4);
-    PublishStandbyTopology({ workerAddress0, workerAddress1, workerAddress2, workerAddress3, workerAddress4,
-                             workerAddress5 });
+    PublishStandbyTopology(
+        { workerAddress0, workerAddress1, workerAddress2, workerAddress3, workerAddress4, workerAddress5 });
     ASSERT_TRUE(CallGetStandbyWorker(excludeNodes, outNode).GetCode() == K_NOT_FOUND);
     ASSERT_TRUE(outNode.empty());
 }
@@ -627,7 +627,7 @@ public:
         hashRing_ = std::move(ring);
         DS_ASSERT_OK(hashRing_->InitWithoutEtcd(ringPb.SerializeAsString()));
         routingView_ = hashRing_->GetRoutingView();
-        PublishWorkerDirectorySnapshot();
+        PublishPlacementDirectorySnapshot();
     }
 };
 

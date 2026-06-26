@@ -4,6 +4,7 @@
 
 - Path(s):
   - `src/datasystem/worker/cluster_manager`
+  - routing read-path helpers in `src/datasystem/topology/routing`
   - shared coordination backend abstraction in `src/datasystem/topology/coordination_backend`
   - startup integration in `src/datasystem/worker/worker_oc_server.cpp`
   - worker readiness and reconciliation integration in `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp`
@@ -17,9 +18,12 @@
   - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/cluster_manager/cluster_manager.h`
   - `src/datasystem/worker/cluster_manager/cluster_node.h`
-  - `src/datasystem/topology/coordination_backend/i_coordination_backend.h`
+  - `src/datasystem/topology/coordination_backend/coordination_backend.h`
   - `src/datasystem/topology/coordination_backend/etcd_coordination_backend.h`
   - `src/datasystem/topology/coordination_backend/etcd_coordination_backend.cpp`
+  - `src/datasystem/topology/routing/placement_directory.h`
+  - `src/datasystem/topology/routing/routing_view.h`
+  - `src/datasystem/topology/routing/placement_facade.h`
   - `src/datasystem/worker/cluster_manager/worker_health_check.cpp`
   - `src/datasystem/worker/cluster_event_type.h`
   - `src/datasystem/worker/hash_ring/hash_ring_event.h`
@@ -39,16 +43,17 @@
   - drives passive scale-down by demoting timed-out nodes, notifying metadata/slot-recovery events, and calling `HashRing::RemoveWorkers`;
   - delegates voluntary scale-down to `HashRing::VoluntaryScaleDown` after marking local cluster-manager state as leaving;
   - triggers restart/network-recovery reconciliation through event subscribers;
-  - owns the B0 `PlacementFacade` backed by local R0 routing and worker-directory snapshots; business route and
+  - owns the B0 `PlacementFacade` backed by local R0 routing and placement-directory snapshots; business route and
     placement-scope callers use narrow `ClusterManager` methods such as `LocateMetaOwner`, `LocateMetaOwnersBatch`,
     `EvaluateRedirect`, and `IsInRange`, while `placementFacade_` stays internal;
   - routes batch metadata-owner groups through one `LocateMetaOwnersBatch` call that also applies local availability
     facts, so callers should not add a second `CheckConnection` pass after grouping;
   - evaluates master metadata redirect through `EvaluateRedirect`; the old hash-ring redirect event is not on the
     business redirect path;
-  - publishes an immutable R0 `WorkerDirectorySnapshot` through `ClusterManager::GetWorkerDirectory()` from
+  - publishes an immutable R0 `PlacementDirectorySnapshot` through `ClusterManager::GetPlacementDirectory()` from
     `clusterNodeTable_` membership, using hash-ring uuid/address facts only to resolve worker ids for node-table
-    addresses; topology availability is two-state (`READY` or `NOT_READY`) and follows `ClusterNode::IsActive()`;
+    addresses; topology availability is `READY`, `NOT_READY`, or `UNCONFIRMED`, where `UNCONFIRMED` means the worker id
+    is present in the routing facts but the local node table has not confirmed its current state yet;
   - routes outward-facing fact queries such as connection availability, worker-id lookup by address, primary replica lookup, valid/active worker lists, standby worker lookup, local worker uuid, worker count, and local hash ranges through topology snapshots instead of direct `hashRing_` or `clusterNodeTable_` reads;
   - exposes a worker readiness probe file through `worker_health_check`.
 - Pending verification:
@@ -76,6 +81,9 @@
 - Candidate sibling submodules considered:
   - `src/datasystem/topology/coordination_backend` owns the reusable `ICoordinationBackend` and
     `EtcdCoordinationBackend` abstraction so topology code does not depend on worker internals.
+  - `src/datasystem/topology/routing` owns the reusable routing/placement read-path DTOs, immutable routing snapshots,
+    placement directory, locator, redirect policy, and facade that `ClusterManager` composes for the current worker
+    endpoint path.
   - `runtime.hash-ring` owns persisted ring state, token/range algorithms, and migration task records.
   - `runtime.etcd-metadata` owns ETCD/Metastore RPC, watch, lease, and CAS mechanics.
   - object-cache and stream-cache metadata managers own actual metadata recovery, reconciliation, and clearing.

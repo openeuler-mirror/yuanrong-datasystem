@@ -17,8 +17,8 @@
 /**
  * Description: Immutable R0 routing snapshot.
  */
-#ifndef DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H
-#define DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H
+#ifndef DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H
+#define DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H
 
 #include <algorithm>
 #include <cstddef>
@@ -28,25 +28,25 @@
 #include <vector>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/topology/runtime/placement_types.h"
+#include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
 namespace topology {
 
 struct RoutingOwnerEntry {
-    PlacementUnit unit;
+    RoutingRange unit;
     std::string ownerWorkerId;
 };
 
 struct RoutingRedirectHint {
-    PlacementUnit unit;
+    RoutingRange unit;
     std::string targetWorkerId;
     HostPort targetAddress;
 };
 
 struct RoutingSnapshotFacts {
     std::vector<RoutingRedirectHint> redirectHints;
-    std::vector<PlacementUnit> localOwnedRanges;
+    std::vector<RoutingRange> localOwnedRanges;
     std::vector<std::string> workerOrder;
     std::unordered_set<std::string> validWorkerIds;
     std::unordered_set<std::string> activeWorkerIds;
@@ -155,7 +155,7 @@ public:
      * @brief Return local worker owned hash ranges.
      * @return Local owned hash ranges.
      */
-    const std::vector<PlacementUnit> &LocalOwnedRanges() const
+    const std::vector<RoutingRange> &LocalOwnedRanges() const
     {
         return localOwnedRanges_;
     }
@@ -199,8 +199,8 @@ public:
         auto iter = std::find(workerOrder_.begin(), workerOrder_.end(), workerId);
         CHECK_FAIL_RETURN_STATUS(iter != workerOrder_.end(), K_NOT_FOUND, "Worker is not found in topology order.");
         for (size_t i = 1; i < workerOrder_.size(); ++i) {
-            const auto &candidate = workerOrder_[(static_cast<size_t>(iter - workerOrder_.begin()) + i)
-                                                 % workerOrder_.size()];
+            const auto &candidate =
+                workerOrder_[(static_cast<size_t>(iter - workerOrder_.begin()) + i) % workerOrder_.size()];
             if (candidate != workerId) {
                 nextWorkerId = candidate;
                 return Status::OK();
@@ -211,7 +211,7 @@ public:
 
 private:
     /**
-     * @brief Find the entry whose PlacementUnit covers objectHash via binary search + wrapped-front fallback.
+     * @brief Find the entry whose RoutingRange covers objectHash via binary search + wrapped-front fallback.
      * @param[in] entries Entries sorted by unit.rangeEnd (owners or redirect hints).
      * @param[in] objectHash Hash value of the business key.
      * @return Pointer to the matching entry, or nullptr if none covers the hash.
@@ -241,18 +241,16 @@ private:
      */
     void Sort()
     {
-        std::sort(sortedOwners_.begin(), sortedOwners_.end(), [](const auto &lhs, const auto &rhs) {
-            return lhs.unit.rangeEnd < rhs.unit.rangeEnd;
-        });
-        std::sort(redirectHints_.begin(), redirectHints_.end(), [](const auto &lhs, const auto &rhs) {
-            return lhs.unit.rangeEnd < rhs.unit.rangeEnd;
-        });
+        std::sort(sortedOwners_.begin(), sortedOwners_.end(),
+                  [](const auto &lhs, const auto &rhs) { return lhs.unit.rangeEnd < rhs.unit.rangeEnd; });
+        std::sort(redirectHints_.begin(), redirectHints_.end(),
+                  [](const auto &lhs, const auto &rhs) { return lhs.unit.rangeEnd < rhs.unit.rangeEnd; });
     }
 
     int64_t version_ = -1;
     std::vector<RoutingOwnerEntry> sortedOwners_;
     std::vector<RoutingRedirectHint> redirectHints_;
-    std::vector<PlacementUnit> localOwnedRanges_;
+    std::vector<RoutingRange> localOwnedRanges_;
     std::vector<std::string> workerOrder_;
     std::unordered_set<std::string> validWorkerIds_;
     std::unordered_set<std::string> activeWorkerIds_;
@@ -260,4 +258,4 @@ private:
 
 }  // namespace topology
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H
+#endif  // DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_SNAPSHOT_H

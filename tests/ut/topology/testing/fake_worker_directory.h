@@ -15,24 +15,34 @@
  */
 
 /**
- * Description: Worker directory read view.
+ * Description: Worker directory fake for module tests.
  */
-#ifndef DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
-#define DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
+#ifndef TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H
+#define TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H
+
+#include <memory>
+#include <mutex>
 
 #include "datasystem/topology/membership/membership_types.h"
 
 namespace datasystem {
 namespace topology {
 
-class WorkerDirectory final : public IWorkerDirectory {
+class FakeWorkerDirectory final : public IWorkerDirectory {
 public:
-    explicit WorkerDirectory(IMembershipSnapshotProvider &snapshotProvider);
-    ~WorkerDirectory() override = default;
-    WorkerDirectory(const WorkerDirectory &) = delete;
-    WorkerDirectory &operator=(const WorkerDirectory &) = delete;
-    WorkerDirectory(WorkerDirectory &&) = delete;
-    WorkerDirectory &operator=(WorkerDirectory &&) = delete;
+    FakeWorkerDirectory() = default;
+    ~FakeWorkerDirectory() override = default;
+    FakeWorkerDirectory(const FakeWorkerDirectory &) = delete;
+    FakeWorkerDirectory &operator=(const FakeWorkerDirectory &) = delete;
+    FakeWorkerDirectory(FakeWorkerDirectory &&) = delete;
+    FakeWorkerDirectory &operator=(FakeWorkerDirectory &&) = delete;
+
+    /**
+     * @brief Seed one immutable membership snapshot.
+     * @param[in] snapshot Snapshot exposed through IWorkerDirectory.
+     * @return K_OK on success.
+     */
+    Status SeedSnapshot(const MembershipSnapshot &snapshot);
 
     Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
     Status GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const override;
@@ -40,10 +50,11 @@ public:
     Status ListReadyWorkers(std::vector<WorkerRecord> &workers) const override;
 
 private:
-    IMembershipSnapshotProvider &snapshotProvider_;
+    mutable std::mutex mutex_;
+    std::shared_ptr<const MembershipSnapshot> snapshot_;
 };
 
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_TOPOLOGY_MEMBERSHIP_WORKER_DIRECTORY_H
+#endif  // TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H

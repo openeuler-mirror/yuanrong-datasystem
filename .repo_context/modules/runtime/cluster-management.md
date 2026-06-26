@@ -5,6 +5,7 @@
 - Paths:
   - `src/datasystem/worker/cluster_manager`
   - `src/datasystem/worker/hash_ring`
+  - `src/datasystem/topology/routing`
   - `third_party/protos/etcd`
   - `src/datasystem/common/kvstore/etcd`
   - `src/datasystem/common/kvstore/metastore`
@@ -76,7 +77,7 @@ Use this file as the cross-module map. Use the detailed package for source-level
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h` defines the worker-side watch RPC service skeleton and inherits from generated `CoordinatorWatchService`.
   - `src/datasystem/common/coordinator/coordinator_service_proxy.h` defines the shared `ICoordinatorServiceProxy` interface and `CoordinatorServiceProxyImpl` skeleton for worker and tests.
   - `src/datasystem/common/coordinator` currently contains only the shared coordinator service proxy skeleton and key/value entry helpers for this phase.
-  - `src/datasystem/topology/coordination_backend/i_coordination_backend.h` defines the topology coordination backend
+  - `src/datasystem/topology/coordination_backend/coordination_backend.h` defines the topology coordination backend
     abstraction used by `ClusterManager` and hash-ring code; `EtcdCoordinationBackend` adapts the current `EtcdStore`
     backend into that abstraction.
 - Current limitation:
