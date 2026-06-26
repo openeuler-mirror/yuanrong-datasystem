@@ -466,7 +466,10 @@ bool FlagManager::ParseCommandLineFlagsFromArgsLocked(const std::unordered_map<s
             continue;
         }
         auto &flag = it->second;
-        if (flagKv.second.empty()) {
+        // Map args distinguish absent keys from explicit empty strings. Non-string flags treat
+        // "" as a missing value; string flags forward "" to Assign/validator (empty may disable
+        // a feature when ValidatePathString and similar validators allow it).
+        if (flagKv.second.empty() && flag.type_ != FLAG_STRING) {
             errorFlags_[flagKv.first] =
                 "Error: flag '" + flagKv.first + "' is missing its argument; flag description: " + flag.meaning_ + "\n";
             continue;

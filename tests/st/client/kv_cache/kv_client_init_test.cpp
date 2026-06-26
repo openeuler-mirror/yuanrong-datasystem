@@ -31,9 +31,12 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/connection.h"
+#include "datasystem/utils/kv_client_config.h"
 
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_uint32(log_async_queue_size);
+DS_DECLARE_int32(v);
+DS_DECLARE_string(monitor_config_file);
 
 namespace datasystem {
 namespace st {
@@ -194,6 +197,39 @@ TEST_F(KVClientInitTest, ConfigAfterDefaultInitDoesNotOverrideProcessConfig)
         if (FLAGS_max_log_size == FIRST_MAX_LOG_SIZE_MB || FLAGS_log_async_queue_size == FIRST_LOG_ASYNC_QUEUE_SIZE
             || FLAGS_zmq_client_io_thread == FIRST_ZMQ_CLIENT_IO_THREAD) {
             LOG(ERROR) << "Config after default Init unexpectedly overrides process-level config.";
+            return 1;
+        }
+        return 0;
+    });
+}
+
+TEST_F(KVClientInitTest, EmptyMonitorConfigPathAllowsUpdateConfig)
+{
+    auto connectOptions = GetConnectOptions();
+    RunInChildProcess([connectOptions]() -> int {
+        unsetenv("DATASYSTEM_CLIENT_CONFIG_PATH");
+        KVClientConfig config;
+        auto buildStatus = KVClientConfig::Builder().MonitorConfigPath("").Build(config);
+        if (buildStatus.IsError()) {
+            LOG(ERROR) << "Build KVClientConfig failed: " << buildStatus.ToString();
+            return 1;
+        }
+        KVClient client(connectOptions);
+        if (client.Init(config).IsError()) {
+            LOG(ERROR) << "Init with empty MonitorConfigPath failed.";
+            return 1;
+        }
+        if (!FLAGS_monitor_config_file.empty()) {
+            LOG(ERROR) << "Expected empty monitor_config_file, actual: " << FLAGS_monitor_config_file;
+            return 1;
+        }
+        auto updateStatus = client.UpdateConfig(R"({"v":"2"})");
+        if (updateStatus.IsError()) {
+            LOG(ERROR) << "UpdateConfig failed: " << updateStatus.ToString();
+            return 1;
+        }
+        if (FLAGS_v != 2) {
+            LOG(ERROR) << "Unexpected v after UpdateConfig, expect: 2, actual: " << FLAGS_v;
             return 1;
         }
         return 0;

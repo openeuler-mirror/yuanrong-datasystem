@@ -101,25 +101,39 @@ bool IsValidNonEmptyLogBaseName(const std::string &value)
     return re2::RE2::FullMatch(value, pattern);
 }
 
-bool ValidateAccessLogNameArg(const std::unordered_map<std::string, std::string> &args)
+void ValidateAccessLogNameArg(const std::unordered_map<std::string, std::string> &args,
+                              std::vector<std::string> &errors)
 {
     auto it = args.find("client_access_log_filename");
     if (it == args.end() || it->second.empty()) {
-        return true;
+        return;
     }
-    return IsValidNonEmptyLogBaseName(it->second);
+    if (!IsValidNonEmptyLogBaseName(it->second)) {
+        AddError(errors, "AccessLogName", "must contain only a-z, A-Z, 0-9, and underscore");
+    }
 }
 
-void ValidateNonEmptyPathArg(const std::unordered_map<std::string, std::string> &args, const std::string &key,
-                             const std::string &fieldName, std::vector<std::string> &errors)
+void ValidatePathArg(const std::unordered_map<std::string, std::string> &args, const std::string &key,
+                     const std::string &fieldName, std::vector<std::string> &errors, bool allowEmpty)
 {
-    if (!ValidateNonEmptyArg(args, key)) {
+    if (allowEmpty) {
+        auto it = args.find(key);
+        if (it == args.end() || it->second.empty()) {
+            return;
+        }
+    } else if (!ValidateNonEmptyArg(args, key)) {
         AddError(errors, fieldName, "must not be empty");
         return;
     }
     if (!ValidateStringArg(args, key, &Validator::ValidatePathString)) {
         AddError(errors, fieldName, "must be a valid path");
     }
+}
+
+void ValidateNonEmptyPathArg(const std::unordered_map<std::string, std::string> &args, const std::string &key,
+                             const std::string &fieldName, std::vector<std::string> &errors)
+{
+    ValidatePathArg(args, key, fieldName, errors, false);
 }
 
 void ValidateKvClientStringFields(const std::unordered_map<std::string, std::string> &args,
@@ -131,10 +145,8 @@ void ValidateKvClientStringFields(const std::unordered_map<std::string, std::str
     } else if (!ValidateStringArg(args, "log_filename", &Validator::ValidateEligibleChar)) {
         AddError(errors, "LogName", "contains unsupported characters");
     }
-    if (!ValidateAccessLogNameArg(args)) {
-        AddError(errors, "AccessLogName", "must contain only a-z, A-Z, 0-9, and underscore");
-    }
-    ValidateNonEmptyPathArg(args, "monitor_config_file", "MonitorConfigPath", errors);
+    ValidateAccessLogNameArg(args, errors);
+    ValidatePathArg(args, "monitor_config_file", "MonitorConfigPath", errors, true);
 }
 
 void ValidateKvClientNumericFields(const std::unordered_map<std::string, std::string> &args,
