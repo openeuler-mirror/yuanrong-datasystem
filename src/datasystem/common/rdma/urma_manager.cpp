@@ -850,20 +850,21 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
     auto config = GetServerLatencyTraceConfig();
+    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
+    if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
+        return Status(K_URMA_WAIT_TIMEOUT,
+                      FormatString("urma write deadline exceeded: %fms, %s", totalElapsedMs, waitRc.GetMsg()));
+    }
     SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs, 1,
-                        "[URMA_ELAPSED_TOTAL]: Time from before urma_post_jetty_send_wr to write completion cost "
-                        << totalElapsedMs << "ms, wait time: " << waitElapsedMs << "ms, request id:" << requestId
+                        "[URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost "
+                        << totalElapsedMs << "ms, wait os sched thread finish time(std::condition_variable.wait_for): "
+                        << waitElapsedMs << "ms, request id:" << requestId
                         << ", src address:" << localUrmaInfo_.localAddress.ToString()
                         << ", target address:" << event->GetRemoteAddress() << ", dataSize:" << event->GetDataSize()
                         << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
                         << ", urma_inflight_wr_count: " << tbbEventMap_.size()
                         << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
-    if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
-        return Status(K_URMA_WAIT_TIMEOUT,
-                      FormatString("urma write deadline exceeded: %fms, %s", totalElapsedMs, waitRc.GetMsg()));
-    }
     RETURN_IF_NOT_OK(waitRc);
-    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
     waitPoint.Record();
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     return Status::OK();
