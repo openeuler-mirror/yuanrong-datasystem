@@ -86,7 +86,7 @@ public:
             // otherwise Consume dereferences a dangling Controller → SIGSEGV.
             // Timeout bounds the wait in case the peer is unresponsive.
             std::unique_lock<std::mutex> lk(readMtx_);
-            bool closed = readCond_.wait_for(lk, std::chrono::seconds(5),
+            bool closed = readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
                 [this] { return streamEnd_ || readError_; });
             streamId_ = brpc::INVALID_STREAM_ID;
             if (!closed) {
@@ -186,6 +186,12 @@ public:
             if (embedded.IsError()) {
                 if (streamId_ != brpc::INVALID_STREAM_ID) {
                     brpc::StreamClose(streamId_);
+                    // StreamClose is async. Must wait for on_closed/on_failed before
+                    // resetting Controller, otherwise brpc IO bthread may still
+                    // dereference it via Stream::Consume → UAF.
+                    std::unique_lock<std::mutex> lk(readMtx_);
+                    readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
+                        [this] { return streamEnd_ || readError_; });
                     streamId_ = brpc::INVALID_STREAM_ID;
                 }
                 stream_cntl_.reset();
@@ -193,6 +199,12 @@ public:
             }
             if (streamId_ != brpc::INVALID_STREAM_ID) {
                 brpc::StreamClose(streamId_);
+                // StreamClose is async. Must wait for on_closed/on_failed before
+                // resetting Controller, otherwise brpc IO bthread may still
+                // dereference it via Stream::Consume → UAF.
+                std::unique_lock<std::mutex> lk(readMtx_);
+                readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
+                    [this] { return streamEnd_ || readError_; });
                 streamId_ = brpc::INVALID_STREAM_ID;
             }
             auto errText = stream_cntl_->ErrorText();
@@ -268,15 +280,18 @@ public:
         }
         if (streamId_ != brpc::INVALID_STREAM_ID) {
             brpc::StreamClose(streamId_);
-            // Same constraint as destructor: StreamClose is async, must wait
-            // for on_closed/on_failed before resetting Controller, otherwise
-            // brpc IO bthread may still dereference it → UAF.
             std::unique_lock<std::mutex> lk(readMtx_);
-            readCond_.wait_for(lk, std::chrono::seconds(5),
+            bool closed = readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
                 [this] { return streamEnd_ || readError_; });
             streamId_ = brpc::INVALID_STREAM_ID;
+            if (closed) {
+                stream_cntl_.reset();
+            } else {
+                (void)stream_cntl_.release();
+            }
+        } else {
+            stream_cntl_.reset();
         }
-        stream_cntl_.reset();
         return Status::OK();
     }
 

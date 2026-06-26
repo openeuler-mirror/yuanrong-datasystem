@@ -741,25 +741,15 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
         }
     }
 
-    // Check whether the RPC service is started based on whether the process listens to the IP port.
-    const bool checkBrpc = []() {
-        const char *env = std::getenv("DS_USE_BRPC");
-        return env != nullptr && std::string(env) == "1";
-    }();
+    // Check whether the RPC service is started by verifying the process listens on the IP port.
+    // In both ZMQ-only mode and brpc mode (kBrpcPortOffset=0), the same port is used, so a
+    // single CheckIpPortListen suffices.  If kBrpcPortOffset ever becomes non-zero, add a
+    // second CheckIpPortListen for addr.Port() + kBrpcPortOffset.
     for (auto addr : allAddrs) {
         timeval curr;
         gettimeofday(&curr, nullptr);
         int timeout = deadLine - curr.tv_sec;
         RETURN_IF_NOT_OK(CheckIpPortListen(addr, timeout));
-        // Also verify the brpc port (ZMQ port + 10000) is listening when brpc mode is enabled.
-        if (checkBrpc) {
-            HostPort hp;
-            RETURN_IF_NOT_OK(hp.ParseString(addr));
-            gettimeofday(&curr, nullptr);
-            timeout = deadLine - curr.tv_sec;
-            HostPort brpcAddr(hp.Host(), hp.Port() + 10000);
-            RETURN_IF_NOT_OK(CheckIpPortListen(brpcAddr.ToString(), timeout));
-        }
     }
 
     LOG(INFO) << "All processes are started successfully. numMasters:" << opts_.numMasters

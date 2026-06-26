@@ -147,8 +147,16 @@ public:
 
         /**
          * @brief Build and start RPC server.
-         * @param[in] Built rpc server.
-         * @return A rpc server.
+         *
+         * In ZMQ mode (useBrpc_=false): starts ZMQ server and returns.
+         * In brpc mode (useBrpc_=true):  only builds the server skeleton;
+         *   does NOT start brpc.  The caller must register brpc adapter
+         *   services via AddBrpcService(), then call
+         *   server->StartBrpcServer(brpcAddr_, brpcPort_) explicitly.
+         *   See WorkerOCServer::Init() for the canonical usage pattern.
+         *
+         * @param[out] server Built rpc server.
+         * @return Status of the call.
          */
         Status BuildAndStart(std::unique_ptr<RpcServer> &server) const;
 

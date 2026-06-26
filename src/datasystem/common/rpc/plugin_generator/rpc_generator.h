@@ -17,8 +17,8 @@
 /**
  * Description: Zmq Plugin Generator.
  */
-#ifndef DATASYSTEM_COMMON_RPC_ZMQ_PLUGIN_H
-#define DATASYSTEM_COMMON_RPC_ZMQ_PLUGIN_H
+#ifndef DATASYSTEM_COMMON_RPC_PLUGIN_GENERATOR_RPC_GENERATOR_H
+#define DATASYSTEM_COMMON_RPC_PLUGIN_GENERATOR_RPC_GENERATOR_H
 #include <map>
 #include <memory>
 
@@ -44,10 +44,10 @@ static std::unordered_set<std::string> CRITICAL_FUNCTIONS{ "Publish",    "Get", 
 static std::unordered_set<std::string> CRITICAL_ASYNC_FUNCTIONS{ "GetObjectRemote" };
 static const std::string exchangeJfrMethodName = "ExchangeJfr";
 
-class ZmqRpcGenerator : public compiler::CodeGenerator {
+class RpcGenerator : public compiler::CodeGenerator {
 public:
-    explicit ZmqRpcGenerator(bool stubHeaderOnly = false) : stubHeaderOnly(stubHeaderOnly){};
-    ~ZmqRpcGenerator() override = default;
+    explicit RpcGenerator(bool stubHeaderOnly = false) : stubHeaderOnly(stubHeaderOnly){};
+    ~RpcGenerator() override = default;
 
     /**
      * @brief This method implement the abstract method to parse the Service descriptor and generates two
@@ -538,4 +538,4 @@ private:
 
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_RPC_ZMQ_PLUGIN_H
+#endif  // DATASYSTEM_COMMON_RPC_PLUGIN_GENERATOR_RPC_GENERATOR_H

@@ -44,10 +44,11 @@
 #include <vector>
 
 #include <brpc/controller.h>
-#include <securec.h>
+#include <sys/time.h>
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -93,6 +94,28 @@ public:
         // The brpc adapter generator guarantees the types match.
         request_ = dynamic_cast<const R *>(request);
         response_ = dynamic_cast<W *>(response);
+
+        // P3: Store scTimeoutDuration per-adapter so it survives bthread M:N
+        // migration.  Under brpc, a bthread may yield and resume on a different
+        // pthread whose thread_local scTimeoutDuration copy is stale.  Service
+        // implementations should use GetScTimeoutDuration() instead of the
+        // thread_local after yield points (sub-RPC calls).
+        if (cntl_ != nullptr) {
+            int64_t deadlineUs = cntl_->deadline_us();
+            if (deadlineUs > 0) {
+                struct timeval tv;
+                gettimeofday(&tv, nullptr);
+                int64_t nowUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec;
+                int64_t remainingMs = (deadlineUs - nowUs + 999) / 1000;
+                if (remainingMs > 0) {
+                    scTimeoutDuration_.Init(remainingMs);
+                } else {
+                    scTimeoutDuration_.Init();
+                }
+            } else {
+                scTimeoutDuration_.Init();
+            }
+        }
     }
 
     ~BrpcServerUnaryWriterReader() override
@@ -341,6 +364,12 @@ public:
      */
     void SetHasRecvPayload(bool v) { recvPayloadOp_ = v; }
 
+    /**
+     * @brief Get per-adapter scTimeoutDuration (survives bthread M:N migration).
+     * Preferred over thread_local scTimeoutDuration after yield points.
+     */
+    const TimeoutDuration& GetScTimeoutDuration() const { return scTimeoutDuration_; }
+
 private:
     /**
      * @brief Complete the deferred RPC by running done_->Run().
@@ -407,31 +436,30 @@ private:
             return Status::OK();
         }
 
-        std::string buf = attach.to_string();
-        const char *data = buf.data();
-        size_t remaining = buf.size();
+        size_t remaining = attach.size();
         size_t offset = 0;
 
         CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
             "Malformed payload: missing count header");
         int64_t count = 0;
-        errno_t rc = memcpy_s(&count, sizeof(count), data + offset, sizeof(count));
-        CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for count header");
+        attach.copy_to(reinterpret_cast<char *>(&count), sizeof(count), offset);
         offset += sizeof(count);
 
         for (int64_t i = 0; i < count; ++i) {
             CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
                 "Malformed payload: truncated size header");
             int64_t sz = 0;
-            rc = memcpy_s(&sz, sizeof(sz), data + offset, sizeof(sz));
-            CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for size header");
+            attach.copy_to(reinterpret_cast<char *>(&sz), sizeof(sz), offset);
             offset += sizeof(sz);
 
+            CHECK_FAIL_RETURN_STATUS(sz >= 0, StatusCode::K_RUNTIME_ERROR,
+                "Malformed payload: negative frame size");
             CHECK_FAIL_RETURN_STATUS(offset + static_cast<size_t>(sz) <= remaining, StatusCode::K_RUNTIME_ERROR,
                 "Malformed payload: frame data exceeds attachment size");
 
             RpcMessage msg;
-            RETURN_IF_NOT_OK(msg.CopyBuffer(data + offset, static_cast<size_t>(sz)));
+            RETURN_IF_NOT_OK(msg.AllocMem(static_cast<size_t>(sz)));
+            attach.copy_to(static_cast<char *>(msg.Data()), static_cast<size_t>(sz), offset);
             payload.emplace_back(std::move(msg));
             offset += static_cast<size_t>(sz);
         }
@@ -446,6 +474,7 @@ private:
     std::atomic<bool> writeOnce_;
     std::atomic<bool> doneConsumed_;
     bool recvPayloadOp_;
+    TimeoutDuration scTimeoutDuration_;
 };
 
 }  // namespace datasystem

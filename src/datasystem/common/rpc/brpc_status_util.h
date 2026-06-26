@@ -33,6 +33,10 @@
 
 namespace datasystem {
 
+/// Timeout (seconds) for StreamClose to deliver on_closed/on_failed callback.
+/// Shared by brpc client streaming adapters to bound destructor wait time.
+inline constexpr int kStreamCloseTimeoutSec = 5;
+
 /**
  * @brief Try to extract an embedded Status from a brpc response protobuf.
  *
@@ -132,7 +136,10 @@ inline Status TryExtractStatusFromControllerError(const std::string &errorText)
     // Search for the \x01DS_ERR:<code>\x02 sentinel set by SendStatus.
     // \x01/\x02 (SOH/STX) delimiters prevent false matches on business error
     // text that may contain the literal substring "DS_ERR:".
-    size_t dsPos = errorText.find("\x01" "DS_ERR:");
+    // Use rfind to match the LAST (outermost) DS_ERR sentinel. In a call
+    // chain A→B→C, if C returns DS_ERR:5 and B wraps it as DS_ERR:7,
+    // the caller should see 7 (the error from the immediate callee).
+    size_t dsPos = errorText.rfind("\x01" "DS_ERR:");
     if (dsPos != std::string::npos) {
         size_t codeStart = dsPos + 8;
         size_t codeEnd = errorText.find("\x02", codeStart);

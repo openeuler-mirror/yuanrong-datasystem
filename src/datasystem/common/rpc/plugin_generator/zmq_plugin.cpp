@@ -20,12 +20,12 @@
 #include <google/protobuf/compiler/code_generator.h>
 #include <google/protobuf/compiler/plugin.h>
 
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 namespace compiler = google::protobuf::compiler;
 
 int main(int argc, char **argv)
 {
-    datasystem::ZmqRpcGenerator generator;
+    datasystem::RpcGenerator generator;
     return compiler::PluginMain(argc, argv, &generator);
 }

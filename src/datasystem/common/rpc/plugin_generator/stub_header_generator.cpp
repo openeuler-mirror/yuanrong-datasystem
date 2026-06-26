@@ -17,12 +17,12 @@
 /**
  * Description: Stub header generator.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 namespace datasystem {
 
-void ZmqRpcGenerator::CreateStubHeader(const google::protobuf::FileDescriptor &file,
-                                       compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateStubHeader(const google::protobuf::FileDescriptor &file,
+                                    compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".stub.rpc.pb.h"));
     io::Printer printer(outputFile.get(), '$');
@@ -41,8 +41,8 @@ void ZmqRpcGenerator::CreateStubHeader(const google::protobuf::FileDescriptor &f
     printer.PrintRaw(ENDIF);
 }
 
-void ZmqRpcGenerator::GenerateGenericStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                               const std::string &indent) const
+void RpcGenerator::GenerateGenericStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                            const std::string &indent) const
 {
     const std::string &svcName = svc.name();
     std::map<std::string, std::string> vars;
@@ -73,8 +73,8 @@ void ZmqRpcGenerator::GenerateGenericStubClass(io::Printer &printer, const googl
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::GenerateStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                        const std::string &indent) const
+void RpcGenerator::GenerateStubClass(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                     const std::string &indent) const
 {
     const std::string &svcName = svc.name();
     std::map<std::string, std::string> vars;
@@ -105,7 +105,7 @@ void ZmqRpcGenerator::GenerateStubClass(io::Printer &printer, const google::prot
     printer.PrintRaw("};\n");
 }
 
-void ZmqRpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -140,8 +140,8 @@ void ZmqRpcGenerator::GenerateStubPrologue(io::Printer &printer, const google::p
     printer.Print(vars, "#include <string>\n");
 }
 
-void ZmqRpcGenerator::ImplementStubApiDecl(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                           const std::string &indent)
+void RpcGenerator::ImplementStubApiDecl(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                        const std::string &indent)
 {
     for (auto j = 0; j < svc.method_count(); ++j) {
         if (svc.method(j) == nullptr) {
@@ -164,7 +164,7 @@ void ZmqRpcGenerator::ImplementStubApiDecl(io::Printer &printer, const google::p
     }
 }
 
-void ZmqRpcGenerator::ImplementGenericStubOtherFuncDecl(io::Printer &printer)
+void RpcGenerator::ImplementGenericStubOtherFuncDecl(io::Printer &printer)
 {
     const std::string otherFuncDecl =
         "    void ForgetRequest(int64_t tagId);\n"
@@ -174,9 +174,9 @@ void ZmqRpcGenerator::ImplementGenericStubOtherFuncDecl(io::Printer &printer)
     printer.PrintRaw(otherFuncDecl);
 }
 
-void ZmqRpcGenerator::ImplementStubAsyncWriteDecl(io::Printer &printer,
-                                                  const google::protobuf::MethodDescriptor &method,
-                                                  const std::string &indent)
+void RpcGenerator::ImplementStubAsyncWriteDecl(io::Printer &printer,
+                                               const google::protobuf::MethodDescriptor &method,
+                                               const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -191,8 +191,8 @@ void ZmqRpcGenerator::ImplementStubAsyncWriteDecl(io::Printer &printer,
         "$indent$::datasystem::Status $method$AsyncWrite(const $input_type$ &rq, int64_t &tagId$payload_send$);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent)
+void RpcGenerator::ImplementStubStreamingDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -207,9 +207,9 @@ void ZmqRpcGenerator::ImplementStubStreamingDecl(io::Printer &printer, const goo
                   "(std::unique_ptr<datasystem::ClientWriterReader<$input_type$, $output_type$>> *out);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubClientStreamingDecl(io::Printer &printer,
-                                                       const google::protobuf::MethodDescriptor &method,
-                                                       const std::string &indent)
+void RpcGenerator::ImplementStubClientStreamingDecl(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -222,9 +222,9 @@ void ZmqRpcGenerator::ImplementStubClientStreamingDecl(io::Printer &printer,
         vars, "$indent$::datasystem::Status $method$(std::unique_ptr<datasystem::ClientWriter<$input_type$>> *out);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubServerStreamingDecl(io::Printer &printer,
-                                                       const google::protobuf::MethodDescriptor &method,
-                                                       const std::string &indent)
+void RpcGenerator::ImplementStubServerStreamingDecl(io::Printer &printer,
+                                                    const google::protobuf::MethodDescriptor &method,
+                                                    const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -242,8 +242,8 @@ void ZmqRpcGenerator::ImplementStubServerStreamingDecl(io::Printer &printer,
         "const $input_type$ &rq$payload_send$);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubAsyncReadDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent)
+void RpcGenerator::ImplementStubAsyncReadDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -255,8 +255,8 @@ void ZmqRpcGenerator::ImplementStubAsyncReadDecl(io::Printer &printer, const goo
                   "::datasystem::RpcRecvFlags flags = ::datasystem::RpcRecvFlags::NONE);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubNoStreamDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                const std::string &indent)
+void RpcGenerator::ImplementStubNoStreamDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                             const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -270,8 +270,8 @@ void ZmqRpcGenerator::ImplementStubNoStreamDecl(io::Printer &printer, const goog
                   "$output_type$ &reply$payload_send$$payload_recv$);\n");
 }
 
-void ZmqRpcGenerator::ImplementStubNoStreamDecl2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                 const std::string &indent)
+void RpcGenerator::ImplementStubNoStreamDecl2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                              const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;
@@ -283,8 +283,8 @@ void ZmqRpcGenerator::ImplementStubNoStreamDecl2(io::Printer &printer, const goo
                   "\t\tstd::unique_ptr<datasystem::ClientUnaryWriterReader<$input_type$, $output_type$>> *out);\n");
 }
 
-void ZmqRpcGenerator::ImplStubNoStreamShortDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                const std::string &indent)
+void RpcGenerator::ImplStubNoStreamShortDecl(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                             const std::string &indent)
 {
     std::map<std::string, std::string> vars;
     vars["indent"] = indent;

@@ -19,7 +19,7 @@
  * Generates {ServiceName}BrpcAdapter classes that wrap I{ServiceName} and
  * implement brpc::Service for brpc integration.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 #include <google/protobuf/descriptor.h>
 
@@ -27,8 +27,8 @@ namespace datasystem {
 
 // --- Brpc adapter header ---
 
-void ZmqRpcGenerator::CreateBrpcAdapterHeader(const google::protobuf::FileDescriptor &file,
-                                              compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateBrpcAdapterHeader(const google::protobuf::FileDescriptor &file,
+                                           compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".brpc.pb.h"));
     io::Printer printer(outputFile.get(), '$');
@@ -45,8 +45,8 @@ void ZmqRpcGenerator::CreateBrpcAdapterHeader(const google::protobuf::FileDescri
     printer.PrintRaw(ENDIF);
 }
 
-void ZmqRpcGenerator::GenerateBrpcAdapterPrologue(io::Printer &printer,
-                                                  const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateBrpcAdapterPrologue(io::Printer &printer,
+                                               const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -71,6 +71,7 @@ void ZmqRpcGenerator::GenerateBrpcAdapterPrologue(io::Printer &printer,
         "#include <brpc/stream.h>\n"
         "#include \"datasystem/common/rpc/brpc_server_unary_writer_reader.h\"\n"
         "#include \"datasystem/common/rpc/brpc_server_writer_reader_impl.h\"\n"
+        "#include \"datasystem/common/rpc/brpc_server_stream_impl.h\"\n"
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/utils/status.h\"\n";
     printer.Print(vars, impl.c_str());
@@ -85,8 +86,8 @@ void ZmqRpcGenerator::GenerateBrpcAdapterPrologue(io::Printer &printer,
     printer.PrintRaw("#include <string>\n");
 }
 
-void ZmqRpcGenerator::GenerateBrpcAdapter(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                          const std::string &indent) const
+void RpcGenerator::GenerateBrpcAdapter(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                       const std::string &indent) const
 {
     (void)indent;
     const std::string &svcName = svc.name();
@@ -138,8 +139,8 @@ void ZmqRpcGenerator::GenerateBrpcAdapter(io::Printer &printer, const google::pr
 
 // --- Brpc adapter cpp ---
 
-void ZmqRpcGenerator::CreateBrpcAdapterCpp(const google::protobuf::FileDescriptor &file,
-                                           compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateBrpcAdapterCpp(const google::protobuf::FileDescriptor &file,
+                                        compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".brpc.pb.cc"));
     io::Printer printer(outputFile.get(), '$');
@@ -158,8 +159,8 @@ void ZmqRpcGenerator::CreateBrpcAdapterCpp(const google::protobuf::FileDescripto
     printer.PrintRaw(namespaceEnd);
 }
 
-void ZmqRpcGenerator::GenerateBrpcAdapterCppPrologue(io::Printer &printer,
-                                                     const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateBrpcAdapterCppPrologue(io::Printer &printer,
+                                                  const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -178,9 +179,9 @@ void ZmqRpcGenerator::GenerateBrpcAdapterCppPrologue(io::Printer &printer,
 // Brpc CallMethod dispatch helpers
 // ============================================================================
 
-void ZmqRpcGenerator::ImplementBrpcServiceBoilerplate(io::Printer &printer,
-                                                      const google::protobuf::ServiceDescriptor &svc,
-                                                      const std::string &svcName) const
+void RpcGenerator::ImplementBrpcServiceBoilerplate(io::Printer &printer,
+                                                   const google::protobuf::ServiceDescriptor &svc,
+                                                   const std::string &svcName) const
 {
     std::map<std::string, std::string> vars;
     vars["adapter_name"] = svcName + "BrpcAdapter";
@@ -232,10 +233,10 @@ void ZmqRpcGenerator::ImplementBrpcServiceBoilerplate(io::Printer &printer,
                      "        ->GetPrototype(method->output_type())->New();\n}\n\n");
 }
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodDef(io::Printer &printer,
-                                                 const google::protobuf::ServiceDescriptor &svc,
-                                                 const std::string &indent,
-                                                 const std::string &svcName)
+void RpcGenerator::ImplementBrpcCallMethodDef(io::Printer &printer,
+                                              const google::protobuf::ServiceDescriptor &svc,
+                                              const std::string &indent,
+                                              const std::string &svcName)
 {
     const std::string level2Indent = indent + indent;
     std::map<std::string, std::string> vars;
@@ -278,9 +279,9 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodDef(io::Printer &printer,
     printer.PrintRaw(endFunction);
 }
 
-void ZmqRpcGenerator::ImplementBrpcMethodVariant(io::Printer &printer,
-                                                 const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                 const std::string &indent)
+void RpcGenerator::ImplementBrpcMethodVariant(io::Printer &printer,
+                                              const google::protobuf::MethodDescriptor &method, int methodIndex,
+                                              const std::string &indent)
 {
     (void)indent;
     if (!method.client_streaming() && !method.server_streaming()) {
@@ -307,10 +308,10 @@ void ZmqRpcGenerator::ImplementBrpcMethodVariant(io::Printer &printer,
     }
 }
 
-void ZmqRpcGenerator::ImplementBrpcDirectCallMethodDef(io::Printer &printer,
-                                                       const google::protobuf::ServiceDescriptor &svc,
-                                                       const std::string &indent,
-                                                       const std::string &svcName)
+void RpcGenerator::ImplementBrpcDirectCallMethodDef(io::Printer &printer,
+                                                    const google::protobuf::ServiceDescriptor &svc,
+                                                    const std::string &indent,
+                                                    const std::string &svcName)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -359,7 +360,7 @@ void ZmqRpcGenerator::ImplementBrpcDirectCallMethodDef(io::Printer &printer,
     printer.PrintRaw(endFunction);
 }
 
-std::string ZmqRpcGenerator::BuildDirectCallCaseCode(const google::protobuf::MethodDescriptor &method)
+std::string RpcGenerator::BuildDirectCallCaseCode(const google::protobuf::MethodDescriptor &method)
 {
     if (!HasPayloadSendOption(method) && !HasPayloadRecvOption(method)) {
         return std::string(
@@ -379,10 +380,10 @@ std::string ZmqRpcGenerator::BuildDirectCallCaseCode(const google::protobuf::Met
 
 // --- Pattern 1: plain (no payloads, no sockets) ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
-                                                   const google::protobuf::MethodDescriptor &method,
-                                                   int methodIndex,
-                                                   const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
+                                                const google::protobuf::MethodDescriptor &method,
+                                                int methodIndex,
+                                                const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -409,10 +410,10 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
 
 // --- Pattern 2: send_payload ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
-                                                         const google::protobuf::MethodDescriptor &method,
-                                                         int methodIndex,
-                                                         const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
+                                                      const google::protobuf::MethodDescriptor &method,
+                                                      int methodIndex,
+                                                      const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -460,10 +461,10 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
 
 // --- Pattern 3: recv_payload ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
-                                                         const google::protobuf::MethodDescriptor &method,
-                                                         int methodIndex,
-                                                         const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
+                                                      const google::protobuf::MethodDescriptor &method,
+                                                      int methodIndex,
+                                                      const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -501,10 +502,10 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
 
 // --- Pattern 2+3 combined: send_payload + recv_payload ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodSendRecvPayload(io::Printer &printer,
-                                                             const google::protobuf::MethodDescriptor &method,
-                                                             int methodIndex,
-                                                             const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodSendRecvPayload(io::Printer &printer,
+                                                          const google::protobuf::MethodDescriptor &method,
+                                                          int methodIndex,
+                                                          const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -519,7 +520,7 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodSendRecvPayload(io::Printer &printe
     printer.Print(vars, impl.c_str());
 }
 
-std::string ZmqRpcGenerator::BuildSendRecvPayloadImpl()
+std::string RpcGenerator::BuildSendRecvPayloadImpl()
 {
     return
         "$indent$auto* req = dynamic_cast<const $inputTypeName$*>(request);\n"
@@ -567,10 +568,10 @@ std::string ZmqRpcGenerator::BuildSendRecvPayloadImpl()
 
 // --- Pattern 4: unary_socket ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
-                                                         const google::protobuf::MethodDescriptor &method,
-                                                         int methodIndex,
-                                                         const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
+                                                      const google::protobuf::MethodDescriptor &method,
+                                                      int methodIndex,
+                                                      const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -595,6 +596,8 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
     }
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
+        "$indent$// Sync per-request timeout to thread_local for backward compat.\n"
+        "$indent$scTimeoutDuration = serverApi->GetScTimeoutDuration();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(serverApi);\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
@@ -610,20 +613,10 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-std::string ZmqRpcGenerator::BuildScTimeoutDurationInitSnippet()
+std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
 {
     return
-        "$indent$// Initialize scTimeoutDuration from brpc deadline, matching ZMQ behavior.\n"
-        "$indent$// NOTE (F07): scTimeoutDuration is thread_local. Under brpc bthread M:N\n"
-        "$indent$// scheduling, the bthread handling this RPC may migrate to a different\n"
-        "$indent$// pthread across yield points (e.g. master->worker sub-RPCs), so reads of\n"
-        "$indent$// scTimeoutDuration from service impls after such yields may land on a\n"
-        "$indent$// different pthread-local copy. Downstream service impls that depend on\n"
-        "$indent$// scTimeoutDuration.CalcRealRemainingTime() after yields must re-Init() it\n"
-        "$indent$// themselves (as master_sc_service_impl.cpp already does). A full fix\n"
-        "$indent$// requires moving scTimeoutDuration off thread_local (bthread-local or\n"
-        "$indent$// Controller-carried); tracked as follow-up, not done here to avoid\n"
-        "$indent$// touching all service files.\n"
+        "$indent$// Init per-request timeout from brpc deadline, survives bthread migration.\n"
         "$indent${\n"
         "$indent$    int64_t deadlineUs = cntl->deadline_us();\n"
         "$indent$    if (deadlineUs > 0) {\n"
@@ -644,12 +637,12 @@ std::string ZmqRpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$}\n";
 }
 
-// --- Streaming patterns (full brpc streaming integration pending) ---
+// --- Streaming patterns ---
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodClientStream(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          int methodIndex,
-                                                          const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodClientStream(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       int methodIndex,
+                                                       const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -658,18 +651,47 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodClientStream(io::Printer &printer,
     vars["methodName"] = method.name();
     vars["inputTypeName"] = method.input_type()->name();
     vars["outputTypeName"] = method.output_type()->name();
+    vars["optRecvPayload1"] = HasPayloadRecvOption(method) ? ", outPayload" : "";
 
+    // Client-streaming (stream->unary): server reads N requests from the
+    // brpc stream, then returns a single response via the RPC response body.
     std::string impl =
-        "$indent$// brpc client-streaming (pending implementation)\n"
-        "$indent$// Method: $methodName$(ServerReader<$inputTypeName$>, $outputTypeName$ &)\n"
-        "$indent$cntl->SetFailed(\"Client-streaming not yet supported in brpc adapter\");\n";
+        "$indent$// Client-streaming via BrpcServerReaderImpl\n"
+        "$indent$auto* rsp = dynamic_cast<$outputTypeName$*>(response);\n"
+        "$indent$if (rsp == nullptr) {\n"
+        "$indent$    cntl->SetFailed(\"Response type mismatch for $methodName$\");\n"
+        "$indent$    return;\n"
+        "$indent$}\n";
+    if (HasPayloadRecvOption(method)) {
+        impl +=
+        "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n";
+    }
+    impl +=
+        "$indent$auto pimpl =\n"
+        "$indent$    std::make_unique<::datasystem::BrpcServerReaderImpl<$inputTypeName$>>(cntl);\n"
+        "$indent$// Sync adapter's scTimeoutDuration to thread_local before pimpl is moved.\n"
+        "$indent$scTimeoutDuration = pimpl->GetScTimeoutDuration();\n"
+        "$indent$auto reader =\n"
+        "$indent$    std::make_shared<::datasystem::ServerReader<$inputTypeName$>>(std::move(pimpl));\n"
+        "$indent${\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
+        "$indent$}\n"
+        "$indent$$outputTypeName$ reply;\n"
+        "$indent$::datasystem::Status st = impl_.$methodName$(reader, reply$optRecvPayload1$);\n"
+        "$indent$if (st.IsError()) {\n"
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
+        "$indent$} else {\n"
+        "$indent$    rsp->CopyFrom(reply);\n"
+        "$indent$}\n";
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodServerStream(io::Printer &printer,
-                                                          const google::protobuf::MethodDescriptor &method,
-                                                          int methodIndex,
-                                                          const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodServerStream(io::Printer &printer,
+                                                       const google::protobuf::MethodDescriptor &method,
+                                                       int methodIndex,
+                                                       const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -678,18 +700,74 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodServerStream(io::Printer &printer,
     vars["methodName"] = method.name();
     vars["inputTypeName"] = method.input_type()->name();
     vars["outputTypeName"] = method.output_type()->name();
+    vars["optSendPayload1"] = HasPayloadSendOption(method) ? ", std::move(pl)" : "";
 
+    // Server-streaming (unary->stream): server reads the request from RPC
+    // body, then writes N responses via brpc::StreamWrite.
     std::string impl =
-        "$indent$// brpc server-streaming (pending implementation)\n"
-        "$indent$// Method: $methodName$(ServerWriter<$outputTypeName$>, $inputTypeName$ &)\n"
-        "$indent$cntl->SetFailed(\"Server-streaming not yet supported in brpc adapter\");\n";
+        "$indent$// Server-streaming via BrpcServerWriterImpl\n"
+        "$indent$auto* req = dynamic_cast<const $inputTypeName$*>(request);\n"
+        "$indent$if (req == nullptr) {\n"
+        "$indent$    cntl->SetFailed(\"Request type mismatch for $methodName$\");\n"
+        "$indent$    return;\n"
+        "$indent$}\n";
+    if (HasPayloadSendOption(method)) {
+        impl +=
+        "$indent$std::vector<::datasystem::RpcMessage> pl;\n";
+    }
+    impl +=
+        "$indent$auto pimpl =\n"
+        "$indent$    std::make_unique<::datasystem::BrpcServerWriterImpl<$outputTypeName$>>(\n"
+        "$indent$        cntl, request);\n"
+        "$indent$// Sync adapter's scTimeoutDuration to thread_local before pimpl is moved.\n"
+        "$indent$scTimeoutDuration = pimpl->GetScTimeoutDuration();\n"
+        "$indent$auto writer =\n"
+        "$indent$    std::make_shared<::datasystem::ServerWriter<$outputTypeName$>>(std::move(pimpl));\n"
+        "$indent${\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
+        "$indent$}\n"
+        "$indent$$inputTypeName$ rq;\n";
+    if (HasPayloadSendOption(method)) {
+        impl +=
+        "$indent$// Receive payload from request_attachment\n"
+        "$indent$butil::IOBuf &reqBuf = cntl->request_attachment();\n"
+        "$indent$do {\n"
+        "$indent$    if (reqBuf.empty()) { break; }\n"
+        "$indent$    int64_t count = 0;\n"
+        "$indent$    if (reqBuf.copy_to(reinterpret_cast<void*>(&count), sizeof(count)) != sizeof(count)) { break; }\n"
+        "$indent$    reqBuf.pop_front(sizeof(count));\n"
+        "$indent$    pl.resize(static_cast<size_t>(count));\n"
+        "$indent$    for (auto& msg : pl) {\n"
+        "$indent$        int64_t sz = 0;\n"
+        "$indent$        if (reqBuf.copy_to(reinterpret_cast<void*>(&sz), sizeof(sz)) != sizeof(sz)) { break; }\n"
+        "$indent$        reqBuf.pop_front(sizeof(sz));\n"
+        "$indent$        if (msg.Resize(static_cast<size_t>(sz)).IsError()) { break; }\n"
+        "$indent$        if (reqBuf.copy_to(msg.Data(), static_cast<size_t>(sz))"
+        " != static_cast<size_t>(sz)) { break; }\n"
+        "$indent$        reqBuf.pop_front(static_cast<size_t>(sz));\n"
+        "$indent$    }\n"
+        "$indent$} while (false);\n";
+    }
+    impl +=
+        "$indent$::datasystem::Status readSt = writer->ReadPb(rq);\n"
+        "$indent$if (readSt.IsError()) {\n"
+        "$indent$    cntl->SetFailed(readSt.GetMsg() + \"\\x01DS_ERR:\" + "
+        "std::to_string(static_cast<int>(readSt.GetCode())) + \"\\x02\");\n"
+        "$indent$    return;\n"
+        "$indent$}\n"
+        "$indent$::datasystem::Status st = impl_.$methodName$(writer, rq$optSendPayload1$);\n"
+        "$indent$if (st.IsError()) {\n"
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
+        "$indent$}\n";
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementBrpcCallMethodBidiStream(io::Printer &printer,
-                                                        const google::protobuf::MethodDescriptor &method,
-                                                        int methodIndex,
-                                                        const std::string &indent)
+void RpcGenerator::ImplementBrpcCallMethodBidiStream(io::Printer &printer,
+                                                     const google::protobuf::MethodDescriptor &method,
+                                                     int methodIndex,
+                                                     const std::string &indent)
 {
     (void)indent;
     (void)methodIndex;
@@ -707,9 +785,13 @@ void ZmqRpcGenerator::ImplementBrpcCallMethodBidiStream(io::Printer &printer,
         "$indent$auto brpcStreamImpl =\n"
         "$indent$    std::make_unique<::datasystem::BrpcServerWriterReaderImpl<$outputTypeName$, $inputTypeName$>>(\n"
         "$indent$        cntl, request);\n"
+        "$indent$// Sync adapter's scTimeoutDuration to thread_local before brpcStreamImpl is moved.\n"
+        "$indent$scTimeoutDuration = brpcStreamImpl->GetScTimeoutDuration();\n"
         "$indent$auto stream =\n"
         "$indent$    std::make_shared<::datasystem::ServerWriterReader<$outputTypeName$, $inputTypeName$>>("
-        "std::move(brpcStreamImpl));\n"
+        "std::move(brpcStreamImpl));\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
         "$indent$::datasystem::Status st = impl_.$methodName$(stream);\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "

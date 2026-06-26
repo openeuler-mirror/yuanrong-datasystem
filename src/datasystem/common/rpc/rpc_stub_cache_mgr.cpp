@@ -221,7 +221,6 @@ Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         brpcChannel->Init(brpcAddr.ToString().c_str(), &opts) == 0, K_RPC_UNAVAILABLE,
         FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
-    (void)WaitForBrpcSocketAvailable(brpcAddr);
     return Status::OK();
 }
 
@@ -412,6 +411,15 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
             return rc;
         }
         newEncapsulatedData->SetDataWithoutLck(rpcStub);
+    }
+    // For brpc: wait for socket health check OUTSIDE the lock so we don't block
+    // concurrent GetStub calls on the same LRU partition for up to 3s.
+    // Channel::Init() is non-blocking -- health check runs periodically in a
+    // background thread.  Waiting here gives the caller a ready-to-use channel
+    // without serializing cache access behind the TCP handshake.
+    if (FLAGS_use_brpc) {
+        HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
+        (void)WaitForBrpcSocketAvailable(brpcAddr);
     }
     LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
                     accessElapsedMs, createElapsedMs, attempts);

@@ -28,15 +28,15 @@
  * rpc_generator.cpp or splitting brpc logic to a separate file is tracked
  * as follow-up #7 in docs/brpc-pr-a-followup-items.md.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 namespace datasystem {
 
-const std::string ZmqRpcGenerator::PREFIX = "    ";
-const std::string ZmqRpcGenerator::ENDIF = "#endif\n";
+const std::string RpcGenerator::PREFIX = "    ";
+const std::string RpcGenerator::ENDIF = "#endif\n";
 
-bool ZmqRpcGenerator::Generate(const google::protobuf::FileDescriptor *file, const std::string &parameter,
-                               compiler::GeneratorContext *generatorCtx, std::string *error) const
+bool RpcGenerator::Generate(const google::protobuf::FileDescriptor *file, const std::string &parameter,
+                            compiler::GeneratorContext *generatorCtx, std::string *error) const
 {
     (void)parameter;
     if (error == nullptr || file == nullptr || generatorCtx == nullptr) {
@@ -82,7 +82,7 @@ bool ZmqRpcGenerator::Generate(const google::protobuf::FileDescriptor *file, con
     return true;
 }
 
-void ZmqRpcGenerator::ParseNameSpace(const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::ParseNameSpace(const google::protobuf::FileDescriptor &file) const
 {
     packageName = file.package();
     if (!packageName.empty()) {
@@ -102,7 +102,7 @@ void ZmqRpcGenerator::ParseNameSpace(const google::protobuf::FileDescriptor &fil
     }
 }
 
-std::string ZmqRpcGenerator::UseNameSpace(const std::string &packageName) const
+std::string RpcGenerator::UseNameSpace(const std::string &packageName) const
 {
     std::stringstream oss;
     oss << "using namespace ";
@@ -120,7 +120,7 @@ std::string ZmqRpcGenerator::UseNameSpace(const std::string &packageName) const
     return oss.str();
 }
 
-bool ZmqRpcGenerator::ErrorChecking(const google::protobuf::FileDescriptor &file, std::string &error)
+bool RpcGenerator::ErrorChecking(const google::protobuf::FileDescriptor &file, std::string &error)
 {
     if (file.options().cc_generic_services()) {
         error =
@@ -143,8 +143,8 @@ bool ZmqRpcGenerator::ErrorChecking(const google::protobuf::FileDescriptor &file
     return true;
 }
 
-void ZmqRpcGenerator::GenerateSvcName(io::Printer &printer, const std::string &svcName, const std::string &indent,
-                                      bool isOverride) const
+void RpcGenerator::GenerateSvcName(io::Printer &printer, const std::string &svcName, const std::string &indent,
+                                   bool isOverride) const
 {
     // Implement the override function ServiceName.
     std::map<std::string, std::string> vars;
@@ -159,32 +159,32 @@ void ZmqRpcGenerator::GenerateSvcName(io::Printer &printer, const std::string &s
     printer.Print(vars, "$indent$$static$std::string ServiceName() $const$$override${ return \"$svc_name$\"; }\n");
 }
 
-bool ZmqRpcGenerator::HasPayloadSendOption(const google::protobuf::MethodDescriptor &method)
+bool RpcGenerator::HasPayloadSendOption(const google::protobuf::MethodDescriptor &method)
 {
     auto &options = method.options();
     auto val = options.GetExtension(datasystem::send_payload_option);
     return val;
 }
 
-bool ZmqRpcGenerator::UnarySocketNeeded(const google::protobuf::MethodDescriptor &method)
+bool RpcGenerator::UnarySocketNeeded(const google::protobuf::MethodDescriptor &method)
 {
     auto &options = method.options();
     return options.GetExtension(datasystem::unary_socket_option);
 }
 
-std::string ZmqRpcGenerator::MethodSvcClassName(const std::string &methodName)
+std::string RpcGenerator::MethodSvcClassName(const std::string &methodName)
 {
     const std::string methodSuffix("SvcMethod");
     return methodName + methodSuffix;
 }
 
-void ZmqRpcGenerator::GenerateInitMethodMapDecl(io::Printer &printer)
+void RpcGenerator::GenerateInitMethodMapDecl(io::Printer &printer)
 {
     printer.PrintRaw("    void InitMethodMap();\n");
 }
 
-void ZmqRpcGenerator::GenerateInitMethodMapDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                               const std::string &indent, const std::string &stub)
+void RpcGenerator::GenerateInitMethodMapDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                            const std::string &indent, const std::string &stub)
 {
     std::map<std::string, std::string> vars;
     vars["indent1"] = indent;
@@ -208,16 +208,16 @@ void ZmqRpcGenerator::GenerateInitMethodMapDef(io::Printer &printer, const googl
     printer.PrintRaw("}\n");
 }
 
-bool ZmqRpcGenerator::HasPayloadRecvOption(const google::protobuf::MethodDescriptor &method)
+bool RpcGenerator::HasPayloadRecvOption(const google::protobuf::MethodDescriptor &method)
 {
     auto &options = method.options();
     auto val = options.GetExtension(datasystem::recv_payload_option);
     return val;
 }
 
-std::string ZmqRpcGenerator::OptionalPayload(const google::protobuf::MethodDescriptor &method,
-                                             const std::string &prefix, const std::string &payloadSend,
-                                             const std::string &payloadRecv, const std::string &suffix)
+std::string RpcGenerator::OptionalPayload(const google::protobuf::MethodDescriptor &method,
+                                          const std::string &prefix, const std::string &payloadSend,
+                                          const std::string &payloadRecv, const std::string &suffix)
 {
     std::string impl = prefix;
     if (HasPayloadSendOption(method)) {
@@ -230,7 +230,7 @@ std::string ZmqRpcGenerator::OptionalPayload(const google::protobuf::MethodDescr
     return impl;
 }
 
-uint64_t ZmqRpcGenerator::HasChannelOption(const google::protobuf::ServiceDescriptor &svc)
+uint64_t RpcGenerator::HasChannelOption(const google::protobuf::ServiceDescriptor &svc)
 {
     // If one of the methods has a payload, assign it a different channel
     bool hasPayload = false;
@@ -248,20 +248,20 @@ uint64_t ZmqRpcGenerator::HasChannelOption(const google::protobuf::ServiceDescri
     return std::max<uint64_t>(val, defaultChannel);
 }
 
-bool ZmqRpcGenerator::MultiSessionEnabled(const google::protobuf::ServiceDescriptor &svc)
+bool RpcGenerator::MultiSessionEnabled(const google::protobuf::ServiceDescriptor &svc)
 {
     return svc.options().GetExtension(datasystem::multi_session_option);
 }
 
-bool ZmqRpcGenerator::UrmaEnabled(const google::protobuf::MethodDescriptor &method)
+bool RpcGenerator::UrmaEnabled(const google::protobuf::MethodDescriptor &method)
 {
     return method.options().GetExtension(datasystem::urma_enabled_option);
 }
 
 // --- V8: IRPC pure virtual interface ---
 
-void ZmqRpcGenerator::CreateInterfaceHeader(const google::protobuf::FileDescriptor &file,
-                                            compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateInterfaceHeader(const google::protobuf::FileDescriptor &file,
+                                         compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".irpc.pb.h"));
     io::Printer printer(outputFile.get(), '$');
@@ -278,8 +278,8 @@ void ZmqRpcGenerator::CreateInterfaceHeader(const google::protobuf::FileDescript
     printer.PrintRaw(ENDIF);
 }
 
-void ZmqRpcGenerator::GenerateInterfacePrologue(io::Printer &printer,
-                                                const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateInterfacePrologue(io::Printer &printer,
+                                             const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -313,8 +313,8 @@ void ZmqRpcGenerator::GenerateInterfacePrologue(io::Printer &printer,
     printer.PrintRaw("#include <string>\n");
 }
 
-void ZmqRpcGenerator::GenerateInterface(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                        const std::string &indent) const
+void RpcGenerator::GenerateInterface(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                     const std::string &indent) const
 {
     (void)indent;
     const std::string &svcName = svc.name();

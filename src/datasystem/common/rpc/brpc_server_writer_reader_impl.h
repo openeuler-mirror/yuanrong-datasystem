@@ -38,6 +38,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_BRPC_SERVER_WRITER_READER_IMPL_H
 #define DATASYSTEM_COMMON_RPC_BRPC_SERVER_WRITER_READER_IMPL_H
 
+#include <sys/time.h>
 #include <atomic>
 #include <vector>
 
@@ -47,6 +48,7 @@
 #include "datasystem/common/rpc/server_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -74,6 +76,7 @@ public:
         : cntl_(cntl),
           request_(nullptr),
           streamId_(brpc::INVALID_STREAM_ID),
+          acceptFailed_(false),
           readOnce_(false),
           finished_(false)
     {
@@ -89,9 +92,28 @@ public:
             // Fail fast: without a stream, downstream Write/SendStatus would hang
             // waiting on streamId_. Mark the Controller failed so the client
             // sees the error immediately rather than timing out.
+            acceptFailed_ = true;
             LOG(ERROR) << "BrpcServerWriterReaderImpl: StreamAccept failed (rc=" << rc
                        << "), marking Controller failed to prevent client hang";
             cntl->SetFailed("BrpcServerWriterReaderImpl: StreamAccept failed");
+        }
+
+        // P3: Store scTimeoutDuration per-adapter so it survives bthread M:N migration.
+        if (cntl_ != nullptr) {
+            int64_t deadlineUs = cntl_->deadline_us();
+            if (deadlineUs > 0) {
+                struct timeval tv;
+                gettimeofday(&tv, nullptr);
+                int64_t nowUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec;
+                int64_t remainingMs = (deadlineUs - nowUs + 999) / 1000;
+                if (remainingMs > 0) {
+                    scTimeoutDuration_.Init(remainingMs);
+                } else {
+                    scTimeoutDuration_.Init();
+                }
+            } else {
+                scTimeoutDuration_.Init();
+            }
         }
     }
 
@@ -122,6 +144,10 @@ public:
 
     Status Write(const W &pb) override
     {
+        if (acceptFailed_) {
+            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                "Stream not available: StreamAccept failed during construction");
+        }
         if (finished_.load()) {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                 "Write called after Finish");
@@ -162,6 +188,12 @@ public:
 
     Status SendStatus(const Status &rc) override
     {
+        if (acceptFailed_) {
+            // StreamAccept failed: cannot send error frame to client,
+            // but the Controller is already marked Failed so the client
+            // will see the error regardless.
+            return Finish();
+        }
         if (rc.IsError()) {
             LOG(WARNING) << "BrpcServerWriterReaderImpl::SendStatus: " << rc.ToString();
             // Write an error status frame so the client can recover the Status
@@ -229,12 +261,19 @@ public:
             "ReceivePayload not supported in brpc streaming adapter");
     }
 
+    /**
+     * @brief Get per-adapter scTimeoutDuration (survives bthread M:N migration).
+     */
+    const TimeoutDuration& GetScTimeoutDuration() const { return scTimeoutDuration_; }
+
 private:
     brpc::Controller *cntl_;
     const R *request_;
     brpc::StreamId streamId_;
+    bool acceptFailed_;
     std::atomic<bool> readOnce_;
     std::atomic<bool> finished_;
+    TimeoutDuration scTimeoutDuration_;
 };
 
 }  // namespace datasystem

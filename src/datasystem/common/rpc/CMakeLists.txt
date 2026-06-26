@@ -9,7 +9,7 @@ set(ZMQ_PLUGIN_DEPEND_LIBS
         )
 
 set(ZMQ_RPC_GENERATOR_SRC
-        plugin_generator/zmq_rpc_generator.cpp
+        plugin_generator/rpc_generator.cpp
         plugin_generator/service_cpp_generator.cpp
         plugin_generator/service_header_generator.cpp
         plugin_generator/stub_cpp_generator.cpp
@@ -18,15 +18,15 @@ set(ZMQ_RPC_GENERATOR_SRC
         plugin_generator/brpc_stub_generator.cpp
 )
 
-add_library(zmq_rpc_generator ${ZMQ_RPC_GENERATOR_SRC})
-target_link_libraries(zmq_rpc_generator PRIVATE ${ZMQ_PLUGIN_DEPEND_LIBS})
-add_dependencies(zmq_rpc_generator zmq_meta_protos rpc_option_protos)
+add_library(rpc_generator ${ZMQ_RPC_GENERATOR_SRC})
+target_link_libraries(rpc_generator PRIVATE ${ZMQ_PLUGIN_DEPEND_LIBS})
+add_dependencies(rpc_generator zmq_meta_protos rpc_option_protos)
 
 add_executable(zmq_plugin plugin_generator/zmq_plugin.cpp)
-target_link_libraries(zmq_plugin PRIVATE zmq_rpc_generator)
+target_link_libraries(zmq_plugin PRIVATE rpc_generator)
 
 add_executable(rpc_plugin plugin_generator/rpc_plugin.cpp)
-target_link_libraries(rpc_plugin PRIVATE zmq_rpc_generator)
+target_link_libraries(rpc_plugin PRIVATE rpc_generator)
 
 # zmq server library
 set(COMMON_RPC_ZMQ_SRCS

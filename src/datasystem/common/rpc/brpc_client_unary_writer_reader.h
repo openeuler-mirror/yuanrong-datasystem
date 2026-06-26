@@ -28,7 +28,6 @@
 #include <brpc/channel.h>
 #include <brpc/controller.h>
 #include <butil/iobuf.h>
-#include <securec.h>
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
@@ -110,31 +109,30 @@ public:
         if (responseAttachment_.empty()) {
             return Status::OK();
         }
-        std::string buf = responseAttachment_.to_string();
-        const char *data = buf.data();
-        size_t remaining = buf.size();
+        size_t remaining = responseAttachment_.size();
         size_t offset = 0;
 
         CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
             "Malformed payload: missing count header");
         int64_t count = 0;
-        errno_t rc = memcpy_s(&count, sizeof(count), data + offset, sizeof(count));
-        CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for count header");
+        responseAttachment_.copy_to(reinterpret_cast<char *>(&count), sizeof(count), offset);
         offset += sizeof(count);
 
         for (int64_t i = 0; i < count; ++i) {
             CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
                 "Malformed payload: truncated size header");
             int64_t sz = 0;
-            rc = memcpy_s(&sz, sizeof(sz), data + offset, sizeof(sz));
-            CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for size header");
+            responseAttachment_.copy_to(reinterpret_cast<char *>(&sz), sizeof(sz), offset);
             offset += sizeof(sz);
 
+            CHECK_FAIL_RETURN_STATUS(sz >= 0, StatusCode::K_RUNTIME_ERROR,
+                "Malformed payload: negative frame size");
             CHECK_FAIL_RETURN_STATUS(offset + static_cast<size_t>(sz) <= remaining, StatusCode::K_RUNTIME_ERROR,
                 "Malformed payload: frame data exceeds attachment size");
 
             RpcMessage msg;
-            RETURN_IF_NOT_OK(msg.CopyBuffer(data + offset, static_cast<size_t>(sz)));
+            RETURN_IF_NOT_OK(msg.AllocMem(static_cast<size_t>(sz)));
+            responseAttachment_.copy_to(static_cast<char *>(msg.Data()), static_cast<size_t>(sz), offset);
             payload.emplace_back(std::move(msg));
             offset += static_cast<size_t>(sz);
         }
@@ -145,16 +143,13 @@ public:
     {
         CHECK_FAIL_RETURN_STATUS(!responseAttachment_.empty(), StatusCode::K_RUNTIME_ERROR,
             "No response attachment data");
-        std::string buf = responseAttachment_.to_string();
-        const char *data = buf.data();
-        size_t remaining = buf.size();
+        size_t remaining = responseAttachment_.size();
         size_t offset = 0;
 
         CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
             "Malformed payload: missing count header");
         int64_t count = 0;
-        errno_t rc = memcpy_s(&count, sizeof(count), data + offset, sizeof(count));
-        CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for count header");
+        responseAttachment_.copy_to(reinterpret_cast<char *>(&count), sizeof(count), offset);
         offset += sizeof(count);
 
         CHECK_FAIL_RETURN_STATUS(count == 1, StatusCode::K_RUNTIME_ERROR,
@@ -163,16 +158,16 @@ public:
         CHECK_FAIL_RETURN_STATUS(offset + sizeof(int64_t) <= remaining, StatusCode::K_RUNTIME_ERROR,
             "Malformed payload: truncated size header");
         int64_t frameSz = 0;
-        rc = memcpy_s(&frameSz, sizeof(frameSz), data + offset, sizeof(frameSz));
-        CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for size header");
+        responseAttachment_.copy_to(reinterpret_cast<char *>(&frameSz), sizeof(frameSz), offset);
         offset += sizeof(frameSz);
 
+        CHECK_FAIL_RETURN_STATUS(frameSz >= 0, StatusCode::K_RUNTIME_ERROR,
+            "Malformed payload: negative frame size");
         CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(frameSz) == sz, StatusCode::K_RUNTIME_ERROR,
             "Payload size mismatch");
         CHECK_FAIL_RETURN_STATUS(offset + sz <= remaining, StatusCode::K_RUNTIME_ERROR,
             "Malformed payload: frame data exceeds attachment size");
-        rc = memcpy_s(dest, sz, data + offset, sz);
-        CHECK_FAIL_RETURN_STATUS(rc == 0, StatusCode::K_RUNTIME_ERROR, "memcpy_s failed for payload data");
+        responseAttachment_.copy_to(dest, sz, offset);
         return Status::OK();
     }
 

@@ -210,10 +210,12 @@ Status RpcServer::Builder::BuildAndStart(std::unique_ptr<RpcServer> &server) con
         if (!useBrpc_ && !svcList_.empty()) {
             RETURN_IF_NOT_OK(server->Run());
         }
-        // Start brpc server if enabled (uses the same port as ZMQ would have).
-        if (useBrpc_) {
-            RETURN_IF_NOT_OK(server->StartBrpcServer(brpcAddr_, brpcPort_));
-        }
+        // IMPORTANT: brpc server start is NOT done here. BuildAndStart() is
+        // called from CommonServer::Init() which runs before CreateAllServices().
+        // Brpc services (adapters) are registered later via AddBrpcService(),
+        // so starting brpc here would start with 0 services and fail.
+        // The caller MUST invoke server->StartBrpcServer(brpcAddr_, brpcPort_)
+        // after registering all brpc services (see WorkerOCServer::Init()).
     } catch (const std::bad_alloc &e) {
         RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, e.what());
     }

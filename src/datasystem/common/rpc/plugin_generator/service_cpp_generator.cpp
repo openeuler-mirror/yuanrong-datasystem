@@ -17,12 +17,12 @@
 /**
  * Description: Service cpp generator.
  */
-#include "datasystem/common/rpc/plugin_generator/zmq_rpc_generator.h"
+#include "datasystem/common/rpc/plugin_generator/rpc_generator.h"
 
 namespace datasystem {
 
-void ZmqRpcGenerator::CreateServiceCpp(const google::protobuf::FileDescriptor &file,
-                                       compiler::GeneratorContext *generatorCtx) const
+void RpcGenerator::CreateServiceCpp(const google::protobuf::FileDescriptor &file,
+                                    compiler::GeneratorContext *generatorCtx) const
 {
     std::unique_ptr<io::ZeroCopyOutputStream> outputFile(generatorCtx->Open(fileName + ".service.rpc.pb.cc"));
     io::Printer printer(outputFile.get(), '$');
@@ -41,8 +41,8 @@ void ZmqRpcGenerator::CreateServiceCpp(const google::protobuf::FileDescriptor &f
     printer.PrintRaw(namespaceEnd);
 }
 
-void ZmqRpcGenerator::GenerateServiceCppPrologue(io::Printer &printer,
-                                                 const google::protobuf::FileDescriptor &file) const
+void RpcGenerator::GenerateServiceCppPrologue(io::Printer &printer,
+                                              const google::protobuf::FileDescriptor &file) const
 {
     std::map<std::string, std::string> vars;
     vars["full_file_name"] = file.name();
@@ -55,9 +55,9 @@ void ZmqRpcGenerator::GenerateServiceCppPrologue(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementCallMethodNoStream(io::Printer &printer,
-                                                  const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                  const std::string &indent, bool enableMsgQ)
+void RpcGenerator::ImplementCallMethodNoStream(io::Printer &printer,
+                                               const google::protobuf::MethodDescriptor &method, int methodIndex,
+                                               const std::string &indent, bool enableMsgQ)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -110,9 +110,9 @@ void ZmqRpcGenerator::ImplementCallMethodNoStream(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementCallMethodClientStream(io::Printer &printer,
-                                                      const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                      const std::string &indent)
+void RpcGenerator::ImplementCallMethodClientStream(io::Printer &printer,
+                                                   const google::protobuf::MethodDescriptor &method, int methodIndex,
+                                                   const std::string &indent)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -144,9 +144,9 @@ void ZmqRpcGenerator::ImplementCallMethodClientStream(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementCallMethodServerStream(io::Printer &printer,
-                                                      const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                      const std::string &indent)
+void RpcGenerator::ImplementCallMethodServerStream(io::Printer &printer,
+                                                   const google::protobuf::MethodDescriptor &method, int methodIndex,
+                                                   const std::string &indent)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -179,8 +179,8 @@ void ZmqRpcGenerator::ImplementCallMethodServerStream(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementCallMethodStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
-                                                int methodIndex, const std::string &indent)
+void RpcGenerator::ImplementCallMethodStream(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
+                                             int methodIndex, const std::string &indent)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -202,9 +202,9 @@ void ZmqRpcGenerator::ImplementCallMethodStream(io::Printer &printer, const goog
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementCallMethodUnarySocket(io::Printer &printer,
-                                                     const google::protobuf::MethodDescriptor &method, int methodIndex,
-                                                     const std::string &indent, bool enableMsgQ)
+void RpcGenerator::ImplementCallMethodUnarySocket(io::Printer &printer,
+                                                  const google::protobuf::MethodDescriptor &method, int methodIndex,
+                                                  const std::string &indent, bool enableMsgQ)
 {
     (void)indent;
     std::map<std::string, std::string> vars;
@@ -233,8 +233,8 @@ void ZmqRpcGenerator::ImplementCallMethodUnarySocket(io::Printer &printer,
     printer.Print(vars, impl.c_str());
 }
 
-void ZmqRpcGenerator::ImplementZmqCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
-                                                const std::string &indent, const std::string &svcName)
+void RpcGenerator::ImplementZmqCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                             const std::string &indent, const std::string &svcName)
 {
     const std::string &level1Indent = indent;
     const std::string level2Indent = level1Indent + indent;
@@ -286,8 +286,8 @@ void ZmqRpcGenerator::ImplementZmqCallMethodDef(io::Printer &printer, const goog
     printer.PrintRaw(endFunction);
 }
 
-void ZmqRpcGenerator::ImplementZmqDirectCallMethodDef(io::Printer &printer,
-    const google::protobuf::ServiceDescriptor &svc, const std::string &indent, const std::string &svcName)
+void RpcGenerator::ImplementZmqDirectCallMethodDef(io::Printer &printer, const google::protobuf::ServiceDescriptor &svc,
+                                                   const std::string &indent, const std::string &svcName)
 {
     const std::string &level1Indent = indent;
     const std::string level2Indent = level1Indent + indent;
