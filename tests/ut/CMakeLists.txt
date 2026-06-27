@@ -118,19 +118,22 @@ target_link_libraries(ds_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_ut_stream PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         worker_stream_cache
         datasystem_worker_static
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_ut_object PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_ut_slot_store PRIVATE
         GTest::gtest
         GTest::gmock
@@ -178,7 +181,8 @@ target_link_libraries(log_perf_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 
 add_executable(flags_ut
         "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_test.cpp")
@@ -194,7 +198,8 @@ target_link_libraries(flags_ut
         common_shared_memory
         worker_object_cache
         datasystem_worker_static
-        -Wl,--no-whole-archive)
+        -Wl,--no-whole-archive
+        -Wl,--reduce-memory-overheads)
 add_datasystem_test(flags_ut)
 
 add_executable(util_flags_ut
@@ -206,7 +211,8 @@ target_link_libraries(util_flags_ut PRIVATE
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         common_util_gflag
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 add_datasystem_test(util_flags_ut)
 
 add_executable(operation_logger_ut
@@ -260,7 +266,8 @@ target_link_libraries(flags_config_monitor_ut PRIVATE
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         common_util_gflag
-        ${DS_UT_HEAVY_LINK_END})
+        ${DS_UT_HEAVY_LINK_END}
+        -Wl,--reduce-memory-overheads)
 add_datasystem_test(flags_config_monitor_ut)
 
 if (BUILD_HETERO AND BUILD_HETERO_NPU)
