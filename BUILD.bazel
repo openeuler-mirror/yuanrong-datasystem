@@ -162,6 +162,8 @@ cc_shared_library(
         "@boringssl//src:crypto_cxx",
         "@boringssl//src:crypto_internal",
         "@boringssl//src:ssl_internal",
+        # brpc butil - required for logging::GetMinLogLevel() used by pybind client .so
+        "@com_github_apache_brpc//:butil",
         "@com_google_protobuf//src/google/protobuf/io:printer",
         "@com_google_protobuf//src/google/protobuf/io:zero_copy_sink",
         "@com_google_protobuf//third_party/utf8_range:utf8_validity",
@@ -299,6 +301,8 @@ cc_shared_library(
         "//src/datasystem/client/perf_client:perf_client_lib",
         "//src/datasystem/common/object_cache:buffer",
         "@com_google_protobuf//upb:wire",
+        # brpc butil provides logging::GetMinLogLevel needed by pybind client .so
+        "@com_github_apache_brpc//:butil",
     ],
 )
 
