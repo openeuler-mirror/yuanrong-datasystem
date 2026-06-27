@@ -44,6 +44,7 @@ DS_DEFINE_int32(int32_flag, 32, "uint32 variable test");
 DS_DEFINE_uint64(uint64_flag, 64, "uint32 variable test");
 DS_DEFINE_int64(int64_flag, 64, "uint32 variable test");
 DS_DEFINE_string(str_flag, "default", "uint32 variable test");
+DS_DEFINE_string(empty_str_flag, "default", "string flag with no validator; accepts empty");
 DS_DEFINE_double(double_flag, 1.0, "double variable test");
 DS_DEFINE_double(invalid_double_flag, 1.0, "invalid double variable test");
 DS_DEFINE_int32_dynamic(test_modifiable_flag, 7, "ut dynamic flag");
@@ -60,8 +61,6 @@ DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_uint32(stderrthreshold);
 DS_DECLARE_string(monitor_config_file);
-DS_DECLARE_string(spill_directory);
-DS_DECLARE_string(health_check_path);
 
 namespace {
 constexpr uint32_t kDefaultSlowUs = 500;
@@ -645,12 +644,10 @@ TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsEmptyStringWhenValidatorAllows)
     ASSERT_TRUE(ParseCommandLineFlags(config, errMsg)) << errMsg;
     ASSERT_EQ(FLAGS_monitor_config_file, "");
 
-    std::unordered_map<std::string, std::string> args = { { "spill_directory", "" },
-                                                            { "health_check_path", "" } };
+    std::unordered_map<std::string, std::string> args = { { "empty_str_flag", "" } };
     ASSERT_TRUE(ParseCommandLineFlags(args, errMsg)) << errMsg;
     ASSERT_TRUE(errMsg.empty());
-    ASSERT_EQ(FLAGS_spill_directory, "");
-    ASSERT_EQ(FLAGS_health_check_path, "");
+    ASSERT_EQ(FLAGS_empty_str_flag, "");
 }
 
 TEST_F(FlagsTest, ParseCommandLineFlagsRejectsEmptyNonStringFlag)
