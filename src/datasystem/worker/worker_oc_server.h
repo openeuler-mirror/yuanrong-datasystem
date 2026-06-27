@@ -62,6 +62,10 @@
 #include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/worker_stream.brpc.pb.h"
+// .brpc.pb.h headers above pull in <brpc/controller.h>/<brpc/stream.h> which
+// override LOG/VLOG/DLOG via butil/logging.h. Re-include log.h to restore
+// datasystem's spdlog-based macros.
+#include "datasystem/common/log/log.h"
 #include "datasystem/worker/worker_service_impl.h"
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
 #include "datasystem/worker/rebalance_executor.h"
