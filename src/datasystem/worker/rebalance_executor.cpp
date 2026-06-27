@@ -156,6 +156,8 @@ RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master
     if (migrateHook_ != nullptr) {
         return migrateHook_(task, targetAddr, objectKeys);
     }
+#else
+    (void)task;
 #endif
     return migrator.MigrateToTargetNode(objectKeys, targetAddr, nullptr, false, 0, false).get();
 }
