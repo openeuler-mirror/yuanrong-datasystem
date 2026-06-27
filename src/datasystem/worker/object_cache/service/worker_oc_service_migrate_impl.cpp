@@ -68,6 +68,28 @@ std::unordered_set<std::string> CollectRequestObjectKeys(const ObjInfoPbList &ob
                    [](const auto &info) { return info.object_key(); });
     return objectKeys;
 }
+
+std::unordered_set<std::string> CollectObjectInfoKeys(const ObjectInfoMap &objectInfos)
+{
+    std::unordered_set<std::string> objectKeys;
+    objectKeys.reserve(objectInfos.size());
+    std::transform(objectInfos.begin(), objectInfos.end(), std::inserter(objectKeys, objectKeys.end()),
+                   [](const auto &item) { return item.first; });
+    return objectKeys;
+}
+
+void AddReplacePrimaryObjectInfos(master::ReplacePrimaryReqPb &req, const std::vector<std::string> &ids,
+                                  const ObjectInfoMap &objectInfos)
+{
+    for (const auto &id : ids) {
+        auto info = req.add_object_infos();
+        info->set_object_key(id);
+        auto iter = objectInfos.find(id);
+        if (iter != objectInfos.end()) {
+            info->set_version((*iter->second.first)->GetCreateTime());
+        }
+    }
+}
 }  // namespace
 
 WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam,
@@ -727,12 +749,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
                                                       std::unordered_set<std::string> &successIds,
                                                       std::unordered_set<std::string> &failedIds)
 {
-    std::unordered_set<std::string> objectKeys;
-    for (const auto &item : needSendMasterIds) {
-        const auto &objectKey = item.first;
-        (void)objectKeys.emplace(objectKey);
-    }
-
+    auto objectKeys = CollectObjectInfoKeys(needSendMasterIds);
     auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
@@ -746,14 +763,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         req.set_remove_location(type == MigrateType::SPILL);
         HostPort masterAddr = item.first.GetAddressAndSaveDbName();
         const auto &ids = item.second;
-        for (const auto &id : ids) {
-            auto info = req.add_object_infos();
-            info->set_object_key(id);
-            auto iter = needSendMasterIds.find(id);
-            if (iter != needSendMasterIds.end()) {
-                info->set_version((*iter->second.first)->GetCreateTime());
-            }
-        }
+        AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
         VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",
                                 ids.size(), originAddr, localAddr_, masterAddr.ToString());
         auto workerMasterApi = GetWorkerMasterApi(masterAddr);

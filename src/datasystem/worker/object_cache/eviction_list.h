@@ -108,6 +108,14 @@ public:
     Status GetAllObjectsInfo(std::vector<EvictionList::Node> &res, EvictionList::Node &oldest);
 
     /**
+     * @brief Get a bounded snapshot from the oldest node.
+     * @param[in] maxScanCount The maximum number of nodes to copy.
+     * @param[out] res The bounded object info snapshot.
+     * @return Status of the call.
+     */
+    Status GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res);
+
+    /**
      * @brief Check whether a object in EvictionList.
      * @param[in] objectKey The ID of the object to check.
      * @return true if object in EvictionList.

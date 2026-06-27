@@ -584,10 +584,22 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots)
     master::ResourceReportReqPb req;
     master::WorkerStat *stat = req.mutable_stat();
     stat->set_address(localAddr_);
+    constexpr uint64_t availableMemory = 2 * 1024;
+    constexpr uint64_t usedMemory = 6 * 1024;
+    constexpr uint64_t memoryCapacity = 8 * 1024;
+    stat->set_available_memory(availableMemory);
+    stat->set_used_memory(usedMemory);
+    stat->set_memory_capacity(memoryCapacity);
+    stat->set_is_ready(true);
     master::ResourceReportRspPb rsp;
     ReportResource(req, rsp);
-    // Step 1: At this time, the read snapshot is empty, and the data is in write snapshot.
-    EXPECT_EQ(rsp.stats_size(), 0);
+    // Step 1: At this time, the read snapshot is empty. The reporting worker's latest state is merged into rsp.
+    EXPECT_EQ(rsp.stats_size(), 1);
+    EXPECT_EQ(rsp.stats(0).address(), localAddr_);
+    EXPECT_EQ(rsp.stats(0).available_memory(), availableMemory);
+    EXPECT_EQ(rsp.stats(0).used_memory(), usedMemory);
+    EXPECT_EQ(rsp.stats(0).memory_capacity(), memoryCapacity);
+    EXPECT_TRUE(rsp.stats(0).is_ready());
 
     // Step 2: At this time, switch the read/write snapshot,
     // so the rsp stats size is loopCount + 1.
@@ -596,14 +608,19 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots)
     ReportResource(req, rsp);
     EXPECT_EQ(rsp.stats_size(), loopCount + 1);
 
-    // Step 3: There is one data in write snapshot and be cleared, and switch it to read snapshot,
-    // so the rsp stats size is 0;
+    // Step 3: There is one data in write snapshot and be cleared, and switch it to read snapshot.
+    // The reporting worker's latest state is still merged into rsp.
     sleep(FLAGS_node_dead_timeout_s + 1);
     CallClearWriteSnapshot();
     CallSwitchSnapshots();
     rsp.Clear();
     ReportResource(req, rsp);
-    EXPECT_EQ(rsp.stats_size(), 0);
+    EXPECT_EQ(rsp.stats_size(), 1);
+    EXPECT_EQ(rsp.stats(0).address(), localAddr_);
+    EXPECT_EQ(rsp.stats(0).available_memory(), availableMemory);
+    EXPECT_EQ(rsp.stats(0).used_memory(), usedMemory);
+    EXPECT_EQ(rsp.stats(0).memory_capacity(), memoryCapacity);
+    EXPECT_TRUE(rsp.stats(0).is_ready());
 
     // Step 4: There is loopCount + 1 data in write snapshot and the loopCount data be cleared, only left one data in
     // it, and switch it to read snapshot, so the rsp stats size is 1(The one data is from step 3 request).

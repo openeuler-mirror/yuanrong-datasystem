@@ -341,6 +341,14 @@ public:
     Status ReportResource(const ResourceReportReqPb &req, ResourceReportRspPb &rsp) override;
 
     /**
+    * @brief Report memory rebalance task result.
+    * @param[in] req The rpc req protobuf.
+    * @param[out] rsp The rpc rsp protobuf.
+    * @return K_OK on success; the error code otherwise.
+    */
+    Status ReportRebalanceResult(const ReportRebalanceResultReqPb &req, ReportRebalanceResultRspPb &rsp) override;
+
+    /**
      * @brief Create multi meta.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.

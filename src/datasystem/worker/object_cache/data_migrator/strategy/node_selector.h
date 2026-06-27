@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -29,6 +30,7 @@
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
+#include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
@@ -38,6 +40,8 @@ namespace datasystem {
 namespace object_cache {
 class NodeSelector {
 public:
+    using RebalanceTaskHandler = std::function<void(const master::RebalanceTaskPb &)>;
+
     /**
      * @brief Get the singleton instance.
      * @return The singleton instance.
@@ -89,6 +93,17 @@ public:
      * @return If the sum available memory from all workers is larger than the needMemory, return true, else false.
      */
     bool HasEnoughAvailableMemory(size_t needMemory);
+
+    /**
+     * @brief Register the callback that consumes memory rebalance tasks returned by master.
+     * @param[in] handler The callback implemented by worker-side rebalance executor.
+     */
+    void RegisterRebalanceTaskHandler(RebalanceTaskHandler handler);
+
+    /**
+     * @brief Clear the registered memory rebalance task callback.
+     */
+    void UnregisterRebalanceTaskHandler();
 protected:
     NodeSelector();
     ~NodeSelector();
@@ -155,6 +170,8 @@ private:
     Thread workerThread_;
     std::mutex taskMutex_;
     std::condition_variable taskCv_;
+    std::mutex rebalanceTaskHandlerMutex_;
+    RebalanceTaskHandler rebalanceTaskHandler_;
     std::atomic<bool> subSuccess_{ false };
     WaitPost subReadyPost_;
     struct Token {

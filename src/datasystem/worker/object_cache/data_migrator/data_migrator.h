@@ -62,15 +62,19 @@ public:
                    const std::unordered_map<std::string, uint64_t> &objectSizes);
 
     /**
-     * @brief Migrate objects to a specific target node (slot migration).
+     * @brief Migrate objects to a specific target node.
      * @param[in] objectKeys Object keys to migrate.
      * @param[in] targetAddr Target node address.
      * @param[in] strategy Selection strategy for node selection on failure.
+     * @param[in] isRetry Whether the migration is a retry.
+     * @param[in] slotId Slot id for slot migration.
+     * @param[in] isSlotMigration Whether to run slot migration semantics on the target.
      * @return Future of migrate result.
      */
     std::future<MigrateDataHandler::MigrateResult> MigrateToTargetNode(
         const std::vector<std::string> &objectKeys, const HostPort &targetAddr,
-        std::shared_ptr<SelectionStrategy> strategy = nullptr, bool isRetry = false, uint32_t slotId = 0);
+        std::shared_ptr<SelectionStrategy> strategy = nullptr, bool isRetry = false, uint32_t slotId = 0,
+        bool isSlotMigration = true);
 
     /**
      * @brief Migrate L2 cache objects by slot grouping.

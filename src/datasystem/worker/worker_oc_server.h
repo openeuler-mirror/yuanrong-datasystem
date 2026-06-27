@@ -64,6 +64,7 @@
 #include "datasystem/protos/worker_stream.brpc.pb.h"
 #include "datasystem/worker/worker_service_impl.h"
 #include "datasystem/common/kvstore/metastore/metastore_server.h"
+#include "datasystem/worker/rebalance_executor.h"
 #ifdef WITH_TESTS
 #include "st_oc_service_impl.h"
 #endif
@@ -298,6 +299,20 @@ private:
     void CreateWorkerServices();
 
     /**
+     * @brief Create object cache worker services.
+     */
+    void CreateObjectCacheWorkerServices(
+        const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+
+    /**
+     * @brief Create rebalance executor and register rebalance task handler.
+     */
+    void CreateRebalanceExecutor(
+        const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+
+    /**
      * @brief Initialize all services above.
      * @return Status of the call.
      */
@@ -357,6 +372,11 @@ private:
      * @brief Stop liveness check.
      */
     void StopLivenessCheck();
+
+    /**
+     * @brief Stop memory rebalance background executor and unregister task callback.
+     */
+    void StopRebalanceExecutor();
 
     /**
      * @brief Registers callback functions for collecting resource information, including queues, thread pools, shared
@@ -593,6 +613,8 @@ private:
     WaitPost waitCond_;
     // Object cache rpc service for client request.
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc_{ nullptr };
+    std::mutex rebalanceExecutorMutex_;
+    std::unique_ptr<RebalanceExecutor> rebalanceExecutor_{ nullptr };
     std::unique_ptr<WorkerOCServiceBrpcAdapter> brpcOcAdapter_{ nullptr };
     std::unique_ptr<master::MasterServiceBrpcAdapter> brpcMasterAdapter_{ nullptr };
     std::unique_ptr<WorkerServiceBrpcAdapter> brpcWorkerAdapter_{ nullptr };

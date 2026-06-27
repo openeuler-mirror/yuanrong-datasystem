@@ -24,12 +24,24 @@
 #include <mutex>
 
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/timer.h"
 
 DS_DECLARE_uint32(node_dead_timeout_s);
 
 namespace datasystem {
 namespace master {
+namespace {
+void FillWorkerStat(const NodeInfo &nodeInfo, master::WorkerStat &stat)
+{
+    stat.set_address(nodeInfo.nodeId);
+    stat.set_available_memory(nodeInfo.availableMemory);
+    stat.set_is_ready(nodeInfo.isReady);
+    stat.set_used_memory(nodeInfo.usedMemory);
+    stat.set_memory_capacity(nodeInfo.memoryCapacity);
+}
+}  // namespace
+
 ResourceManager::ResourceManager()
 {
     workerThread_ = Thread(&ResourceManager::WorkerThread, this);
@@ -54,7 +66,8 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
     auto currentTimestamp = GetSteadyClockTimeStampMs();
     std::string address = req.stat().address();
     CHECK_FAIL_RETURN_STATUS(!address.empty(), K_INVALID, "The address can not be empty");
-    NodeInfo newInfo(address, req.stat().available_memory(), req.stat().is_ready(), currentTimestamp);
+    NodeInfo newInfo(address, req.stat().available_memory(), req.stat().is_ready(), currentTimestamp,
+                     req.stat().used_memory(), req.stat().memory_capacity());
     {
         // Update the write snapshot
         std::lock_guard<std::mutex> lock(writeSnapshotMutex_);
@@ -63,17 +76,43 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
             result.first->second = newInfo;
         }
     }
-    // Get the read snapshot and fill response
-    std::shared_lock<std::shared_timed_mutex> lock(readSnapshotMutex_);
+
+    bool needScheduleSnapshot = rebalanceScheduler_.NeedSnapshotForSchedule(req, newInfo, rsp);
+    std::unordered_map<std::string, NodeInfo> snapshot;
     auto *stats = rsp.mutable_stats();
-    for (const auto &info : readSnapshot_) {
-        auto &nodeInfo = info.second;
-        auto *stat = stats->Add();
-        stat->set_address(nodeInfo.nodeId);
-        stat->set_available_memory(nodeInfo.availableMemory);
-        stat->set_is_ready(nodeInfo.isReady);
+    {
+        std::shared_lock<std::shared_timed_mutex> lock(readSnapshotMutex_);
+        if (needScheduleSnapshot) {
+            snapshot.reserve(readSnapshot_.size() + 1);
+        }
+        bool hasReportingWorker = false;
+        for (const auto &[worker, nodeInfoInSnapshot] : readSnapshot_) {
+            const NodeInfo &nodeInfo = worker == address ? newInfo : nodeInfoInSnapshot;
+            hasReportingWorker = hasReportingWorker || worker == address;
+            if (needScheduleSnapshot) {
+                snapshot.emplace(worker, nodeInfo);
+            }
+            auto *stat = stats->Add();
+            FillWorkerStat(nodeInfo, *stat);
+        }
+        if (!hasReportingWorker) {
+            if (needScheduleSnapshot) {
+                snapshot.emplace(address, newInfo);
+            }
+            auto *stat = stats->Add();
+            FillWorkerStat(newInfo, *stat);
+        }
     }
-    return Status::OK();
+    if (!needScheduleSnapshot) {
+        return Status::OK();
+    }
+    return rebalanceScheduler_.Schedule(req, snapshot, rsp);
+}
+
+Status ResourceManager::ReportRebalanceResult(const master::ReportRebalanceResultReqPb &req,
+                                              master::ReportRebalanceResultRspPb &rsp)
+{
+    return rebalanceScheduler_.ReportResult(req, rsp);
 }
 
 void ResourceManager::WorkerThread()

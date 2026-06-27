@@ -16,6 +16,7 @@ add_subdirectory(coordinator)
 # Set source files
 set(WORKER_SRCS
         authenticate.cpp
+        rebalance_executor.cpp
         worker_service_impl.cpp
         worker_service_accessor.cpp
         worker_oc_server.cpp

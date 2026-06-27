@@ -25,6 +25,7 @@
 #include <future>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -128,6 +129,14 @@ public:
     Status GetAllObjectsInfo(std::vector<EvictionList::Node> &res, EvictionList::Node &oldest);
 
     /**
+     * @brief Get a bounded object info snapshot from eviction list oldest position.
+     * @param[in] maxScanCount The maximum number of nodes to copy.
+     * @param[out] res The bounded object info snapshot.
+     * @return Status of the call.
+     */
+    Status GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res);
+
+    /**
      * @brief Setter function to assign the cluster manager back pointer.
      * @param[in] clusterManager The cluster manager pointer to assign
      */
@@ -161,8 +170,41 @@ public:
         return !isDone_;
     }
 
+    /**
+     * @brief Try to mark an object as being rebalanced.
+     * @param[in] objectKey The object key.
+     * @return true if this call marks the object successfully, false if it has been marked already.
+     */
+    bool TryMarkRebalancingObject(const std::string &objectKey);
+
+    /**
+     * @brief Remove rebalance mark from one object.
+     * @param[in] objectKey The object key.
+     */
+    void UnmarkRebalancingObject(const std::string &objectKey);
+
+    /**
+     * @brief Remove rebalance marks from objects.
+     * @param[in] objectKeys The object keys.
+     */
+    void UnmarkRebalancingObjects(const std::vector<std::string> &objectKeys);
+
+    /**
+     * @brief Check whether an object is being rebalanced.
+     * @param[in] objectKey The object key.
+     * @return true if object is being rebalanced.
+     */
+    bool IsObjectBeingRebalanced(const std::string &objectKey) const;
+
+#ifdef WITH_TESTS
+    void EvictionTaskForTest(uint64_t needSize, CacheType cacheType = CacheType::MEMORY)
+    {
+        EvictionTask(needSize, cacheType);
+    }
+#endif
+
 private:
-    enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN, MIGRATE };
+    enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN };
     using EvictDeletedObjects = std::unordered_map<std::string, uint64_t>;
 
     struct EvictionTrace {
@@ -221,13 +263,9 @@ private:
     struct SpillResult {
         Status rc;
         double elapsed;
-        std::vector<std::string> failedKeys;
     };
 
-    enum class TaskType : int { SINGLE, BATCH };
-
     struct SpillTask {
-        TaskType taskType;
         std::future<SpillResult> future;
         std::unique_ptr<EvictionTrace> trace;
     };
@@ -289,15 +327,6 @@ private:
      * @param[in] cacheType The type of cache.
      */
     void EvictionTask(uint64_t needSize, CacheType cacheType = CacheType::MEMORY);
-
-    /**
-     * @brief Migrate memory data to other workers.
-     * @param[in] migrateObjects The list of object keys to be migrated.
-     * @param[out] failedMigrateObjectKeys The list of object keys that are failed.
-     * @return Status of the call.
-     */
-    Status MigrateData(const std::string &taskId, const std::unordered_map<std::string, size_t> &migrateObjects,
-                       std::vector<std::string> &failedMigrateObjectKeys);
 
     /**
      * @brief Indicate if now is above low water mark.
@@ -484,25 +513,6 @@ private:
     Status SpillImpl(const std::string &objectKey, uint64_t version);
 
     /**
-     * @brief Submit batch spill task to thread pool.
-     * @param[in] taskId The batch spill taskId.
-     * @param[in] objectKeySizeMap The object key and size map.
-     * @return The future of the async thread.
-     */
-    std::future<WorkerOcEvictionManager::SpillResult> SubmitBatchSpillTask(
-        const std::string &taskId, const std::unordered_map<std::string, uint64_t> &objectKeySizeMap);
-
-    /**
-     * @brief Batch spill object.
-     * @param[in] taskId The batch spill taskId.
-     * @param[in] objectKeySizeMap The object key and size map.
-     * @param[out] failedKeys The failed keys.
-     * @return Status
-     */
-    Status BatchSpillImpl(const std::string &taskId, const std::unordered_map<std::string, uint64_t> &objectKeySizeMap,
-                          std::vector<std::string> &failedKeys);
-
-    /**
      * @brief Release finished spill task.
      * @param[in/out] spillTasks The spill task list.
      * @param[out] evictFailedIds Object keys that spill failed.
@@ -587,13 +597,10 @@ private:
      */
     uint64_t GetLowWaterMark(CacheType cacheType = CacheType::MEMORY);
 
-    /**
-     * @brief Get spill task id.
-     */
-    std::string GetSpillTaskId();
-
     std::shared_ptr<ObjectTable> objectTable_;
     EvictionList memEvictionList_;
+    mutable std::mutex rebalancingObjectsMutex_;
+    std::unordered_set<std::string> rebalancingObjects_;
     std::unique_ptr<ThreadPool> memEvictTaskThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> primaryEndLifeThreadPool_{ nullptr };
     std::unique_ptr<ThreadPool> spillEvictTaskThreadPool_{ nullptr };
