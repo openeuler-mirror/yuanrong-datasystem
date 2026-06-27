@@ -492,7 +492,7 @@ bool MetaDataRecoveryManager::InitRecoverApi(const MetaAddrInfo &metaAddrInfo,
                                              std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                              DispatchResult &result) const
 {
-    addr = metaAddrInfo.GetAddressAndSaveDbName();
+    addr = metaAddrInfo.GetAddress();
     if (addr.Empty()) {
         result.failedIds.insert(result.failedIds.end(), objectKeys.begin(), objectKeys.end());
         result.status = Status(K_RPC_UNAVAILABLE, "master address is empty");

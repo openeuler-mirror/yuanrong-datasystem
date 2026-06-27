@@ -2832,10 +2832,9 @@ Status OCMetadataManager::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncr
 
 Status OCMetadataManager::GetPrimaryReplicaAddr(const std::string &masterAddr, HostPort &primaryAddr)
 {
-    std::string dbName;
+    [[maybe_unused]] std::string dbName;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetPrimaryReplicaLocationByAddr(masterAddr, primaryAddr, dbName),
                                      "GetPrimaryReplicaAddr failed");
-    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -3963,7 +3962,7 @@ Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<
 
     // If this node is the heterogeneous metadata master, clean up client metadata
     // associated with the scaled-in worker nodes
-    auto devMasterAddr = metaAddrInfo.GetAddressAndSaveDbName().ToString();
+    auto devMasterAddr = metaAddrInfo.GetAddress().ToString();
     auto localWorkerAddr = clusterManager_->GetWorkerAddress();
     if (localWorkerAddr == devMasterAddr) {
         return masterDevOcManager_->ReleaseClientMetaForScaledInWorker(removeNodes);

@@ -58,7 +58,6 @@ struct RequestContext {
     // Per-request transport kind tracked by AccessTransportTracker.
     // Default SHM=0; full enum definition in access_recorder.h.
     AccessTransportKind accessTransportKind = static_cast<AccessTransportKind>(0);
-    std::string metaRocksDbName;
 };
 
 // Initialize the per-bthread key. Must be called once during server init.
@@ -110,22 +109,6 @@ inline TimeCost& GetWorkerTimeCost(const char* file = __builtin_FILE(), int line
 inline TimeCost& GetMasterTimeCost(const char* file = __builtin_FILE(), int line = __builtin_LINE())
 {
     return GetRequestContext(file, line)->masterTimeCost;
-}
-
-// Convenience: set meta RocksDB name.
-inline void SetMetaRocksDbName(const std::string& dbName,
-                               const char* file = __builtin_FILE(), int line = __builtin_LINE())
-{
-    GetRequestContext(file, line)->metaRocksDbName = dbName;
-}
-
-// Convenience: get meta RocksDB name.
-// Returns a const reference to avoid a per-call std::string copy/allocation on
-// hot RPC paths (e.g. UpdateMetaByThreadLocalValue is called on every outbound RPC).
-inline const std::string& GetMetaRocksDbName(const char* file = __builtin_FILE(),
-                                             int line = __builtin_LINE())
-{
-    return GetRequestContext(file, line)->metaRocksDbName;
 }
 
 }  // namespace datasystem

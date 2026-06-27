@@ -1038,10 +1038,9 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
     auto traceID = meta.trace_id();
     auto logSampleState = meta.log_sample_state();
     auto timeout = meta.timeout();
-    auto dbName = meta.db_name();
 
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
-    VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout) << ", dbName:" << dbName;
+    VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout);
     Timer timer;
     auto func = [=]() mutable {
         const int64_t US_TO_NS = 1000;
@@ -1062,9 +1061,7 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
             reqTimeoutDuration.Init();
             scTimeoutDuration.Init();
         }
-        SetMetaRocksDbName(dbName);
         LOG_IF_ERROR(worker->WorkerEntry(), "worker entry failed");
-        SetMetaRocksDbName("");
         GetWorkerTimeCost().Clear();
         GetMasterTimeCost().Clear();
     };
@@ -1279,7 +1276,6 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
     meta.set_worker_id(workerId);
 
     auto timeout = meta.timeout();
-    auto dbName = meta.db_name();
 
     Timer timer;
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
@@ -1291,9 +1287,7 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
         reqTimeoutDuration.Init();
         scTimeoutDuration.Init();
     }
-    SetMetaRocksDbName(dbName);
     LOG_IF_ERROR(worker->WorkerEntryWithoutMsgQ(inFrames, outFrames), "worker entry failed");
-    SetMetaRocksDbName("");
     GetWorkerTimeCost().Clear();
     GetMasterTimeCost().Clear();
     VLOG(RPC_LOG_LEVEL) << FormatString("Routing request %s to %s", meta.client_id(), workerId);

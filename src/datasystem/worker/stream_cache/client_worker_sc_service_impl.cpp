@@ -194,9 +194,8 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
 
 Status ClientWorkerSCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
 {
-    std::string dbName;
+    [[maybe_unused]] std::string dbName;
     RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -1652,7 +1651,7 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
             LOG(ERROR) << rc.ToString();
             return false;
         }
-        auto masterAddress = metaAddrInfo.GetAddressAndSaveDbName();
+        auto masterAddress = metaAddrInfo.GetAddress();
         return masterAddress.ToString() == masterAddr;
     }
     return clusterManager_->IsInRange(hashRanges, streamName);

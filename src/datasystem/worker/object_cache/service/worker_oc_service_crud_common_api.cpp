@@ -322,9 +322,8 @@ Status WorkerOcServiceCrudCommonApi::BatchLockWithInsert(
 
 Status WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
 {
-    std::string dbName;
+    [[maybe_unused]] std::string dbName;
     RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -482,7 +481,7 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> currentObjectKeysRemove = item.second;
         std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi =
             workerMasterApiManager_->GetWorkerMasterApi(masterAddr);

@@ -1270,7 +1270,7 @@ Status ClusterManager::GetMasterAddr(const std::string &objKey, HostPort &master
 {
     MetaAddrInfo metaAddrInfo;
     RETURN_IF_NOT_OK(LocateMetaOwner(objKey, false, metaAddrInfo));
-    masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
+    masterAddr = metaAddrInfo.GetAddress();
     return Status::OK();
 }
 

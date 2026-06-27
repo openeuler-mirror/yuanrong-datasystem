@@ -238,7 +238,6 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
         RETURN_IF_NOT_OK(dest.ParseString(info.destAddr));
         api = std::make_unique<MasterMasterSCApi>(dest, localHostPort_, akSkManager_);
         RETURN_IF_NOT_OK(api->Init());
-        SetMetaRocksDbName(info.destDbName);
         return Status::OK();
     };
 

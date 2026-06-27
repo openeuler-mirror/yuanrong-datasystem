@@ -78,7 +78,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
 
-            HostPort workerAddr = item.first.GetAddressAndSaveDbName();
+            HostPort workerAddr = item.first.GetAddress();
             const std::vector<std::string> &currentIds = item.second;
             rc = ExpireFromMaster(currentIds, workerAddr, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
             if (rc.IsError()) {

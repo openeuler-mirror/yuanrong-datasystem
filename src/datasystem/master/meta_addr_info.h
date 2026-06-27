@@ -48,12 +48,6 @@ public:
         return !(*this == other);
     }
 
-    const HostPort &GetAddressAndSaveDbName() const
-    {
-        SetMetaRocksDbName(dbName_);
-        return addr_;
-    }
-
     const HostPort &GetAddress() const
     {
         return addr_;

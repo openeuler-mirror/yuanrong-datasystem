@@ -201,7 +201,7 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
     auto &objKeysGrpByMaster = grouped.groups;
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentObjectKeys = item.second;
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
@@ -335,7 +335,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastErr;
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentIncIds = item.second;
         Status res = clusterManager_->CheckConnection(masterAddr);
         if (res.IsError()) {
@@ -416,7 +416,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentIncIds = item.second;
         Status res = clusterManager_->CheckConnection(masterAddr);
         master::GDecreaseReqPb req;
@@ -501,7 +501,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
     Status lastErr;
     auto clientId = ClientKey::Intern(req.address());
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentFirstIncIds = item.second;
         std::vector<std::string> rpcFailedIds;
         Status res = clusterManager_->CheckConnection(masterAddr);
@@ -647,7 +647,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentFinishDecIds = item.second;
         std::vector<std::string> rpcFailedIds;
         std::unordered_set<std::string> rpcUnAliveIds;
@@ -729,7 +729,7 @@ Status WorkerOcServiceGlobalReferenceImpl::IncNestedRef(const std::vector<std::s
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         const std::vector<std::string> &currentIds = item.second;
         master::GIncNestedRefReqPb req;
         *req.mutable_object_keys() = { currentIds.begin(), currentIds.end() };
@@ -758,7 +758,7 @@ Status WorkerOcServiceGlobalReferenceImpl::DecNestedRef(const std::vector<std::s
 
     // send requests for each master
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         LOG(INFO) << "master address nested ref is sending notification " << masterAddr.ToString();
         const std::vector<std::string> &currentIds = item.second;
         master::GDecNestedRefReqPb req;
