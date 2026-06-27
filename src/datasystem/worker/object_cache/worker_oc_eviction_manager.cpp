@@ -99,8 +99,13 @@ std::string JoinKeys(const std::vector<std::string> &keys)
 
 WorkerOcEvictionManager::EvictionTrace::~EvictionTrace()
 {
-    static thread_local EvictionTraceAggregator aggregator;
-    aggregator.Add(*this);
+    if (aggregator_ != nullptr) {
+        aggregator_->Add(*this);
+    } else {
+        // Fallback for code paths that don't set aggregator_.
+        static thread_local EvictionTraceAggregator aggregator;
+        aggregator.Add(*this);
+    }
 }
 
 WorkerOcEvictionManager::EvictionTraceAggregator::~EvictionTraceAggregator()
@@ -480,6 +485,23 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
 void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType)
 {
     EvictFailedList evictFailedIds;
+    // IMPORTANT — declaration order:
+    // evictionAggregator MUST be declared before spillTasks.
+    //
+    // spillTasks entries hold EvictionTrace objects whose aggregator_ pointer
+    // points to evictionAggregator (set at line ~trace->aggregator_ = &evictionAggregator).
+    // C++ destroys local variables in reverse declaration order, so spillTasks
+    // (and the EvictionTrace objects inside it) are destroyed BEFORE evictionAggregator.
+    //
+    // When an EvictionTrace is destroyed, its destructor calls
+    // aggregator_->Add(*this), which appends data into evictionAggregator.
+    // If evictionAggregator were destroyed first, this would be a use-after-free.
+    //
+    // Additionally, async spill futures may hold EvictionTrace objects whose
+    // destructors fire when the future completes. ReleaseSpillFutures(..., true)
+    // at the end of this function blocks until ALL futures are ready, ensuring
+    // every trace destructor runs before evictionAggregator goes out of scope.
+    EvictionTraceAggregator evictionAggregator;
     std::unordered_map<std::string, SpillTask> spillTasks;
     EvictDeletedObjects deletedObjects;
     Timer deletedObjectsFlushTimer(BATCH_DELETE_META_MAX_DELAY_MS);
@@ -503,6 +525,7 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
             continue;
         }
         auto trace = std::make_unique<EvictionTrace>(candidateId);
+        trace->aggregator_ = &evictionAggregator;
         std::shared_ptr<SafeObjType> entry;
         Status rc = GetAndLockEntry(candidateId, entry, evictFailedIds);
         if (rc.IsError()) {
@@ -551,6 +574,11 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         INJECT_POINT("worker.Evict", [&pendingSpillSize](size_t size) { pendingSpillSize = size; });
     }
     flushDeletedObjects();
+    // Blocking wait (last=true) for ALL remaining async spill futures.
+    // This must be blocking because evictionAggregator (declared above) will go
+    // out of scope when this function returns. Futures that complete after the
+    // aggregator is destroyed would call aggregator_->Add() on a dangling pointer
+    // in ~EvictionTrace(), causing use-after-free.
     (void)ReleaseSpillFutures(spillTasks, evictFailedIds, true);
 
     for (const auto &objKeyCounter : evictFailedIds) {

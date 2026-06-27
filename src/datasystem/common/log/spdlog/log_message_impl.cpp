@@ -39,9 +39,28 @@ DS_DEFINE_int32_dynamic(v, 0, "Show all VLOG(m) messages for m <= this.");
 DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
-// thread_local for store log info
-const size_t MAX_LOG_SIZE = 30000;
-static thread_local char g_ThreadLogData[MAX_LOG_SIZE];
+// thread_local log buffer for log message formatting.
+//
+// Why thread_local is safe here under brpc cooperative M:N:
+// A single LOG() statement expands to a temporary LogMessageImpl whose lifetime
+// spans the full `<<` chain and ends at the enclosing full-expression.  The
+// destructor flushes to spdlog (which takes its sink mutex).  spdlog formatting
+// is synchronous pure-CPU work; there is no bthread_yield on this path.
+//
+// Required invariants for this to stay safe (must be enforced at all call sites):
+//   1. The `<<` operand expression MUST NOT itself contain another LOG(...)
+//      call. A nested LOG would reuse g_ThreadLogData (offset 0) and clobber the
+//      outer message currently being assembled.
+//   2. The `<<` operand expression MUST NOT perform any operation that can
+//      bthread_yield (RPC calls, locks contended across worker bthreads,
+//      blocking IO). A yield would let another bthread on the same pthread
+//      enter its own LOG() and reuse this buffer.
+//
+// Under those invariants, two bthreads on the same pthread cannot concurrently
+// access g_ThreadLogData. This is a deferred-fix item; if a future call site
+// cannot guarantee the invariants, move this buffer into LogMessageImpl (which
+// is already heap-allocated per call) to remove the thread_local dependency.
+static thread_local char g_ThreadLogData[LogMessageImpl::MAX_LOG_SIZE];
 
 LogStreamBuf::LogStreamBuf(char *buf, int len)
 {
@@ -106,7 +125,7 @@ LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int li
     : logSeverity_(logSeverity),
       level_(ToSpdlogLevel(logSeverity)),
       sourceLoc_{ file, line, "" },
-      streamBuf_(g_ThreadLogData, MAX_LOG_SIZE),
+      streamBuf_(g_ThreadLogData, LogMessageImpl::MAX_LOG_SIZE),
       logStream_(&streamBuf_),
       forceLog_(forceLog),
       samplerChecked_(samplerChecked)

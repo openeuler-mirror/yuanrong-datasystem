@@ -28,6 +28,7 @@
 #include "datasystem/common/log/latency_phase_types.h"
 
 namespace datasystem {
+
 constexpr size_t SHORT_TRACEID_SIZE = 16;
 constexpr uint16_t LATENCY_TICK_MAX_NUM = 16;
 
@@ -102,6 +103,12 @@ struct LatencyTick {
 
 class TraceGuard;
 
+// Forward declaration for brpc M:N support.
+// Defined in request_context.cpp. Returns per-bthread Trace from RequestContext
+// when a handler is active, or nullptr to fall back to thread_local.
+class Trace;
+Trace* GetBthreadTrace();
+
 struct TraceContext {
     std::string traceID;
     bool requestLogTrace = false;
@@ -127,10 +134,26 @@ public:
 
     /**
      * @brief Singleton mode, obtaining instance.
+     * Under brpc M:N, returns the RequestContext's per-bthread Trace when a
+     * ScopedRequestContext is active on the current bthread. Otherwise
+     * (background std::thread, client SDK threads, async thread pools, ZMQ
+     * pthread handlers, or any context without an active ScopedRequestContext),
+     * GetBthreadTrace() returns nullptr and this falls back to a per-pthread
+     * thread_local Trace, which is safe because such contexts each own their
+     * pthread or are cooperative-yield-free within a single LOG/Trace call.
      * @return Instance of Trace.
      */
     static Trace &Instance()
     {
+        // Check for per-bthread Trace isolation (brpc M:N model).
+        // GetBthreadTrace() is defined in request_context.cpp and returns
+        // the RequestContext's Trace when a handler is active.
+        Trace* btTrace = GetBthreadTrace();
+        if (btTrace != nullptr) {
+            return *btTrace;
+        }
+        // Fall back to thread_local for ZMQ pthread handlers and
+        // non-handler contexts.
         static thread_local Trace instance;
         return instance;
     }
@@ -319,6 +342,7 @@ public:
 
 private:
     Trace() = default;
+    friend struct RequestContext;  // Allows per-bthread Trace in RequestContext for brpc M:N isolation
 
     // The caller set prefix by Context::SetTraceId
     char prefix_[TRACEID_PREFIX_SIZE + 1] = { 0 };

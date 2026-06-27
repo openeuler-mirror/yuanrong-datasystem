@@ -25,6 +25,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
@@ -230,7 +231,7 @@ std::pair<Status, std::vector<std::string>> OCMigrateMetadataManager::AsyncMigra
         RETURN_IF_NOT_OK(dest.ParseString(info.destAddr));
         api = std::make_unique<MasterMasterOCApi>(dest, localHostPort_, akSkManager_);
         RETURN_IF_NOT_OK(api->Init());
-        g_MetaRocksDbName = info.destDbName;
+        SetMetaRocksDbName(info.destDbName);
         return Status::OK();
     };
 

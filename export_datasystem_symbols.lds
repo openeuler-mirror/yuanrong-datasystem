@@ -9,6 +9,8 @@
       logging::*;
       # absl symbols required in debug builds (LOG(FATAL)/CHECK use absl internals)
       absl::*;
+      # butil symbols (butil::demangle, etc.) needed by pybind client .so
+      butil::*;
     };
     _ZTI*;        # 显式导出所有 RTTI 符号
     _ZTV*;        # 显式导出所有虚表符号（如果 Buffer 有虚函数）

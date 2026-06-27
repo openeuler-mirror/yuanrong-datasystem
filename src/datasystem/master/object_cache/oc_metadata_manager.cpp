@@ -54,6 +54,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
@@ -576,7 +577,7 @@ Status OCMetadataManager::CreatePendingMeta(const ObjectMetaPb &newMeta, const s
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-    masterOperationTimeCost.Append("CreatePendingMeta get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("CreatePendingMeta get lock", timer.ElapsedMilliSecond());
     TbbMetaTable::accessor accessor;
     firstOne = metaShards_[shardIdx].table.insert(accessor, objectKey);
     Status rc = CheckExistenceOpt(accessor->second, objectKey, newMeta.existence(), firstOne);
@@ -1040,7 +1041,7 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
         Timer timer;
         size_t shardIdx = GetShardIndex(objectKey);
         std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-        masterOperationTimeCost.Append("CreateCopyMeta get lock", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("CreateCopyMeta get lock", timer.ElapsedMilliSecond());
         TbbMetaTable::accessor accessor;
         bool isExpired;
         Raii raii([&accessor]() { accessor.release(); });
@@ -1072,7 +1073,7 @@ Status OCMetadataManager::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &re
     {
         // Check meta info in cache and rocksdb.
         Timer timer;
-        masterOperationTimeCost.Append("CreateMultiCopyMeta get lock", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("CreateMultiCopyMeta get lock", timer.ElapsedMilliSecond());
         for (const MultiCopyMetaReqElem &elem : request.multi_copy_meta_req_elems()) {
             size_t shardIdx = GetShardIndex(elem.object_key());
             std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
@@ -1215,7 +1216,7 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
 {
     const auto &address = req.address();
     Timer timer;
-    masterOperationTimeCost.Append("QueryMeta get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("QueryMeta get lock", timer.ElapsedMilliSecond());
     uint64_t payloadSize = 0;
     std::vector<QueryMetaInfoPb> infos;
     infos.reserve(objectKeys.size());
@@ -1624,7 +1625,7 @@ Status OCMetadataManager::RemoveMetaLocation(const std::string &objectKey, const
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-    masterOperationTimeCost.Append("RemoveMetaLocation get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RemoveMetaLocation get lock", timer.ElapsedMilliSecond());
     TbbMetaTable::accessor accessor;
     if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
         LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey);
@@ -1656,7 +1657,7 @@ void OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &req
             Timer timer;
             size_t shardIdx = GetShardIndex(objectKey);
             std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-            masterOperationTimeCost.Append("RemoveMetaForInvalidateBuffer get lock", timer.ElapsedMilliSecond());
+            GetMasterTimeCost().Append("RemoveMetaForInvalidateBuffer get lock", timer.ElapsedMilliSecond());
             TbbMetaTable::accessor accessor;
             if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
                 LOG(ERROR) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey);
@@ -2006,7 +2007,7 @@ Status OCMetadataManager::BFSGetDeadObjects(const std::unordered_set<std::string
         // Intentional: per-key snapshot via TBB const_accessor without acquiring shard mutex.
         // Cross-key consistency is not required — BFS is iterative and the next round will
         // re-collect any dead objects missed here. See MetaTableShard design doc.
-        masterOperationTimeCost.Append("BFSGetDeadObjects get lock", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("BFSGetDeadObjects get lock", timer.ElapsedMilliSecond());
         for (size_t index = 0; index < zeroRefIds.size(); index++) {
             auto &objectKey = zeroRefIds[index];
             TbbMetaTable::const_accessor accessor;
@@ -2199,7 +2200,7 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-    masterOperationTimeCost.Append("UpdateMeta get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("UpdateMeta get lock", timer.ElapsedMilliSecond());
     VLOG(1) << FormatString("Update start: objectKey: %s, worker address: %s", request.object_key(), request.address());
     TbbMetaTable::accessor accessor;
     CHECK_FAIL_RETURN_STATUS(metaShards_[shardIdx].table.find(accessor, objectKey), StatusCode::K_NOT_FOUND,
@@ -2834,7 +2835,7 @@ Status OCMetadataManager::GetPrimaryReplicaAddr(const std::string &masterAddr, H
     std::string dbName;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetPrimaryReplicaLocationByAddr(masterAddr, primaryAddr, dbName),
                                      "GetPrimaryReplicaAddr failed");
-    g_MetaRocksDbName = dbName;
+    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -3402,7 +3403,7 @@ Status OCMetadataManager::RemoveMetaByWorker(const std::string &workerAddr)
     {
         Timer timer;
         WithAllShardsLocked([&]() {
-            masterOperationTimeCost.Append("RemoveMetaByWorker get lock", timer.ElapsedMilliSecond());
+            GetMasterTimeCost().Append("RemoveMetaByWorker get lock", timer.ElapsedMilliSecond());
             for (auto& shard : metaShards_) {
                 for (const auto &it : shard.table) {
                     const std::string &objectKey = it.first;
@@ -3627,7 +3628,7 @@ Status OCMetadataManager::RecoveryMetaFromWorker(const std::string &workerAddr, 
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-    masterOperationTimeCost.Append("RecoveryMetaFromWorker get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RecoveryMetaFromWorker get lock", timer.ElapsedMilliSecond());
     TbbMetaTable::accessor accessor;
     auto found = metaShards_[shardIdx].table.find(accessor, objectKey);
     if (found) {
@@ -3788,7 +3789,7 @@ Status OCMetadataManager::SaveMigrationData(const std::string &objectKey, Object
     Timer timer;
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-    masterOperationTimeCost.Append("SaveMigrationMetadata get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("SaveMigrationMetadata get lock", timer.ElapsedMilliSecond());
     (void)metaShards_[shardIdx].table.insert({ objectKey, std::move(metaCache) });
 
     return Status::OK();
@@ -4439,7 +4440,7 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
     // TBB concurrent_hash_map::find() provides its own internal locking for const_accessor,
     // making this read safe for concurrent access without an external shard lock.
     Timer timer;
-    masterOperationTimeCost.Append("PureQueryMeta get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("PureQueryMeta get lock", timer.ElapsedMilliSecond());
     for (const auto &objectKey : notRedirectObjectKeys) {
         TbbMetaTable::const_accessor accessor;
         size_t shardIdx = GetShardIndex(objectKey);

@@ -45,3 +45,10 @@ set_source_files_properties(version.cpp PROPERTIES
 
 add_library(common_util STATIC ${UTIL_SRCS})
 target_link_libraries(common_util PRIVATE ${UTIL_LIBS})
+
+# request_context.cpp depends only on bthread (bthread_key_create/getspecific/setspecific)
+# and on header types from common_log (TimeCost, Trace). No link-time dependency on
+# common_log — request_context.cpp does not call any function defined in common_log.
+# Kept as a separate target so common_util stays brpc-free.
+add_library(common_request_context STATIC request_context.cpp)
+target_link_libraries(common_request_context PUBLIC ${BRPC_LIBRARIES})

@@ -36,6 +36,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -828,7 +829,7 @@ Status ZmqBaseStubConn::WaitForConnect(const std::shared_ptr<StubInfo> &info, in
         INJECT_POINT("ZmqBaseStubConn.WaitForConnect");
     } while (rc.IsError() && remaining > 0);
     auto elapsedMs = static_cast<int64_t>(t.ElapsedMilliSecond());
-    workerOperationTimeCost.Append("wait for connected", static_cast<uint64_t>(elapsedMs));
+    GetWorkerTimeCost().Append("wait for connected", static_cast<uint64_t>(elapsedMs));
     LOG_IF(INFO, elapsedMs > SLOW_WAIT_FOR_CONNECT_THRESHOLD_MS || rc.IsError())
         << FormatString("[WAIT_FOR_CONNECT_FAIL] ep=%s status=%s trace=%s", key_.channelEndPoint_, rc.ToString(),
                         Trace::Instance().GetTraceID());

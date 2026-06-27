@@ -23,7 +23,9 @@ set(LOG_LIBS
         )
 
 add_library(common_log STATIC ${LOG_SRCS})
-target_link_libraries(common_log PRIVATE ${LOG_LIBS})
+# access_recorder.cpp calls GetRequestContext() from request_context.h.
+# PUBLIC ensures all consumers of common_log resolve this symbol at link time.
+target_link_libraries(common_log PUBLIC common_request_context PRIVATE ${LOG_LIBS})
 target_include_directories(common_log PRIVATE ${CMAKE_BINARY_DIR}/src)
 
 add_library(common_log_proto STATIC log_sampler_proto.cpp)

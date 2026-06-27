@@ -48,6 +48,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -624,6 +625,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
             break;
         }
         futures.emplace_back(deleteThreadPool_->Submit([=, &needAbort, &timer]() -> SendResult {
+            ScopedRequestContext ctx;
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             if (elapsed >= realTimeoutMs) {
@@ -765,7 +767,7 @@ Status OCNotifyWorkerManager::InsertAsyncWorkerOp(const std::string &workerId, c
     INJECT_POINT("OCNotifyWorkerManager.InsertAsyncWorkerOp.Fail");
     Timer timer;
     std::shared_lock<std::shared_timed_mutex> lck(notifyWorkerOpMutex_);
-    masterOperationTimeCost.Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("InsertAsyncWorkerOp get lock", timer.ElapsedMilliSecond());
     TbbNotifyWorkerOpTable::accessor accessor;
     NotifyWorkerOp opAfterModify = op;
 
@@ -899,7 +901,7 @@ void OCNotifyWorkerManager::RemoveFaultWorker(const std::string &workerAddr)
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(faultWorkerMutex_);
     LOG(INFO) << "remove fault worker: " << workerAddr;
-    masterOperationTimeCost.Append("RemoveFaultWorker get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RemoveFaultWorker get lock", timer.ElapsedMilliSecond());
     (void)faultWorkers_.erase(workerAddr);
 }
 
@@ -908,7 +910,7 @@ Status OCNotifyWorkerManager::CheckWorkerIsHealthy(const std::string &workerAddr
     INJECT_POINT("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy");
     Timer timer;
     std::shared_lock<std::shared_timed_mutex> lck(faultWorkerMutex_);
-    masterOperationTimeCost.Append("CheckWorkerIsHealthy get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("CheckWorkerIsHealthy get lock", timer.ElapsedMilliSecond());
     if (faultWorkers_.find(workerAddr) != faultWorkers_.end()) {
         RETURN_STATUS(K_WORKER_ABNORMAL, "The worker status is abnormal. workerAddr:" + workerAddr);
     }

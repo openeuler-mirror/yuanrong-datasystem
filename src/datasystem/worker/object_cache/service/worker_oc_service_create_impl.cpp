@@ -31,6 +31,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
@@ -57,7 +58,7 @@ WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &i
 Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     INJECT_POINT("worker.Create.begin");
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     PerfPoint point(PerfKey::WORKER_CREATE_OBJECT);
     auto config = GetServerLatencyTraceConfig();
@@ -100,10 +101,10 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     access.Result(rc).Record();
     point.Record();
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
-    workerOperationTimeCost.Append("Total Create", totalMs);
+    GetWorkerTimeCost().Append("Total Create", totalMs);
     INJECT_POINT("worker.Create.end");
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-                        FormatString("Create done, cost: %.3fms, %s", totalMs, workerOperationTimeCost.GetInfo()));
+                        FormatString("Create done, cost: %.3fms, %s", totalMs, GetWorkerTimeCost().GetInfo()));
     return rc;
 }
 

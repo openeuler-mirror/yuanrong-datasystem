@@ -150,10 +150,16 @@ find_library(BRPC_LIBRARY
 include_directories(SYSTEM ${BRPC_INCLUDE_DIR})
 
 # Convenience aggregate for targets that need brpc (incl. bthread/butil/bvar) + their deps.
+# protobuf::libprotobuf is needed because libbrpc.so links against it at build time
+# but find_library above returns a raw .so path without its NEEDED transitive deps.
+# Adding it explicitly ensures consumers get -L<protobuf_lib_dir> -lprotobuf.
+# protobuf::libprotobuf also transitively brings in absl (protobuf was built with
+# -Dprotobuf_ABSL_PROVIDER=package), resolving libbrpc.so's absl symbols.
 set(BRPC_LIBRARIES
     ${BRPC_LIBRARY}
     ${gflags_LIBRARY}
-    ${leveldb_LIBRARY})
+    ${leveldb_LIBRARY}
+    protobuf::libprotobuf)
 
 if (DEFINED EXPORT_TO_USER_ENV_FILE)
     file(APPEND "${EXPORT_TO_USER_ENV_FILE}"

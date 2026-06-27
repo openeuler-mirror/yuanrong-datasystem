@@ -24,6 +24,7 @@
 
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
@@ -323,7 +324,7 @@ Status WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr(const std::string &sr
 {
     std::string dbName;
     RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    g_MetaRocksDbName = dbName;
+    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 

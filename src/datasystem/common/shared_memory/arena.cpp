@@ -65,9 +65,9 @@ DS_DECLARE_bool(enable_fallocate);
 
 namespace datasystem {
 namespace memory {
-thread_local bool g_NeedFallocate = false;
-thread_local uint64_t g_RequestSize = 0;
-thread_local bool g_FakeAllocate = false;  // fake allocate only need allochook, no need to commit.
+// Per-allocation metadata moved to Arena::currentNeedFallocate_,
+// Arena::currentRequestSize_, and Arena::currentFakeAllocate_ (std::atomic members).
+// See arena.h for declarations.
 
 inline uintptr_t AlignCeiling(uintptr_t addr, uintptr_t alignment)
 {
@@ -158,10 +158,25 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
     CHECK_FAIL_RETURN_STATUS(arenas_.size() > index, StatusCode::K_RUNTIME_ERROR, "index is bigger than arenas_ size");
     using clock = std::chrono::steady_clock;
-    g_NeedFallocate = populate;
-    g_RequestSize = size;
-    auto arenaCount = arenas_.size();
     auto arena = arenas_[index];
+    // Safety note on per-Arena atomic flags (moved here from thread_local by this PR):
+    // Although multiple pthreads may share one Arena instance (e.g. when
+    // arena_per_tenant=1 is forced by populate/huge_tlb/NeedRegisterWholeArena),
+    // the store() here, the Jemalloc::Allocate() call below, and the synchronous
+    // AllocHook/CommitHook callbacks that read these flags all execute on the
+    // SAME calling pthread with no bthread_yield / lock release / async hop in
+    // between (jemalloc extent hooks are plain C; brpc cooperative M:N never
+    // yields inside a pure-C synchronous call chain). Therefore no other thread
+    // can interleave a store() between this thread's store() and CommitImpl's
+    // load(), so the relaxed memory order is safe and there is no cross-thread
+    // clobber of currentRequestSize_/currentNeedFallocate_. The reason for
+    // moving away from thread_local is robustness: the flags conceptually
+    // belong to the Arena being operated on, not to the calling thread, and
+    // keeping them as members makes the state-locality explicit and protects
+    // against any future caller that adds a yield point inside this chain.
+    arena->currentNeedFallocate_.store(populate, std::memory_order_relaxed);
+    arena->currentRequestSize_.store(size, std::memory_order_relaxed);
+    auto arenaCount = arenas_.size();
     auto arenaId = arena->GetArenaId();
     auto beginTime = clock::now();
     auto status = Jemalloc::Allocate(arenaId, size, pointer);
@@ -450,7 +465,10 @@ Status ArenaManager::CreateArenaGroup(CacheType type, uint64_t maxSize, std::sha
 
 void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &arenaInds, const uint64_t maxSize)
 {
-    g_FakeAllocate = true;
+    // Set fake allocate flag on target arenas before triggering alloc hooks.
+    for (const auto &arenaInd : arenaInds) {
+        arenas_[arenaInd]->currentFakeAllocate_.store(true, std::memory_order_relaxed);
+    }
     for (const auto &arenaInd : arenaInds) {
         uint64_t hookSize = maxSize;
         void *pointer;
@@ -469,7 +487,10 @@ void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &are
             Jemalloc::Free(arenaInd, pointer);
         }
     }
-    g_FakeAllocate = false;
+    // Clear fake allocate flags on all target arenas.
+    for (const auto &arenaInd : arenaInds) {
+        arenas_[arenaInd]->currentFakeAllocate_.store(false, std::memory_order_relaxed);
+    }
 }
 
 Status ArenaManager::CreateArenaGroup(const std::string &tenantId, CacheType type, uint64_t maxSize,
@@ -770,11 +791,12 @@ Arena::~Arena() noexcept
 
 void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
 {
-    if (g_FakeAllocate) {
+    bool fakeAllocate = currentFakeAllocate_.load(std::memory_order_relaxed);
+    if (fakeAllocate) {
         *commit = false;
     }
     bool needCommit = *commit && !*zero;
-    if (g_FakeAllocate && !firstFakeHook_.load()) {
+    if (fakeAllocate && !firstFakeHook_.load()) {
         LOG(INFO) << "fake hook before, no need to hook again";
         return nullptr;
     }
@@ -789,7 +811,7 @@ void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
         }
         return addr;
     }
-    if (g_FakeAllocate) {
+    if (fakeAllocate) {
         firstFakeHook_ = false;
     }
     if (needCommit) {
@@ -818,7 +840,7 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
     VLOG(1) << "CommitHook arena " << arenaId_;
     (void)size;
     if (commit) {
-        if (g_FakeAllocate) {
+        if (currentFakeAllocate_.load(std::memory_order_relaxed)) {
             LOG(INFO) << "fake allocate no need to commit";
             return true;
         }
@@ -837,14 +859,16 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
 bool Arena::CommitImpl(void *addr, size_t offset, size_t length)
 {
     PerfPoint point(PerfKey::JEMALLOC_COMMIT);
-    if (!g_NeedFallocate && length > Arena::pageSize_) {
-        if (length == g_RequestSize) {
+    bool needFallocate = currentNeedFallocate_.load(std::memory_order_relaxed);
+    uint64_t requestSize = currentRequestSize_.load(std::memory_order_relaxed);
+    if (!needFallocate && length > Arena::pageSize_) {
+        if (length == requestSize) {
             return false;
-        } else if (length > g_RequestSize) {
-            offset += g_RequestSize;
-            length -= g_RequestSize;
+        } else if (length > requestSize) {
+            offset += requestSize;
+            length -= requestSize;
         } else {
-            LOG(WARNING) << "Request size is: " << g_RequestSize << " but length is " << length
+            LOG(WARNING) << "Request size is: " << requestSize << " but length is " << length
                          << ", it should not happen";
         }
     }

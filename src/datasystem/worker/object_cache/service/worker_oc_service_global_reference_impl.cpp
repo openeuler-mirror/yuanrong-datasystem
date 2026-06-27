@@ -24,6 +24,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -62,7 +63,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     if (!req.remote_client_id().empty()) {
         return GIncreaseRefWithRemoteClientId(req, resp);
     }
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     access.ObjectKeysRef(req.object_keys());
@@ -104,17 +105,17 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRef(const GIncreaseReqPb &re
     resp.mutable_last_rc()->set_error_code(lastErr.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastErr.GetMsg());
     access.Result(lastErr).Record();
-    workerOperationTimeCost.Append("Total GIncreaseRef", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Total GIncreaseRef", timer.ElapsedMilliSecond());
 
     bool partlySuccess = !failIncIds.empty() && (objectKeys.size() > failIncIds.size());
     LOG(INFO) << FormatString("[Ref] GIncreaseRef finish with status: %s. The operations of worker GIncreaseRef %s",
-                              lastErr.ToString(), workerOperationTimeCost.GetInfo());
+                              lastErr.ToString(), GetWorkerTimeCost().GetInfo());
     return partlySuccess ? Status::OK() : lastErr;
 }
 
 Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_keys_size()),
@@ -147,7 +148,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRef(const GDecreaseReqPb &re
     resp.mutable_last_rc()->set_error_msg(rc.GetMsg());
     access.Result(rc).Record();
     LOG(INFO) << FormatString("[Ref] GDecreaseRef finish with status: %s. The operations %s", rc.ToString(),
-                              workerOperationTimeCost.GetInfo());
+                              GetWorkerTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -184,7 +185,7 @@ Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb 
 Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
                                                              QueryGlobalRefNumRspCollectionPb &rsp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -227,10 +228,10 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
         }
     }
     access.Result(StatusCode::K_OK).Record();
-    workerOperationTimeCost.Append("Total QueryGlobalRefNum", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Total QueryGlobalRefNum", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString(
         "worker query global ref number end, namespaceUris: %s. The operations of worker QueryGlobalRefNum %s",
-        VectorToString(namespaceUris), workerOperationTimeCost.GetInfo());
+        VectorToString(namespaceUris), GetWorkerTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -239,7 +240,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRefWithRemoteClientId(const 
 {
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_GINCREASEREF);
     INJECT_POINT("worker.GIncrease_ref_failure");
     auto objectKeys = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.object_keys());
@@ -267,7 +268,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseRefWithRemoteClientId(const 
     bool partlySuccess = !failIncIds.empty() && (objectKeys.size() > failIncIds.size());
     access.Result(lastErr).Record();
     LOG(INFO) << FormatString("[Ref] GIncreaseRefWithRemoteClientId finish with status: %s, The operations %s",
-                              lastErr.ToString(), workerOperationTimeCost.GetInfo());
+                              lastErr.ToString(), GetWorkerTimeCost().GetInfo());
     return partlySuccess ? Status::OK() : lastErr;
 }
 
@@ -281,7 +282,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRefWithLockWithRemoteClientI
     Timer timer;
     Status lastErr = BatchLockWithInsert(objectKeys, lockedEntries, sendToMasterIds, failedLockIds);
     auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
-    workerOperationTimeCost.Append("BatchLockWithInsert", elapsedMs);
+    GetWorkerTimeCost().Append("BatchLockWithInsert", elapsedMs);
 
     if (sendToMasterIds.empty()) {
         LOG(ERROR) << "[Ref] All objects lock failed: " << lastErr.ToString();
@@ -577,7 +578,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRefWithLock(const std::vecto
     Timer timer;
     Status lastErr = BatchLockWithInsert(objectKeys, lockedEntries, sendToMasterIds, failedLockIds);
     auto elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecondAndReset()));
-    workerOperationTimeCost.Append("BatchLockWithInsert", elapsedMs);
+    GetWorkerTimeCost().Append("BatchLockWithInsert", elapsedMs);
 
     if (sendToMasterIds.empty()) {
         LOG(ERROR) << "[Ref] All objects lock failed: " << lastErr.ToString();
@@ -587,7 +588,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseRefWithLock(const std::vecto
 
     BatchGRefLock(lockedEntries);
     elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecondAndReset()));
-    workerOperationTimeCost.Append("BatchGRefLock", elapsedMs);
+    GetWorkerTimeCost().Append("BatchGRefLock", elapsedMs);
     Raii unlockAll([&lockedEntries, this]() {
         BatchGRefUnlock(lockedEntries);
         BatchUnlock(lockedEntries);

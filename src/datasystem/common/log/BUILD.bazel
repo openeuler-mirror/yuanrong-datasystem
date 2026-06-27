@@ -106,6 +106,7 @@ ds_cc_library(
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/common/util:locks",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:request_context",
         "//src/datasystem/common/util:thread",
         "//src/datasystem/common/util:uuid_generator",
         "@re2",

@@ -45,6 +45,7 @@
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
@@ -784,7 +785,7 @@ Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowDirec
     Timer timer;
     INJECT_POINT("ClusterManager.checkConnection");
     auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
-    workerOperationTimeCost.Append("CheckConnection wait", elapsedMs);
+    GetWorkerTimeCost().Append("CheckConnection wait", elapsedMs);
     topology::PlacementEndpoint endpoint;
     auto rc = placementDirectory_->ResolveWorkerByAddress(nodeAddr.ToString(), endpoint);
     if (rc.IsError()) {
@@ -803,7 +804,7 @@ Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowDirec
         RETURN_STATUS(StatusCode::K_MASTER_TIMEOUT, "Disconnected from remote node " + nodeAddr.ToString());
     }
     elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecond());
-    workerOperationTimeCost.Append("CheckConnection", elapsedMs);
+    GetWorkerTimeCost().Append("CheckConnection", elapsedMs);
     return Status::OK();
 }
 
@@ -1291,7 +1292,7 @@ Status ClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKe
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY))
             .Observe(us);
     }
-    workerOperationTimeCost.Append("GetMetaAddress", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("GetMetaAddress", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -1367,7 +1368,7 @@ ClusterManager::MetaOwnerKeyGroups ClusterManager::GroupKeysByMetaOwnerImpl(cons
                   << ", status is " << result.failures.begin()->second.ToString();
     }
     auto elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecond()));
-    workerOperationTimeCost.Append("GroupObjKeys", elapsedMs);
+    GetWorkerTimeCost().Append("GroupObjKeys", elapsedMs);
     return result;
 }
 

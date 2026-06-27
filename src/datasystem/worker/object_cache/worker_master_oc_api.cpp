@@ -33,6 +33,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
@@ -210,7 +211,7 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         Timer sealTimer;
         Status rc = (brpcSession_ ? brpcSession_->CreateMeta(opts, request, response)
                                     : rpcSession_->CreateMeta(opts, request, response));
-        workerOperationTimeCost.Append("Worker to master rpc Seal CreateMeta", sealTimer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Worker to master rpc Seal CreateMeta", sealTimer.ElapsedMilliSecond());
         return WithRpcDiag(rc, "CreateMeta", localHostPort_, hostPort_);
     }
 
@@ -227,7 +228,7 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->CreateMeta(opts, request, response)
                                         : rpcSession_->CreateMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc CreateMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc CreateMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -326,7 +327,7 @@ Status WorkerRemoteMasterOCApi::CreateCopyMeta(master::CreateCopyMetaReqPb &requ
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->CreateCopyMeta(opts, request, response)
                                         : rpcSession_->CreateCopyMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc CreateCopyMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc CreateCopyMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -351,7 +352,7 @@ Status WorkerRemoteMasterOCApi::CreateMultiCopyMeta(master::CreateMultiCopyMetaR
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->CreateMultiCopyMeta(opts, request, response)
                                         : rpcSession_->CreateMultiCopyMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc CreateMultiCopyMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc CreateMultiCopyMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -383,7 +384,7 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->QueryMeta(opts, request, response, payloads)
                                         : rpcSession_->QueryMeta(opts, request, response, payloads));
-            workerOperationTimeCost.Append("Worker to master rpc QueryMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc QueryMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -407,7 +408,7 @@ Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, mas
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->RemoveMeta(opts, request, response)
                                         : rpcSession_->RemoveMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc RemoveMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc RemoveMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -424,7 +425,7 @@ Status WorkerRemoteMasterOCApi::GIncNestedRef(master::GIncNestedRefReqPb &reques
     Timer timer;
     Status rc = (brpcSession_ ? brpcSession_->GIncNestedRef(opts, request, response)
                                 : rpcSession_->GIncNestedRef(opts, request, response));
-    workerOperationTimeCost.Append("Worker to master rpc GIncNestedRef", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Worker to master rpc GIncNestedRef", timer.ElapsedMilliSecond());
     return WithRpcDiag(rc, "GIncNestedRef", localHostPort_, hostPort_);
 }
 
@@ -436,7 +437,7 @@ Status WorkerRemoteMasterOCApi::GDecNestedRef(master::GDecNestedRefReqPb &reques
     Timer timer;
     Status rc = (brpcSession_ ? brpcSession_->GDecNestedRef(opts, request, response)
                                 : rpcSession_->GDecNestedRef(opts, request, response));
-    workerOperationTimeCost.Append("Worker to master rpc GDecNestedRef", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Worker to master rpc GDecNestedRef", timer.ElapsedMilliSecond());
     return WithRpcDiag(rc, "GDecNestedRef", localHostPort_, hostPort_);
 }
 
@@ -450,7 +451,7 @@ Status WorkerRemoteMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, mas
         Timer sealTimer;
         Status rc = (brpcSession_ ? brpcSession_->UpdateMeta(opts, request, response)
                                     : rpcSession_->UpdateMeta(opts, request, response));
-        workerOperationTimeCost.Append("Worker to master rpc Seal UpdateMeta", sealTimer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Worker to master rpc Seal UpdateMeta", sealTimer.ElapsedMilliSecond());
         return WithRpcDiag(rc, "UpdateMeta", localHostPort_, hostPort_);
     }
 
@@ -467,7 +468,7 @@ Status WorkerRemoteMasterOCApi::UpdateMeta(master::UpdateMetaReqPb &request, mas
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->UpdateMeta(opts, request, response)
                                         : rpcSession_->UpdateMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc UpdateMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc UpdateMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -489,7 +490,7 @@ Status WorkerRemoteMasterOCApi::DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->DeleteAllCopyMeta(opts, request, response)
                                         : rpcSession_->DeleteAllCopyMeta(opts, request, response));
-            workerOperationTimeCost.Append("Worker to master rpc DeleteAllCopyMeta", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc DeleteAllCopyMeta", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -578,7 +579,7 @@ Status WorkerRemoteMasterOCApi::GDecreaseMasterRef(const std::vector<std::string
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->GDecreaseRef(opts, decReq, decRsp)
                                         : rpcSession_->GDecreaseRef(opts, decReq, decRsp));
-            workerOperationTimeCost.Append("Worker to master rpc GDecreaseMasterRef", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc GDecreaseMasterRef", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -609,7 +610,7 @@ Status WorkerRemoteMasterOCApi::QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, Q
     Timer timer;
     Status rc = (brpcSession_ ? brpcSession_->QueryGlobalRefNum(opts, req, rsp)
                                 : rpcSession_->QueryGlobalRefNum(opts, req, rsp));
-    workerOperationTimeCost.Append("Worker to master rpc QueryGlobalRefNum", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Worker to master rpc QueryGlobalRefNum", timer.ElapsedMilliSecond());
     return WithRpcDiag(rc, "QueryGlobalRefNum", localHostPort_, hostPort_);
 }
 
@@ -626,7 +627,7 @@ Status WorkerRemoteMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReq
         Timer timer;
         Status rc = (brpcSession_ ? brpcSession_->PushMetaToMaster(opts, req, rsp)
                                     : rpcSession_->PushMetaToMaster(opts, req, rsp));
-        workerOperationTimeCost.Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
         return rc;
     });
     return WithRpcDiag(status, "PushMetadataToMaster", localHostPort_, hostPort_);
@@ -654,7 +655,7 @@ Status WorkerRemoteMasterOCApi::RollbackSeal(const std::string &objectKey, uint3
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->RollbackSeal(opts, req, rsp)
                                         : rpcSession_->RollbackSeal(opts, req, rsp));
-            workerOperationTimeCost.Append("Worker to master rpc RollbackSeal", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc RollbackSeal", timer.ElapsedMilliSecond());
             return rc;
         },
         []() { return Status::OK(); },
@@ -684,7 +685,7 @@ Status WorkerRemoteMasterOCApi::IfNeedTriggerReconciliation(master::Reconciliati
         Timer timer;
         Status rc = (brpcSession_ ? brpcSession_->IfNeedTriggerReconciliation(req, rsp)
                                     : rpcSession_->IfNeedTriggerReconciliation(req, rsp));
-        workerOperationTimeCost.Append("Worker to master rpc IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Worker to master rpc IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
         return rc;
     };
     RETURN_IF_NOT_OK(RetryOnError(
@@ -1005,7 +1006,7 @@ Status WorkerRemoteMasterOCApi::GetObjectLocations(master::GetObjectLocationsReq
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->GetObjectLocations(opts, req, resp)
                                         : rpcSession_->GetObjectLocations(opts, req, resp));
-            workerOperationTimeCost.Append("Worker to master rpc GetObjectLocations", timer.ElapsedMilliSecond());
+            GetWorkerTimeCost().Append("Worker to master rpc GetObjectLocations", timer.ElapsedMilliSecond());
             INJECT_POINT("WorkerRemoteMasterOCApi.GetObjectLocations");
             return rc;
         },

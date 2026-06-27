@@ -69,6 +69,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/log:common_log",
         "//tests/ut:ut_common",
+        "//src/datasystem/common/util:request_context",
     ],
 )
 
@@ -143,7 +144,6 @@ ds_cc_test(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:file_util",
-        "@com_google_googletest//:gtest",
     ],
 )
 

@@ -35,6 +35,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/utils/status.h"
@@ -63,7 +64,7 @@ WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
 Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                                      std::vector<RpcMessage> &payloads, const ClientKey &clientId)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTIPUBLISH);
     access
@@ -80,9 +81,9 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublish(const MultiPublishReqPb &re
     Status status = MultiPublishImpl(req, resp, payloads, clientId);
     access.Result(status).Record();
     auto totalMs = timer.ElapsedMilliSecond();
-    workerOperationTimeCost.Append("Total MultiPublish", totalMs);
+    GetWorkerTimeCost().Append("Total MultiPublish", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s", totalMs, workerOperationTimeCost.GetInfo());
+    VLOG(vlogLevel) << FormatString("MultiPublish done, cost: %.1fms, %s", totalMs, GetWorkerTimeCost().GetInfo());
     return status;
 }
 

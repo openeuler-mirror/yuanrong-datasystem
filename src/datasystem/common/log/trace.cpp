@@ -28,7 +28,19 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/utils/status.h"
+
+namespace datasystem {
+
+// Default weak implementation of GetBthreadTrace (forward-declared in trace.h).
+// Returns nullptr so that Trace::Instance() falls back to thread_local.
+// When request_context is linked, its strong override provides per-bthread
+// isolation via the active RequestContext.
+__attribute__((weak)) Trace* GetBthreadTrace()
+{
+    return nullptr;
+}
+
+}  // namespace datasystem
 
 namespace datasystem {
 namespace {

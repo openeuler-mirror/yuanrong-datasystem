@@ -25,9 +25,8 @@ thread_local TimeoutDuration timeoutDuration(RPC_TIMEOUT);
 thread_local TimeoutDuration scTimeoutDuration(RPC_TIMEOUT);
 thread_local TimeoutDuration reqTimeoutDuration(RPC_TIMEOUT);
 thread_local ZmqMessage g_SerializedMessage;
-thread_local TimeCost workerOperationTimeCost;
-thread_local TimeCost masterOperationTimeCost;
-thread_local std::string g_MetaRocksDbName;
+// ZMQ fallback: used when GetRequestContext() returns nullptr (ZMQ pthread handler paths).
+// In brpc M:N handlers, per-request isolation is provided by RequestContext.
 thread_local std::string g_ContextTenantId;
 thread_local std::string g_ReqAk;
 thread_local std::string g_ReqSignature;

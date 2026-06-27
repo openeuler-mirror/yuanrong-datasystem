@@ -24,6 +24,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
 
@@ -55,6 +56,10 @@ Status CommonServer::CreateGenericService()
 
 Status CommonServer::Init()
 {
+    // Initialize the per-bthread request context key once, before any brpc
+    // handler can execute. Idempotent via std::call_once.
+    InitRequestContext();
+
     eventLoop_ = std::make_shared<SockEventLoop>();
     RETURN_IF_NOT_OK(eventLoop_->Init());
     // In brpc mode, brpc owns the TCP port exclusively. Do not add a ZMQ TCP

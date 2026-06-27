@@ -25,6 +25,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -258,7 +259,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
     RETURN_IF_NOT_OK(InitializeMetadataMemory(objectKey, metadataSize, populate, shmUnit));
 
     point.Record();
-    workerOperationTimeCost.Append("AllocateMemory", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("AllocateMemory", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
