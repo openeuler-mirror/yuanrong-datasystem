@@ -29,6 +29,7 @@
 
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/master/memory_rebalance_scheduler.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/protos/master_object.pb.h"
 
@@ -53,6 +54,15 @@ public:
      * @return Status of this call.
      */
     Status ReportResource(const master::ResourceReportReqPb &req, master::ResourceReportRspPb &rsp);
+
+    /**
+     * @brief Accept the memory rebalance result reported by source worker.
+     * @param[in] req The reported rebalance result.
+     * @param[out] rsp The response of the call.
+     * @return Status of this call.
+     */
+    Status ReportRebalanceResult(const master::ReportRebalanceResultReqPb &req,
+                                 master::ReportRebalanceResultRspPb &rsp);
 protected:
     /**
      * @brief Clear the expired resource in write snapshot.
@@ -87,6 +97,7 @@ private:
     std::shared_timed_mutex readSnapshotMutex_;
     std::unordered_map<std::string, NodeInfo> readSnapshot_{};
     std::unordered_map<std::string, NodeInfo> writeSnapshot_{};
+    MemoryRebalanceScheduler rebalanceScheduler_;
 };
 } // namespace master
 } // namespace datasystem

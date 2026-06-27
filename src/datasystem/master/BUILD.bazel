@@ -95,6 +95,23 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "memory_rebalance_scheduler",
+    srcs = [
+        "memory_rebalance_scheduler.cpp",
+    ],
+    hdrs = [
+        "memory_rebalance_scheduler.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:node_info",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/protos:master_object_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "resource_manager",
     srcs = [
         "resource_manager.cpp",
@@ -103,6 +120,9 @@ ds_cc_library(
         "resource_manager.h",
     ],
     deps = [
+        ":memory_rebalance_scheduler",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:node_info",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/protos:master_object_cc_proto",

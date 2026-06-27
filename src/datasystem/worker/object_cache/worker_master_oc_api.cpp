@@ -261,6 +261,29 @@ Status WorkerRemoteMasterOCApi::ReportResource(master::ResourceReportReqPb &requ
     return WithRpcDiag(status, "ReportResource", localHostPort_, hostPort_);
 }
 
+Status WorkerRemoteMasterOCApi::ReportRebalanceResult(master::ReportRebalanceResultReqPb &request,
+                                                      master::ReportRebalanceResultRspPb &response)
+{
+    reqTimeoutDuration.Init();
+    RpcOptions opts;
+    int64_t timeoutMs =
+        std::min(WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime()), RESOURCE_REPORT_RPC_TIMEOUT_MS);
+    Status status = RetryOnErrorRepent(
+        timeoutMs,
+        [this, &opts, &request, &response](int32_t) {
+            int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     FormatString("Request timeout (%ld ms).", -remainingTime));
+            opts.SetTimeout(std::min(remainingTime, RESOURCE_REPORT_RPC_TIMEOUT_MS));
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+            return rpcSession_->ReportRebalanceResult(opts, request, response);
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE });
+    return WithRpcDiag(status, "ReportRebalanceResult", localHostPort_, hostPort_);
+}
+
 Status WorkerRemoteMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &request,
                                                 master::CreateMultiMetaRspPb &response, bool retry)
 {
@@ -1111,6 +1134,13 @@ Status WorkerLocalMasterOCApi::ReportResource(master::ResourceReportReqPb &reque
 {
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
     return masterOC_->ReportResource(request, response);
+}
+
+Status WorkerLocalMasterOCApi::ReportRebalanceResult(master::ReportRebalanceResultReqPb &request,
+                                                     master::ReportRebalanceResultRspPb &response)
+{
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
+    return masterOC_->ReportRebalanceResult(request, response);
 }
 
 Status WorkerLocalMasterOCApi::CreateMultiMeta(master::CreateMultiMetaReqPb &request,

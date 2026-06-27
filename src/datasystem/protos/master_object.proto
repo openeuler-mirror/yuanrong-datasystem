@@ -683,7 +683,44 @@ message WorkerStat {
   string address = 1;
   uint64 available_memory = 2;
   bool is_ready = 3;
+  uint64 used_memory = 4;
+  uint64 memory_capacity = 5;
 }
+
+message RebalanceTaskPb {
+  string task_id = 1;
+  string source_worker = 2;
+  string target_worker = 3;
+  uint64 max_bytes = 4;
+  uint64 deadline_ms = 5;
+  uint64 create_time_ms = 6;
+}
+
+enum RebalanceTaskStatusPb {
+  REBALANCE_TASK_INIT = 0;
+  REBALANCE_TASK_RUNNING = 1;
+  REBALANCE_TASK_SUCCEEDED = 2;
+  REBALANCE_TASK_FAILED = 3;
+  REBALANCE_TASK_EXPIRED = 4;
+}
+
+message ReportRebalanceResultReqPb {
+  string task_id = 1;
+  string source_worker = 2;
+  string target_worker = 3;
+  RebalanceTaskStatusPb status = 4;
+  uint64 migrated_bytes = 5;
+  uint64 migrated_objects = 6;
+  uint64 failed_objects = 7;
+  string failed_reason = 8;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message ReportRebalanceResultRspPb {}
 
 message ResourceReportReqPb {
   WorkerStat stat = 1;
@@ -696,6 +733,7 @@ message ResourceReportReqPb {
 
 message ResourceReportRspPb {
   repeated WorkerStat stats = 1;
+  RebalanceTaskPb rebalance_task = 2;
 }
 
 message LivenessCheckReqPb {
@@ -741,6 +779,7 @@ service MasterOCService {
   rpc ReleaseGRefsOfRemoteClientId(ReleaseGRefsReqPb) returns (ReleaseGRefsRspPb) {}
   rpc CreateMultiMeta(CreateMultiMetaReqPb) returns (CreateMultiMetaRspPb) {}
   rpc ReportResource(ResourceReportReqPb) returns (ResourceReportRspPb) {}
+  rpc ReportRebalanceResult(ReportRebalanceResultReqPb) returns (ReportRebalanceResultRspPb) {}
   rpc LivenessCheck(LivenessCheckReqPb) returns (LivenessCheckRspPb) {}
 
 

@@ -157,14 +157,14 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToSpecificNo
 
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode(
     const std::vector<std::string> &objectKeys, const HostPort &targetAddr, std::shared_ptr<SelectionStrategy> strategy,
-    bool isRetry, uint32_t slotId)
+    bool isRetry, uint32_t slotId, bool isSlotMigration)
 {
     if (!strategy) {
         strategy = GetStrategyByType();
     }
 
     auto traceID = Trace::Instance().GetTraceID();
-    return threadPool_->Submit([this, objectKeys, targetAddr, traceID, strategy, isRetry, slotId]() {
+    return threadPool_->Submit([this, objectKeys, targetAddr, traceID, strategy, isRetry, slotId, isSlotMigration]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
 
         MigrateDataHandler::MigrateResult finalResult;
@@ -183,7 +183,7 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
         std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
         MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_, remoteWorkerStub,
                                    strategy, nullptr, isRetry, slotId);
-        auto result = handler.MigrateDataToRemote(true);
+        auto result = handler.MigrateDataToRemote(isSlotMigration);
         return result;
     });
 }

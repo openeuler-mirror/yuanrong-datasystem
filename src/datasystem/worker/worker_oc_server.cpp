@@ -87,6 +87,7 @@
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/worker/rebalance_executor.h"
 
 DS_DECLARE_bool(use_brpc);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
@@ -310,6 +311,7 @@ WorkerOCServer::~WorkerOCServer()
     }
 
     builder_ = RpcServer::Builder();
+    StopRebalanceExecutor();
     objCacheMasterSvc_.reset();
     objCacheWorkerWkSvc_.reset();
     objCacheWorkerMsSvc_.reset();
@@ -660,29 +662,7 @@ void WorkerOCServer::CreateWorkerServices()
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(objectTable, hostPort_, masterAddr_,
                                                                                    objCacheMasterSvc_.get());
     if (EnableOCService()) {
-        // create WorkerOCServices
-        objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
-            hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
-            objCacheMasterSvc_.get());
-        objCacheClientWorkerSvc_->SetClusterManager(clusterManager_.get());
-        objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &taskId) {
-            while (!checkAsyncTasksDone_.load()) {
-                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                    !clusterManager_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
-                    FormatString("task id %s has expired while waiting async tasks done", taskId));
-                std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
-            }
-            return Status::OK();
-        });
-        // create WorkerWorkerOCService
-        objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
-            objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), clusterManager_.get());
-        // create MasterWorkerOCService
-        objCacheWorkerMsSvc_ = std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(
-            objCacheClientWorkerSvc_, akSkManager_);
-        // create WorkerWorkerTransportService
-        objCacheWorkerTransSvc_ =
-            std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(objCacheClientWorkerSvc_);
+        CreateObjectCacheWorkerServices(objectTable, evictionManager);
     }
     if (EnableSCService()) {
         auto scAllocateManager = std::make_shared<stream_cache::WorkerSCAllocateMemory>(evictionManager);
@@ -697,6 +677,53 @@ void WorkerOCServer::CreateWorkerServices()
         streamCacheWorkerWorkerSvc_ =
             std::make_unique<stream_cache::WorkerWorkerSCServiceImpl>(streamCacheClientWorkerSvc_.get(), akSkManager_);
     }
+}
+
+void WorkerOCServer::CreateObjectCacheWorkerServices(
+    const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    // create WorkerOCServices
+    objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
+        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
+        objCacheMasterSvc_.get());
+    objCacheClientWorkerSvc_->SetClusterManager(clusterManager_.get());
+    CreateRebalanceExecutor(objectTable, evictionManager);
+    objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &taskId) {
+        while (!checkAsyncTasksDone_.load()) {
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+                !clusterManager_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
+                FormatString("task id %s has expired while waiting async tasks done", taskId));
+            std::this_thread::sleep_for(std::chrono::seconds(CHECK_ASYNC_SLEEP_TIME_S));
+        }
+        return Status::OK();
+    });
+    // create WorkerWorkerOCService
+    objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
+        objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), clusterManager_.get());
+    // create MasterWorkerOCService
+    objCacheWorkerMsSvc_ =
+        std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(objCacheClientWorkerSvc_, akSkManager_);
+    // create WorkerWorkerTransportService
+    objCacheWorkerTransSvc_ =
+        std::make_shared<datasystem::object_cache::WorkerWorkerTransportServiceImpl>(objCacheClientWorkerSvc_);
+}
+
+void WorkerOCServer::CreateRebalanceExecutor(
+    const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+    const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
+{
+    RebalanceExecutorConfig rebalanceConfig{
+        hostPort_, clusterManager_.get(), akSkManager_, objectTable, evictionManager,
+        objCacheClientWorkerSvc_->GetWorkerMasterApiManager()
+    };
+    rebalanceExecutor_ = std::make_unique<RebalanceExecutor>(std::move(rebalanceConfig));
+    object_cache::NodeSelector::Instance().RegisterRebalanceTaskHandler([this](const master::RebalanceTaskPb &task) {
+        std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
+        if (rebalanceExecutor_ != nullptr) {
+            rebalanceExecutor_->Submit(task);
+        }
+    });
 }
 
 void WorkerOCServer::CreateAllServices()
@@ -1850,12 +1877,20 @@ void WorkerOCServer::StopLivenessCheck()
     }
 }
 
+void WorkerOCServer::StopRebalanceExecutor()
+{
+    object_cache::NodeSelector::Instance().UnregisterRebalanceTaskHandler();
+    std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
+    rebalanceExecutor_.reset();
+}
+
 Status WorkerOCServer::Shutdown()
 {
     INJECT_POINT("worker.BeforeShutdown");
     LOG(INFO) << "Worker process executing a shutdown.";
     StopConnectionWarmup();
     StopWorkerMasterRpcWarmup();
+    StopRebalanceExecutor();
     StopLivenessCheck();
     // Stop the background resource collector to prevent the background resource collector from invoking the background
     // resource collector when some objects of the worker exit.

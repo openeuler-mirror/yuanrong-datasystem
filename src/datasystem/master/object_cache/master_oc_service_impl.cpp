@@ -800,6 +800,14 @@ Status MasterOCServiceImpl::ReportResource(const ResourceReportReqPb &req, Resou
     return Status::OK();
 }
 
+Status MasterOCServiceImpl::ReportRebalanceResult(const ReportRebalanceResultReqPb &req,
+                                                  ReportRebalanceResultRspPb &rsp)
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    INJECT_POINT("MasterOCServiceImpl.ReportRebalanceResult");
+    return resourceManager_->ReportRebalanceResult(req, rsp);
+}
+
 Status MasterOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRspPb &resp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");

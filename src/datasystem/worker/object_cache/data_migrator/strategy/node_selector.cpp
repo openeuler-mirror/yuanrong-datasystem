@@ -18,6 +18,7 @@
 
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/object_cache/node_info.h"
@@ -30,6 +31,8 @@ namespace object_cache {
 static const std::string RESOURCE_MONITOR_MASTER = "RESOURCE_MONITOR";
 static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS = 30 * 1000;
 static const int64_t REPORT_RESOURCE_INTERVAL_TIME_MS_IF_FAILED = 500;
+static constexpr int RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL = 1;
+static constexpr int RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N = 2;
 NodeSelector &NodeSelector::Instance()
 {
     static NodeSelector instance;
@@ -86,6 +89,18 @@ void NodeSelector::Shutdown()
     clusterManager_  = nullptr;
     apiManager_.reset();
     LOG(INFO) << "NodeSelector shutdown";
+}
+
+void NodeSelector::RegisterRebalanceTaskHandler(RebalanceTaskHandler handler)
+{
+    std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
+    rebalanceTaskHandler_ = std::move(handler);
+}
+
+void NodeSelector::UnregisterRebalanceTaskHandler()
+{
+    std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
+    rebalanceTaskHandler_ = nullptr;
 }
 
 Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNodes, const std::string &preferNode,
@@ -251,6 +266,8 @@ Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCAp
     // get the master address info
     MetaAddrInfo metaAddrInfo;
     RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, metaAddrInfo));
+    VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
+        << "Get " << RESOURCE_MONITOR_MASTER << " address: " << metaAddrInfo.GetAddress().ToString();
     workerMasterApi = apiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddress());
     if (workerMasterApi == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "The worker master api is nullptr");
@@ -263,8 +280,14 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
 {
     // Report current worker resource info to master
     master::WorkerStat *stat = req.mutable_stat();
+    auto *allocator = datasystem::memory::Allocator::Instance();
+    const auto availableMemory = allocator->GetMemoryAvailToHighWater();
+    const auto usedMemory = allocator->GetTotalRealMemoryUsage();
     stat->set_address(localAddress_);
-    stat->set_available_memory(datasystem::memory::Allocator::Instance()->GetMemoryAvailToHighWater());
+    stat->set_available_memory(availableMemory);
+    stat->set_used_memory(usedMemory);
+    // Report capacity as current used memory plus memory still available to the high watermark.
+    stat->set_memory_capacity(usedMemory + availableMemory);
     stat->set_is_ready(!(clusterManager_->CheckLocalNodeIsExiting()));
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
@@ -296,13 +319,25 @@ Status NodeSelector::CollectClusterInfo()
         }
         token_->working = false;
     }
+    if (!rsp.rebalance_task().task_id().empty()) {
+        RebalanceTaskHandler handler;
+        {
+            std::lock_guard<std::mutex> lock(rebalanceTaskHandlerMutex_);
+            handler = rebalanceTaskHandler_;
+        }
+        if (handler != nullptr) {
+            // Master piggybacks rebalance tasks in ResourceReportRspPb; NodeSelector only dispatches them.
+            handler(rsp.rebalance_task());
+        }
+    }
     // update the rankList_
     std::unique_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     rankList_.clear();
     rankList_.reserve(rsp.stats().size());
     totalSize_ = 0;
     for (const auto &info : rsp.stats()) {
-        rankList_.emplace_back(info.address(), info.available_memory(), info.is_ready());
+        rankList_.emplace_back(info.address(), info.available_memory(), info.is_ready(), 0, info.used_memory(),
+                               info.memory_capacity());
         if (info.is_ready()) {
             totalSize_ += info.available_memory();
         }

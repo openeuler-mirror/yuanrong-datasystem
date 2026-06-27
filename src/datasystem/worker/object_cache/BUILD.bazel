@@ -333,10 +333,29 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:eviction_list",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
-        "//src/datasystem/worker/object_cache/data_migrator",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
         # "//src/datasystem/protos:master_object_gen",
         "@tbb",
+    ],
+)
+
+ds_cc_library(
+    name = "rebalance_candidate_provider",
+    srcs = [
+        "rebalance_candidate_provider.cpp",
+    ],
+    hdrs = [
+        "rebalance_candidate_provider.h",
+    ],
+    deps = [
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:safe_table",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/object_cache:eviction_list",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
     ],
 )
 

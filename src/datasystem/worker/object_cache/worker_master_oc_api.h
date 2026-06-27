@@ -74,6 +74,15 @@ public:
     virtual Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) = 0;
 
     /**
+     * @brief Report a memory rebalance task result to master.
+     * @param[in] request The rpc req protobuf.
+     * @param[out] response The rpc rsp protobuf.
+     * @return Status of the call.
+     */
+    virtual Status ReportRebalanceResult(master::ReportRebalanceResultReqPb &request,
+                                         master::ReportRebalanceResultRspPb &response) = 0;
+
+    /**
      * @brief Create multiple objects' meta in cache and rocksdb.
      * @param[in] request The rpc request protobuf.
      * @param[out] response The rpc response protobuf.
@@ -410,6 +419,8 @@ public:
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
     Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
+    Status ReportRebalanceResult(master::ReportRebalanceResultReqPb &request,
+                                 master::ReportRebalanceResultRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;
@@ -491,6 +502,8 @@ public:
     Status Init() override;
     Status CreateMeta(master::CreateMetaReqPb &request, master::CreateMetaRspPb &response) override;
     Status ReportResource(master::ResourceReportReqPb &request, master::ResourceReportRspPb &response) override;
+    Status ReportRebalanceResult(master::ReportRebalanceResultReqPb &request,
+                                 master::ReportRebalanceResultRspPb &response) override;
     Status CreateMultiMeta(master::CreateMultiMetaReqPb &request, master::CreateMultiMetaRspPb &response,
                            bool retry = true) override;
     Status CreateCopyMeta(master::CreateCopyMetaReqPb &request, master::CreateCopyMetaRspPb &response) override;

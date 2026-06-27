@@ -276,22 +276,22 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "kv_client_spill_remote_tcp_test",
-    srcs = ["kv_client_spill_remote_tcp_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS + [
-        "//src/datasystem/common/util:hash_algorithm",
-        "//src/datasystem/master/object_cache:oc_metadata_manager",
-        "//tests/st/cluster:st_cluster",
-    ],
-)
-
-ds_cc_test(
     name = "kv_client_tenant_akskauth_test",
     srcs = ["kv_client_tenant_akskauth_test.cpp"],
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/client/context",
+    ],
+)
+
+ds_cc_test(
+    name = "kv_client_memory_rebalance_test",
+    srcs = ["kv_client_memory_rebalance_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//tests/st/cluster:st_cluster",
     ],
 )
 

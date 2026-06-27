@@ -142,6 +142,39 @@ Status EvictionList::GetAllObjectsInfo(std::vector<EvictionList::Node> &res, Evi
     return Status::OK();
 }
 
+Status EvictionList::GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res)
+{
+    res.clear();
+    if (maxScanCount == 0) {
+        return Status::OK();
+    }
+    // Reserve outside the list read lock to avoid repeated vector growth while holding the lock, reducing the time
+    // Evict can be blocked on the write lock.
+    res.reserve(maxScanCount);
+
+    tbb::spin_rw_mutex::scoped_lock rlock(listMutex_, false);
+    if (list_.empty()) {
+        return Status::OK();
+    }
+
+    // Rebalance only needs a candidate snapshot near the oldest position, not a full eviction-list copy.
+    // Scan at most maxScanCount nodes so lock hold time changes from O(list size) to O(maxScanCount).
+    auto node = oldest_;
+    size_t scanned = 0;
+    while (scanned < maxScanCount) {
+        res.emplace_back(*node);
+        ++scanned;
+        ++node;
+        if (node == list_.end()) {
+            node = list_.begin();
+        }
+        if (node == oldest_) {
+            break;
+        }
+    }
+    return Status::OK();
+}
+
 bool EvictionList::Exist(const std::string &objectKey)
 {
     return indexTable_.count(objectKey) > 0;

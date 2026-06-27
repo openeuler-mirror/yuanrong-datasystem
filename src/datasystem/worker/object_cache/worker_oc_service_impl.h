@@ -488,6 +488,15 @@ public:
     }
 
     /**
+     * @brief Get the worker-to-master object cache api manager.
+     * @return The worker master api manager.
+     */
+    std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> GetWorkerMasterApiManager() const
+    {
+        return workerMasterApiManager_;
+    }
+
+    /**
      * @brief Check whether there are any requests for asynchronously writing to L2 cache.
      * @return True if there are unfinished async requests.
      */

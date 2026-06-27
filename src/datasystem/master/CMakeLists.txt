@@ -7,6 +7,7 @@ set(MASTER_SRCS
         node_descriptor.cpp
         worker_manager.cpp
         metadata_manager_holder.cpp
+        memory_rebalance_scheduler.cpp
         resource_manager.cpp
         metadata_redirect_helper.cpp)
 

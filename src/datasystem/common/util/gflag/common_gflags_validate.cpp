@@ -143,12 +143,33 @@ bool ValidateUrmaMaxWriteSize(const char *flagName, uint64_t value)
     return true;
 }
 
+bool ValidatePercent(const char *flagName, uint32_t value)
+{
+    constexpr uint32_t kMinPercent = 1;
+    constexpr uint32_t kMaxPercent = 100;
+    if (value < kMinPercent || value > kMaxPercent) {
+        LOG(ERROR) << FormatString("The %s flag is %u, which must be between %u and %u.", flagName, value,
+                                   kMinPercent, kMaxPercent);
+        return false;
+    }
+    return true;
+}
+
 bool ValidateUrmaFailoverSuccessRateRatio(const char *flagName, double value)
 {
     constexpr double kMinSuccessRateRatio = 0.0;
     constexpr double kMaxSuccessRateRatio = 1.0;
     if (!std::isfinite(value) || value < kMinSuccessRateRatio || value > kMaxSuccessRateRatio) {
         LOG(ERROR) << FormatString("The %s flag is %g, which must be between 0.0 and 1.0.", flagName, value);
+        return false;
+    }
+    return true;
+}
+
+bool ValidatePositiveUint64(const char *flagName, uint64_t value)
+{
+    if (value == 0) {
+        LOG(ERROR) << FormatString("The value of %s flag must be greater than 0.", flagName);
         return false;
     }
     return true;
@@ -192,6 +213,11 @@ DS_DEFINE_validator(enable_remote_h2d, &ValidateEnableRemoteH2D);
 DS_DEFINE_validator(remote_h2d_link_type, &ValidateRemoteH2DLinkType);
 DS_DEFINE_validator(remote_h2d_hccs_buffer_pool, &ValidateRemoteH2DHccsBufferPool);
 DS_DEFINE_validator(enable_rdma, &ValidateEnableRdma);
+DS_DEFINE_validator(rebalance_source_usage_percent, &ValidatePercent);
+DS_DEFINE_validator(rebalance_usage_gap_percent, &ValidatePercent);
+DS_DEFINE_validator(rebalance_max_migrate_bytes_per_round, &ValidatePositiveUint64);
+DS_DEFINE_validator(rebalance_cooldown_s, &Validator::ValidateUint32);
+DS_DEFINE_validator(rebalance_task_report_grace_ms, &Validator::ValidateUint32);
 DS_DEFINE_validator(monitor_config_file, &Validator::ValidatePathString);
 DS_DEFINE_validator(unix_domain_socket_dir, &Validator::ValidateUnixDomainSocketDir);
 DS_DEFINE_validator(log_filename, &Validator::ValidateEligibleChar);

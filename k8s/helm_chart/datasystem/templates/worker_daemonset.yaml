@@ -220,7 +220,7 @@ spec:
         - -spill_enable_readahead={{ $.Values.global.spill.spillEnableReadahead }}
         - -spill_high_watermark_ratio={{ $.Values.global.spill.spillHighWatermarkRatio }}
         - -spill_low_watermark_ratio={{ $.Values.global.spill.spillLowWatermarkRatio }}
-        - -spill_to_remote_worker={{ $.Values.global.spill.spillToRemoteWorker }}
+        - -enable_memory_rebalance={{ $.Values.global.memoryRebalance.enabled }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}

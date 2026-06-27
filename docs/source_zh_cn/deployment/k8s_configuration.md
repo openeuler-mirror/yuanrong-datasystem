@@ -11,6 +11,7 @@
     - [IPC/RPC相关配置](#ipcrpc相关配置)
     - [ETCD相关配置](#etcd相关配置)
     - [Spill相关配置](#spill相关配置)
+    - [Memory Rebalance相关配置](#memory-rebalance相关配置)
     - [日志与可观测相关配置](#日志与可观测相关配置)
     - [二级缓存相关配置](#二级缓存相关配置)
     - [元数据相关配置](#元数据相关配置)
@@ -216,7 +217,6 @@ global:
 | global.spill.evictionLowWatermarkRatio | float | `0.8` | 内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio |
 | global.spill.spillHighWatermarkRatio | float | `0.8` | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio |
 | global.spill.spillLowWatermarkRatio | float | `0.6` | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio |
-| global.spill.spillToRemoteWorker | bool | `false` | 表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。 |
 
 - **样例1**：
 
@@ -254,21 +254,23 @@ global:
       mountPath: "/opt/spill/yr_datasystem_spill"
     ```
 
-- **样例3**：
+### Memory Rebalance相关配置
 
-    Spill目录为 "/opt/spill/yr_datasystem_spill"，大小为10GB。当spillToRemoteWorker为true时，如果本节点内存不足，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。
+Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享内存。开启后，master 根据各 worker 上报的资源使用情况，选择内存使用率较高的 worker 作为 source，选择内存使用率较低且仍有可用共享内存的 worker 作为 target，并向 source worker 下发对象迁移任务，从而降低单个 worker 的共享内存压力。
 
-    ```yaml
-    global:
-      spill:
-        spillDirectory: "/opt/spill/yr_datasystem_spill"
-        spillSizeLimit: "10737418240"
-        spillThreadNum: 8
-        spillFileMaxSizeMb: 200
-        spillFileOpenLimit: 512
-        spillEnableReadahead: true
-        spillToRemoteWorker: true
-    ```
+该能力默认关闭。当集群中没有满足迁移条件的 target worker 时，Memory Rebalance 不会产生迁移任务，worker 会继续按照既有驱逐、Spill 和二级缓存策略处理内存压力。因此，Memory Rebalance 适合用于多 worker 集群内存使用不均衡的场景，但不能替代 Spill 或二级缓存可靠性配置。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.memoryRebalance.enabled | bool | `false` | 是否开启由 master 调度的内存均衡能力。设置为 `true` 后，master 会尝试将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+
+**样例**：
+
+```yaml
+global:
+  memoryRebalance:
+    enabled: true
+```
 
 ### 日志与可观测相关配置
 

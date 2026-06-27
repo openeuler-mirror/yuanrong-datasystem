@@ -72,6 +72,24 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "rebalance_worker_test",
+    srcs = ["object_cache/rebalance_worker_test.cpp"],
+    deps = [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/immutable_string",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:rebalance_executor",
+        "//src/datasystem/worker/object_cache:rebalance_candidate_provider",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:eviction_manager_common",
+    ],
+)
+
 # Worker OC 服务实现测试
 ds_cc_test(
     name = "worker_oc_service_impl_test",
@@ -192,7 +210,7 @@ ds_cc_test(
     srcs = ["object_cache/migrate_data_service_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:shm_guard",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/util/gflag:common_util_gflag_header",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:worker_object_cc_proto",
@@ -368,6 +386,7 @@ test_suite(
         "migrate_data_handler_test",
         "migrate_data_service_test",
         "node_selector_test",
+        "rebalance_worker_test",
         "shared_page_queue_group_test",
         "shared_page_queue_test",
         "stream_bufferpool_test",

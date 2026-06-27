@@ -115,9 +115,12 @@ global:
     spillHighWatermarkRatio: 0.8
     # Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99.
     spillLowWatermarkRatio: 0.6
-    # It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.
-    # When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk.
-    spillToRemoteWorker: false
+
+  # Memory rebalance configuration. When enabled, the master schedules object migration from workers with high
+  # shared-memory usage to workers with lower usage to balance object-cache memory pressure across the cluster.
+  memoryRebalance:
+    # Enable master-scheduled object cache memory rebalance.
+    enabled: false
 
   log:
     # Log config.
