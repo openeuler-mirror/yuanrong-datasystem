@@ -51,8 +51,9 @@ this feature is `SLOW_LOG`.
 - It should add the recognizable marker `[SLOW LOG]` while preserving the existing business log body.
 - It must not format the message unless either the request is sampled or the slow condition passes.
 - Its local/rpc thresholds must come from the request-stage slow-log config:
-  `slow_log_local_slower_than` and `slow_log_rpc_slower_than` on worker/master/data-worker processes, and the matching
-  cached client environment values on client paths.
+  `slow_log_process_slower_than` and `slow_log_rpc_slower_than` on worker/master/data-worker processes, and
+  `client_slow_log_process_slower_than` and `client_slow_log_rpc_slower_than` on client paths. All four are
+  dynamic gflags, hot-reloadable via config file or UpdateConfig API.
 - A `0` threshold disables the matching `SLOW_LOG` force condition. Failed but fast requests must not use `SLOW_LOG` as an
   all-error diagnostic path.
 
@@ -113,7 +114,7 @@ Target source changes:
 
 - Replace the public macro surface with `SLOW_LOG*` names and migrate call sites to `SLOW_LOG_IF_OR_VLOG`.
 - Replace hard-coded slow constants at request-stage call sites with the cached request-stage local/rpc thresholds.
-- Map local execution segments to `slow_log_local_slower_than` and RPC/remote/URMA transfer segments to
+- Map local execution segments to `slow_log_process_slower_than` and RPC/remote/URMA transfer segments to
   `slow_log_rpc_slower_than`.
 - Remove `|| rc.IsError()` / `|| status.IsError()` from the `SLOW_LOG` force condition for this feature; failed but fast
   requests should use ordinary error logs rather than slow-log force output.
@@ -144,16 +145,16 @@ queueing, and RPC framework sub-breakdowns are not standalone Get `SLOW_LOG` seg
 ## Get Calibration Targets
 
 The thresholds below are calibration targets from the earlier Get slow-log pass, not hard-coded defaults. The implemented
-condition must read the effective `slow_log_local_slower_than` or `slow_log_rpc_slower_than` value, and `0` disables the
+condition must read the effective `slow_log_process_slower_than` or `slow_log_rpc_slower_than` value, and `0` disables the
 corresponding `SLOW_LOG` force path.
 
 | Segment | Existing carrier | Source path | Sample | Calibration target | Effective config | Notes |
 | --- | --- | --- | ---: | ---: | --- | --- |
-| Get local processing | new narrow `[Get] Local processing done ... cost` log | `worker_oc_service_get_impl.cpp` | about `200 us` | `1 ms` | `slow_log_local_slower_than` | Both local and remote Get run through `TryGetObjectFromLocal`; current aggregate logs are not enough, so use `VLOG` + `SLOW_LOG`. |
+| Get local processing | new narrow `[Get] Local processing done ... cost` log | `worker_oc_service_get_impl.cpp` | about `200 us` | `1 ms` | `slow_log_process_slower_than` | Both local and remote Get run through `TryGetObjectFromLocal`; current aggregate logs are not enough, so use `VLOG` + `SLOW_LOG`. |
 | QueryMeta RPC total | `[Get] Master query done ... cost` | `worker_oc_service_get_impl.cpp` | `433 us` | `1 ms` | `slow_log_rpc_slower_than` | Covers local worker to master QueryMeta RPC total. |
-| Master local QueryMeta | `QueryMeta done ... cost` | `master_oc_service_impl.cpp` | `0.0 ms` | `2 ms` | `slow_log_local_slower_than` | Current log uses ms formatting; `SLOW_LOG` condition uses microseconds internally. |
+| Master local QueryMeta | `QueryMeta done ... cost` | `master_oc_service_impl.cpp` | `0.0 ms` | `2 ms` | `slow_log_process_slower_than` | Current log uses ms formatting; `SLOW_LOG` condition uses microseconds internally. |
 | Remote worker RPC total | `[Get] Remote done ... cost` / `Remote get success, elapsed ...` | `worker_oc_service_batch_get_impl.cpp`, `worker_oc_service_get_impl.cpp` | `850 us` | `2 ms` | `slow_log_rpc_slower_than` | Batch path uses `[Get] Remote done`; non-batch path can reuse `Remote get success`. |
-| Remote worker local total | `[Get/RemotePull] finish ... cost`; non-batch needs finish cost | `worker_worker_oc_service_impl.cpp` | `513 us` | `2 ms` | `slow_log_local_slower_than` | Aligns with remote data-worker local execution thresholds. |
+| Remote worker local total | `[Get/RemotePull] finish ... cost`; non-batch needs finish cost | `worker_worker_oc_service_impl.cpp` | `513 us` | `2 ms` | `slow_log_process_slower_than` | Aligns with remote data-worker local execution thresholds. |
 | URMA total | `[URMA_ELAPSED_TOTAL] ... cost` | `urma_manager.cpp` | `456 us` | `1 ms` | `slow_log_rpc_slower_than` | Use URMA wait total as the first-pass URMA total carrier; `[UrmaWrite]` stays supporting only. |
 | Response construction/return | not in current first pass | `worker_request_manager.cpp` | about `90 us` | deferred | deferred | ReturnToClient `SLOW_LOG` was removed to keep risk low near release. |
 
@@ -177,16 +178,16 @@ local/rpc slow-log config as request-stage latency summaries.
 
 | Segment | Existing carrier | Source path | Calibration target | Effective config | Notes |
 | --- | --- | --- | ---: | --- | --- |
-| client Set/Put total | `[Set] Done ... totalCost` | `object_client_impl.cpp` | `1 ms` | client cached local threshold | Single-key Set only; fast path stays behind `VLOG(1)`. |
-| client Create RPC | `Finished creating object to worker` and remote `Create` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | client cached rpc threshold | Single-key Create only; prints `SHM` or `UB` path when known. |
-| client Publish RPC | `Finished publishing object to worker` and remote `Publish` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | client cached rpc threshold | Single-key Publish/Set only. |
-| worker create total | `Create done, cost` | `worker_oc_service_create_impl.cpp` | `1 ms` | `slow_log_local_slower_than` | Object creation should be small; slow create often points to allocation/shared-memory pressure. |
+| client Set/Put total | `[Set] Done ... totalCost` | `object_client_impl.cpp` | `1 ms` | `client_slow_log_process_slower_than` | Single-key Set only; fast path stays behind `VLOG(1)`. |
+| client Create RPC | `Finished creating object to worker` and remote `Create` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | `client_slow_log_rpc_slower_than` | Single-key Create only; prints `SHM` or `UB` path when known. |
+| client Publish RPC | `Finished publishing object to worker` and remote `Publish` RPC done | `object_client_impl.cpp`, `client_worker_remote_api.cpp` | `2 ms` | `client_slow_log_rpc_slower_than` | Single-key Publish/Set only. |
+| worker create total | `Create done, cost` | `worker_oc_service_create_impl.cpp` | `1 ms` | `slow_log_process_slower_than` | Object creation should be small; slow create often points to allocation/shared-memory pressure. |
 | publish metadata RPC | `[Set] CreateMeta/UpdateMeta RPC done` | `worker_oc_service_publish_impl.cpp` | `1 ms` | `slow_log_rpc_slower_than` | Covers the single-key worker-to-master metadata RPC wrapper. |
-| master CreateMeta local | `CreateMeta done, cost` | `master_oc_service_impl.cpp` | `1 ms` | `slow_log_local_slower_than` | Single-key CreateMeta only. |
-| master UpdateMeta local | `UpdateMeta done, cost` | `master_oc_service_impl.cpp` | `1 ms` | `slow_log_local_slower_than` | Single-key UpdateMeta only. |
-| publish local save/copy | no exact existing completion log for `SaveBinaryObjectToMemory` | `worker_oc_service_publish_impl.cpp` | `300 us` | `slow_log_local_slower_than` | Needs confirmation before adding a new `SLOW_LOG` if exact local-copy attribution is required. |
-| publish l2 write-through | `Save binary object to l2cache begin` and error logs | `worker_oc_service_publish_impl.cpp` | `800 us` | `slow_log_local_slower_than` | Exact done-time logging would be a new log; keep out of first pass unless write-through SLO diagnosis requires it. |
-| publish aggregate | `Publish done, cost` | `worker_oc_service_publish_impl.cpp` | `1 ms` | `slow_log_local_slower_than` | Single-key Publish/Set only. |
+| master CreateMeta local | `CreateMeta done, cost` | `master_oc_service_impl.cpp` | `1 ms` | `slow_log_process_slower_than` | Single-key CreateMeta only. |
+| master UpdateMeta local | `UpdateMeta done, cost` | `master_oc_service_impl.cpp` | `1 ms` | `slow_log_process_slower_than` | Single-key UpdateMeta only. |
+| publish local save/copy | no exact existing completion log for `SaveBinaryObjectToMemory` | `worker_oc_service_publish_impl.cpp` | `300 us` | `slow_log_process_slower_than` | Needs confirmation before adding a new `SLOW_LOG` if exact local-copy attribution is required. |
+| publish l2 write-through | `Save binary object to l2cache begin` and error logs | `worker_oc_service_publish_impl.cpp` | `800 us` | `slow_log_process_slower_than` | Exact done-time logging would be a new log; keep out of first pass unless write-through SLO diagnosis requires it. |
+| publish aggregate | `Publish done, cost` | `worker_oc_service_publish_impl.cpp` | `1 ms` | `slow_log_process_slower_than` | Single-key Publish/Set only. |
 
 ## Remote Set/Get Distribution Definitions
 
@@ -270,8 +271,8 @@ First-pass plan:
 
 ## Tuning Rules
 
-- Production defaults are `0` for both local and rpc thresholds, so `SLOW_LOG` force output is off until explicitly
-  configured.
+- Production defaults are `2000`/`5000` (process/rpc) for both worker and client thresholds; `0` disables the
+  `SLOW_LOG` force condition for the corresponding gate.
 - Treat the calibration targets in this file as initial tuning hints, not constants to bake into request paths.
 - If logs are too sparse for tail diagnosis, lower only the segment that is missing evidence.
 - If log volume is too high, raise segment thresholds before raising the aggregate Set/Get thresholds.

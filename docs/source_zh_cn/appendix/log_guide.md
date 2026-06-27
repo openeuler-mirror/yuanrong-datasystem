@@ -178,8 +178,10 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 
 | 参数 | 类型 | 默认值 | 格式与示例 | 描述 |
 |------|------|--------|------------|------|
-| `slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒；例如 `1000` 表示 1ms 阶段 | 处理阶段时延阈值（微秒）。默认2000μs(2ms)；设为0可禁用；启用后，当处理阶段的耗时（不含跨进程 RPC）超过此阈值时输出 latencySummary。`process` 指处理耗时，等于总耗时减去子 RPC 耗时 |
-| `slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒；例如 `2000` 表示 2ms 阶段 | 跨进程 RPC 阶段时延阈值（微秒）。默认5000μs(5ms)；设为0可禁用；启用后，当 RPC 子阶段耗时超过此阈值时输出 latencySummary |
+| `slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒；例如 `1000` 表示 1ms 阶段 | 处理阶段时延阈值（微秒）。默认2000μs(2ms)；设为0可禁用；启用后，当处理阶段的耗时（不含跨进程 RPC）超过此阈值时输出 latencySummary。`process` 指处理耗时，等于总耗时减去子 RPC 耗时。支持热更新。 |
+| `slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒；例如 `2000` 表示 2ms 阶段 | 跨进程 RPC 阶段时延阈值（微秒）。默认5000μs(5ms)；设为0可禁用；启用后，当 RPC 子阶段耗时超过此阈值时输出 latencySummary。支持热更新。 |
+| `client_slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒 | Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
+| `client_slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒 | Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
 
 > **"process"含义说明**：`process` 阶段 = 总耗时 - 子 RPC 耗时，代表处理与等待时间，而非端到端整链路耗时。例如 `client.process.get` = 客户端从发起 Get 到收到响应的总耗时 - `client.rpc.get`（客户端→worker RPC耗时），即客户端排队、序列化、反序列化等处理耗时。
 
@@ -232,6 +234,8 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 | K8s Helm | `values.yaml` 中设置 `slowLogProcessSlowerThan: 1000` | 同上 |
 | dscli | `dscli start --slow_log_process_slower_than 1000` | 同上 |
 | Embedded Worker | `config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)` | 同上 |
+| Client 配置文件 | `DATASYSTEM_CLIENT_CONFIG_PATH` 指定文件中设置 `--client_slow_log_process_slower_than=1000` | Client 侧处理>1ms时输出 |
+| Client API | `UpdateConfig(R"({"client_slow_log_process_slower_than":"1000"})")` | 运行时动态修改 Client 侧门限 |
 | 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
 
 默认值为 `2000`/`5000`（进程内2ms/RPC 5ms），完全向后兼容，零开销。

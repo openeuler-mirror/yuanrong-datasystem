@@ -129,6 +129,8 @@ public:
         std::string errMsg;
         SetCommandLineOption("slow_log_process_slower_than", std::string("1"), errMsg);
         SetCommandLineOption("slow_log_rpc_slower_than", std::string("1"), errMsg);
+        SetCommandLineOption("client_slow_log_process_slower_than", std::string("1"), errMsg);
+        SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("1"), errMsg);
         InitTestKVClient(0, client_);
     }
 
@@ -138,6 +140,8 @@ public:
         std::string errMsg;
         SetCommandLineOption("slow_log_process_slower_than", std::string("0"), errMsg);
         SetCommandLineOption("slow_log_rpc_slower_than", std::string("0"), errMsg);
+        SetCommandLineOption("client_slow_log_process_slower_than", std::string("0"), errMsg);
+        SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("0"), errMsg);
         ExternalClusterTest::TearDown();
     }
 
@@ -286,6 +290,8 @@ TEST_F(LatencySummaryStTest, DefaultDisabledNoLatencySummaryInAccessLog)
     std::string errMsg;
     SetCommandLineOption("slow_log_process_slower_than", std::string("0"), errMsg);
     SetCommandLineOption("slow_log_rpc_slower_than", std::string("0"), errMsg);
+    SetCommandLineOption("client_slow_log_process_slower_than", std::string("0"), errMsg);
+    SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("0"), errMsg);
 
     const std::string key = ObjectKey() + "_disabled";
     DS_ASSERT_OK(client_->Set(key, "val_disabled"));
@@ -297,6 +303,8 @@ TEST_F(LatencySummaryStTest, DefaultDisabledNoLatencySummaryInAccessLog)
 
     SetCommandLineOption("slow_log_process_slower_than", std::string("1"), errMsg);
     SetCommandLineOption("slow_log_rpc_slower_than", std::string("1"), errMsg);
+    SetCommandLineOption("client_slow_log_process_slower_than", std::string("1"), errMsg);
+    SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("1"), errMsg);
 }
 
 TEST_F(LatencySummaryStTest, GetTimeoutWorkerAccessLogContainsLatencySummary)
@@ -312,6 +320,48 @@ TEST_F(LatencySummaryStTest, GetTimeoutWorkerAccessLogContainsLatencySummary)
 
     std::string workerLog = WorkerAccessLogPath();
     AssertFileContains(workerLog, { "latencySummary:{", "worker.process.get:" });
+}
+
+TEST_F(LatencySummaryStTest, ClientDisabledWorkerEnabledOnlyWorkerHasSummary)
+{
+    std::string errMsg;
+    SetCommandLineOption("client_slow_log_process_slower_than", std::string("0"), errMsg);
+    SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("0"), errMsg);
+
+    const std::string key = ObjectKey() + "_worker_only";
+    DS_ASSERT_OK(client_->Set(key, "val_worker_only"));
+
+    std::string out;
+    DS_ASSERT_OK(client_->Get(key, out));
+
+    AssertAccessLogNotContains(ClientAccessLogPath(), { key, "latencySummary:" });
+
+    client_.reset();
+    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+
+    std::string workerLog = WorkerAccessLogPath();
+    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.publish:" });
+    AssertFileContains(workerLog, { "latencySummary:{", "worker.process.get:" });
+}
+
+TEST_F(LatencySummaryStTest, WorkerDisabledClientEnabledOnlyClientHasSummary)
+{
+    std::string errMsg;
+    SetCommandLineOption("slow_log_process_slower_than", std::string("0"), errMsg);
+    SetCommandLineOption("slow_log_rpc_slower_than", std::string("0"), errMsg);
+    SetCommandLineOption("client_slow_log_process_slower_than", std::string("1"), errMsg);
+    SetCommandLineOption("client_slow_log_rpc_slower_than", std::string("1"), errMsg);
+
+    const std::string key = ObjectKey() + "_client_only";
+    DS_ASSERT_OK(client_->Set(key, "val_client_only"));
+
+    std::string out;
+    DS_ASSERT_OK(client_->Get(key, out));
+
+    AssertAccessLogContains(ClientAccessLogPath(), { "latencySummary:{", "client.rpc.get:" });
+
+    SetCommandLineOption("slow_log_process_slower_than", std::string("1"), errMsg);
+    SetCommandLineOption("slow_log_rpc_slower_than", std::string("1"), errMsg);
 }
 
 }  // namespace st

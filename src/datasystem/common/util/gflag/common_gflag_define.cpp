@@ -137,14 +137,22 @@ DS_DEFINE_int32(sc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerSCService. 0 -- disable this direction connection");
 DS_DEFINE_bool(enable_pipeline_h2d, false, "Enable pipeline H2D. Default is false");
 DS_DEFINE_int32(pipeline_h2d_thread_num, 64, "Pipeline H2D worker thread number. Default value 64");
-DS_DEFINE_uint64(slow_log_process_slower_than, 2000,
+DS_DEFINE_uint64_dynamic(slow_log_process_slower_than, 2000,
                  "In-process processing latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 2000 (2ms). 0 means disabled. When enabled, requests whose in-process phases "
                  "exceed this threshold will include a latency summary in the access log.");
-DS_DEFINE_uint64(slow_log_rpc_slower_than, 5000,
+DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "RPC operation latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
 DS_DEFINE_bool(use_brpc, GetBoolFromEnv("DATASYSTEM_USE_BRPC", false),
                "Use brpc instead of ZMQ for RPC communication.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");
+DS_DEFINE_uint64_dynamic(client_slow_log_process_slower_than, 2000,
+                 "Client-side in-process processing latency threshold (microseconds) for slow-log and latency "
+                 "summary. Default 2000 (2ms). 0 means disabled. When enabled, requests whose in-process phases "
+                 "exceed this threshold will include a latency summary in the access log.");
+DS_DEFINE_uint64_dynamic(client_slow_log_rpc_slower_than, 5000,
+                 "Client-side RPC operation latency threshold (microseconds) for slow-log and latency summary. "
+                 "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
+                 "will include a latency summary in the access log.");
