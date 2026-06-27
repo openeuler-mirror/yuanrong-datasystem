@@ -22,8 +22,11 @@
 
 #include <chrono>
 #include <cstddef>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "ut/common.h"
 #include "datasystem/common/util/thread.h"
@@ -319,6 +322,67 @@ TEST_F(ThreadPoolTest, TestTaskDelay)
     std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
 
     ASSERT_EQ(threadsIn, taskCount);
+}
+
+// Verify ToString(intervalMs) field order aligns with res_metrics.def:
+// IDLE_NUM / CURRENT_TOTAL_NUM / MAX_THREAD_NUM / WAITING_TASK_NUM / THREAD_POOL_USAGE.
+// Field positions are the stable contract; usage (pos5) is interval-dependent and not pinned.
+TEST_F(ThreadPoolTest, ThreadPoolUsageToStringFieldOrder)
+{
+    const size_t minThreads = 2;
+    const size_t maxThreads = 4;
+    const int spinLockSleep = 500;
+    std::atomic<int> threadsIn = 0;
+    ThreadPool threadPool(minThreads, maxThreads, "", false);
+    // Saturate all threads so running == total == maxThreads and idle == 0.
+    for (size_t i = 0; i < maxThreads; ++i) {
+        threadPool.Execute([&threadsIn, &spinLockSleep] {
+            ++threadsIn;
+            while (threadsIn != 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+            }
+        });
+    }
+    while (threadsIn != static_cast<int>(maxThreads)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+    // Enqueue one extra task so waitingTaskNum == 1 while pool is saturated.
+    std::atomic<bool> extraDone{ false };
+    threadPool.Execute([&extraDone] { extraDone.store(true, std::memory_order_release); });
+
+    constexpr int64_t intervalMs = 1000;
+    auto usage = threadPool.GetAndResetIntervalStats();
+    auto str = usage.ToString(intervalMs);
+    ASSERT_FALSE(str.empty());
+    std::vector<std::string> parts;
+    std::istringstream iss(str);
+    std::string token;
+    while (std::getline(iss, token, '/')) {
+        parts.push_back(token);
+    }
+    ASSERT_EQ(parts.size(), static_cast<size_t>(5));
+    // pos1 IDLE_NUM = total - running == 0; pos2 CURRENT_TOTAL_NUM == maxThreads; pos3 MAX_THREAD_NUM == maxThreads;
+    // pos4 WAITING_TASK_NUM == 1.
+    EXPECT_EQ(std::stoul(parts[0]), static_cast<unsigned long>(0));
+    EXPECT_EQ(std::stoul(parts[1]), static_cast<unsigned long>(maxThreads));
+    EXPECT_EQ(std::stoul(parts[2]), static_cast<unsigned long>(maxThreads));
+    EXPECT_EQ(std::stoul(parts[3]), static_cast<unsigned long>(1));
+
+    threadsIn = 0;
+    while (!extraDone.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(spinLockSleep));
+    }
+}
+
+// Empty pool (currentTotalNum == 0) returns an empty string; collector folds it into an empty segment.
+// ThreadPool rejects min==max==0 at construction, so drive the empty-segment path directly via the struct.
+TEST_F(ThreadPoolTest, ThreadPoolUsageToStringEmptyPool)
+{
+    ThreadPool::ThreadPoolUsage usage{};
+    usage.currentTotalNum = 0;
+    constexpr int64_t intervalMs = 1000;
+    EXPECT_TRUE(usage.ToString(intervalMs).empty());
+    EXPECT_TRUE(usage.ToString().empty());
 }
 }  // namespace ut
 }  // namespace datasystem

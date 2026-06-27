@@ -1,15 +1,19 @@
 add_library(metrics_exporter_base STATIC metrics_exporter.cpp)
 
 set(METRICS_SRCS
+        json_lines_exporter.cpp
         kv_metrics.cpp
         metrics.cpp
         res_metric_collector.cpp
+        resource_json_schema.cpp
         )
-set(METRICS_LIBS 
+set(METRICS_LIBS
         common_log
-        metrics_exporter_base) 
+        metrics_exporter_base)
 
 add_subdirectory(hard_disk_exporter)
 
 add_library(common_metrics STATIC ${METRICS_SRCS})
-target_link_libraries(common_metrics PRIVATE ${METRICS_LIBS}  common_log metrics_exporter_base)
+target_link_libraries(common_metrics PRIVATE
+        ${METRICS_LIBS}
+        nlohmann_json::nlohmann_json)

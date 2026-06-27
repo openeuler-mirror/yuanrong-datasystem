@@ -29,6 +29,7 @@ DS_DECLARE_int64(payload_nocopy_threshold);
 DS_DECLARE_bool(enable_multi_stubs);
 DS_DECLARE_bool(enable_tcp_direct_for_multi_stubs);
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_bool(enable_data_replication);
 DS_DECLARE_bool(enable_worker_worker_batch_get);
 DS_DECLARE_bool(enable_urma);

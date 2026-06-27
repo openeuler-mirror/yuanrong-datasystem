@@ -13,7 +13,7 @@
   - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`
   - `src/datasystem/common/log/access_recorder.cpp`
 - Last verified against source:
-  - `2026-04-13`
+  - `2026-06-26`
 - Related design docs:
   - `.repo_context/modules/infra/metrics/design.md`
   - `.repo_context/modules/infra/logging/design.md`
@@ -37,6 +37,9 @@
 - `src/datasystem/common/metrics/metrics_exporter.cpp`
 - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h`
 - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`
+- `src/datasystem/common/metrics/json_lines_exporter.h`
+- `src/datasystem/common/metrics/json_lines_exporter.cpp`
+- `src/datasystem/common/log/log_manager.cpp`
 - `src/datasystem/common/log/access_recorder.cpp`
 - `tests/ut/common/log/BUILD.bazel`
 - `tests/st/client/kv_cache/BUILD.bazel`
@@ -63,12 +66,37 @@
   - rotation is driven by `max_log_size`.
   - pruning of rotated files is driven by `max_log_file_num`.
 
+## Base-Class File Management (hoisted)
+
+- Verified from `metrics_exporter.*`:
+  - file-management methods (`CreateFileByPath`, `ChangeLogFile`, `GetLogFilePath`, `CollectRotatedLogFiles`, `PruneOldLogFiles`) and state (`fd_`, `filePath_`, `fileSize_`, `podName_`, `fileSuffix_`) were hoisted from `HardDiskExporter` (private) up to `MetricsExporter` (protected) so both `HardDiskExporter` and `JsonLinesExporter` share one implementation.
+  - the `.log` suffix is parameterized as `fileSuffix_` (default `.log`); `HardDiskExporter` behavior is unchanged (suffix defaults to `.log`).
+  - `HardDiskExporter` retains only its own `Send` (prefix builder) and `FlushThread`; `JsonLinesExporter` overrides `FlushThread` without prefixing.
+
+## JsonLinesExporter Behavior
+
+- Verified from `json_lines_exporter.*`:
+  - `Init(filePath)` creates the file, caches `podName_` (`GetPodIdentifier()`) and `clusterName_` (`FLAGS_cluster_name`), and starts exporter infrastructure.
+  - `WriteJsonLine(json)` writes one complete JSON object per line with **no text prefix** (unlike `HardDiskExporter::Send`, it does not call `ConstructLogPrefix`); `Send` exists only as a pure-virtual contract stub and should not be used by new callers.
+  - `PodName()`/`ClusterName()` expose the cached labels (with `[[nodiscard]]`/`noexcept`) for JSON top-level fields.
+  - rotation and pruning reuse the hoisted base-class machinery; rotated files use the `.<ts>.log` suffix.
+  - `WrapJsonWithPodCluster(body, pod, cluster)` is the single shared helper that JSON-escapes both labels and splices them after the leading `{` of a body; used by both `kv_resource.log` (collector) and `kv_metrics.log` (metrics::LogSummary) so the two outputs share one escaping + prefixing path.
+
+## LogManager Rotation Coupling
+
+- Verified from `log_manager.cpp`:
+  - `FetchLogWithPattern` scans `kv_resource.*[0-9].log` and `kv_metrics.*[0-9].log` (plus `.gz` when compressing) alongside `resource.*[0-9].log`, so rotated kv_* copies go through the same compress/prune pipeline as resource.log.
+  - `JsonLinesExporter::PruneOldLogFiles` (hoisted, driven by `FLAGS_max_log_file_num`) is the per-exporter backstop; LogManager is the unified compression entry.
+
 ## Logging Coupling
 
 - Important coupling:
   - `HardDiskExporter` is shared by:
     - resource metrics
     - access/performance monitor logs via `AccessRecorderManager`
+  - `JsonLinesExporter` is used by:
+    - `ResMetricCollector` (kv_resource.log, JSON resource snapshot)
+    - `metrics::LogSummary` (kv_metrics.log, parallel JSON-Lines output for metrics_summary gated by `json_log_monitor`)
 - Review implication:
   - exporter changes are observability-wide changes, not metrics-local tweaks.
 

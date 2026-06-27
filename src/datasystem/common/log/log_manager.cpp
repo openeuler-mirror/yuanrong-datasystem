@@ -158,6 +158,16 @@ Status LogManager::FetchLogWithPattern(std::vector<std::string> &files, bool isR
     pattern = resourceFile.str();
     RETURN_IF_NOT_OK(Glob(pattern, files));
 
+    std::stringstream kvResourceFile;
+    kvResourceFile << FLAGS_log_dir.c_str() << "/" << KV_RESOURCE_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
+    pattern = kvResourceFile.str();
+    RETURN_IF_NOT_OK(Glob(pattern, files));
+
+    std::stringstream kvMetricsFile;
+    kvMetricsFile << FLAGS_log_dir.c_str() << "/" << KV_METRICS_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
+    pattern = kvMetricsFile.str();
+    RETURN_IF_NOT_OK(Glob(pattern, files));
+
     std::stringstream operationFile;
     operationFile << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "_operation\\." << "*[0-9]\\.log"
                   << suffix;

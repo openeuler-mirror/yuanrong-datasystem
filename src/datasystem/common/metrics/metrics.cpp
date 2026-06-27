@@ -16,21 +16,28 @@
 
 #include "datasystem/common/metrics/metrics.h"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/json_lines_exporter.h"
 #include "datasystem/common/util/uuid_generator.h"
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
+DS_DECLARE_string(cluster_name);
+DS_DECLARE_string(log_dir);
 namespace datasystem::metrics {
 namespace {
 constexpr size_t MAX_METRIC_NUM = 1024;
@@ -48,6 +55,7 @@ std::string BuildSuffix(const char *unit)
     return unit;
 }
 }  // namespace
+
 
 struct alignas(64) MetricSlot {
     uint16_t id = 0;
@@ -80,6 +88,24 @@ std::mutex g_tickMutex;
 std::chrono::steady_clock::time_point g_lastLogTime = std::chrono::steady_clock::now();
 std::atomic<bool> g_inited{ false };
 uint64_t g_cycle = 0;
+// Shared ownership so LogSummary (no lock) can hold a live copy while ClearAll/Init (under
+// g_stateMutex) atomically swaps a new one. std::atomic_load/store on shared_ptr is the C++17
+// way to publish a shared_ptr without a lock; the old exporter is destroyed only after the last
+// reader drops its copy, so the flush thread join in ~JsonLinesExporter cannot race with an
+// in-flight WriteJsonLine.
+std::shared_ptr<JsonLinesExporter> g_kvMetricsExporter;
+// Create the kv_metrics.log exporter when json_log_monitor is enabled. Called from Init.
+Status InitKvMetricsExporter()
+{
+    if (!FLAGS_json_log_monitor) {
+        return Status::OK();
+    }
+    std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    auto exporter = std::make_shared<JsonLinesExporter>();
+    RETURN_IF_NOT_OK(exporter->Init(filePath));
+    std::atomic_store(&g_kvMetricsExporter, std::move(exporter));
+    return Status::OK();
+}
 void ClearAll()
 {
     g_inited.store(false, std::memory_order_release);
@@ -101,6 +127,10 @@ void ClearAll()
     }
     g_ids.clear();
     g_cycle = 0;
+    // Publish nullptr atomically; the old exporter is destroyed when the last reader (LogSummary)
+    // drops its copy, so ~JsonLinesExporter (which joins the flush thread) cannot race an in-flight
+    // WriteJsonLine. No lock needed here for the swap itself.
+    std::atomic_store(&g_kvMetricsExporter, std::shared_ptr<JsonLinesExporter>{});
 }
 
 MetricSlot *FindSlot(uint16_t id, MetricType type)
@@ -289,24 +319,20 @@ std::vector<std::string> BuildSummary(int intervalMs)
 void LogSummary(int intervalMs)
 {
     auto summaries = BuildSummary(intervalMs);
-    // Use a stable "Metrics;<uuid>" traceID so the periodic metrics summary
-    // lines have a grep-able identifier in the traceID column. The previous
-    // "<podName>-metrics" literal leaked the pod hostname into the traceID
-    // column, which (1) is not a traceID format and (2) differed from the
-    // role;<uuid> convention used by other background threads. One UUID per
-    // process keeps all summary lines under the same identifier for the
-    // process lifetime.
-    //
-    // Save+restore the caller's TraceContext: LogSummary is invoked on the
-    // worker main pthread (which carries a pinned WorkerMain;<uuid> traceID)
-    // and on SDK client threads (which carry request traceIDs). Without
-    // restore, the SetTraceNewID's CLEAR_TRACE_ID TraceGuard would leave the
-    // caller's thread with an empty traceID for the rest of its lifetime.
+    // Use a stable Metrics;<uuid> traceID so periodic metrics summary lines have a grep-able identifier.
+    // Save and restore the caller TraceContext because LogSummary can run on worker main or SDK client threads.
     static const std::string metricsTraceID = "Metrics;" + GetStringUuid();
     auto savedCtx = Trace::Instance().GetContext();
+    // Hold a live copy so an atomic swap in ClearAll/Init cannot destroy the exporter mid-call.
+    auto exporter = std::atomic_load(&g_kvMetricsExporter);
     for (const auto &summary : summaries) {
         auto guard = Trace::Instance().SetTraceNewID(metricsTraceID);
-        LOG(INFO) << summary;
+        if (FLAGS_log_monitor) {
+            LOG(INFO) << summary;
+        }
+        if (FLAGS_json_log_monitor && exporter != nullptr) {
+            exporter->WriteJsonLine(WrapJsonWithPodCluster(summary, exporter->PodName(), exporter->ClusterName()));
+        }
     }
     auto restoreGuard = Trace::Instance().SetTraceContext(savedCtx);
     (void)restoreGuard;
@@ -339,12 +365,13 @@ Status Init(const MetricDesc *descs, size_t count)
         std::lock_guard<std::mutex> lock(g_tickMutex);
         g_lastLogTime = std::chrono::steady_clock::now();
     }
+    RETURN_IF_NOT_OK(InitKvMetricsExporter());
     return Status::OK();
 }
 
 void Tick()
 {
-    if (!FLAGS_log_monitor) {
+    if (!FLAGS_log_monitor && !FLAGS_json_log_monitor) {
         return;
     }
     int interval = FLAGS_log_monitor_interval_ms;
@@ -362,7 +389,7 @@ void Tick()
 
 void PrintSummary()
 {
-    if (!FLAGS_log_monitor) {
+    if (!FLAGS_log_monitor && !FLAGS_json_log_monitor) {
         return;
     }
     {
