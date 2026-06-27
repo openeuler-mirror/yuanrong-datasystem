@@ -42,6 +42,7 @@
     - storage and memory: `shared_memory`, `kvstore`, `l2cache`, `object_cache`, `stream_cache`
     - observability: `log`, `metrics`, `perf`
     - transport and device paths: `rdma`, `device`, `os_transport_pipeline`
+    - parallel task dispatch contract: `task_action` (subscribers wired today, not yet dispatched from production paths)
   - this layer is wide by design and should be split further when one subdomain becomes a frequent context target.
 - Pending verification:
   - exact runtime ownership for each `common/*` component between client-only, worker-only, and truly shared callers;
@@ -60,6 +61,7 @@
 | `l2cache`               | persistence and secondary-storage support                                        | includes OBS/SFS clients, distributed-disk slot client, and persistence API dispatch |
 | `device`                | Ascend and optional Nvidia device support wrappers                               | builds `common_device` over backend-specific device libs                             |
 | `os_transport_pipeline` | optional pipeline H2D transport path                                             | only built when `BUILD_PIPLN_H2D` is enabled                                         |
+| `task_action`           | subscriber registry mirroring `HashRingEvent` migration/recovery/cleanup actions | builds `common_task_action`; callers use `datasystem::TaskActionRegistry`; subscribers are registered today by OC/SC metadata managers, `WorkerOcServiceClearDataFlow`, and `WorkerOCServer`, but `Dispatch` is not yet called by any production path (hash ring still drives execution via `HashRingEvent::NotifyAll`) |
 
 Detailed follow-up docs now exist for:
 

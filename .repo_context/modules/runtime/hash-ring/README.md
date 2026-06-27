@@ -6,7 +6,7 @@
   - `src/datasystem/worker/hash_ring`
   - `src/datasystem/protos/hash_ring.proto`
   - cluster-manager integration in `src/datasystem/worker/cluster_manager/cluster_manager.*`
-  - master/object-cache, stream-cache, and worker object-cache subscribers to `HashRingEvent`
+  - parallel task-action subscriber registry in `src/datasystem/common/task_action` (subscribers registered today, not yet dispatched from ring code)
 - Why this module exists:
   - maintain the distributed-master ownership map used to route object and stream metadata;
   - serialize cluster topology and in-progress scale tasks through ETCD-compatible storage;
@@ -28,7 +28,11 @@
   - stores the canonical ring as serialized `HashRingPb` at `ETCD_RING_PREFIX` (`/datasystem/ring`) and updates it mostly through `EtcdStore::CAS`;
   - assigns four virtual tokens per worker by default through `HashRingAllocator::defaultHashTokenNum`;
   - initializes the first cluster ring, adds `INITIAL` workers to an already initialized ring, removes failed workers, and marks voluntary scale-down workers;
-  - converts ring changes into `HashRingEvent` callbacks for metadata migration, data cleanup, and redirect checks;
+  - converts ring changes into legacy `HashRingEvent` notifications for metadata migration, recovery, local cleanup,
+    device-client cleanup, voluntary readiness, voluntary data migration, and source cleanup;
+  - keeps `HashRingEvent` as the current production path; `TaskActionRegistry` (`datasystem::TaskActionRegistry`) holds a
+    parallel set of subscribers that reuse the same migration/recovery/cleanup functions, but no `HashRing`,
+    `ClusterManager`, or `HashRingTaskExecutor` code calls `TaskActionRegistry::Dispatch` yet — only unit tests do;
   - keeps local read-side maps (`tokenMap_`, `workerUuid2AddrMap_`, `workerAddr2UuidMap_`, `relatedWorkerMap_`) derived from `HashRingPb`;
   - publishes an immutable R0 `RoutingSnapshot` through `HashRing::GetRoutingView()` after local token/worker maps are rebuilt by `UpdateRing`, including ownership ranges, local owned ranges, valid/active worker ids, standby lookup order, and add-node redirect hints derived from `add_node_info`;
   - runs `HashRingHealthCheck` to detect long-stuck scale-up, scale-down, initial, joining, and leaving states, optionally self-healing when `enable_hash_ring_self_healing=true`;
@@ -91,9 +95,10 @@
   - worker shutdown / lossless exit paths call `ClusterManager::VoluntaryScaleDown`, which delegates to `HashRing::VoluntaryScaleDown`.
 - Downstream modules:
   - ETCD-compatible storage through `EtcdStore`.
-  - object-cache and stream-cache metadata managers via `HashRingEvent::MigrateRanges`, `RecoverMetaRanges`,
-    `RecoverAsyncTaskRanges`, `ClearDataWithoutMeta`, and `LocalClearDataWithoutMeta`.
-  - object-cache worker service via `BeforeVoluntaryExit`, `DataMigrationReady`, and local clear-data events.
+  - object-cache and stream-cache metadata managers through `HashRingEvent` subscribers for the current production path.
+  - `TaskActionRegistry` subscribers are registered today by OC/SC metadata managers, `WorkerOcServiceClearDataFlow`,
+    and `WorkerOCServer`; they reuse the same migration/recovery/cleanup functions but do not write ring progress, and
+    `Dispatch` is not yet invoked from any ring code.
   - cluster manager via `SyncClusterNodes`, `GetFailedWorkers`, `GetDbPrimaryLocation`, and redirect callbacks.
 - External dependencies:
   - ETCD-compatible KV and watch semantics, including CAS, range get, lease-backed cluster table, and monotonic revisions.
@@ -129,7 +134,8 @@ Important nuance:
 3. `HashRing::AddNode` computes workers in `INITIAL` state with no tokens and creates a new ring by CAS.
 4. `HashRingAllocator::AddNode` repeatedly splits the largest ownership range, taking about 55% of that range for each new virtual token.
 5. `GetAddNodeInfo` records, per new destination worker, which source workers must migrate which ranges.
-6. `HashRingTaskExecutor::SubmitScaleUpTask` asynchronously notifies `MigrateRanges`; on success it CAS-marks matching `add_node_info` ranges finished.
+6. `HashRingTaskExecutor::SubmitScaleUpTask` asynchronously notifies `HashRingEvent::MigrateRanges`; on success it
+   CAS-marks matching `add_node_info` ranges finished.
 7. `HashRingAllocator::FinishAddNodeInfoIfNeed` clears `add_node_info` and transitions all joining workers to `ACTIVE` once all ranges are finished.
 
 ### Passive Remove / Failed Node Scale Down
@@ -138,7 +144,8 @@ Important nuance:
 2. `RemoveWorker` first chooses a bounded set of process workers derived from related workers and `MAX_CANDIDATE_WORKER_NUM`; only those workers attempt to write `del_node_info`.
 3. The selected worker CAS-checks that local `ringInfo_` still matches ETCD, then uses `HashRingAllocator::RemoveNode`.
 4. `RemoveNode` transfers the failed node's ranges to the next available node and records recovery work under `del_node_info[failedWorker]`.
-5. `HashRingTaskExecutor::SubmitScaleDownTask` responds to incremental `del_node_info` and recovers metadata/data from ETCD or L2 cache using local metadata ownership.
+5. `HashRingTaskExecutor::SubmitScaleDownTask` responds to incremental `del_node_info` and notifies the existing
+   `HashRingEvent` recovery and cleanup subscribers.
 6. After recovery, `EraseFinishedDelNodeInfo` removes completed `del_node_info` entries and erases the worker from `workers`.
 
 ### Voluntary Scale Down
@@ -148,7 +155,8 @@ Important nuance:
 3. Periodic `InspectAndProcessPeriodically` waits for the local node to be primary for its DB, then calls `GenerateVoluntaryScaleDownChangingInfo`.
 4. That CAS changes the worker to `LEAVING` and uses `HashRingAllocator::RemoveNodeVoluntarily` to write `add_node_info` toward standby workers.
 5. Scale-up-style metadata migration runs; once normal hash ranges finish, `ClearTokenForScaleDown` removes matching hash tokens while preserving the worker UUID as an internal worker/replica identity.
-6. After metadata is migrated and `DataMigrationReady` succeeds, `SubmitMigrateDataTask` notifies `BeforeVoluntaryExit`, then CAS-erases the worker from the ring.
+6. After metadata is migrated, `SubmitMigrateDataTask` checks `HashRingEvent::DataMigrationReady`, notifies
+   `HashRingEvent::BeforeVoluntaryExit`, then CAS-erases the worker from the ring.
 
 ### Restart / Rolling Upgrade
 

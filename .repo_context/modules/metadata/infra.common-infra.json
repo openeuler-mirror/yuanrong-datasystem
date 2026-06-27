@@ -26,7 +26,8 @@
       "infra.slot",
       "infra.logging",
       "infra.metrics",
-      "infra.observability"
+      "infra.observability",
+      "runtime.hash-ring"
     ],
     "split_signals": [
       "cross_module_plumbing"
@@ -36,10 +37,13 @@
     "keywords": [
       "common infra",
       "shared infrastructure",
-      "common"
+      "common",
+      "task_action",
+      "TaskActionRegistry"
     ],
     "intent_examples": [
-      "understand shared infra used across modules"
+      "understand shared infra used across modules",
+      "find the shared task action registry"
     ]
   }
 }

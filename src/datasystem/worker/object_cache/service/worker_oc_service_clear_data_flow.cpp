@@ -42,6 +42,7 @@
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DECLARE_bool(enable_metadata_recovery);
 
@@ -129,6 +130,17 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     }
     return workerMasterApi;
 }
+
+ClearDataReqPb BuildClearDataReq(const worker::HashRange &ranges)
+{
+    ClearDataReqPb req;
+    for (const auto &range : ranges) {
+        auto *reqRange = req.add_ranges();
+        reqRange->set_from(range.first);
+        reqRange->set_end(range.second);
+    }
+    return req;
+}
 }
 
 WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
@@ -147,16 +159,16 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
 {
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
     clearDataThreadPool_ = std::make_shared<ThreadPool>(0, CLEAR_DATA_THREAD_NUM, "scaledown_handle_thread");
+    auto submitClearData = [this](const worker::HashRange &ranges) {
+        SubmitClearDataAsync(BuildClearDataReq(ranges), ranges);
+        return Status::OK();
+    };
     HashRingEvent::LocalClearDataWithoutMeta::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_CLEAR_DATA_FLOW, [this](const worker::HashRange &ranges) {
-            ClearDataReqPb req;
-            for (const auto &range : ranges) {
-                auto *reqRange = req.add_ranges();
-                reqRange->set_from(range.first);
-                reqRange->set_end(range.second);
-            }
-            SubmitClearDataAsync(req, ranges);
-            return Status::OK();
+        WORKER_OC_SERVICE_CLEAR_DATA_FLOW, submitClearData);
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META, WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
+        [submitClearData](const TransferTask &task) {
+            return submitClearData(task.placementScope.ranges);
         });
 }
 
@@ -165,8 +177,10 @@ WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
     if (exitFlag_ != nullptr) {
         exitFlag_->store(true);
     }
-    clearDataThreadPool_.reset();
     HashRingEvent::LocalClearDataWithoutMeta::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META, WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
+    clearDataThreadPool_.reset();
 }
 
 void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &req,

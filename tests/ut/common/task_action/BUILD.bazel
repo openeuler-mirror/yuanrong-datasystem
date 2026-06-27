@@ -1,0 +1,12 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "task_action_test",
+    srcs = ["task_action_test.cpp"],
+    deps = [
+        "//src/datasystem/common/task_action",
+        "//tests/ut:ut_common",
+    ],
+)

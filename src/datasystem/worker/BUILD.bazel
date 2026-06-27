@@ -183,6 +183,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
+        "//src/datasystem/common/task_action",
         "//src/datasystem/protos:object_posix_brpc",
         "//src/datasystem/protos:master_heartbeat_brpc",
         "//src/datasystem/protos:share_memory_brpc",

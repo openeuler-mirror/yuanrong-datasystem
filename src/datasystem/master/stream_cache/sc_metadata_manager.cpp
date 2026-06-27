@@ -35,6 +35,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_int32(sc_regular_socket_num);
@@ -92,6 +93,8 @@ void SCMetadataManager::Shutdown()
     StartClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     ClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::RecoverMetaRanges::GetInstance().RemoveSubscriber(eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_);
     // Stop async reconciliation pool FIRST to prevent new brpc streaming
     // RPCs (e.g., CheckMetadataImpl -> QueryMetadata) from being created
     // while the notification manager is shutting down.  This avoids
@@ -137,6 +140,11 @@ Status SCMetadataManager::Init()
     HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
         eventName_,
         [this](const worker::HashRange &extraRanges) { return RecoverMetadataOfFaultyWorker(extraRanges); });
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_,
+        [this](const TransferTask &task) {
+            return RecoverMetadataOfFaultyWorker(task.placementScope.ranges);
+        });
     LOG(INFO) << FormatString("[%s] Initialize success", LogPrefix());
     return Status::OK();
 }

@@ -85,6 +85,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         worker_client_manager
         cluster_manager
         worker_health_check
+        common_task_action
         )
 
 list(APPEND WORKER_OBJECT_CACHE_DEPEND_LIBS common_rdma)

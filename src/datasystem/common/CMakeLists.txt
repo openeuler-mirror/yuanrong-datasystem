@@ -1,6 +1,7 @@
 add_subdirectory(ak_sk)
 add_subdirectory(log)
 add_subdirectory(util)
+add_subdirectory(task_action)
 add_subdirectory(rpc)
 add_subdirectory(kvstore)
 add_subdirectory(shared_memory)

@@ -56,6 +56,7 @@ set(WORKER_DEPEND_LIBS
         worker_stream_cache
         rpc_stub_cache_mgr
         worker_hash_ring
+        common_task_action
         worker_client_manager
         worker_update_flag_check
         cluster_manager
