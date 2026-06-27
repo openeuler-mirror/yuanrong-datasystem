@@ -59,6 +59,9 @@ DS_DECLARE_uint32(log_retention_day);
 DS_DECLARE_uint32(max_log_file_num);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_uint32(stderrthreshold);
+DS_DECLARE_string(monitor_config_file);
+DS_DECLARE_string(spill_directory);
+DS_DECLARE_string(health_check_path);
 
 namespace {
 constexpr uint32_t kDefaultSlowUs = 500;
@@ -159,6 +162,9 @@ static bool ValidateInt64(const char *name, int64_t value)
 static bool ValidateString(const char *name, const std::string &value)
 {
     if (std::string(name) != "str_flag") {
+        return false;
+    }
+    if (value.empty()) {
         return false;
     }
     if (value != "default") {
@@ -621,11 +627,48 @@ TEST_F(FlagsTest, KVClientConfigBuilderRejectsEmptyGflagStrings)
     status = KVClientConfig::Builder().LogName("").Build(config);
     ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("LogName"));
+}
 
-    status = KVClientConfig::Builder().MonitorConfigPath("").Build(config);
-    ASSERT_EQ(status.GetCode(), StatusCode::K_INVALID);
-    EXPECT_THAT(status.GetMsg(), testing::HasSubstr("MonitorConfigPath"));
-    EXPECT_TRUE(config.GetArgs().empty());
+TEST_F(FlagsTest, KVClientConfigBuilderAcceptsEmptyMonitorConfigPath)
+{
+    KVClientConfig config;
+    Status status = KVClientConfig::Builder().MonitorConfigPath("").Build(config);
+    ASSERT_EQ(status, Status::OK());
+    ASSERT_EQ(config.GetArgs().at("monitor_config_file"), "");
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsAcceptsEmptyStringWhenValidatorAllows)
+{
+    KVClientConfig config;
+    ASSERT_EQ(KVClientConfig::Builder().MonitorConfigPath("").Build(config), Status::OK());
+    std::string errMsg;
+    ASSERT_TRUE(ParseCommandLineFlags(config, errMsg)) << errMsg;
+    ASSERT_EQ(FLAGS_monitor_config_file, "");
+
+    std::unordered_map<std::string, std::string> args = { { "spill_directory", "" },
+                                                            { "health_check_path", "" } };
+    ASSERT_TRUE(ParseCommandLineFlags(args, errMsg)) << errMsg;
+    ASSERT_TRUE(errMsg.empty());
+    ASSERT_EQ(FLAGS_spill_directory, "");
+    ASSERT_EQ(FLAGS_health_check_path, "");
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsRejectsEmptyNonStringFlag)
+{
+    std::unordered_map<std::string, std::string> args = { { "uint32_flag", "" } };
+    std::string errMsg;
+    ASSERT_FALSE(ParseCommandLineFlags(args, errMsg));
+    EXPECT_THAT(errMsg, testing::HasSubstr("uint32_flag"));
+    EXPECT_THAT(errMsg, testing::HasSubstr("missing its argument"));
+}
+
+TEST_F(FlagsTest, ParseCommandLineFlagsRejectsEmptyStringWhenValidatorDisallows)
+{
+    std::unordered_map<std::string, std::string> args = { { "str_flag", "" } };
+    std::string errMsg;
+    ASSERT_FALSE(ParseCommandLineFlags(args, errMsg));
+    EXPECT_THAT(errMsg, testing::HasSubstr("str_flag"));
+    EXPECT_THAT(errMsg, testing::HasSubstr("illegal value"));
 }
 
 TEST_F(FlagsTest, KVClientConfigBuilderRejectsInvalidAccessLogName)

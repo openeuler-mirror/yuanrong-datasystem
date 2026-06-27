@@ -174,7 +174,7 @@ public:
 
         /**
          * @brief Log monitor config file path.
-         * @param[in] path Equivalent to flag monitor_config_file.
+         * @param[in] path Equivalent to flag monitor_config_file. Empty path disables file monitoring.
          * @return Reference to self for chaining.
          */
         Builder &MonitorConfigPath(const std::string &path);
