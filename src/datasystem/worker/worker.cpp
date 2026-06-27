@@ -50,6 +50,10 @@
 #include "datasystem/worker/worker_sched_runtime.h"
 #include "datasystem/worker/worker_service_accessor.h"
 #include "datasystem/worker/worker_update_flag_check.h"
+// worker_oc_server.h pulls in brpc headers which override LOG/VLOG/DLOG.
+// Re-include log.h to restore datasystem's spdlog-based macros
+// (the restore block lives outside log.h's include guard).
+#include "datasystem/common/log/log.h"
 
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(bind_address);

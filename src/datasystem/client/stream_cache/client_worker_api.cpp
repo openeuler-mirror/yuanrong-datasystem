@@ -21,6 +21,9 @@
 
 #include <brpc/channel.h>
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
+// brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
+// Re-include log.h to restore datasystem's spdlog-based macros.
+#include "datasystem/common/log/log.h"
 
 #include <cstdint>
 #include "datasystem/common/perf/perf_manager.h"

@@ -36,6 +36,9 @@
 #include "datasystem/protos/master_object.brpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+// .brpc.pb.h above pulls in brpc headers which override LOG/VLOG/DLOG via
+// butil/logging.h. Re-include log.h to restore datasystem's spdlog-based macros.
+#include "datasystem/common/log/log.h"
 
 namespace datasystem {
 namespace master {

@@ -40,6 +40,9 @@
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/protos/worker_object.brpc.stub.pb.h"
 #include "datasystem/protos/worker_stream.brpc.stub.pb.h"
+// brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
+// Re-include log.h to restore datasystem's spdlog-based macros.
+#include "datasystem/common/log/log.h"
 
 DS_DEFINE_int32(oc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");
 DS_DEFINE_int32(sc_worker_worker_pool_size, 3, "Number of parallel connections between worker/worker. Default is 3.");

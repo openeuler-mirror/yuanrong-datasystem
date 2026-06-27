@@ -353,3 +353,145 @@ inline const char *SafeStringOutput(const char *s)
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_LOG_LOG_H
+
+// ============================================================================
+// Macro re-definitions OUTSIDE the include guard.
+//
+// When brpc/butil/logging.h (pulled in by <brpc/channel.h> etc.) is included
+// AFTER this header, it re-defines LOG, VLOG, DLOG and friends with glog-based
+// semantics.  The include guard above prevents a simple re-include from
+// restoring our macros.
+//
+// Solution: duplicate the #undef / #define block outside the guard.  After
+// any TU includes brpc headers, it can re-include this file to restore the
+// datasystem logging macros.
+//
+// NOTE: CHECK/DCHECK macros are intentionally NOT restored here — brpc code
+// uses CHECK_EQ(...) << "msg" chaining which is incompatible with our
+// do-while-block CHECK macros.  CHECK failures are fatal anyway, so falling
+// through to glog for CHECK is acceptable.
+// ============================================================================
+
+#ifdef LOG
+#undef LOG
+#endif
+#ifdef PLOG
+#undef PLOG
+#endif
+#ifdef LOG_IF
+#undef LOG_IF
+#endif
+#ifdef PLOG_IF
+#undef PLOG_IF
+#endif
+#ifdef LOG_EVERY_N
+#undef LOG_EVERY_N
+#endif
+#ifdef LOG_FIRST_N
+#undef LOG_FIRST_N
+#endif
+#ifdef LOG_IF_EVERY_N
+#undef LOG_IF_EVERY_N
+#endif
+#ifdef VLOG
+#undef VLOG
+#endif
+#ifdef VLOG_IF
+#undef VLOG_IF
+#endif
+#ifdef VLOG_EVERY_N
+#undef VLOG_EVERY_N
+#endif
+#ifdef VLOG_IS_ON
+#undef VLOG_IS_ON
+#endif
+#ifdef DLOG
+#undef DLOG
+#endif
+#if defined(NDEBUG) && !defined(DCHECK_ALWAYS_ON)
+#define DLOG(severity) LOG(severity)
+#else
+#define DLOG(severity) \
+    while (false)      \
+    LOG(severity)
+#endif
+
+#define LOG_IMPL(severity) \
+    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, false, true).Stream()
+#define SLOW_LOG_IMPL(severity) \
+    datasystem::LogMessage(DS_LOGS_LEVEL_##severity, __FILE__, __LINE__, true, true).Stream() << "[SLOW LOG] "
+
+#define LOG_IF(severity, condition)                                                         \
+    if ((condition) && datasystem::ShouldCreateLogMessage(DS_LOGS_LEVEL_##severity))        \
+    LOG_IMPL(severity)
+#define SLOW_LOG_IF(severity, thresholdHit)                                                \
+    if (datasystem::ShouldCreateSlowLogMessage(DS_LOGS_LEVEL_##severity, thresholdHit))    \
+    SLOW_LOG_IMPL(severity)
+
+#define LOG(severity) LOG_IF(severity, true)
+#define SLOW_LOG(severity) SLOW_LOG_IF(severity, true)
+
+#define LOG_EVERY_N(severity, n)                     \
+    static int LOG_EVERY_N_COUNTER_##__LINE__ = 0;   \
+    if (++LOG_EVERY_N_COUNTER_##__LINE__ % (n) == 0) \
+    LOG(severity)
+
+#define LOG_EVERY_T(severity, seconds)                                                                       \
+    static auto LOG_EVERY_T_LAST_TIME_##__LINE__ = std::chrono::steady_clock::now();                         \
+    auto LOG_EVERY_T_NOW_##__LINE__ = std::chrono::steady_clock::now();                                      \
+    auto LOG_EVERY_T_ELAPSED_##__LINE__ = std::chrono::duration_cast<std::chrono::milliseconds>(             \
+                                              LOG_EVERY_T_NOW_##__LINE__ - LOG_EVERY_T_LAST_TIME_##__LINE__) \
+                                              .count();                                                      \
+    if (LOG_EVERY_T_ELAPSED_##__LINE__ >= (seconds)*1000                                                     \
+        && (LOG_EVERY_T_LAST_TIME_##__LINE__ = LOG_EVERY_T_NOW_##__LINE__, true))                            \
+    LOG(severity)
+
+#define LOG_FIRST_N(severity, n)                   \
+    static int LOG_FIRST_N_COUNTER_##__LINE__ = 0; \
+    if (LOG_FIRST_N_COUNTER_##__LINE__++ < (n))    \
+    LOG(severity)
+
+#define LOG_IF_EVERY_N(severity, condition, n)              \
+    static int LOG_IF_EVERY_N_COUNTER_##__LINE__ = 0;       \
+    if (condition)                                          \
+        if (++LOG_IF_EVERY_N_COUNTER_##__LINE__ % (n) == 0) \
+    LOG(severity)
+
+#define LOG_FIRST_AND_EVERY_N(severity, n)                                                                  \
+    static std::atomic<uint64_t> DS_LOG_PP_CAT(LOG_FIRST_AND_EVERY_N_COUNTER_, __LINE__){ 0 };             \
+    if (datasystem::ShouldLogFirstAndEveryN((n), DS_LOG_PP_CAT(LOG_FIRST_AND_EVERY_N_COUNTER_, __LINE__))) \
+    LOG(severity)
+
+#define LOG_FIRST_EVERY_N(severity, n)                                                                      \
+    static std::atomic<int64_t> DS_LOG_FTE_LAST_NS_##__LINE__{ 0 };                                          \
+    static std::atomic<int> DS_LOG_FTE_CTR_##__LINE__{ (n) - 1 };                                            \
+    if (datasystem::LogFirstEveryNShouldEmit(                                                                \
+            (n), FLAGS_log_monitor_interval_ms, DS_LOG_FTE_LAST_NS_##__LINE__, DS_LOG_FTE_CTR_##__LINE__))   \
+    LOG(severity)
+
+#define VLOG_IS_ON(verboselevel) (2 >= verboselevel)
+
+#define VLOG(verboselevel)       \
+    if (FLAGS_v >= verboselevel) \
+    LOG(INFO)
+
+#define VLOG_IF(verboselevel, condition)        \
+    if (FLAGS_v >= verboselevel && (condition)) \
+    LOG(INFO)
+
+#define SLOW_LOG_IF_OR_VLOG(severity, thresholdHit, verboselevel, message) \
+    do {                                                                    \
+        if (thresholdHit) {                                                \
+            SLOW_LOG(severity) << message;                                  \
+        } else {                                                            \
+            VLOG(verboselevel) << message;                                  \
+        }                                                                   \
+    } while (0)
+
+#define VLOG_EVERY_N(verboselevel, n)                     \
+    static int VLOG_EVERY_N_COUNTER_##__LINE__ = 0;       \
+    if (FLAGS_v >= verboselevel)                          \
+        if (++VLOG_EVERY_N_COUNTER_##__LINE__ % (n) == 0) \
+    LOG(INFO)
+
+// CHECK/DCHECK macros intentionally not restored here — see note above.

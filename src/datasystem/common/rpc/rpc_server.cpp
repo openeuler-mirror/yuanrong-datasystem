@@ -20,6 +20,9 @@
 #include "datasystem/common/rpc/rpc_server.h"
 
 #include <brpc/server.h>
+// brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
+// Re-include log.h to restore datasystem's spdlog-based macros.
+#include "datasystem/common/log/log.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
