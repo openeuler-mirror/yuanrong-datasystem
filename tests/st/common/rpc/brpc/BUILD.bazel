@@ -10,3 +10,12 @@ ds_cc_test(
         "@com_github_apache_brpc//:brpc",
     ],
 )
+
+ds_cc_test(
+    name = "shutdown_timeout_test",
+    srcs = ["shutdown_timeout_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc/brpc:hello_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)

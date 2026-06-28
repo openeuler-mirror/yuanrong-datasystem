@@ -247,7 +247,14 @@ public:
     Status StartBrpcServer(const std::string &addr, int port);
 
     /**
-     * @brief Stop the brpc server.
+     * @brief Stop the brpc server with bounded Join timeout.
+     *
+     * Calls Stop(0) (async, marks server closing) then runs Join() on a
+     * detached thread with a 10s bounded wait via std::future::wait_for.
+     * Normal path: Join completes, brpcServer_ is reset() safely.
+     * Timeout path: LOG(ERROR), intentional leak via release() to avoid
+     * UAF with the detached Join thread. Process continues for graceful
+     * local cleanup (data flush, log drain).
      */
     void StopBrpcServer();
 

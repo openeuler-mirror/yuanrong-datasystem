@@ -19,6 +19,10 @@
  */
 #include "datasystem/common/rpc/rpc_server.h"
 
+#include <chrono>
+#include <future>
+#include <thread>
+
 #include <brpc/server.h>
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Re-include log.h to restore datasystem's spdlog-based macros.
@@ -30,7 +34,7 @@
 
 namespace datasystem {
 namespace {
-constexpr int BRPC_SERVER_STOP_TIMEOUT_MS = 5000;
+constexpr int BRPC_SERVER_JOIN_TIMEOUT_MS = 10000;
 }  // namespace
 
 RpcServer::RpcServer(Token key, const RpcCredential &cred) : useBrpc_(false)
@@ -42,7 +46,21 @@ RpcServer::RpcServer(Token key, const RpcCredential &cred) : useBrpc_(false)
 RpcServer::~RpcServer() noexcept
 {
     if (useBrpc_ && brpcServer_) {
-        StopBrpcServer();
+        try {
+            StopBrpcServer();
+        } catch (const std::exception &e) {
+            // std::thread constructor may throw std::system_error under
+            // resource exhaustion. Since the destructor is noexcept, an
+            // uncaught exception would call std::terminate. Release the
+            // server to avoid UAF; log the error for diagnostics.
+            LOG(ERROR) << "StopBrpcServer() threw in ~RpcServer: " << e.what()
+                       << "; intentionally leaking brpcServer_";
+            (void)brpcServer_.release();
+        } catch (...) {
+            LOG(ERROR) << "StopBrpcServer() threw unknown exception in ~RpcServer; "
+                       << "intentionally leaking brpcServer_";
+            (void)brpcServer_.release();
+        }
     }
 }
 
@@ -124,22 +142,39 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
 void RpcServer::StopBrpcServer()
 {
     if (brpcServer_) {
-        // Wait up to 5s for in-flight bthread handlers to drain before
-        // returning. Without this, the owning WorkerOCServer destructor
-        // may destroy adapters and service impls while bthread handlers
-        // are still executing → UAF in TenantAuthManager, GetImpl, Stream.
-        //
-        // F12 note: brpc Server::Stop(closeTimeoutMs) only schedules shutdown;
-        // Join() blocks until all queued work finishes with no upper bound.
-        // In OOM or stuck-bthread scenarios Join can hang indefinitely.
-        // brpc 1.15 has no Join(timeout) variant; a full fix would run Join
-        // on a separate thread + future.wait_for and LOG FATAL on timeout.
-        // Tracked as follow-up — the 5s Stop timeout already bounds how
-        // long brpc will accept new work.
-        brpcServer_->Stop(BRPC_SERVER_STOP_TIMEOUT_MS);
-        brpcServer_->Join();
-        // Reset so repeated calls are no-ops (V06: StopBrpcServer idempotency).
-        brpcServer_.reset();
+        // Stop() is async — marks server closing, sends ELOGOFF to clients,
+        // rejects new requests. The closewait_ms parameter is "not used anymore"
+        // in brpc 1.15 (see brpc/server.h:470), so pass 0 explicitly.
+        brpcServer_->Stop(0);
+
+        // brpc 1.15 has no Join(timeout) variant. Run Join() on a detached
+        // thread; the calling thread waits bounded time. Capture the raw
+        // pointer to avoid touching brpcServer_ from the detached thread
+        // after the main thread potentially releases ownership (race-safe).
+        brpc::Server* raw = brpcServer_.get();
+        std::promise<void> joinDone;
+        std::future<void> doneFuture = joinDone.get_future();
+        std::thread([raw, p = std::move(joinDone)]() mutable {
+            raw->Join();
+            p.set_value();
+        }).detach();
+
+        // Bounded wait: 10s timeout. On timeout we DON'T crash — log error
+        // and intentionally leak brpcServer_ to avoid UAF with the detached
+        // thread. Process keeps running for graceful local cleanup (data
+        // flush, log drain, other module shutdown); the detached Join
+        // thread continues in background.
+        if (doneFuture.wait_for(std::chrono::milliseconds(BRPC_SERVER_JOIN_TIMEOUT_MS))
+            == std::future_status::timeout) {
+            LOG(ERROR) << "brpc Server::Join() did not complete within "
+                       << BRPC_SERVER_JOIN_TIMEOUT_MS
+                       << "ms; likely OOM or stuck bthread. Intentionally "
+                       << "leaking brpcServer_; detached Join thread continues "
+                       << "in background. Manual investigation needed.";
+            (void)brpcServer_.release();  // Give up ownership; raw pointer leaks
+        } else {
+            brpcServer_.reset();  // Join completed — safe to release normally
+        }
     }
 }
 
