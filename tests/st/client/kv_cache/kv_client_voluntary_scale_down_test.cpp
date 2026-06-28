@@ -3125,9 +3125,21 @@ TEST_F(KVClientVoluntaryScaleDownTest, CreateClientWithServiceDiscoveryDuringSca
         std::string newKey = "new_key_" + GetStringUuid();
         std::string newVal = "new_val";
         DS_ASSERT_OK(newClient->Set(newKey, newVal));
+        // Retry gets to tolerate master MigrateMetaData not yet finished when
+        // scale-down runs concurrently. Without retry this test is flaky
+        // (~50% fail rate on master baseline) because Get can arrive after
+        // RemoveMetaLocation but before MigrateData completes.
         for (int i = 0; i < objectCnt; ++i) {
             std::string getValue;
-            DS_ASSERT_OK(newClient->Get(objectKey[i], getValue));
+            Status getSt;
+            for (int retry = 0; retry < 5; ++retry) {
+                getSt = newClient->Get(objectKey[i], getValue);
+                if (getSt.IsOk() && getValue == data[i]) {
+                    break;
+                }
+                sleep(1);
+            }
+            DS_ASSERT_OK(getSt);
             ASSERT_EQ(data[i], getValue);
         }
         std::string readBack;

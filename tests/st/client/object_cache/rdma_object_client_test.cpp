@@ -151,7 +151,21 @@ TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
 
     valuesGet.clear();
     valuesGet.reserve(keys.size());
-    DS_ASSERT_OK(client2->Get(keys, valuesGet));
+    // Worker restart wipes client registration table; client2 reconnects passively (not heart-beat
+    // driven) so the first Get after WaitNodeReady may race with reconnect and fail with
+    // "client id does not exist" (~60% fail rate on master baseline without retry).
+    // Retry to tolerate reconnect latency, matching the pattern used by
+    // KVClientVoluntaryScaleDownTest.CreateClientWithServiceDiscoveryDuringScaleDown.
+    Status getSt;
+    for (int retry = 0; retry < 10; ++retry) {
+        valuesGet.clear();
+        getSt = client2->Get(keys, valuesGet);
+        if (getSt.IsOk()) {
+            break;
+        }
+        sleep(1);
+    }
+    DS_ASSERT_OK(getSt);
     checkFunc(valuesGet);
 }
 
