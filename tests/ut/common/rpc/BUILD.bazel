@@ -17,7 +17,6 @@ ds_cc_test(
     name = "timeout_duration_test",
     srcs = ["timeout_duration_test.cpp"],
     deps = [
-        # status_helper (via timeout_duration) calls Trace in status.cpp; pull trace.cpp from common_log.
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:timeout_duration",
     ],
@@ -39,5 +38,15 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/rpc:brpc_stream_close_helper",
         "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
+    name = "brpc_async_context_test",
+    srcs = ["brpc_async_context_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/common/rpc/zmq:zmq_payload",
     ],
 )
