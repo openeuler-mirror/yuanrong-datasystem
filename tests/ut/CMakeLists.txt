@@ -192,14 +192,7 @@ target_link_libraries(flags_ut
         nlohmann_json::nlohmann_json
         ${SECUREC_LIBRARY}
         GTest::gtest
-        GTest::gmock
-        -Wl,--whole-archive
-        common_etcd
-        common_shared_memory
-        worker_object_cache
-        datasystem_worker_static
-        -Wl,--no-whole-archive
-        -Wl,--reduce-memory-overheads)
+        GTest::gmock)
 add_datasystem_test(flags_ut)
 
 add_executable(util_flags_ut
