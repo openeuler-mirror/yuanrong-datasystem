@@ -27,6 +27,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/deadlock_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -57,17 +58,17 @@ WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &i
 
 Status WorkerOcServiceDeleteImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     uint64_t deletedSize = 0;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_DELETE_ALL_COPY);
     access.ObjectKeysRef(req.object_keys()).DataSizeProvider([&deletedSize]() -> uint64_t { return deletedSize; });
     Status rc = DeleteAllCopyImpl(req, resp, deletedSize);
     access.Result(rc).Record();
-    workerOperationTimeCost.Append("Total DeleteAllCopy", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Total DeleteAllCopy", timer.ElapsedMilliSecond());
     LOG(INFO) << "DeleteAllCopy finish with request size: " << req.object_keys_size()
               << ", failed size: " << resp.fail_object_keys_size() << ", the operation cost "
-              << workerOperationTimeCost.GetInfo();
+              << GetWorkerTimeCost().GetInfo();
     return rc;
 }
 

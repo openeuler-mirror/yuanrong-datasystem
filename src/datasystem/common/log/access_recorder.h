@@ -76,7 +76,7 @@ public:
     static std::string ToString();
 
 private:
-    static thread_local AccessTransportKind current_;
+    static const char* KindToName(AccessTransportKind kind);
 };
 
 struct RequestParam {

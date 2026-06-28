@@ -30,6 +30,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -49,7 +50,7 @@ WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &i
 
 Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
     LOG(INFO) << "Expire start from client:" << req.client_id();
@@ -102,8 +103,8 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
     *rsp.mutable_failed_object_keys() = { objKeysExpireFailed.begin(), objKeysExpireFailed.end() };
     access.Result(rc).Record();
-    workerOperationTimeCost.Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
-    LOG(INFO) << FormatString("The operations of Expire %s", workerOperationTimeCost.GetInfo());
+    GetWorkerTimeCost().Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
+    LOG(INFO) << FormatString("The operations of Expire %s", GetWorkerTimeCost().GetInfo());
     return rc;
 }
 

@@ -77,6 +77,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -511,7 +512,7 @@ Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, Ho
 {
     std::string dbName;
     RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    g_MetaRocksDbName = dbName;
+    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -954,7 +955,7 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
         LOG(INFO) << "Finished waiting for the reconFlag, elapsed ms: " << timer.ElapsedMilliSecond()
                   << ", setHealthFile: " << setHealthFile_.load() << ", numRecon: " << numRecon_;
     }
-    workerOperationTimeCost.Append("ValidateWorkerState", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("ValidateWorkerState", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -1420,7 +1421,7 @@ Status WorkerOCServiceImpl::StartDecreaseReferenceProcess()
 
 Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const std::vector<ShmKey> &shmIds)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -1438,7 +1439,7 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
 
 Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &req, DecreaseReferenceResponse &resp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -1458,15 +1459,15 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(resp.error().error_code() == 0,
                                          static_cast<StatusCode>(resp.error().error_code()),
                                          "Decrease reference failed");
-    workerOperationTimeCost.Append("DecreaseReference", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("DecreaseReference", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("[Ref] DecreaseReference finish. The operations of worker DecreaseReference %s",
-                              workerOperationTimeCost.GetInfo());
+                              GetWorkerTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, ReconcileShmRefRspPb &resp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
     bool exist;
@@ -1488,7 +1489,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     for (const auto &shmId : maybeExpiredShmIds) {
         resp.add_maybe_expired_shm_ids(shmId);
     }
-    workerOperationTimeCost.Append("ReconcileShmRef", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("ReconcileShmRef", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -1579,7 +1580,7 @@ Status WorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjec
 
 Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, InvalidateBufferRspPb &rsp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -1604,9 +1605,9 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             RemoveMetaFromMaster(objectKeysRemove, master::RemoveMetaReqPb::INVALID_BUFFER), "remove meta failed");
     }
-    workerOperationTimeCost.Append("Total InvalidateBuffer", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Total InvalidateBuffer", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("InvalidateBuffer end, clientId: %s. The operations of worker InvalidateBuffer %s",
-                              req.client_id(), workerOperationTimeCost.GetInfo());
+                              req.client_id(), GetWorkerTimeCost().GetInfo());
     return Status::OK();
 }
 

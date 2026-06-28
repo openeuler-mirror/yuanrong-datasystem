@@ -42,6 +42,7 @@
 #include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -850,7 +851,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
     auto config = GetServerLatencyTraceConfig();
-    workerOperationTimeCost.Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
+    GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", totalElapsedMs, waitRc.GetMsg()));
@@ -1327,7 +1328,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         writtenSize += writeSize;
         eventKeys.emplace_back(key);
     }
-    workerOperationTimeCost.Append("Urma total write.", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Urma total write.", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -1557,7 +1558,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     urma_jfs_wr_t *bad_wr = NULL;
     Timer timer;
     auto ret = ds_urma_post_jetty_send_wr(jetty->Raw(), &wrList[0], &bad_wr);
-    workerOperationTimeCost.Append("Urma gather write.", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Urma gather write.", timer.ElapsedMilliSecond());
     if (ret != URMA_SUCCESS) {
         for (auto key : eventKeys) {
             DeleteEvent(key);

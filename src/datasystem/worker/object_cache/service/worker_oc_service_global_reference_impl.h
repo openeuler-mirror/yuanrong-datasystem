@@ -22,6 +22,7 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
@@ -236,7 +237,7 @@ private:
             Timer timer;
             RETURN_IF_NOT_OK(fun(req, rsp));
             auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
-            workerOperationTimeCost.Append("RpcToMaster", elapsedMs);
+            GetWorkerTimeCost().Append("RpcToMaster", elapsedMs);
             if (rsp.infos().empty() && !rsp.ref_is_moving()) {
                 return Status::OK();
             }
@@ -256,7 +257,7 @@ private:
                     mergeFun(redirecRsp, rsp);
                 }
                 elapsedMs = static_cast<uint64_t>(std::round(timer.ElapsedMilliSecond()));
-                workerOperationTimeCost.Append("Redirect", elapsedMs);
+                GetWorkerTimeCost().Append("Redirect", elapsedMs);
                 return Status::OK();
             }
             static const int sleepTimeMs = 200;

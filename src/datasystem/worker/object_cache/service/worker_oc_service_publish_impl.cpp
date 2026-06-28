@@ -37,6 +37,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -432,7 +433,7 @@ Status WorkerOcServicePublishImpl::PublishImpl(const PublishReqPb &req, PublishR
 Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
                                            std::vector<RpcMessage> &payloads)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
@@ -473,9 +474,9 @@ Status WorkerOcServicePublishImpl::Publish(const PublishReqPb &req, PublishRspPb
     }
     access.Result(rc).Record();
     const double totalPublishMs = static_cast<double>(totalPublishUs) / US_PER_MS;
-    workerOperationTimeCost.Append("Total Publish", totalPublishMs);
+    GetWorkerTimeCost().Append("Total Publish", totalPublishMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalPublishUs >= config.processSlowerThanUs, 1,
-        FormatString("Publish done, cost: %.3fms, %s", totalPublishMs, workerOperationTimeCost.GetInfo()));
+        FormatString("Publish done, cost: %.3fms, %s", totalPublishMs, GetWorkerTimeCost().GetInfo()));
     return rc;
 }
 

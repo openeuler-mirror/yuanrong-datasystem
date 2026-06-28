@@ -617,6 +617,7 @@ private:
     void SubPhysicalMemeoryUsage(uint64_t size);
 
     friend ArenaManager;
+    friend ArenaGroup;
 
     // Page size.
     static uint64_t pageSize_;
@@ -648,6 +649,14 @@ private:
 
     // Record the shared memory already binding to physical memory.
     ResourcePool physicalMemoryStats_;
+
+    // Per-allocation metadata for jemalloc hook callbacks.
+    // Set in AllocateMemoryImpl before Jemalloc::Allocate, read in CommitImpl.
+    std::atomic<bool> currentNeedFallocate_{false};
+    std::atomic<uint64_t> currentRequestSize_{0};
+    // Fake allocate mode indicator. When true, AllocHook and CommitHook skip
+    // physical memory commit. Only valid during CreateArenaGroup's FakeAllocate.
+    std::atomic<bool> currentFakeAllocate_{false};
 
     std::atomic<bool> firstFakeHook_{ true };
 

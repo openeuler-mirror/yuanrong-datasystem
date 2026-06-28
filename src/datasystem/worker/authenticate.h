@@ -32,6 +32,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 
@@ -103,7 +104,7 @@ Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req
         authTenantId = clientInfo->GetTenantId();
     }
     RETURN_IF_NOT_OK(worker::AuthenticateRequest(akSkManager, req, authTenantId, tenantId));
-    workerOperationTimeCost.Append("Authenticate", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Authenticate", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -123,7 +124,7 @@ Status AuthenticateMessage(std::shared_ptr<AkSkManager> akSkManager, const ReqTy
         authTenantId = clientInfo->GetTenantId();
     }
     RETURN_IF_NOT_OK(worker::AuthenticateMessageInternal(akSkManager, authTenantId, req.token(), tenantId));
-    workerOperationTimeCost.Append("Authenticate message", static_cast<uint64_t>(timer.ElapsedMilliSecond()));
+    GetWorkerTimeCost().Append("Authenticate message", static_cast<uint64_t>(timer.ElapsedMilliSecond()));
     return Status::OK();
 }
 

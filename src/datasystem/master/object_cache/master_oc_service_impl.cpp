@@ -35,6 +35,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
@@ -87,20 +88,20 @@ Status MasterOCServiceImpl::GIncNestedRef(const GIncNestedRefReqPb &req, GIncNes
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master recv GIncNestedRef req: %s", LogHelper::IgnoreSensitive(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->IncreaseNestedRefCnt(req, resp),
                                      "Inc global nested refs failed with a error");
-    masterOperationTimeCost.Append("Total GIncNestedRef", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master GIncNestedRef %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total GIncNestedRef", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master GIncNestedRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNestedRefRspPb &resp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master recv GDecNestedRef req: %s", LogHelper::IgnoreSensitive(req));
@@ -112,15 +113,15 @@ Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNes
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->DecreaseNestedRefCnt(req, resp),
                                      "Dec global nested refs failed with error");
-    masterOperationTimeCost.Append("Total GDecNestedRef", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master GDecNestedRef %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total GDecNestedRef", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master GDecNestedRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRspPb &rsp)
 {
     INJECT_POINT("master.CreateMeta.begin");
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
@@ -164,16 +165,16 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
         }
     }
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
-    masterOperationTimeCost.Append("Total CreateMeta", totalMs);
+    GetMasterTimeCost().Append("Total CreateMeta", totalMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-                        FormatString("CreateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
+                        FormatString("CreateMeta done, cost: %.3fms, %s", totalMs, GetMasterTimeCost().GetInfo()));
     return status;
 }
 
 Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
     INJECT_POINT("master.CreateMultiMeta.begin");
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -189,14 +190,14 @@ Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, Cre
         VLOG(1) << FormatString("Master %s CreateMultiMeta rsp: %s", GetLocalAddr().ToString(),
                                 LogHelper::IgnoreSensitive(rsp));
     }
-    masterOperationTimeCost.Append("Total CreateMultiMeta", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master CreateMultiMeta %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total CreateMultiMeta", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master CreateMultiMeta %s", GetMasterTimeCost().GetInfo());
     return status;
 }
 
 Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, CreateCopyMetaRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     PerfPoint point(PerfKey::MASTER_CREATE_COPY_META);
@@ -223,16 +224,16 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
                             LogHelper::IgnoreSensitive(rsp));
     point.Record();
     auto totalMs = timer.ElapsedMilliSecond();
-    masterOperationTimeCost.Append("Total CreateCopyMeta", totalMs);
+    GetMasterTimeCost().Append("Total CreateCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
     VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs,
-                                    masterOperationTimeCost.GetInfo());
+                                    GetMasterTimeCost().GetInfo());
     return status;
 }
 
 Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &req, CreateMultiCopyMetaRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     PerfPoint point(PerfKey::MASTER_CREATE_MULTI_COPY_META);
     const std::string localAddr = GetLocalAddr().ToString();
@@ -243,10 +244,10 @@ Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &
     point.Record();
     auto elapsedMs = timer.ElapsedMilliSecond();
     auto vlogLevel = elapsedMs > 1 ? 0 : 1;
-    masterOperationTimeCost.Append("Total CreateMultiCopyMeta", elapsedMs);
+    GetMasterTimeCost().Append("Total CreateMultiCopyMeta", elapsedMs);
     VLOG(vlogLevel) << FormatString("Process CreateMultiCopyMeta cost: %d ms, req: ", elapsedMs)
                     << LogHelper::IgnoreSensitive(req) << AppendSrcDstForLog(req.address(), localAddr) << " "
-                    << masterOperationTimeCost.GetInfo();
+                    << GetMasterTimeCost().GetInfo();
     return status;
 }
 
@@ -272,7 +273,7 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::META_QUERYMETA_START);
     }
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     INJECT_POINT("MasterOCServiceImpl.QueryMeta.busy");
@@ -300,10 +301,10 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
         }
     }
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
-    masterOperationTimeCost.Append("Total QueryMeta", totalMs);
+    GetMasterTimeCost().Append("Total QueryMeta", totalMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
         FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
-                     rsp.query_metas_size(), totalMs, masterOperationTimeCost.GetInfo()));
+                     rsp.query_metas_size(), totalMs, GetMasterTimeCost().GetInfo()));
     return Status::OK();
 }
 
@@ -318,7 +319,7 @@ Status MasterOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfo
 
 Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
@@ -329,13 +330,13 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
     Status status = RemoveMetaImpl(req, rsp);
     point.Record();
     auto elapsedMs = timer.ElapsedMilliSecond();
-    masterOperationTimeCost.Append("Total RemoveMeta", elapsedMs);
+    GetMasterTimeCost().Append("Total RemoveMeta", elapsedMs);
     LOG(INFO) << FormatString(
         "RemoveMeta finished cost %d ms, receive id size: %d, success size: %d, need wait size: %d, need data size: "
         "%d, failed size: %d, outdated size: %d, req: %s %s",
         elapsedMs, req.ids_size() + req.id_with_version_size(), rsp.success_ids_size(), rsp.need_wait_ids_size(),
         rsp.need_data_ids_size(), rsp.failed_ids_size(), rsp.outdated_ids_size(), LogHelper::IgnoreSensitive(req),
-        masterOperationTimeCost.GetInfo());
+        GetMasterTimeCost().GetInfo());
     return status;
 }
 
@@ -354,7 +355,7 @@ Status MasterOCServiceImpl::RemoveMetaImpl(const RemoveMetaReqPb &req, RemoveMet
 
 Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
@@ -395,9 +396,9 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     VLOG(1) << FormatString("Master %s UpdateMeta rsp: %s", GetLocalAddr().ToString(), LogHelper::IgnoreSensitive(rsp));
     INJECT_POINT("master.update_meta_failure");
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
-    masterOperationTimeCost.Append("Total UpdateMeta", totalMs);
+    GetMasterTimeCost().Append("Total UpdateMeta", totalMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-                        FormatString("UpdateMeta done, cost: %.3fms, %s", totalMs, masterOperationTimeCost.GetInfo()));
+                        FormatString("UpdateMeta done, cost: %.3fms, %s", totalMs, GetMasterTimeCost().GetInfo()));
     return status;
 }
 
@@ -441,7 +442,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
 
 Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req, DeleteAllCopyMetaRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(1) << FormatString("DeleteAllCopyMeta, object count: %d", req.object_keys_size());
@@ -456,10 +457,10 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     ocMetadataManager->DeleteAllCopyMeta(req, rsp);
     auto totalMs = timer.ElapsedMilliSecond();
-    masterOperationTimeCost.Append("Total DeleteAllCopyMeta", totalMs);
+    GetMasterTimeCost().Append("Total DeleteAllCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
     VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms, %s",
-                                    req.object_keys_size(), totalMs, masterOperationTimeCost.GetInfo());
+                                    req.object_keys_size(), totalMs, GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -581,7 +582,7 @@ Status MasterOCServiceImpl::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIn
 
 Status MasterOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "[Ref] Master received GIncreaseRef request, address:" << req.address()
@@ -599,8 +600,8 @@ Status MasterOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
     }
     resp.mutable_last_rc()->set_error_code(status.GetCode());
     resp.mutable_last_rc()->set_error_msg(status.GetMsg());
-    masterOperationTimeCost.Append("Total GIncreaseRef", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master GIncreaseRef %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total GIncreaseRef", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master GIncreaseRef %s", GetMasterTimeCost().GetInfo());
 
     return Status::OK();
 }
@@ -608,7 +609,7 @@ Status MasterOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
 Status MasterOCServiceImpl::GDecreaseRef(
     std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> serverApi)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     GDecreaseReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -621,13 +622,13 @@ Status MasterOCServiceImpl::GDecreaseRef(
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     ocMetadataManager->GDecreaseRefWithServerApi(req, serverApi);
-    LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", masterOperationTimeCost.GetInfo());
+    LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "[Ref] Master received GDecreaseRef request, address:" << req.address()
@@ -639,8 +640,8 @@ Status MasterOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
     timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { timeoutDuration.Reset(); });
     ocMetadataManager->GDecreaseRef(req, resp);
-    masterOperationTimeCost.Append("Total GDecreaseRef", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total GDecreaseRef", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -672,7 +673,7 @@ Status MasterOCServiceImpl::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb
 
 Status MasterOCServiceImpl::PushMetaToMaster(const PushMetaToMasterReqPb &req, PushMetaToMasterRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received PushMetaToMaster req: " << LogHelper::IgnoreSensitive(req);
@@ -681,14 +682,14 @@ Status MasterOCServiceImpl::PushMetaToMaster(const PushMetaToMasterReqPb &req, P
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->ProcessWorkerPushMeta(req, rsp),
                                      "Master process PushMetaToMaster failed");
-    masterOperationTimeCost.Append("Total PushMetaToMaster", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master PushMetaToMaster %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total PushMetaToMaster", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master PushMetaToMaster %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::RollbackSeal(const RollbackSealReqPb &req, RollbackSealRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -696,15 +697,15 @@ Status MasterOCServiceImpl::RollbackSeal(const RollbackSealReqPb &req, RollbackS
                                      "GetOcMetadataManager failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->RollbackSeal(req, rsp), "Master process RollbackSeal failed");
     INJECT_POINT("MasterOCServiceImpl.RollbackSeal.idempotence");
-    masterOperationTimeCost.Append("Total RollbackSeal", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master PushMetaToMaster %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total RollbackSeal", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master PushMetaToMaster %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const ReconciliationQueryPb &req, ReconciliationRspPb &rsp)
 {
     (void)rsp;
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     // This is called by worker when centralized master is used. Do sync reconciliation.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -714,9 +715,9 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_INVALID, "No ClusterManager is provided.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         clusterManager_->IfNeedTriggerReconciliation(workerAddr, req.event_timestamp(), true), "reconciliation failed");
-    masterOperationTimeCost.Append("Total IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("Total IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of master IfNeedTriggerReconciliation %s",
-                              masterOperationTimeCost.GetInfo());
+                              GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -766,7 +767,7 @@ std::string MasterOCServiceImpl::GetMasterAsyncPoolUsage(int64_t intervalMs)
 
 Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -784,19 +785,19 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     if (!req.sub_metas().empty()) {
         ocMetadataManager->SaveSubscribeData(req);
     }
-    masterOperationTimeCost.Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master MigrateMetadata %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master MigrateMetadata %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
 Status MasterOCServiceImpl::ReportResource(const ResourceReportReqPb &req, ResourceReportRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_IF_NOT_OK(resourceManager_->ReportResource(req, rsp));
-    masterOperationTimeCost.Append("Total ReportResource", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master ReportResource %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total ReportResource", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master ReportResource %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 

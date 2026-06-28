@@ -30,6 +30,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
@@ -271,7 +272,7 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
     Timer timer;
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
-        masterOperationTimeCost.Append("RocksDB Put", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("RocksDB Put", timer.ElapsedMilliSecond());
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
         auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, value]() {
@@ -282,7 +283,7 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
         });
         return Status::OK();
     }
-    masterOperationTimeCost.Append("RocksDB Put", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RocksDB Put", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -393,7 +394,7 @@ Status RocksStore::Get(const std::string &tableName, const std::string &key, std
         });
         future.wait();
     }
-    masterOperationTimeCost.Append("RocksDB Get", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RocksDB Get", timer.ElapsedMilliSecond());
     if (!rc.ok()) {
         if (rc == rocksdb::Status::NotFound()) {
             RETURN_STATUS(StatusCode::K_NOT_FOUND, "Key not found " + key);
@@ -426,7 +427,7 @@ Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<st
             outKeyValues.emplace_back(std::make_pair(iter2->key().ToString(), iter2->value().ToString()));
             iter2->Next();
         }
-        masterOperationTimeCost.Append("RocksDB GetAll", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("RocksDB GetAll", timer.ElapsedMilliSecond());
         return Status::OK();
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
         auto future = asyncThreadPool_->Submit(tableName, [this, readOptions, tableHandle, &outKeyValues]() {
@@ -440,7 +441,7 @@ Status RocksStore::GetAll(const std::string &tableName, std::vector<std::pair<st
         future.wait();
         return Status::OK();
     }
-    masterOperationTimeCost.Append("RocksDB GetAll", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RocksDB GetAll", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -499,7 +500,7 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
     PerfPoint point(PerfKey::ROCKSDB_DELETE);
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = Delete(tableHandle, key, FLAGS_rocksdb_sync_write);
-        masterOperationTimeCost.Append("RocksDB Delete", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("RocksDB Delete", timer.ElapsedMilliSecond());
         // Deleting a key that does not exist in the database will NOT yield an error.
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
@@ -511,7 +512,7 @@ Status RocksStore::Delete(const std::string &tableName, const std::string &key)
         });
         return Status::OK();
     }
-    masterOperationTimeCost.Append("RocksDB Delete", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RocksDB Delete", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 
@@ -533,7 +534,7 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
     Timer timer;
     if (mode_ == RocksdbWriteMode::SYNC) {
         rc = db_->DeleteRange(options, tableHandle, rocksdb::Slice(prefixKey), rocksdb::Slice(endKey));
-        masterOperationTimeCost.Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
+        GetMasterTimeCost().Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
         if (rc != rocksdb::Status::OK()) {
             RETURN_STATUS(StatusCode::K_KVSTORE_ERROR,
                           "Cannot delete prefix key: " + prefixKey + " Error: " + rc.ToString());
@@ -550,7 +551,7 @@ Status RocksStore::PrefixDelete(const std::string &tableName, const std::string 
         });
         return Status::OK();
     }
-    masterOperationTimeCost.Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RocksDB DeleteRange", timer.ElapsedMilliSecond());
     return Status::OK();
 }
 }  // namespace datasystem

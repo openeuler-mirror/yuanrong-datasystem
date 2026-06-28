@@ -33,8 +33,9 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/uri.h"
 
 DS_DECLARE_string(unix_domain_socket_dir);
 
@@ -1061,11 +1062,11 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
             reqTimeoutDuration.Init();
             scTimeoutDuration.Init();
         }
-        g_MetaRocksDbName = dbName;
+        SetMetaRocksDbName(dbName);
         LOG_IF_ERROR(worker->WorkerEntry(), "worker entry failed");
-        g_MetaRocksDbName.clear();
-        workerOperationTimeCost.Clear();
-        masterOperationTimeCost.Clear();
+        SetMetaRocksDbName("");
+        GetWorkerTimeCost().Clear();
+        GetMasterTimeCost().Clear();
     };
     CHECK_FAIL_RETURN_STATUS(thrdPool_ != nullptr, K_INVALID, "service is stop");
     thrdPool_->Execute(func);
@@ -1290,11 +1291,11 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
         reqTimeoutDuration.Init();
         scTimeoutDuration.Init();
     }
-    g_MetaRocksDbName = dbName;
+    SetMetaRocksDbName(dbName);
     LOG_IF_ERROR(worker->WorkerEntryWithoutMsgQ(inFrames, outFrames), "worker entry failed");
-    g_MetaRocksDbName.clear();
-    workerOperationTimeCost.Clear();
-    masterOperationTimeCost.Clear();
+    SetMetaRocksDbName("");
+    GetWorkerTimeCost().Clear();
+    GetMasterTimeCost().Clear();
     VLOG(RPC_LOG_LEVEL) << FormatString("Routing request %s to %s", meta.client_id(), workerId);
 
     return Status::OK();

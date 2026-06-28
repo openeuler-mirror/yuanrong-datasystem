@@ -36,6 +36,7 @@
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
@@ -1258,21 +1259,9 @@ std::string StreamResponseParam::ToString() const
     return ss.str();
 }
 
-thread_local AccessTransportKind AccessTransportTracker::current_ = AccessTransportKind::SHM;
-
-void AccessTransportTracker::Reset()
+const char* AccessTransportTracker::KindToName(AccessTransportKind kind)
 {
-    current_ = AccessTransportKind::SHM;
-}
-
-void AccessTransportTracker::Record(AccessTransportKind kind)
-{
-    current_ = kind;
-}
-
-std::string AccessTransportTracker::ToString()
-{
-    switch (current_) {
+    switch (kind) {
         case AccessTransportKind::UB:
             return "UB";
         case AccessTransportKind::TCP:
@@ -1281,5 +1270,20 @@ std::string AccessTransportTracker::ToString()
         default:
             return "SHM";
     }
+}
+
+void AccessTransportTracker::Reset()
+{
+    GetRequestContext()->accessTransportKind = AccessTransportKind::SHM;
+}
+
+void AccessTransportTracker::Record(AccessTransportKind kind)
+{
+    GetRequestContext()->accessTransportKind = kind;
+}
+
+std::string AccessTransportTracker::ToString()
+{
+    return KindToName(GetRequestContext()->accessTransportKind);
 }
 }  // namespace datasystem

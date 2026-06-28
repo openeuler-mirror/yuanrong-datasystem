@@ -168,6 +168,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "request_context_test",
+    srcs = ["request_context_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:request_context",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "rpc_diagnostic_test",
     srcs = ["rpc_diagnostic_test.cpp"],
     deps = [
@@ -323,6 +332,7 @@ test_suite(
         "eviction_watermark_test",
         "watermark_flag_parse_test",
         "blocking_queue_test",
+        "request_context_test",
         "event_subscribers_test",
         "fd_manager_test",
         "fd_pass_over_scmtcp_test",

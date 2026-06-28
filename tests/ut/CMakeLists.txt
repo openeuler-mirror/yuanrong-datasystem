@@ -141,7 +141,8 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_persistence_api
         common_slot_client
         common_log
-        common_util)
+        common_util
+        common_request_context)
 target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
 
 

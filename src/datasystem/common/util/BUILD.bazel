@@ -31,6 +31,19 @@ ds_cc_library(
     ],
 )
 
+# Per-request context for brpc M:N model (needs brpc dep for bthread_key_t).
+# AccessTransportKind is forward-declared (not included) to avoid cascading
+# access_recorder.h to all RequestContext users.
+ds_cc_library(
+    name = "request_context",
+    srcs = ["request_context.cpp"],
+    deps = [
+        ":common_util_impl",
+        "//src/datasystem/common/log:log_base",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
 # Main glob-based target: all util sources except alwayslink files and cycle-sensitive files
 ds_cc_library(
     name = "common_util_impl",
@@ -42,6 +55,7 @@ ds_cc_library(
             "status.cpp",
             "deadlock_util.cpp",
             "numa_util.cpp",
+            "request_context.cpp",
         ],
     ),
     hdrs = glob(

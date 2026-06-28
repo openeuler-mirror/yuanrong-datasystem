@@ -44,6 +44,8 @@ public:
 
 class LogMessageImpl {
 public:
+    static constexpr size_t MAX_LOG_SIZE = 30000;
+
     LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog = false,
                    bool samplerChecked = false);
 

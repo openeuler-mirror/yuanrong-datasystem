@@ -24,6 +24,7 @@
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/stream_cache/util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
@@ -319,7 +320,7 @@ Status MasterSCServiceImpl::StartCheckMetadata()
 
 Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req, MigrateSCMetadataRspPb &rsp)
 {
-    masterOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto copyReq = req;
     for (int i = 0; i < copyReq.stream_metas_size(); ++i) {
@@ -334,8 +335,8 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
                                      "GetScMetadataManager failed");
     RETURN_IF_NOT_OK(scMetadataManager->SaveMigrationMetadata(req, rsp));
-    masterOperationTimeCost.Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of SC master MigrateMetadata %s", masterOperationTimeCost.GetInfo());
+    GetMasterTimeCost().Append("Total MigrateMetadata", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of SC master MigrateMetadata %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 

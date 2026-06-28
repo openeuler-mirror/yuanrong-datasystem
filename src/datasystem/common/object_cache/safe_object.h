@@ -34,6 +34,7 @@
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/template_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 
@@ -282,8 +283,9 @@ Status SafeObject<ObjType>::WLock(bool nullable)
     } else {
         mutex_.lock();
     }
-    workerOperationTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
-    masterOperationTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
+    auto* reqCtx = GetRequestContext();
+    reqCtx->workerTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
+    reqCtx->masterTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
         if (FLAGS_use_brpc) {
             bthread_rwlock_unlock(&bthread_mutex_);

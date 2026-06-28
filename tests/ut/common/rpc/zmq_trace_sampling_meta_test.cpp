@@ -36,14 +36,14 @@ protected:
         Trace::Instance().Invalidate();
         LogSampler::Instance().ResetForTest();
         reqTimeoutDuration.Init();
-        g_MetaRocksDbName.clear();
+        SetMetaRocksDbName("");
     }
 
     void TearDown() override
     {
         Trace::Instance().Invalidate();
         LogSampler::Instance().ResetForTest();
-        g_MetaRocksDbName.clear();
+        SetMetaRocksDbName("");
     }
 };
 

@@ -42,6 +42,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/gflag/eviction_watermark.h"
@@ -585,7 +586,7 @@ Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> fileLock(fileInfoMutex_);
     auto waitElapsed = timer.ElapsedMilliSecond();
-    workerOperationTimeCost.Append("Delete From Disk Get lock", timer.ElapsedMilliSecond());
+    GetWorkerTimeCost().Append("Delete From Disk Get lock", timer.ElapsedMilliSecond());
     // Delete from SpillBuffer.
     if (buffer_.Exist(objectKey, decSize)) {
         if (buffer_.UniqObject(objectKey)) {

@@ -54,6 +54,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -116,7 +117,7 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
 Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> &serverApi)
 {
     PerfPoint point(PerfKey::WORKER_GET_OBJECT);
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     const bool traceEnabled = ShouldCollectLatencyTrace(GetServerLatencyTraceConfig());
     if (traceEnabled) {
@@ -153,10 +154,11 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     if (serverApi->EnableMsgQ()) {
         const std::chrono::steady_clock::time_point submitToPool = std::chrono::steady_clock::now();
         auto traceContext = Trace::Instance().GetContext();
-        auto cost = workerOperationTimeCost;
+        auto cost = GetWorkerTimeCost();
         threadPool_->Execute([=]() mutable {
+            ScopedRequestContext ctx;
+            GetWorkerTimeCost() = cost;
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
-            workerOperationTimeCost = cost;
             const std::chrono::steady_clock::time_point poolThreadStart = std::chrono::steady_clock::now();
             {
                 const uint64_t qUs = static_cast<uint64_t>(
@@ -194,7 +196,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                         .Observe(e2EUs);
                 }
                 auto getElapsedMs = timer.ElapsedMilliSecond();
-                workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+                GetWorkerTimeCost().Append("ProcessGetObjectRequest", getElapsedMs);
                 auto inflightGaugeGet =
                     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
                 LOG(INFO) << FormatString(
@@ -202,7 +204,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                     "%d %s",
                     clientId, request->GetRawObjectKeys().size(),
                     IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), getElapsedMs, inflightGauge.Get(),
-                    workerOperationTimeCost.GetInfo());
+                    GetWorkerTimeCost().GetInfo());
             }
         });
     } else {
@@ -220,14 +222,14 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             }
         }
         auto getElapsedMs = timer.ElapsedMilliSecond();
-        workerOperationTimeCost.Append("ProcessGetObjectRequest", getElapsedMs);
+        GetWorkerTimeCost().Append("ProcessGetObjectRequest", getElapsedMs);
         auto inflightGaugeGet =
             metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
         LOG(INFO) << FormatString(
             "[Get] Done, clientId: %s, objects: %zu, transferPath: %s, totalCost: %.3fms, inflightRemoteGet: "
             "%d %s",
             clientId, request->GetRawObjectKeys().size(), IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"),
-            getElapsedMs, inflightGauge.Get(), workerOperationTimeCost.GetInfo());
+            getElapsedMs, inflightGauge.Get(), GetWorkerTimeCost().GetInfo());
     }
     return Status::OK();
 }
@@ -2568,7 +2570,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
 
 Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &resp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     INJECT_POINT("worker.GetObjMetaInfo");
     RETURN_IF_NOT_OK(AuthenticateGetMetaUser(akSkManager_.get(), req));
     // construct objectKey by the input tenantId
@@ -2582,7 +2584,7 @@ Status WorkerOcServiceGetImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, Ge
 
 Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb &rsp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     auto clientId = ClientKey::Intern(req.client_id());
     LOG(INFO) << "QuerySize start from client:" << clientId;
@@ -2629,7 +2631,7 @@ bool WorkerOcServiceGetImpl::IsLocalObject(const std::string &key)
 
 Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
-    workerOperationTimeCost.Clear();
+    ScopedRequestContext ctx;
     Timer timer;
     PerfPoint point(PerfKey::WORKER_EXIST_PRE_PROCESS);
     auto config = GetServerLatencyTraceConfig();
@@ -2742,9 +2744,9 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     }
     access.Result(rc).Record();
     const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
-    workerOperationTimeCost.Append("Total Exist", totalExistMs);
+    GetWorkerTimeCost().Append("Total Exist", totalExistMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalExistUs >= config.processSlowerThanUs, 1,
-        FormatString("Exist done, cost: %.3fms, %s", totalExistMs, workerOperationTimeCost.GetInfo()));
+        FormatString("Exist done, cost: %.3fms, %s", totalExistMs, GetWorkerTimeCost().GetInfo()));
     return rc;
 }
 

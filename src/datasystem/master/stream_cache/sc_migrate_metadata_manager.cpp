@@ -20,6 +20,7 @@
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
@@ -237,7 +238,7 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
         RETURN_IF_NOT_OK(dest.ParseString(info.destAddr));
         api = std::make_unique<MasterMasterSCApi>(dest, localHostPort_, akSkManager_);
         RETURN_IF_NOT_OK(api->Init());
-        g_MetaRocksDbName = info.destDbName;
+        SetMetaRocksDbName(info.destDbName);
         return Status::OK();
     };
 

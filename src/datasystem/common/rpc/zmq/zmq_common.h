@@ -43,10 +43,11 @@
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/mem_view.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/protos/rpc_option.pb.h"
 #include "datasystem/protos/utils.pb.h"
@@ -427,9 +428,10 @@ inline void UpdateMetaByThreadLocalValue(MetaPb &meta)
     meta.set_log_sample_state(GetOrCreateLogSampleState());
 
     meta.set_timeout(reqTimeoutDuration.CalcRealRemainingTime());
-    meta.set_db_name(g_MetaRocksDbName);
+    const auto& metaRocksDbName = GetMetaRocksDbName();
+    meta.set_db_name(metaRocksDbName);
     VLOG(RPC_LOG_LEVEL) << FormatString("Send message with timeout %zu and db name %s", meta.timeout(),
-                                        g_MetaRocksDbName);
+                                        metaRocksDbName);
 }
 
 inline TraceGuard SetTraceContextFromMeta(const MetaPb &meta, bool keep = false)

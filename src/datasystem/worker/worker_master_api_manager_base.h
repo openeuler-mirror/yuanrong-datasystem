@@ -23,6 +23,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
@@ -50,7 +51,7 @@ public:
         MetaAddrInfo metaAddrInfo;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->LocateMetaOwner(id, true, metaAddrInfo),
                                          "LocateMetaOwner failed");
-        workerOperationTimeCost.Append("Get master address", timer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Get master address", timer.ElapsedMilliSecond());
         auto masterHostAddress = metaAddrInfo.GetAddressAndSaveDbName();
 
         VLOG(1) << FormatString("Get masterHostAddress:[%s] for identifier:[%s]", masterHostAddress.ToString(), id);
@@ -93,7 +94,7 @@ public:
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->Init(),
                                          "Master addr " + masterAddress.ToString() + " workerMasterApi init failed");
         api = std::move(workerMasterApi);
-        workerOperationTimeCost.Append("Worker master api init", timer.ElapsedMilliSecond());
+        GetWorkerTimeCost().Append("Worker master api init", timer.ElapsedMilliSecond());
         return Status::OK();
     }
 

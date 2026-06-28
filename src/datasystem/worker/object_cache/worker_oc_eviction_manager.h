@@ -207,6 +207,8 @@ private:
     enum class Action : int { UNKNOWN, DELETE, FREE_MEMORY, SPILL, END_LIFE, RETAIN };
     using EvictDeletedObjects = std::unordered_map<std::string, uint64_t>;
 
+    struct EvictionTraceAggregator;  // forward declaration for EvictionTrace::aggregator_
+
     struct EvictionTrace {
         Timer timer;
         std::string taskId;
@@ -216,6 +218,21 @@ private:
         std::string info;
         double spillCost;
         Status rc;
+        // Per-task aggregator pointer. Set by EvictionTask before the trace is
+        // consumed by TryEvictObject or spill futures. When non-null, the
+        // destructor calls aggregator_->Add(*this) instead of using a shared
+        // thread_local instance.
+        //
+        // Lifetime contract: the aggregator MUST outlive every EvictionTrace
+        // that points to it. EvictionTask guarantees this via:
+        // 1. Declaration order: aggregator declared before spillTasks (reverse
+        //    destruction ensures aggregator outlives spillTasks' traces).
+        // 2. ReleaseSpillFutures(..., true): blocking wait at end of function
+        //    drains all async futures before aggregator goes out of scope.
+        //
+        // When nullptr (legacy/other code paths), the destructor falls back
+        // to a static thread_local EvictionTraceAggregator.
+        EvictionTraceAggregator* aggregator_ = nullptr;
         EvictionTrace(std::string id) : taskId(std::move(id)), objectSize(0), action(Action::UNKNOWN), spillCost(0)
         {
         }

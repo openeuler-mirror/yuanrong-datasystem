@@ -23,6 +23,7 @@
 #include <sstream>
 
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -49,7 +50,7 @@ public:
 
     const HostPort &GetAddressAndSaveDbName() const
     {
-        g_MetaRocksDbName = dbName_;
+        SetMetaRocksDbName(dbName_);
         return addr_;
     }
 

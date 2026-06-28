@@ -17,6 +17,7 @@
 /**
  * Description: Module responsible for managing the object's nested relationship on the master.
  */
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/master/object_cache/oc_nested_manager.h"
 
@@ -26,7 +27,7 @@ bool OCNestedManager::CheckIsNoneNestedRefById(const std::string &childObjectKey
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("CheckIsNoneNestedRefById get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("CheckIsNoneNestedRefById get lock", timer.ElapsedMilliSecond());
     return nestedRef_->CheckIsNoneRef(childObjectKey);
 }
 
@@ -35,7 +36,7 @@ Status OCNestedManager::IncreaseNestedRefCnt(const std::string &parentObjectKey,
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("IncreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("IncreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
     auto iter = dependencyTable_.find(parentObjectKey);
     if (iter == dependencyTable_.end()) {
         dependencyTable_.emplace(parentObjectKey, nestedObjectKeys);
@@ -54,7 +55,7 @@ Status OCNestedManager::IncreaseNestedRefCnt(const std::string &nestedObjectKey,
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("IncreaseNestedRefCnt get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("IncreaseNestedRefCnt get lock", timer.ElapsedMilliSecond());
     LOG(INFO) << "Increasing nested ref count for ObjectKey: " << nestedObjectKey << ", ref is " << ref;
     if (nestedRef_->AddRef(nestedObjectKey, ref)) {
         objectStore_->UpdateNestedRefCount(nestedObjectKey, nestedRef_->GetRefCount(nestedObjectKey));
@@ -127,7 +128,7 @@ Status OCNestedManager::DecreaseNestedRefCnt(const std::string &nestedObjectKey)
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("DecreaseNestedRefCnt get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("DecreaseNestedRefCnt get lock", timer.ElapsedMilliSecond());
     LOG(INFO) << "Decreasing nested ref count for ObjectKey: " << nestedObjectKey;
     if (nestedRef_->RemoveRef(nestedObjectKey)) {
         uint32_t count = nestedRef_->GetRefCount(nestedObjectKey);
@@ -145,7 +146,7 @@ Status OCNestedManager::DecreaseNestedRefCnt(const std::string &parentObjectKey,
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("DecreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("DecreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
     auto iter = dependencyTable_.find(parentObjectKey);
     if (iter == dependencyTable_.end()) {
         return Status::OK();
@@ -174,7 +175,7 @@ Status OCNestedManager::RecoverRelationshipData(const std::string &refTable, con
     };
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("RecoverRelationshipData", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RecoverRelationshipData", timer.ElapsedMilliSecond());
     for (const auto &meta : metas) {
         auto parentIdPos = meta.first.rfind("_");
         if (parentIdPos != std::string::npos) {
@@ -205,7 +206,7 @@ bool OCNestedManager::NestedKeysCanSet(const std::string &parentObjectKey,
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("NestedKeysCanSet", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("NestedKeysCanSet", timer.ElapsedMilliSecond());
     auto iter = dependencyTable_.find(parentObjectKey);
     if (iter == dependencyTable_.end() || iter->second.empty() || iter->second == nestedObjectKeys) {
         return true;
@@ -219,7 +220,7 @@ bool OCNestedManager::IsNestedKeysDiff(const std::string &parentObjectKey,
 {
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-    masterOperationTimeCost.Append("IsNestedKeysDiff", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("IsNestedKeysDiff", timer.ElapsedMilliSecond());
     auto iter = dependencyTable_.find(parentObjectKey);
     if (iter == dependencyTable_.end() || iter->second != nestedObjectKeys) {
         return true;

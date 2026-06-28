@@ -28,6 +28,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/log.h"
@@ -148,7 +149,7 @@ Status ExpiredObjectManager::InsertObject(const std::string &objectKey, const ui
     Timer timer;
     auto &shard = shards_[GetShardIndex(objectKey)];
     std::lock_guard<std::mutex> lock(shard.mutex);
-    masterOperationTimeCost.Append("InsertObject", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("InsertObject", timer.ElapsedMilliSecond());
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_RUNTIME_ERROR));
     RemoveObjectIfExistUnlock(shard, objectKey);
     return InsertObjectUnlock(shard, objectKey, version, ttlSecond);
@@ -185,7 +186,7 @@ Status ExpiredObjectManager::RemoveObjectIfExist(const std::string &objectKey)
     Timer timer;
     auto &shard = shards_[GetShardIndex(objectKey)];
     std::lock_guard<std::mutex> lock(shard.mutex);
-    masterOperationTimeCost.Append("RemoveObjectIfExist", timer.ElapsedMilliSecond());
+    GetMasterTimeCost().Append("RemoveObjectIfExist", timer.ElapsedMilliSecond());
     RETURN_IF_NOT_OK(CheckObjectInAsyncDelete(shard, objectKey, K_TRY_AGAIN));
     RemoveObjectIfExistUnlock(shard, objectKey);
     return Status::OK();
@@ -394,6 +395,7 @@ Status ExpiredObjectManager::GetObjectRemainTimeAndRemove(const std::string &obj
 
 void ExpiredObjectManager::Run()
 {
+    ScopedRequestContext ctx;
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     auto traceId = Trace::Instance().GetTraceID();
     int intervalMs = SCAN_INTERVAL_MS;
