@@ -60,7 +60,6 @@ message MetaPb {
     repeated TickPb ticks = 9;
     string trace_id = 10;
     int64 timeout = 11;
-    string db_name = 12;
     int32 route_fd = 13;  // New version of routing_fd
     LogSampleState log_sample_state = 14;
     // RPC latency metric timestamps. This is separate from ticks because ticks is the GetLapTime perf timeline.

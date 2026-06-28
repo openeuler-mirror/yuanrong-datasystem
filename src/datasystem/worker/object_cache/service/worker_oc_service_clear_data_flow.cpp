@@ -110,7 +110,7 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys,
     std::unordered_set<std::string> &failedIds)
 {
-    HostPort masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
+    HostPort masterAddr = metaAddrInfo.GetAddress();
     if (masterAddr.Empty()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();

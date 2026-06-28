@@ -302,7 +302,7 @@ void WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<
         auto &req = reqs[i];
         auto func = [this, &masterAddrInfo, &req, timeout, &traceId, &timer] {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
-            const auto &masterAddr = masterAddrInfo.GetAddressAndSaveDbName();
+            const auto &masterAddr = masterAddrInfo.GetAddress();
             std::shared_ptr<WorkerMasterOCApi> api;
             auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
             if (rc.IsError()) {

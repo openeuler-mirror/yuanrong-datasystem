@@ -510,9 +510,8 @@ void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &
 
 Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
 {
-    std::string dbName;
+    [[maybe_unused]] std::string dbName;
     RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    SetMetaRocksDbName(dbName);
     return Status::OK();
 }
 
@@ -753,7 +752,7 @@ Status WorkerOCServiceImpl::PushMetadataToMaster(const HostPort &masterAddr)
         VLOG(1) << "PushMetadataToMaster: " << LogHelper::IgnoreSensitive(req);
 
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddressAndSaveDbName());
+            workerMasterApiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddress());
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, PushMeta failed");
         RETURN_IF_NOT_OK(workerMasterApi->PushMetadataToMaster(req, rsp));
@@ -1088,7 +1087,7 @@ Status WorkerOCServiceImpl::ReconciliationDecrRef(
 {
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         const std::vector<std::string> &currentNeedDelGrefIds = item.second;
         auto func = [this, &currentNeedDelGrefIds, &masterAddr](int32_t) {
             std::unordered_set<std::string> unAliveIds;
@@ -1535,7 +1534,7 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentObjectKeysRemove = item.second;
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {

@@ -428,10 +428,6 @@ inline void UpdateMetaByThreadLocalValue(MetaPb &meta)
     meta.set_log_sample_state(GetOrCreateLogSampleState());
 
     meta.set_timeout(reqTimeoutDuration.CalcRealRemainingTime());
-    const auto& metaRocksDbName = GetMetaRocksDbName();
-    meta.set_db_name(metaRocksDbName);
-    VLOG(RPC_LOG_LEVEL) << FormatString("Send message with timeout %zu and db name %s", meta.timeout(),
-                                        metaRocksDbName);
 }
 
 inline TraceGuard SetTraceContextFromMeta(const MetaPb &meta, bool keep = false)

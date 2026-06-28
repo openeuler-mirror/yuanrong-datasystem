@@ -277,7 +277,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMasterId) {
-        HostPort masterAddr = item.first.GetAddressAndSaveDbName();
+        HostPort masterAddr = item.first.GetAddress();
         std::vector<std::string> &currentNeedDeleteObjectKey = item.second;
         LOG(INFO) << "Delete all copy meta from master: " << masterAddr
                   << ", objects: " << VectorToString(currentNeedDeleteObjectKey);

@@ -410,7 +410,7 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
     std::unordered_set<std::string> tmpFailedIds;
     for (auto &item : objKeysGrpByMaster) {
-        HostPort masterAddr = item.first.GetAddressAndSaveDbName();
+        HostPort masterAddr = item.first.GetAddress();
         const auto &ids = item.second;
         auto workerMasterApi = GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
@@ -761,7 +761,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         req.set_origin_primary_addr(originAddr);
         req.set_new_primary_addr(localAddr_);
         req.set_remove_location(type == MigrateType::SPILL);
-        HostPort masterAddr = item.first.GetAddressAndSaveDbName();
+        HostPort masterAddr = item.first.GetAddress();
         const auto &ids = item.second;
         AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
         VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",

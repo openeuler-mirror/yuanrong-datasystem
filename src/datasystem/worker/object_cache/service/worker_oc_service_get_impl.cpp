@@ -1501,7 +1501,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
             int64_t elapsed = timer.ElapsedMilliSecond();
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
-            HostPort masterAddr = itemPtr->first.GetAddressAndSaveDbName();
+            HostPort masterAddr = itemPtr->first.GetAddress();
             const std::vector<std::string> &currentIds = itemPtr->second;
             datasystem::master::QueryMetaRspPb &rsp = res.rsp;
             Timer queryMetaTimer;
@@ -2378,7 +2378,7 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
                              "ETCD cluster manager is not provided.");
     MetaAddrInfo metaAddrInfo;
     RETURN_IF_NOT_OK(clusterManager_->LocateMetaOwner(objKey, true, metaAddrInfo));
-    masterAddr = metaAddrInfo.GetAddressAndSaveDbName();
+    masterAddr = metaAddrInfo.GetAddress();
     return Status::OK();
 }
 
@@ -2540,7 +2540,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
     auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
     auto &objKeysGrpByMaster = grouped.groups;
     for (auto &[master, objs] : objKeysGrpByMaster) {
-        HostPort workerAddr = master.GetAddressAndSaveDbName();
+        HostPort workerAddr = master.GetAddress();
         master::GetObjectLocationsReqPb masterReq;
         master::GetObjectLocationsRspPb masterRsp;
         *masterReq.mutable_object_keys() = { objs.begin(), objs.end() };

@@ -314,7 +314,7 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
                                objKeysGrpByMaster[MetaAddrInfo()].emplace_back(objectKey);
                            });
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddressAndSaveDbName();
+        const HostPort &masterAddr = item.first.GetAddress();
         const auto &currentObjectKeys = item.second;
         if (currentObjectKeys.empty()) {
             continue;
@@ -846,7 +846,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
     ReaddPrimaryEndLifeTasks(failedTasks);
 
     for (const auto &item : groupedKeys) {
-        HostPort masterAddr = item.first.GetAddressAndSaveDbName();
+        HostPort masterAddr = item.first.GetAddress();
         std::vector<PrimaryEndLifeTask> masterTasks;
         masterTasks.reserve(item.second.size());
         for (const auto &objectKey : item.second) {
@@ -1312,7 +1312,7 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetMetaAddress(objectKey, metaAddrInfo),
                                      "Get metadata address failed.");
 
-    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddressAndSaveDbName(),
+    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddress(),
                                                                               localAddress_, akSkManager_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     master::DeleteAllCopyMetaReqPb req;
