@@ -35,6 +35,7 @@
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_string(log_filename);
@@ -81,6 +82,7 @@ Status LogManager::Stop()
 
 void LogManager::RunTimerTask(const std::function<Status(void)> &func, int64_t waitSeconds)
 {
+    Trace::Instance().SetTraceNewID("LogManager;" + GetStringUuid(), true);
     const int intervalMs = 10;
     const int secToMs = 1000;
     LOG(INFO) << "RunTimerTask thread start with duration:" << waitSeconds << "s";

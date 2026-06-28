@@ -33,6 +33,7 @@
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -201,6 +202,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                   std::vector<RpcMessage> &payload)
 {
+    // Inherit the SDK traceID from the worker thread's thread_local Trace (set by
+    // WorkerEntryImpl's SetTraceContextFromMeta) into the per-request context so
+    // that any access recorder or log emitted inside the pull handler scope carries
+    // the same traceID as the original SDK request. Without this, the pull handler
+    // runs without an active RequestContext and nested recorders fall back to a
+    // detached UUID that does not correlate with the SDK request.
+    ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string callerAddress = GetRemoteAddressForLog(req);

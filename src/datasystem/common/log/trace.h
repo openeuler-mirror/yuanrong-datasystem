@@ -141,22 +141,22 @@ public:
      * GetBthreadTrace() returns nullptr and this falls back to a per-pthread
      * thread_local Trace, which is safe because such contexts each own their
      * pthread or are cooperative-yield-free within a single LOG/Trace call.
+     *
+     * Implementation note: the body lives in trace.cpp (out-of-line). When the
+     * body was inlined in this header, each DSO that includes trace.h got its
+     * own `static thread_local Trace instance;`, so the client SDK's
+     * libds_client_py.so (where the pybind Set/Get lambdas call
+     * SetRequestTraceUUID) and libdatasystem.so (where the access-log and
+     * RPC-send paths call GetTraceID) observed DIFFERENT thread_local
+     * instances. Symptom: SDK access log / INFO log traceID column was empty
+     * even though SetRequestTraceUUID minted a UUID, because the mint wrote to
+     * the pybind-DSO's instance while the log prefix read the
+     * libdatasystem-DSO's (empty) instance. Defining Instance() out-of-line
+     * in trace.cpp forces a single thread_local instance shared across all
+     * DSOs that link libdatasystem.so, restoring cross-DSO traceID visibility.
      * @return Instance of Trace.
      */
-    static Trace &Instance()
-    {
-        // Check for per-bthread Trace isolation (brpc M:N model).
-        // GetBthreadTrace() is defined in request_context.cpp and returns
-        // the RequestContext's Trace when a handler is active.
-        Trace* btTrace = GetBthreadTrace();
-        if (btTrace != nullptr) {
-            return *btTrace;
-        }
-        // Fall back to thread_local for ZMQ pthread handlers and
-        // non-handler contexts.
-        static thread_local Trace instance;
-        return instance;
-    }
+    static Trace &Instance();
 
     /**
      * @brief Set traceID to thread_local.(The traceID is the automatically generated UUID)

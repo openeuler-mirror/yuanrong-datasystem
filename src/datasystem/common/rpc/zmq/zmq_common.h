@@ -47,6 +47,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/protos/meta_zmq.pb.h"
 #include "datasystem/protos/rpc_option.pb.h"
@@ -424,7 +425,27 @@ inline void ApplyLogSampleState(LogSampleState state)
 
 inline void UpdateMetaByThreadLocalValue(MetaPb &meta)
 {
-    meta.set_trace_id(Trace::Instance().GetTraceID());
+    auto traceID = Trace::Instance().GetTraceID();
+    if (traceID.empty()) {
+        // The calling thread has no active traceID in its thread_local Trace.
+        // Root cause: client SDK's per-request SetRequestTraceUUID TraceGuard
+        // (declared in pybind_register_kv.cpp `Set`/`Get`/etc lambdas) does
+        // not propagate traceID to the actual RPC send site, so the calling
+        // thread sees an empty Trace::Instance().GetTraceID() here. Without
+        // this fallback, meta.trace_id is sent empty and worker-side access
+        // log / log prefix traceID column is empty end-to-end.
+        //
+        // Fix: mint a fresh UUID directly via GetStringUuid (the same helper
+        // Trace::SetTraceUUID uses internally) and use it for this RPC. We
+        // intentionally do NOT call Trace::Instance().SetTraceUUID() here
+        // because SetTraceUUID returns a TraceGuard(CLEAR_TRACE_ID) whose
+        // destructor would invalidate the traceID before we read it back.
+        // Each RPC from a trace-empty thread mints its own UUID, which is
+        // semantically correct: each RPC is an independent request from
+        // this thread's perspective.
+        traceID = GetStringUuid();
+    }
+    meta.set_trace_id(traceID);
     meta.set_log_sample_state(GetOrCreateLogSampleState());
 
     meta.set_timeout(reqTimeoutDuration.CalcRealRemainingTime());

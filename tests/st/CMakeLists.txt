@@ -113,10 +113,14 @@ add_ds_st_grouped_executable(ds_st_kv_cache _ds_st_kv_cache_obj)
 add_ds_st_grouped_executable(ds_st _ds_st_other_obj)
 add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
 
-target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS})
-target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS})
-target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock)
-target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS})
+# Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
+# ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
+# CI runners with limited RAM. -Wl,--reduce-memory-overheads drops GNU ld RSS
+# by ~20-40% during the final link step (same pattern PR #1182 used for UT).
+target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
+target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
+target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
+target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_embedded_client  GTest::gtest GTest::gmock common_etcd  nlohmann_json::nlohmann_json generic_service_protos datasystem cluster)
 target_compile_definitions(ds_st_embedded_client PRIVATE HASH_PHRASE_PATH="${CMAKE_CURRENT_BINARY_DIR}/hashring_parser")
 

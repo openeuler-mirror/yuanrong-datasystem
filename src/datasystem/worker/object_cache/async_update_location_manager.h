@@ -38,6 +38,10 @@ struct UpdateLocationParam {
     std::string objectKey;
     uint64_t version;
     uint32_t data_format;
+    // Trace ID captured on the dispatching handler thread so the async worker
+    // thread that eventually calls CreateCopyMeta can re-establish it for
+    // correlated logging and downstream propagation.
+    std::string traceID;
 };
 
 class UpdateLocationTask {

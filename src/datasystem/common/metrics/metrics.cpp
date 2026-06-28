@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
 namespace datasystem::metrics {
@@ -288,11 +289,27 @@ std::vector<std::string> BuildSummary(int intervalMs)
 void LogSummary(int intervalMs)
 {
     auto summaries = BuildSummary(intervalMs);
-    const auto traceId = (Logging::PodName() + "-metrics").substr(0, Trace::TRACEID_MAX_SIZE);
+    // Use a stable "Metrics;<uuid>" traceID so the periodic metrics summary
+    // lines have a grep-able identifier in the traceID column. The previous
+    // "<podName>-metrics" literal leaked the pod hostname into the traceID
+    // column, which (1) is not a traceID format and (2) differed from the
+    // role;<uuid> convention used by other background threads. One UUID per
+    // process keeps all summary lines under the same identifier for the
+    // process lifetime.
+    //
+    // Save+restore the caller's TraceContext: LogSummary is invoked on the
+    // worker main pthread (which carries a pinned WorkerMain;<uuid> traceID)
+    // and on SDK client threads (which carry request traceIDs). Without
+    // restore, the SetTraceNewID's CLEAR_TRACE_ID TraceGuard would leave the
+    // caller's thread with an empty traceID for the rest of its lifetime.
+    static const std::string metricsTraceID = "Metrics;" + GetStringUuid();
+    auto savedCtx = Trace::Instance().GetContext();
     for (const auto &summary : summaries) {
-        auto guard = Trace::Instance().SetTraceNewID(traceId);
+        auto guard = Trace::Instance().SetTraceNewID(metricsTraceID);
         LOG(INFO) << summary;
     }
+    auto restoreGuard = Trace::Instance().SetTraceContext(savedCtx);
+    (void)restoreGuard;
 }
 }  // namespace
 

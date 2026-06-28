@@ -128,6 +128,9 @@ public:
 
 protected:
     std::mt19937 randomDevice_;
+
+private:
+    static uint64_t RotateLeft64(uint64_t value, unsigned int bits);
 };
 
 class HRandomData {

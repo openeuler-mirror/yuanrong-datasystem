@@ -45,6 +45,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 
 constexpr uint32_t DEFAULT_CLIENT_LOG_ASYNC_QUEUE_SIZE = 1024;
@@ -283,6 +284,8 @@ void Logging::ShutdownLoggingWrapper()
     if (!IsLoggingInitialized()) {
         return;
     }
+
+    Trace::Instance().SetTraceNewID("Shutdown;" + GetStringUuid(), true);
 
     OperationLogger::Instance().Shutdown();
 
