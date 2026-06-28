@@ -42,6 +42,7 @@
 #include <google/protobuf/message.h>
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/utils/status.h"
@@ -269,19 +270,10 @@ public:
 
     ~BrpcClientReaderImpl() override
     {
-        if (streamId_ != brpc::INVALID_STREAM_ID) {
-            brpc::StreamClose(streamId_);
-            std::unique_lock<std::mutex> lk(readMtx_);
-            readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                [this] { return streamEnd_ || readError_; });
-            streamId_ = brpc::INVALID_STREAM_ID;
-        }
-        if (cntl_ && streamEnd_) {
-            cntl_.reset();
-        } else if (cntl_) {
-            // Stream still in-flight; leak controller to avoid UAF
-            (void)cntl_.release();
-        }
+        StreamCloseAndDrain(
+            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
+            cntl_,
+            "~BrpcClientReaderImpl");
     }
 
     // --- brpc::StreamInputHandler callbacks ---
@@ -311,6 +303,7 @@ public:
     void on_closed(brpc::StreamId id) override
     {
         (void)id;
+        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(readMtx_);
         streamEnd_ = true;
         readReady_ = true;
@@ -322,6 +315,7 @@ public:
         (void)id;
         (void)error_code;
         LOG(WARNING) << "BrpcClientReaderImpl stream failed: " << error_text;
+        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
@@ -363,19 +357,17 @@ public:
         if (cntl_->Failed()) {
             Status embedded = TryExtractStatusFromResponse(dummyResponse);
             if (embedded.IsError()) {
-                if (streamId_ != brpc::INVALID_STREAM_ID) {
-                    brpc::StreamClose(streamId_);
-                    streamId_ = brpc::INVALID_STREAM_ID;
-                }
-                cntl_.reset();
+                StreamCloseAndDrain(
+                    {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
+                    cntl_,
+                    "BrpcClientReaderImpl::Write (embedded error)");
                 return embedded;
             }
-            if (streamId_ != brpc::INVALID_STREAM_ID) {
-                brpc::StreamClose(streamId_);
-                streamId_ = brpc::INVALID_STREAM_ID;
-            }
             auto errText = cntl_->ErrorText();
-            cntl_.reset();
+            StreamCloseAndDrain(
+                {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
+                cntl_,
+                "BrpcClientReaderImpl::Write (errText)");
             RETURN_STATUS(TryExtractStatusFromControllerError(errText).GetCode(),
                           errText.c_str());
         }
@@ -435,20 +427,10 @@ public:
         if (finished_.exchange(true)) {
             return Status::OK();
         }
-        if (streamId_ != brpc::INVALID_STREAM_ID) {
-            brpc::StreamClose(streamId_);
-            std::unique_lock<std::mutex> lk(readMtx_);
-            bool closed = readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                [this] { return streamEnd_ || readError_; });
-            streamId_ = brpc::INVALID_STREAM_ID;
-            if (closed) {
-                if (cntl_) cntl_.reset();
-            } else if (cntl_) {
-                (void)cntl_.release();
-            }
-        } else if (cntl_) {
-            cntl_.reset();
-        }
+        StreamCloseAndDrain(
+            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
+            cntl_,
+            "BrpcClientReaderImpl::Finish");
         return Status::OK();
     }
 
@@ -482,6 +464,8 @@ private:
     bool readReady_;
     bool streamEnd_;
     bool readError_;
+    std::shared_ptr<std::atomic<bool>> closeNotifier_ =
+        std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace datasystem

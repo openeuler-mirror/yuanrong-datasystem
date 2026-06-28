@@ -185,15 +185,36 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "brpc_status_util",
+    hdrs = ["brpc_status_util.h"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
+ds_cc_library(
+    name = "brpc_stream_close_helper",
+    srcs = ["brpc_stream_close_helper.cpp"],
+    hdrs = ["brpc_stream_close_helper.h"],
+    deps = [
+        ":brpc_status_util",
+        "//src/datasystem/common/log:common_log",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
     name = "rpc_stub",
     hdrs = [
         "brpc_client_stream_impl.h",
-        "brpc_status_util.h",
         "client_writer_reader_base.h",
         "rpc_stub.h",
         "rpc_stub_base.h",
     ],
     deps = [
+        ":brpc_status_util",
+        ":brpc_stream_close_helper",
         ":rpc_message",
         ":rpc_options",
         "//src/datasystem/common/log:common_log",
@@ -228,10 +249,11 @@ ds_cc_library(
         "brpc_client_stream_impl.h",
         "brpc_client_stream_writer_reader.h",
         "brpc_client_unary_writer_reader.h",
-        "brpc_status_util.h",
         "rpc_unary_client_impl.h",
     ],
     deps = [
+        ":brpc_status_util",
+        ":brpc_stream_close_helper",
         "//src/datasystem/common/rpc/zmq:zmq_unary_client_impl",
         "@com_github_apache_brpc//:brpc",
         "@com_google_protobuf//:protobuf",

@@ -44,6 +44,7 @@
 #include <brpc/stream.h>
 #include <butil/iobuf.h>
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/client_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
@@ -78,30 +79,10 @@ public:
 
     ~BrpcClientStreamWriterReader() override
     {
-        if (streamId_ != brpc::INVALID_STREAM_ID) {
-            brpc::StreamClose(streamId_);
-            // StreamClose is async — brpc's ExecutionQueue may still have
-            // pending Stream::Consume calls on a bthread. Must wait for
-            // on_closed/on_failed to fire before destroying the Controller,
-            // otherwise Consume dereferences a dangling Controller → SIGSEGV.
-            // Timeout bounds the wait in case the peer is unresponsive.
-            std::unique_lock<std::mutex> lk(readMtx_);
-            bool closed = readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                [this] { return streamEnd_ || readError_; });
-            streamId_ = brpc::INVALID_STREAM_ID;
-            if (!closed) {
-                // Peer did not close within 5s. Resetting stream_cntl_ now could
-                // UAF (brpc IO bthread may still dereference Controller). Intentionally
-                // leak the Controller by releasing ownership; the memory is reachable
-                // but never freed. This trades a small leak for crash safety.
-                LOG(ERROR) << "BrpcClientStreamWriterReader destructor: stream close "
-                              "timed out after 5s; intentionally leaking stream_cntl_ "
-                              "to avoid UAF on in-flight brpc IO bthread";
-                (void)stream_cntl_.release();
-                return;
-            }
-        }
-        stream_cntl_.reset();
+        StreamCloseAndDrain(
+            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
+            stream_cntl_,
+            "~BrpcClientStreamWriterReader");
     }
 
     // --- StreamInputHandler callbacks (called by brpc IO threads) ---
@@ -131,6 +112,7 @@ public:
     void on_closed(brpc::StreamId id) override
     {
         (void)id;
+        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(readMtx_);
         streamEnd_ = true;
         readReady_ = true;
@@ -142,6 +124,7 @@ public:
         (void)id;
         (void)error_code;
         LOG(WARNING) << "BrpcClientStreamWriterReader stream failed: " << error_text;
+        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
@@ -184,31 +167,17 @@ public:
             // bthread execution queue, which would SIGSEGV on the unconnected state.
             Status embedded = TryExtractStatusFromResponse(dummyResponse);
             if (embedded.IsError()) {
-                if (streamId_ != brpc::INVALID_STREAM_ID) {
-                    brpc::StreamClose(streamId_);
-                    // StreamClose is async. Must wait for on_closed/on_failed before
-                    // resetting Controller, otherwise brpc IO bthread may still
-                    // dereference it via Stream::Consume → UAF.
-                    std::unique_lock<std::mutex> lk(readMtx_);
-                    readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                        [this] { return streamEnd_ || readError_; });
-                    streamId_ = brpc::INVALID_STREAM_ID;
-                }
-                stream_cntl_.reset();
+                StreamCloseAndDrain(
+                    {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
+                    stream_cntl_,
+                    "BrpcClientStreamWriterReader::Write (embedded error)");
                 return embedded;
             }
-            if (streamId_ != brpc::INVALID_STREAM_ID) {
-                brpc::StreamClose(streamId_);
-                // StreamClose is async. Must wait for on_closed/on_failed before
-                // resetting Controller, otherwise brpc IO bthread may still
-                // dereference it via Stream::Consume → UAF.
-                std::unique_lock<std::mutex> lk(readMtx_);
-                readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                    [this] { return streamEnd_ || readError_; });
-                streamId_ = brpc::INVALID_STREAM_ID;
-            }
             auto errText = stream_cntl_->ErrorText();
-            stream_cntl_.reset();
+            StreamCloseAndDrain(
+                {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
+                stream_cntl_,
+                "BrpcClientStreamWriterReader::Write (errText)");
             RETURN_STATUS(TryExtractStatusFromControllerError(errText).GetCode(),
                           errText.c_str());
         }
@@ -278,20 +247,10 @@ public:
         if (finished_.exchange(true)) {
             return Status::OK();
         }
-        if (streamId_ != brpc::INVALID_STREAM_ID) {
-            brpc::StreamClose(streamId_);
-            std::unique_lock<std::mutex> lk(readMtx_);
-            bool closed = readCond_.wait_for(lk, std::chrono::seconds(kStreamCloseTimeoutSec),
-                [this] { return streamEnd_ || readError_; });
-            streamId_ = brpc::INVALID_STREAM_ID;
-            if (closed) {
-                stream_cntl_.reset();
-            } else {
-                (void)stream_cntl_.release();
-            }
-        } else {
-            stream_cntl_.reset();
-        }
+        StreamCloseAndDrain(
+            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
+            stream_cntl_,
+            "BrpcClientStreamWriterReader::Finish");
         return Status::OK();
     }
 
@@ -311,6 +270,8 @@ private:
     bool readReady_;
     bool streamEnd_;
     bool readError_;
+    std::shared_ptr<std::atomic<bool>> closeNotifier_ =
+        std::make_shared<std::atomic<bool>>(false);
 };
 
 }  // namespace datasystem

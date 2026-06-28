@@ -57,6 +57,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
@@ -332,6 +333,12 @@ WorkerOCServer::~WorkerOCServer()
     streamCacheClientWorkerSvc_.reset();
     streamCacheMasterSvc_.reset();
     clusterManager_.reset();
+
+    // Drain deferred cleanup queue AFTER all adapters/services have been
+    // destroyed.  Adapter destructors may trigger streaming client cleanup
+    // (StreamCloseAndDrain → EnqueueDeferredCleanup), which would restart
+    // the reaper if Stop were called too early.
+    StopDeferredCleanupReaper();
     datasystem::memory::Allocator::Instance()->Shutdown();
 }
 
@@ -1185,6 +1192,14 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
     // The total number of clients
     instance.RegisterCollectHandler(ResMetricName::ACTIVE_CLIENT_COUNT,
                                     [] { return std::to_string(ClientManager::Instance().GetClientCount()); });
+
+    // brpc stream close intentional leak counter
+    instance.RegisterCollectHandler(ResMetricName::BRPC_STREAM_LEAK_COUNT,
+                                    [] { return std::to_string(GetBrpcStreamLeakCount()); });
+
+    // Deferred cleanup queue depth
+    instance.RegisterCollectHandler(ResMetricName::DEFERRED_CLEANUP_QUEUE_SIZE,
+                                    [] { return std::to_string(GetDeferredCleanupQueueSize()); });
 
     if (EnableOCService()) {
         // The total number of objects
