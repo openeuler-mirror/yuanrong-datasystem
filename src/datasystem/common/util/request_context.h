@@ -76,17 +76,18 @@ void SetRequestContext(RequestContext* ctx);
 RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line = __builtin_LINE());
 
 // RAII wrapper that creates a RequestContext on the stack, registers it via
-// SetRequestContext(), and clears the bthread_key on destruction before the
-// stack object is destroyed. This prevents dangling-pointer bugs when
-// handlers exit early (e.g. via RETURN_IF_NOT_OK).
+// SetRequestContext(), and restores the previous context on destruction.
+// Nested ScopedRequestContext is safe: the destructor restores the outer
+// context rather than clearing to nullptr.
 //
 // Usage in brpc handlers:
 //   ScopedRequestContext ctx;
 //   // ... handler logic, may return early ...
-//   // Destructor automatically calls SetRequestContext(nullptr).
+//   // Destructor automatically calls SetRequestContext(saved).
 class ScopedRequestContext {
 public:
     ScopedRequestContext()
+        : saved_(GetRequestContext())
     {
         // Snapshot the dispatcher's traceID, then re-set it onto ctx_.trace so LOG/access
         // records inside the handler scope keep emitting the inherited traceID.
@@ -97,7 +98,7 @@ public:
             (void)guard;
         }
     }
-    ~ScopedRequestContext() { SetRequestContext(nullptr); }
+    ~ScopedRequestContext() { SetRequestContext(saved_); }
 
     // Non-copyable, non-movable.
     ScopedRequestContext(const ScopedRequestContext&) = delete;
@@ -107,6 +108,7 @@ public:
 
 private:
     RequestContext ctx_;
+    RequestContext* saved_;
 };
 
 // Convenience: get worker TimeCost (always valid, never nullptr).
