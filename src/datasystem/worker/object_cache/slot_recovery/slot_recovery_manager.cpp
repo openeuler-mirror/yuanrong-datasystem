@@ -1260,7 +1260,11 @@ Status SlotRecoveryManager::EnqueueDeferredMetaRetry(const std::string &incident
         }
     }
     if (shouldScheduleDrainer && deferredMetaRetryThreadPool_ != nullptr) {
-        deferredMetaRetryThreadPool_->Execute([this]() { DrainDeferredMetaRetryQueue(); });
+        auto drainTraceID = Trace::Instance().GetTraceID();
+        deferredMetaRetryThreadPool_->Execute([this, drainTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
+            DrainDeferredMetaRetryQueue();
+        });
     }
     LOG(WARNING) << FormatString(
         "action=execute_recovery_task_defer_meta_retry local_worker=%s task={%s} status=%s "

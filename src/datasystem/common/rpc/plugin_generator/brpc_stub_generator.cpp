@@ -76,6 +76,7 @@ void RpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
         "#include \"datasystem/common/rpc/brpc_client_stream_writer_reader.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_stream_impl.h\"\n"
         "#include \"datasystem/common/rpc/brpc_status_util.h\"\n"
+        "#include \"datasystem/common/rpc/trace_attachment.h\"\n"
         "#include \"datasystem/common/rpc/rpc_message.h\"\n"
         "#include \"datasystem/common/rpc/rpc_options.h\"\n"
         "#include \"datasystem/common/rpc/rpc_stub_base.h\"\n"
@@ -366,6 +367,7 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         "    if (overrideMs > 0) {\n"
         "        cntl.set_timeout_ms(overrideMs);\n"
         "    }\n";
+    impl += BuildTraceIDAttachSnippet();
     if (HasPayloadSendOption(method)) {
         impl += BuildSendPayloadFramingSnippet();
     }
@@ -388,6 +390,14 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         "    return ::datasystem::Status::OK();\n"
         "}\n";
     printer.Print(vars, impl.c_str());
+}
+
+std::string RpcGenerator::BuildTraceIDAttachSnippet()
+{
+    // Attach per-request traceID for end-to-end propagation.
+    // AttachTraceIDToAttachment() is defined in trace_attachment.h.
+    return
+        "    ::datasystem::AttachTraceIDToAttachment(cntl.request_attachment());\n";
 }
 
 std::string RpcGenerator::BuildSendPayloadFramingSnippet()
@@ -539,7 +549,9 @@ std::string RpcGenerator::BuildAsyncWriteImpl(const google::protobuf::MethodDesc
         "    auto overrideMs = opt.GetTimeout();\n"
         "    if (overrideMs > 0) {\n"
         "        call->cntl.set_timeout_ms(overrideMs);\n"
-        "    }\n";
+        "    }\n"
+        "    // Attach per-request traceID for end-to-end propagation\n"
+        "    ::datasystem::AttachTraceIDToAttachment(call->cntl.request_attachment());\n";
     if (HasPayloadSendOption(method)) {
         impl +=
             "    // Framed payload in request attachment (same wire format as sync path)\n"

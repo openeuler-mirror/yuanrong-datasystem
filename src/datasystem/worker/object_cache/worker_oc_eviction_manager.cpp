@@ -739,7 +739,11 @@ Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTa
     }
     if (!primaryEndLifeDrainRunning_) {
         try {
-            primaryEndLifeThreadPool_->Execute(&WorkerOcEvictionManager::DrainPrimaryEndLifeTasks, this);
+            auto drainTraceID = Trace::Instance().GetTraceID();
+            primaryEndLifeThreadPool_->Execute([this, drainTraceID]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
+                DrainPrimaryEndLifeTasks();
+            });
             primaryEndLifeDrainRunning_ = true;
         } catch (const std::exception &e) {
             primaryEndLifeQueue_.pop_back();
@@ -1231,7 +1235,11 @@ void WorkerOcEvictionManager::TryEvictSpilledObjects(uint64_t objectSize)
         return;
     }
     if (spillEvictTaskThreadPool_->GetRunningTasksNum() == 0) {
-        spillEvictTaskThreadPool_->Execute(&WorkerOcEvictionManager::EvictSpilledObjects, this, objectSize);
+        auto spillTraceID = Trace::Instance().GetTraceID();
+        spillEvictTaskThreadPool_->Execute([this, objectSize, spillTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(spillTraceID);
+            EvictSpilledObjects(objectSize);
+        });
     } else {
         LOG(INFO) << "Spill evict task running...";
     }

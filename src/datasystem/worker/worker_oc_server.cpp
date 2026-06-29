@@ -39,6 +39,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/gflag/dynamic_config_updater.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/slot_client/slot_file_util.h"
@@ -1529,7 +1530,13 @@ Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
         warmupThreadPoolForSubmit = masterRpcWarmupThreadPool_;
     }
     try {
-        (void)warmupThreadPoolForSubmit->Submit([this]() { WarmupReadyWorkerMasterRpcOnStartup(); });
+        auto warmupTraceID = Trace::Instance().GetTraceID();
+        (void)warmupThreadPoolForSubmit->Submit([this, warmupTraceID]() {
+            TraceGuard traceGuard = warmupTraceID.empty()
+                ? Trace::Instance().SetTraceUUID()
+                : Trace::Instance().SetTraceNewID(warmupTraceID, true);
+            WarmupReadyWorkerMasterRpcOnStartup();
+        });
     } catch (const std::exception &e) {
         LOG(WARNING) << "[MASTER_RPC_WARMUP] submit startup warmup failed, error=" << e.what();
     }

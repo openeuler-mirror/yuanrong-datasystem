@@ -49,6 +49,7 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/trace_attachment.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -158,6 +159,7 @@ public:
                 "brpc::StreamCreate failed");
         }
 
+        AttachTraceIDToAttachment(stream_cntl_->request_attachment());
         // Send the RPC with the request protobuf in the body.
         R dummyResponse;
         channel_->CallMethod(method_, stream_cntl_.get(), &pb, &dummyResponse, nullptr);

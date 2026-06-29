@@ -22,6 +22,7 @@
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -116,8 +117,12 @@ Status SCNotifyWorkerManager::ProcessAsyncNotify()
         std::vector<std::future<Status>> futures;
         for (auto &streamList : parts) {
             if (!streamList.empty()) {
-                futures.emplace_back(
-                    notifyThreadPool_->Submit([this, &streamList] { return SendPendingNotification(streamList); }));
+                auto notifyTraceID = Trace::Instance().GetTraceID();
+                futures.emplace_back(notifyThreadPool_->Submit(
+                    [this, &streamList, notifyTraceID] {
+                        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(notifyTraceID);
+                        return SendPendingNotification(streamList);
+                    }));
             }
         }
 
@@ -160,7 +165,12 @@ Status SCNotifyWorkerManager::ProcessDeleteStreams()
         std::vector<std::future<Status>> futures;
         for (auto &streams : parts) {
             if (!streams.empty()) {
-                futures.emplace_back(deleteThreadPool_->Submit([this, &streams] { return DeleteStreams(streams); }));
+                auto delTraceID = Trace::Instance().GetTraceID();
+                futures.emplace_back(deleteThreadPool_->Submit(
+                    [this, &streams, delTraceID] {
+                        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(delTraceID);
+                        return DeleteStreams(streams);
+                    }));
             }
         }
         for (auto &fut : futures) {

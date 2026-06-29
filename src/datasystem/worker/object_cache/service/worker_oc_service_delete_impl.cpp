@@ -118,7 +118,11 @@ Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenc
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                              "DeletePersistenceObject rpc timeout before scheduling task");
-    auto future = persistenceDeleteThreadPool_->Submit([this, req]() { return DeletePersistenceObjectImpl(req); });
+    auto traceID = Trace::Instance().GetTraceID();
+    auto future = persistenceDeleteThreadPool_->Submit([this, req, traceID]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        return DeletePersistenceObjectImpl(req);
+    });
     if (future.wait_for(std::chrono::milliseconds(remainingTimeMs)) != std::future_status::ready) {
         auto usage = persistenceDeleteThreadPool_->GetThreadPoolUsage();
         RETURN_STATUS_LOG_ERROR(StatusCode::K_RPC_DEADLINE_EXCEEDED,
