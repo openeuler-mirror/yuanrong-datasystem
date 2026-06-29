@@ -26,6 +26,7 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DECLARE_uint32(node_dead_timeout_s);
 
@@ -33,6 +34,7 @@ namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 static constexpr int MAX_MIGRATE_CNT_PER_STREAM = 30;
+static const std::string SC_MIGRATE_METADATA_MANAGER = "SCMigrateMetadataManager";
 MasterMasterSCApi::MasterMasterSCApi(const HostPort &hostPort, const HostPort &localHostPort,
                                      std::shared_ptr<AkSkManager> akSkManager)
     : destHostPort_(hostPort), localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
@@ -70,11 +72,18 @@ Status SCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
     metadataManagerHolder_ = metadataManagerHolder;
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
-        "SCMigrateMetadataManager",
+        SC_MIGRATE_METADATA_MANAGER,
         [this](const std::string &dbName, const std::string &dest, const std::string &destDbName,
                const worker::HashRange &ranges, bool isNetworkRecovery) {
             return MigrateByRanges(dbName, dest, destDbName, ranges, isNetworkRecovery);
         });
+    auto migrateByTask = [this](const TransferTask &task) {
+        return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
+    };
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::MIGRATE_SCALE_UP_METADATA, SC_MIGRATE_METADATA_MANAGER, migrateByTask);
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, SC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -87,7 +96,11 @@ SCMigrateMetadataManager::~SCMigrateMetadataManager()
 void SCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber("SCMigrateMetadataManager");
+    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(SC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::MIGRATE_SCALE_UP_METADATA, SC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, SC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 

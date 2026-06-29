@@ -167,6 +167,7 @@ ds_cc_library(
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
         "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/hash_ring",
+        "//src/datasystem/common/task_action",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
         "@tbb",
     ],
@@ -181,6 +182,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/master:metadata_manager_holder",
+        "//src/datasystem/common/task_action",
         "@tbb",
     ],
 )

@@ -492,6 +492,16 @@ private:
     Status InitMetadataManagerHolder();
 
     /**
+     * @brief Register task actions owned by WorkerOCServer for future task executors.
+     */
+    void RegisterTaskActions();
+
+    /**
+     * @brief Remove task actions owned by WorkerOCServer.
+     */
+    void UnregisterTaskActions();
+
+    /**
      * @brief Check sc_encrypt_secret_key.
      * @return Status of this call.
      */

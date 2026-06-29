@@ -32,6 +32,7 @@ set(DS_UT_DEPEND_LIBS
         worker_object_cache
         worker_hash_ring
         topology
+        common_task_action
         worker_client_manager
         datasystem_worker_static
         )

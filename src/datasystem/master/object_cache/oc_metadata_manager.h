@@ -253,6 +253,11 @@ public:
      */
     void InitSubscribeEvent();
 
+    /**
+     * @brief Register task action subscribers with the shared TaskActionRegistry.
+     */
+    void RegisterTaskActions();
+
     struct BinaryFormatParamsStruct {
         uint32_t writeMode;
         uint32_t dataFormat;

@@ -18,6 +18,7 @@ set(MASTER_SC_DEPEND_LIBS
         master_stream_cache_store
         master_stream_protos
         cluster_manager
+        common_task_action
         )
 
 add_library(master_stream_cache STATIC ${MASTER_SC_SRCS})

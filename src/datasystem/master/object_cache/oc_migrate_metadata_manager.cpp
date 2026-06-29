@@ -34,11 +34,13 @@
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 
 namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 constexpr uint32_t OBJECT_BATCH = 300;  // Comparison test: The performance is optimal when the batch number is 300.
+static const std::string OC_MIGRATE_METADATA_MANAGER = "OCMigrateMetadataManager";
 OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 {
     static OCMigrateMetadataManager instance;
@@ -55,11 +57,18 @@ Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
-        "OCMigrateMetadataManager",
+        OC_MIGRATE_METADATA_MANAGER,
         [this](const std::string &dbName, const std::string &dest, const std::string &destDbName,
                const worker::HashRange &ranges, bool isNetworkRecovery) {
             return MigrateByRanges(dbName, dest, destDbName, ranges, isNetworkRecovery);
         });
+    auto migrateByTask = [this](const TransferTask &task) {
+        return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
+    };
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::MIGRATE_SCALE_UP_METADATA, OC_MIGRATE_METADATA_MANAGER, migrateByTask);
+    TaskActionRegistry::GetInstance().AddSubscriber(
+        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, OC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -72,7 +81,11 @@ OCMigrateMetadataManager::~OCMigrateMetadataManager()
 void OCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber("OCMigrateMetadataManager");
+    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(OC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::MIGRATE_SCALE_UP_METADATA, OC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, OC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 

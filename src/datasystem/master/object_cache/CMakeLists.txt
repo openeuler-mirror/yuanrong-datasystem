@@ -36,6 +36,7 @@ set(MASTER_OC_DEPEND_LIBS
         master_object_protos
         worker_object_protos
         cluster_manager
+        common_task_action
         )
 
 add_library(master_object_cache STATIC ${MASTER_OC_SRCS})

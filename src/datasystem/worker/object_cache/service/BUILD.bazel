@@ -323,6 +323,7 @@ ds_cc_library(
         "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/hash_ring:hash_ring_allocator",
         "//src/datasystem/worker/hash_ring:hash_ring_event",
+        "//src/datasystem/common/task_action",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",

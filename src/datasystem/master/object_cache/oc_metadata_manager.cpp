@@ -71,6 +71,7 @@
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DEFINE_string(rocksdb_store_dir, "~/datasystem/rocksdb",
                  "The path of persistent gcs meta data and must "
@@ -226,6 +227,31 @@ void OCMetadataManager::InitSubscribeEvent()
         eventName_, [this](const std::vector<std::string> removeNodes) {
             return ClearDevClientMetaForScaledInWorker(removeNodes);
         });
+    RegisterTaskActions();
+}
+
+void OCMetadataManager::RegisterTaskActions()
+{
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_,
+                                                    [this](const TransferTask &task) {
+                                                        return RecoverDataOfFaultyWorker(task.placementScope.ranges);
+                                                    });
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::RECOVER_PASSIVE_ASYNC_TASK, eventName_,
+                                                    [this](const TransferTask &task) {
+                                                        return RecoverAsyncTask(task.placementScope.ranges);
+                                                    });
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::RECOVER_VOLUNTARY_ASYNC_TASK, eventName_,
+                                                    [this](const TransferTask &task) {
+                                                        return RecoverAsyncTask(task.placementScope.ranges);
+                                                    });
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::CLEANUP_PASSIVE_RESIDUAL_METADATA, eventName_,
+                                                    [this](const TransferTask &task) {
+                                                        return ProcessWorkerTimeout(task.failedWorkerAddr, false, true);
+                                                    });
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::CLEANUP_DEVICE_CLIENT_META, eventName_,
+                                                    [this](const TransferTask &task) {
+                                                        return ClearDevClientMetaForScaledInWorker(task.removedWorkers);
+                                                    });
 }
 
 OCMetadataManager::~OCMetadataManager()
@@ -251,6 +277,16 @@ void OCMetadataManager::Shutdown()
     HashRingEvent::RecoverAsyncTaskRanges::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::ClearDataWithoutMeta::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::ClearDevClientMetaForScaledInWorker::GetInstance().RemoveSubscriber(eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::RECOVER_PASSIVE_ASYNC_TASK, eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::RECOVER_VOLUNTARY_ASYNC_TASK, eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::CLEANUP_PASSIVE_RESIDUAL_METADATA, eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(
+        TransferTaskType::CLEANUP_DEVICE_CLIENT_META, eventName_);
 
     asyncPool_.reset();
     if (monitor_ != nullptr && monitor_->joinable()) {

@@ -87,6 +87,7 @@
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
+#include "datasystem/common/task_action/task_action_registry.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/rebalance_executor.h"
 
@@ -280,12 +281,13 @@ static bool ValidateEtcdOrMetastoreAddress()
 
 WorkerOCServer::~WorkerOCServer()
 {
+    UnregisterTaskActions();
+    HashRingEvent::DataMigrationReady::GetInstance().RemoveSubscriber(WORKER_OC_SERVER);
     StopConnectionWarmup();
     StopWorkerMasterRpcWarmup();
     if (metadataManagerHolder_ != nullptr) {
         metadataManagerHolder_->Shutdown();
     }
-    HashRingEvent::DataMigrationReady::GetInstance().RemoveSubscriber(WORKER_OC_SERVER);
     checkThreadRunning_ = false;
     if (checkAsyncTasksThread_ != nullptr) {
         checkAsyncTasksThread_->join();
@@ -1126,6 +1128,7 @@ Status WorkerOCServer::Init()
     HashRingEvent::DataMigrationReady::GetInstance().AddSubscriber(WORKER_OC_SERVER, [this]() {
         return IsClientsExist() || IsAsyncTasksRunning() ? Status(K_NOT_READY, "Not Ready") : Status::OK();
     });
+    RegisterTaskActions();
     LOG(INFO) << "Worker init success.";
 
     return Status::OK();
@@ -1160,6 +1163,35 @@ Status WorkerOCServer::InitMetadataManagerHolder()
     param.isOcEnabled = EnableOCService();
     param.isScEnabled = EnableSCService();
     return metadataManagerHolder_->Init(param);
+}
+
+void WorkerOCServer::RegisterTaskActions()
+{
+    auto &registry = TaskActionRegistry::GetInstance();
+    registry.AddSubscriber(
+        TransferTaskType::CHECK_VOLUNTARY_READY, WORKER_OC_SERVER, [this](const TransferTask &) {
+            return IsClientsExist() || IsAsyncTasksRunning() ? Status(K_NOT_READY, "Not Ready") : Status::OK();
+        });
+    registry.AddSubscriber(
+        TransferTaskType::MIGRATE_VOLUNTARY_DATA, WORKER_OC_SERVER, [this](const TransferTask &task) {
+            CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
+                                     "Worker object-cache service is not initialized.");
+            return objCacheClientWorkerSvc_->ProcessVoluntaryScaledown(task.taskId);
+        });
+    registry.AddSubscriber(
+        TransferTaskType::CLEANUP_VOLUNTARY_SOURCE, WORKER_OC_SERVER, [this](const TransferTask &) {
+            CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
+                                     "Worker object-cache service is not initialized.");
+            return objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation();
+        });
+}
+
+void WorkerOCServer::UnregisterTaskActions()
+{
+    auto &registry = TaskActionRegistry::GetInstance();
+    registry.RemoveSubscriber(TransferTaskType::CHECK_VOLUNTARY_READY, WORKER_OC_SERVER);
+    registry.RemoveSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_DATA, WORKER_OC_SERVER);
+    registry.RemoveSubscriber(TransferTaskType::CLEANUP_VOLUNTARY_SOURCE, WORKER_OC_SERVER);
 }
 
 void WorkerOCServer::RegisteringAllResourceCollectionCallbackFunc()

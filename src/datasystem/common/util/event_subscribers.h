@@ -21,10 +21,13 @@
 #define DATASYSTEM_COMMON_UTIL_EVENT_SUBSCRIBERS_H
 
 #include <shared_mutex>
+#include <sstream>
 #include <string>
+#include <type_traits>
 #include <list>
 #include <algorithm>
 #include <mutex>
+#include <utility>
 
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
