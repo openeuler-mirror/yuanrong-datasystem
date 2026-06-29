@@ -62,7 +62,7 @@ struct ClusterInfo {
     std::vector<std::pair<std::string, std::string>> localHashRing;  // <azName, hashRingPb>
     std::vector<std::pair<std::string, std::string>> workers;        // <addr, nodeMsg>
     int64_t revision = -1;
-    bool etcdAvailable = true;
+    bool coordinatorAvailable = true;
 
     std::string ToString();
 };
@@ -114,6 +114,15 @@ public:
      * @return Status of the call
      */
     Status Init(const ClusterInfo &clusterInfo);
+
+    /**
+     * @brief Enqueue an external cluster store event for the cluster manager background thread.
+     * @param[in] event The event to enqueue.
+     */
+    void EnqueueExternalEvent(topology::CoordinationEvent &&event)
+    {
+        EnqueEvent(std::move(event));
+    }
 
     /**
      * @brief Shuts down the cluster manager. It is best to call this explicitly rather than rely on destructor codepath
@@ -419,9 +428,9 @@ public:
         return isEtcdAvailableWhenStart_;
     }
 
-    bool IsCreateFirstLease()
+    bool IsFirstKeepAliveSent()
     {
-        return clusterStore_->IsCreateFirstLease();
+        return clusterStore_->IsFirstKeepAliveSent();
     }
 
     /**
@@ -842,7 +851,7 @@ protected:
      * @brief Query etcd status from other nodes when a network failure occurs between this node and etcd.
      * @return true if any other node indicates that etcd is writable.
      */
-    bool CheckEtcdStateWhenNetworkFailed();
+    bool CheckCoordinatorStateWhenNetworkFailed();
 
     /**
      * @brief Process if node state is changed to fail.

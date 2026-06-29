@@ -112,6 +112,7 @@ set(RPC_STUB_CACHE_MGR_SRCS
 )
 
 set(RPC_STUB_CACHE_MGR_DEPENDS_LIBS
+        coordinator_protos
         master_object_protos
         worker_object_protos
         master_stream_protos

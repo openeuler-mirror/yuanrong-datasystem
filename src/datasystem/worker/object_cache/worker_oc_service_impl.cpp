@@ -86,6 +86,7 @@
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
@@ -184,13 +185,15 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                          std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<AkSkManager> manager,
                                          std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                          std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                                         MasterOCServiceImpl *masterOCService)
+                                         MasterOCServiceImpl *masterOCService,
+                                         topology::ICoordinationBackend *coordinationBackend)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
       persistenceApi_(persistApi),
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
       etcdStore_(etcdStore),
+      coordinationBackend_(coordinationBackend),
       akSkManager_(std::move(manager))
 {
     initOkFuture_ = initOk_.get_future();
@@ -1062,7 +1065,7 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         RETURN_IF_NOT_OK(CheckWaitNodeTableComplete());
         if (req.is_restart()) {
             LOG(INFO) << "Restart finish. Set health file.";
-            if (!clusterManager_->IsCreateFirstLease() && clusterManager_->IsEtcdAvailableWhenStart()) {
+            if (!clusterManager_->IsFirstKeepAliveSent() && clusterManager_->IsEtcdAvailableWhenStart()) {
                 RETURN_STATUS(K_NOT_READY,
                               "Setting the health file is not allowed before the first lease is successfully created");
             }
@@ -1071,7 +1074,8 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         }
         if (clusterManager_->CheckLocalNodeIsExiting()) {
             INJECT_POINT("recover.toexiting.delay");
-            RETURN_IF_NOT_OK(etcdStore_->UpdateNodeState(ETCD_NODE_EXITING));
+            CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
+            RETURN_IF_NOT_OK(coordinationBackend_->UpdateNodeState(ETCD_NODE_EXITING));
         } else {
             RETURN_IF_NOT_OK(clusterManager_->InformEtcdReconciliationDone());
         }
@@ -1082,7 +1086,7 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         if (!setHealthFile_.load() && expectedReconNum == numRecon_) {
             setHealthFile_.store(true);
             RETURN_IF_NOT_OK(SetHealthProbe());
-            RETURN_IF_NOT_OK(etcdStore_->UpdateNodeState(ETCD_NODE_READY));
+            RETURN_IF_NOT_OK(UpdateLocalNodeReady());
         }
         return Status::OK();
     });
@@ -1846,7 +1850,7 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
         setHealthFile_.store(true);
         RETURN_IF_NOT_OK(SetHealthProbe());
         if (clusterManager_->IsEtcdAvailableWhenStart()) {
-            RETURN_IF_NOT_OK(etcdStore_->UpdateNodeState(ETCD_NODE_READY));
+            RETURN_IF_NOT_OK(UpdateLocalNodeReady());
         }
     } else {
         LOG(INFO) << "Local node restarted. Need reconciliation.";
@@ -1962,8 +1966,14 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
 
     setHealthFile_.store(true);
     RETURN_IF_NOT_OK(SetHealthProbe());
-    RETURN_IF_NOT_OK(etcdStore_->UpdateNodeState(ETCD_NODE_READY));
+    RETURN_IF_NOT_OK(UpdateLocalNodeReady());
     return Status::OK();
+}
+
+Status WorkerOCServiceImpl::UpdateLocalNodeReady()
+{
+    CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
+    return coordinationBackend_->UpdateNodeState(ETCD_NODE_READY);
 }
 
 Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason,
@@ -1981,11 +1991,10 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
         finishReason = FormatString("waiting for reconciliation, expected: %d", hashWorkerNum);
         return Status::OK();
     }
-    if (!etcdStore_->IsCreateFirstLease()) {
-        finishReason = "first lease is not created";
+    if (coordinationBackend_ != nullptr && !coordinationBackend_->IsFirstKeepAliveSent()) {
+        finishReason = "first keepalive is not sent";
         return Status::OK();
     }
-
     shouldSetReady = true;
     if (numRecon_ < hashWorkerNum) {
         finishReason = FormatString("give up waiting, expected: %d", hashWorkerNum);

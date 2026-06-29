@@ -33,6 +33,7 @@
 
 #include "ut/common.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
+#include "datasystem/coordinator/coordinator_service_impl.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
 #include "datasystem/common/coordinator/ttl_manager.h"
@@ -216,6 +217,32 @@ protected:
     std::shared_ptr<TtlManager> ttlManager_;
     std::unique_ptr<CoordinatorStore> store_;
 };
+
+TEST_F(CoordinatorStoreTest, CoordinatorServiceForwardsStoreOperationsAndMarksLeader)
+{
+    auto store = std::shared_ptr<CoordinatorStore>(store_.release());
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18480), store);
+
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/svc/key");
+    putReq.set_value("value");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+    ASSERT_TRUE(putRsp.header().is_leader());
+    ASSERT_TRUE(putRsp.header().leader_address().empty());
+    ASSERT_EQ(putRsp.version(), 1);
+    ASSERT_GT(putRsp.revision(), 0);
+
+    coordinator::RangeReqPb rangeReq;
+    rangeReq.set_key("/svc/key");
+    coordinator::RangeRspPb rangeRsp;
+    DS_ASSERT_OK(service.Range(rangeReq, rangeRsp));
+    ASSERT_TRUE(rangeRsp.header().is_leader());
+    ASSERT_EQ(rangeRsp.kvs_size(), 1);
+    ASSERT_EQ(rangeRsp.kvs(0).key(), "/svc/key");
+    ASSERT_EQ(rangeRsp.kvs(0).value(), "value");
+    ASSERT_EQ(rangeRsp.kvs(0).version(), putRsp.version());
+}
 
 TEST_F(CoordinatorStoreTest, MemoryKvStoreSupportsPutRangeCasAndDelete)
 {

@@ -7,6 +7,7 @@ ds_cc_test(
     srcs = ["coordinator_store_test.cpp"],
     deps = [
         "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/coordinator:coordinator_service_impl",
         "//tests/ut:ut_common",
     ],
 )

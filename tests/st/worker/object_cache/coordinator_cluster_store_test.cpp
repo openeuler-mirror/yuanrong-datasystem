@@ -138,36 +138,42 @@ public:
     }
 
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-               int64_t &version, int64_t &revision) override
+               int64_t &version, int64_t &revision, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->Put(key, value, ttlMs, expectedVersion, version, revision);
     }
 
     Status Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
-                 int64_t &revision) override
+                 int64_t &revision, int32_t timeoutMs) override
     {
+        lastRangeTimeoutMs_ = timeoutMs;
         return coordinatorStore_->Range(key, rangeEnd, kvs, revision);
     }
 
-    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                       int64_t &revision) override
+    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
+                       int32_t timeoutMs) override
     {
+        lastDeleteRangeTimeoutMs_ = timeoutMs;
         return coordinatorStore_->DeleteRange(key, rangeEnd, deleted, revision);
     }
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs) override
+                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->WatchRange(key, rangeEnd, watcherAddr, watchId, initialKvs);
     }
 
-    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds) override
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->CancelWatch(watcherAddr, watchIds);
     }
 
-    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs) override
+    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->KeepAlive(key, ttlMs, remainingTtlMs);
     }
 
@@ -185,12 +191,24 @@ public:
         watchDispatcher_->RegisterWatcherHandler(watcherAddr, std::move(handler));
     }
 
+    int32_t LastRangeTimeoutMs() const
+    {
+        return lastRangeTimeoutMs_;
+    }
+
+    int32_t LastDeleteRangeTimeoutMs() const
+    {
+        return lastDeleteRangeTimeoutMs_;
+    }
+
 private:
     std::shared_ptr<MemoryKvStore> memKvStore_;
     std::shared_ptr<WatchRegistry> watchRegistry_;
     std::shared_ptr<LocalWatchDispatcher> watchDispatcher_;
     std::shared_ptr<TtlManager> ttlManager_;
     std::unique_ptr<CoordinatorStore> coordinatorStore_;
+    int32_t lastRangeTimeoutMs_ = 0;
+    int32_t lastDeleteRangeTimeoutMs_ = 0;
 };
 }  // namespace
 
@@ -253,6 +271,26 @@ TEST_F(CoordinatorClusterStoreTest, KeepAliveLocalNetworkFailureTriggersKillFall
     ASSERT_GT(inject::GetExecuteCount("CoordinationBackend.KeepAlive.kill"), 0U);
 }
 
+TEST_F(CoordinatorClusterStoreTest, PropagatesTimeoutToCoordinatorProxy)
+{
+    topology::CoordinationBackend store(coordinatorProxy_.get(), "127.0.0.1:0");
+    const std::string workerAddr = "127.0.0.1:301";
+    int64_t version = 0;
+    int64_t revision = 0;
+    constexpr int32_t getTimeoutMs = 1234;
+    constexpr int32_t deleteTimeoutMs = 2345;
+
+    DS_ASSERT_OK(coordinatorProxy_->Put("/" + std::string(CLUSTER_TABLE) + "/" + workerAddr, "1;start", 0,
+                                        COORDINATOR_NO_VERSION_CHECK, version, revision,
+                                        DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
+    RangeSearchResult res;
+    DS_ASSERT_OK(store.Get(CLUSTER_TABLE, workerAddr, res, getTimeoutMs));
+    ASSERT_EQ(coordinatorProxy_->LastRangeTimeoutMs(), getTimeoutMs);
+
+    DS_ASSERT_OK(store.Delete(CLUSTER_TABLE, workerAddr, deleteTimeoutMs));
+    ASSERT_EQ(coordinatorProxy_->LastDeleteRangeTimeoutMs(), deleteTimeoutMs);
+}
+
 TEST_F(CoordinatorClusterStoreTest, DestructorCancelsOwnedWatches)
 {
     const std::string watcherAddr = "127.0.0.1:30000";
@@ -275,7 +313,8 @@ TEST_F(CoordinatorClusterStoreTest, DestructorCancelsOwnedWatches)
     int64_t version = 0;
     int64_t revision = 0;
     DS_ASSERT_OK(coordinatorProxy_->Put(std::string(CLUSTER_TABLE) + "/127.0.0.1:301", "1;start", 0,
-                                        COORDINATOR_NO_VERSION_CHECK, version, revision));
+                                        COORDINATOR_NO_VERSION_CHECK, version, revision,
+                                        DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
 
     std::unique_lock<std::mutex> lock(mutex);
     ASSERT_FALSE(cv.wait_for(lock, std::chrono::milliseconds(NO_EVENT_WAIT_MS), [&]() { return eventCount > 0; }));

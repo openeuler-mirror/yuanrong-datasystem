@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "datasystem/protos/coordinator.service.rpc.pb.h"
+#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace coordinator {
@@ -31,9 +32,22 @@ public:
     explicit CoordinatorWatchServiceImpl(HostPort localAddress) : CoordinatorWatchService(std::move(localAddress))
     {
     }
+
+    CoordinatorWatchServiceImpl(HostPort localAddress, ClusterManager *clusterManager)
+        : CoordinatorWatchService(std::move(localAddress)), clusterManager_(clusterManager)
+    {
+    }
     ~CoordinatorWatchServiceImpl() override = default;
 
+    void SetClusterManager(ClusterManager *clusterManager)
+    {
+        clusterManager_ = clusterManager;
+    }
+
     Status HandleEvent(const EventReqPb &req, EventRspPb &rsp) override;
+
+private:
+    ClusterManager *clusterManager_ = nullptr;
 };
 }  // namespace coordinator
 }  // namespace datasystem

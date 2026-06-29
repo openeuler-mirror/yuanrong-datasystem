@@ -51,8 +51,9 @@ enum ClusterNodeType {
     ALL = 0,     // Operate all nodes.
     MASTER = 1,  // Operate all master nodes.
     WORKER = 3,  // Operate all worker nodes.
-    ETCD = 4,    // Operate all etcd nodes.
-    OBS = 5
+    ETCD = 4,         // Operate all etcd nodes.
+    OBS = 5,
+    COORDINATOR = 6  // Operate all coordinator nodes.
 };
 
 constexpr int DEFAULT_SLEEP_FOR_TIME = 500;
@@ -69,6 +70,7 @@ struct BaseClusterOptions {
           numScRegularSocket(DEFAULT_THREAD_NUM),
           numScStreamSocket(DEFAULT_THREAD_NUM),
           numEtcd(0),
+          numCoordinators(0),
           numOBS(0)
     {
     }
@@ -125,6 +127,10 @@ struct BaseClusterOptions {
     std::vector<int> workerScDirectPorts;
 
     uint32_t numEtcd;
+
+    uint32_t numCoordinators;
+
+    std::vector<HostPort> coordinatorConfigs;
 
     // One etcd node requires two ports.
     std::vector<std::pair<HostPort, HostPort>> etcdIpAddrs;
@@ -241,6 +247,7 @@ public:
     {
         DCHECK(!isRunning_);
         RETURN_IF_NOT_OK(StartEtcdCluster());
+        RETURN_IF_NOT_OK(StartCoordinatorCluster());
         RETURN_IF_NOT_OK(StartOBS());
         RETURN_IF_NOT_OK(StartWorkers());
         RETURN_IF_NOT_OK(WaitUntilClusterReadyOrTimeout(timeoutSecs));
@@ -463,6 +470,12 @@ public:
      * @return Status::OK() if success.
      */
     virtual Status StartEtcdCluster() = 0;
+
+    /**
+     * @brief Start coordinator cluster, called in Start method.
+     * @return Status::OK() if success.
+     */
+    virtual Status StartCoordinatorCluster() = 0;
 
     /**
      * @brief Start mock obs service, called in Start method.

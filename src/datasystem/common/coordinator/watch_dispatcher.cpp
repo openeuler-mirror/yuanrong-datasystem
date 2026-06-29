@@ -62,6 +62,7 @@ void WatchDispatcher::Enqueue(std::shared_ptr<WatchEvent> event)
         std::unique_lock<std::mutex> lock(pendingMutex_);
         pendingFullCv_.wait(lock, [this] { return pendingQueue_.size() < MAX_PENDING_EVENTS; });
         wasEmpty = pendingQueue_.empty();
+        VLOG(1) << "Enqueue event, revision: " << event->revision;
         pendingQueue_.push_back(std::move(event));
     }
     if (wasEmpty) {
@@ -197,6 +198,8 @@ void WatchDispatcher::FanOutLoop()
                         continue;
                     }
                     if (channel->queue.size() < channel->backpressureLimit) {
+                        VLOG(1) << "Enqueue event to channel, watchId: " << channel->watchId
+                                << ", watcherAddr:" << channel->watcherAddr << ", revision: " << event->revision;
                         channel->queue.push_back(event);
                     } else {
                         auto rewatchEvent = MakeRewatchEvent(event);
@@ -301,6 +304,8 @@ bool WatchDispatcher::PrepareChannelEvents(const std::shared_ptr<WatcherChannel>
     auto count = std::min(MAX_EVENTS_PER_NOTIFY, channel->queue.size());
     auto end = std::next(channel->queue.begin(), static_cast<long>(count));
     for (auto it = channel->queue.begin(); it != end; ++it) {
+        VLOG(1) << "PrepareChannelEvents, event revision: " << (*it)->revision << " watchId: " << channel->watchId
+                << ", watcherAddr: " << channel->watcherAddr;
         events.push_back(*it);
         maxEventRevision = std::max(maxEventRevision, (*it)->revision);
     }
@@ -317,6 +322,8 @@ WatchDispatcher::HandleResult WatchDispatcher::HandleChannelEvents(const std::sh
         return HandleResult::NONE;
     }
 
+    VLOG(1) << "HandleChannelEvents, watchId: " << channel->watchId << ", watcherAddr: " << channel->watcherAddr
+            << ", events size: " << events.size() << ", max revision: " << maxEventRevision;
     Status status = DoNotify(channel->watchId, channel->watcherAddr, events);
     if (status.IsError()) {
         LOG(WARNING) << "Failed to notify watch events, watchId=" << channel->watchId

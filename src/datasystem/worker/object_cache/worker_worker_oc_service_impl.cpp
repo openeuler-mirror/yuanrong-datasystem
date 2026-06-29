@@ -67,7 +67,6 @@ constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 
-
 constexpr double US_PER_MS = 1000.0;
 
 bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
@@ -129,10 +128,11 @@ Status GetRemoteAddressFromBatchGetReq(const BatchGetObjectRemoteReqPb &req, Hos
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
-    EtcdStore *etcdStore, ClusterManager *clusterManager)
+    EtcdStore *etcdStore, topology::ICoordinationBackend *coordinationBackend, ClusterManager *clusterManager)
     : ocClientWorkerSvc_(std::move(clientSvc)),
       akSkManager_(std::move(akSkManager)),
       etcdStore_(etcdStore),
+      coordinationBackend_(coordinationBackend),
       clusterManager_(clusterManager)
 {
 }
@@ -192,11 +192,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
-                        AppendSrcDstForLog(
-                            FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
-                                         req.object_key(), payload.size(), elapsedMs),
-                            GetRemoteAddressForLog(req), FLAGS_worker_address));
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+        AppendSrcDstForLog(FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
+                                        req.object_key(), payload.size(), elapsedMs),
+                           GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -492,11 +492,11 @@ Status WorkerWorkerOCServiceImpl::EstablishConnAndFillSeg(const std::string &com
 }
 
 Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
-    const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
-    std::vector<RpcMessage> &outPayload, const std::string &objectKey, uint64_t offset, uint64_t size,
-    bool blocking, std::vector<uint64_t> &eventKeys, const std::shared_ptr<AggregateMemory> &batchPtr,
-    RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext, Status *fallbackStatus,
-    bool isFastTransportEnabled, bool isUrmaFastTransport, bool isPipelineH2DRequest, PerfPoint &batchImplPoint)
+    const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry, std::vector<RpcMessage> &outPayload,
+    const std::string &objectKey, uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
+    const std::shared_ptr<AggregateMemory> &batchPtr, RemoteH2DRootInfoPb *batchRootInfo,
+    BatchRh2dContext *batchRh2dContext, Status *fallbackStatus, bool isFastTransportEnabled, bool isUrmaFastTransport,
+    bool isPipelineH2DRequest, PerfPoint &batchImplPoint)
 {
     PerfPoint loadDataPoint(PerfKey::WORKER_LOAD_OBJECT_DATA);
     PerfPoint pointImpl(PerfKey::WORKER_REMOTE_GET_READ_KEY);
@@ -519,19 +519,18 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
         auto shmUnit = entry->GetShmUnit();
         uint64_t localSegAddress;
         uint64_t localSegSize;
-        GetSegmentInfoFromShmUnit(shmUnit, reinterpret_cast<uint64_t>(shmUnit->GetPointer()),
-                                  localSegAddress, localSegSize);
+        GetSegmentInfoFromShmUnit(shmUnit, reinterpret_cast<uint64_t>(shmUnit->GetPointer()), localSegAddress,
+                                  localSegSize);
         Status fastTransportStatus = Status::OK();
         std::string fastTransportName;
 
-        RETURN_IF_NOT_OK(WriteViaFastTransport(
-            req, rsp, entry, shmUnit, localSegAddress, localSegSize, offset, size, blocking, eventKeys,
-            batchPtr, isFastTransportEnabled, isPipelineH2DRequest,
-            fastTransportStatus, fastTransportName));
-        RETURN_IF_NOT_OK(HandlePayloadFallback(
-            req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus, fastTransportName,
-            objectKey, isUrmaFastTransport, isPipelineH2DRequest, blocking,
-            batchPtr, fallbackStatus, batchRootInfo, batchRh2dContext, objKv, localSegAddress, localSegSize));
+        RETURN_IF_NOT_OK(WriteViaFastTransport(req, rsp, entry, shmUnit, localSegAddress, localSegSize, offset, size,
+                                               blocking, eventKeys, batchPtr, isFastTransportEnabled,
+                                               isPipelineH2DRequest, fastTransportStatus, fastTransportName));
+        RETURN_IF_NOT_OK(HandlePayloadFallback(req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus,
+                                               fastTransportName, objectKey, isUrmaFastTransport, isPipelineH2DRequest,
+                                               blocking, batchPtr, fallbackStatus, batchRootInfo, batchRh2dContext,
+                                               objKv, localSegAddress, localSegSize));
 
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_RESP);
     }
@@ -547,8 +546,7 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::LockEntryForRemoteGet(const std::string &objectKey, bool tryLock,
-                                                        uint64_t version,
+Status WorkerWorkerOCServiceImpl::LockEntryForRemoteGet(const std::string &objectKey, bool tryLock, uint64_t version,
                                                         std::shared_ptr<SafeObjType> &safeEntry)
 {
     RETURN_IF_NOT_OK(GetSafeObjectEntry(objectKey, tryLock, version, safeEntry));
@@ -589,15 +587,11 @@ Status WorkerWorkerOCServiceImpl::CheckFastTransportSize(const SafeObjType &entr
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                                        SafeObjType &entry, std::shared_ptr<ShmUnit> shmUnit,
-                                                        uint64_t localSegAddress, uint64_t localSegSize,
-                                                        uint64_t offset, uint64_t size, bool blocking,
-                                                        std::vector<uint64_t> &eventKeys,
-                                                        const std::shared_ptr<AggregateMemory> &batchPtr,
-                                                        bool isFastTransportEnabled,
-                                                        bool isPipelineH2DRequest, Status &fastTransportStatus,
-                                                        std::string &fastTransportName)
+Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
+    const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry, std::shared_ptr<ShmUnit> shmUnit,
+    uint64_t localSegAddress, uint64_t localSegSize, uint64_t offset, uint64_t size, bool blocking,
+    std::vector<uint64_t> &eventKeys, const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
+    bool isPipelineH2DRequest, Status &fastTransportStatus, std::string &fastTransportName)
 {
     auto markFastTransferResult = [&rsp, isPipelineH2DRequest](const Status &status) {
         if (status.IsError()) {
@@ -627,15 +621,14 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(const GetObjectRemoteReq
             const uint8_t dstChipId =
                 req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
             auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
-                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()),
-                                       offset, size, entry->GetMetadataSize(),
-                                       srcChipId, dstChipId, blocking, eventKeys);
+                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
+                                       entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
             fastTransportStatus = rc;
             fastTransportName = "UrmaWrite";
             RETURN_IF_NOT_OK(markFastTransferResult(rc));
         } else if (IsUcpEnabled()) {
-            auto rc = UcpPutPayload(req.ucp_info(), reinterpret_cast<uint64_t>(shmUnit->GetPointer()),
-                                    offset, size, entry->GetMetadataSize(), blocking, eventKeys);
+            auto rc = UcpPutPayload(req.ucp_info(), reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
+                                    entry->GetMetadataSize(), blocking, eventKeys);
             fastTransportStatus = rc;
             fastTransportName = "UcpWrite";
             RETURN_IF_NOT_OK(markFastTransferResult(rc));
@@ -645,9 +638,9 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(const GetObjectRemoteReq
 }
 
 Status WorkerWorkerOCServiceImpl::ProcessFallbackTrackError(const Status &rc, const Status &fastTransportStatus,
-    bool blocking, Status *fallbackStatus,
-    bool &canPrepareFallbackPayload,
-    const std::string &objectKey)
+                                                            bool blocking, Status *fallbackStatus,
+                                                            bool &canPrepareFallbackPayload,
+                                                            const std::string &objectKey)
 {
     if (!rc.IsError()) {
         return Status::OK();
@@ -660,20 +653,18 @@ Status WorkerWorkerOCServiceImpl::ProcessFallbackTrackError(const Status &rc, co
         canPrepareFallbackPayload = false;
         return Status::OK();
     }
-    LOG(WARNING) << FormatString("Worker-to-worker TCP fallback payload rejected for object %s: %s",
-                                 objectKey, rc.ToString());
+    LOG(WARNING) << FormatString("Worker-to-worker TCP fallback payload rejected for object %s: %s", objectKey,
+                                 rc.ToString());
     return rc;
 }
 
 Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
-    const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
-    std::vector<RpcMessage> &outPayload, ShmGuard &shmGuard,
-    std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
-    const std::string &fastTransportName, const std::string &objectKey,
-    bool isUrmaFastTransport, bool isPipelineH2DRequest, bool blocking,
-    const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
-    RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
-    const ReadObjectKV &objKv, uint64_t localSegAddress, uint64_t localSegSize)
+    const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry, std::vector<RpcMessage> &outPayload,
+    ShmGuard &shmGuard, std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
+    const std::string &fastTransportName, const std::string &objectKey, bool isUrmaFastTransport,
+    bool isPipelineH2DRequest, bool blocking, const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
+    RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext, const ReadObjectKV &objKv,
+    uint64_t localSegAddress, uint64_t localSegSize)
 {
     if (!isPipelineH2DRequest && IsRemoteH2DEnabled() && !req.comm_id().empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -692,8 +683,8 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
                                    ? Status(StatusCode::K_URMA_ERROR, "URMA wait fallback payload precheck")
                                    : fastTransportStatus;
             auto rc = shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), trackStatus, "worker->worker");
-            RETURN_IF_NOT_OK(ProcessFallbackTrackError(rc, fastTransportStatus, blocking,
-                fallbackStatus, canPrepareFallbackPayload, objectKey));
+            RETURN_IF_NOT_OK(ProcessFallbackTrackError(rc, fastTransportStatus, blocking, fallbackStatus,
+                                                       canPrepareFallbackPayload, objectKey));
         }
         if (canPrepareFallbackPayload) {
             LOG_IF(WARNING, fastTransportStatus.IsError()) << FormatString(
@@ -749,19 +740,27 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     bool isFastTransportEnabled = isUrmaFastTransport || (IsUcpEnabled() && req.has_ucp_info());
     RETURN_IF_NOT_OK(CheckFastTransportSize(entry, expectedDataSize, objectKey, isFastTransportEnabled, rsp));
 
-    return LoadPayloadAndFillResponse(
-        req, rsp, entry, outPayload, objectKey, offset, size, blocking, eventKeys,
-        batchPtr, batchRootInfo, batchRh2dContext, fallbackStatus, isFastTransportEnabled,
-        isUrmaFastTransport, isPipelineH2DRequest, batchImplPoint);
+    return LoadPayloadAndFillResponse(req, rsp, entry, outPayload, objectKey, offset, size, blocking, eventKeys,
+                                      batchPtr, batchRootInfo, batchRh2dContext, fallbackStatus, isFastTransportEnabled,
+                                      isUrmaFastTransport, isPipelineH2DRequest, batchImplPoint);
 }
 
-Status WorkerWorkerOCServiceImpl::CheckEtcdState(const CheckEtcdStateReqPb &req, CheckEtcdStateRspPb &rsp)
+Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorStateReqPb &req,
+                                                        CheckCoordinatorStateRspPb &rsp)
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isEtcdAvailable = etcdStore_->Writable().IsOk();
-    rsp.set_available(isEtcdAvailable);
-    LOG_IF(INFO, isEtcdAvailable) << "Etcd is available";
+    bool isCoordinationAvailable = false;
+    if (etcdStore_ != nullptr) {
+        isCoordinationAvailable = etcdStore_->Writable().IsOk();
+    } else if (coordinationBackend_ != nullptr) {
+        isCoordinationAvailable = !coordinationBackend_->IsKeepAliveTimeout();
+    } else {
+        LOG(WARNING)
+            << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
+    }
+    rsp.set_available(isCoordinationAvailable);
+    LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
 }
 
@@ -769,11 +768,19 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isEtcdAvailable = etcdStore_->Writable().IsOk();
-    rsp.set_etcd_available(isEtcdAvailable);
+    bool isCoordinationAvailable = false;
+    if (etcdStore_ != nullptr) {
+        isCoordinationAvailable = etcdStore_->Writable().IsOk();
+    } else if (coordinationBackend_ != nullptr) {
+        isCoordinationAvailable = !coordinationBackend_->IsKeepAliveTimeout();
+    } else {
+        LOG(WARNING)
+            << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
+    }
+    rsp.set_coordinator_available(isCoordinationAvailable);
     RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
     *rsp.mutable_hash_ring() = clusterManager_->GetHashRing()->GetHashRingPb();
-    LOG_IF(INFO, isEtcdAvailable) << "Etcd is available";
+    LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
 }
 
@@ -864,7 +871,8 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
         AppendSrcDstForLog(
             FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
                          "remainingTime: %zu, cost: %.3fms",

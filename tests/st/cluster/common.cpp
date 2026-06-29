@@ -158,6 +158,9 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
             roles.emplace_back("etcd_peer_" + std::to_string(i));
         }
     }
+    for (uint32_t i = 0; i < opts.numCoordinators; ++i) {
+        roles.emplace_back("coordinator_" + std::to_string(i));
+    }
     for (uint32_t i = 0; i < opts.numOBS; ++i) {
         roles.emplace_back("obs_" + std::to_string(i));
     }
@@ -195,6 +198,12 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
         }
     } else {
         LOG(INFO) << "External cluster setup detected custom etcd ip addresses. Default has been bypassed.";
+    }
+
+    for (uint32_t i = 0; i < opts.numCoordinators; ++i) {
+        int port = leases[leaseIdx++].Port();
+        ASSERT_NE(port, -1);
+        opts.coordinatorConfigs.emplace_back("127.0.0.1", port);
     }
 
     for (uint32_t i = 0; i < opts.numOBS; ++i) {

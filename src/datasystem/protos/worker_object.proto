@@ -77,14 +77,14 @@ message BatchGetObjectRemoteRspPb {
   uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }
 
-message CheckEtcdStateReqPb {
+message CheckCoordinatorStateReqPb {
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
   string signature = 101;
   string access_key = 102;
 }
 
-message CheckEtcdStateRspPb {
+message CheckCoordinatorStateRspPb {
   bool available = 1;
 }
 
@@ -96,7 +96,7 @@ message GetClusterStateReqPb {
 }
 
 message GetClusterStateRspPb {
-  bool etcd_available = 1;
+  bool coordinator_available = 1;
   HashRingPb hash_ring = 2;
 }
 
@@ -198,7 +198,7 @@ service WorkerWorkerOCService {
     option (datasystem.recv_payload_option) = true;
     option (datasystem.urma_enabled_option) = true;
   }
-  rpc CheckEtcdState(CheckEtcdStateReqPb) returns (CheckEtcdStateRspPb) {}
+  rpc CheckCoordinatorState(CheckCoordinatorStateReqPb) returns (CheckCoordinatorStateRspPb) {}
   rpc MigrateData(MigrateDataReqPb) returns (MigrateDataRspPb) {
     option (datasystem.send_payload_option) = true;
   }

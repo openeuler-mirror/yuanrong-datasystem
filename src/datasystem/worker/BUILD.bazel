@@ -176,6 +176,7 @@ ds_cc_library(
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/cluster_manager:cluster_manager",
         "//src/datasystem/worker/cluster_manager:worker_health_check",
+        "//src/datasystem/worker/coordinator:coordinator_watch_service_impl",
         "//src/datasystem/worker/hash_ring",
         "//src/datasystem/worker/hash_ring:hash_ring_event",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",

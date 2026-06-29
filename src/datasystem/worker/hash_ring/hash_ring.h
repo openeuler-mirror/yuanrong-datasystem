@@ -62,14 +62,14 @@ public:
     /**
      * @brief Init consistent hash ring.
      */
-    Status InitWithEtcd();
+    Status InitWithCoordinator();
 
     /**
      * @brief Init consistent hash ring during ETCD crash.
      * @param[in] hashRing The hash ring loaded from rocksdb.
      * @return Status of the call.
      */
-    Status InitWithoutEtcd(const std::string &hashRing);
+    Status InitWithoutCoordinator(const std::string &hashRing);
 
     /**
      * @brief When the worker num is equal to HashRingAllocator::defaultHashTokenNum, this function will generate hash
@@ -464,22 +464,13 @@ protected:
     Status InitMasterAddress();
 
     /**
-     * @brief Try get old ring from etcd.
-     * @param[out] oldVersionRingVal Get ringpb from etcd ring value.
-     * @return Status of the call
-     */
-    void TryGetOldRing(std::string &oldVersionRingVal);
-
-    /**
      * @brief According to the current ring info to do some init job.
      * @param[in] oldValue The serialized old ring get from etcd.
      * @param[in] newValue The new serialized ring that should be write to etcd.
      * @param[out] retry The flags that used to indicate if or not to retry.
-     * @param[in] oldVersionRingVal Get ringpb from etcd ring value.
      * @return Status of the call.
      */
-    Status InitRing(const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry,
-                    const std::string &oldVersionRingVal);
+    Status InitRing(const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry);
 
     /**
      * @brief Return true if the token in ring is enough.

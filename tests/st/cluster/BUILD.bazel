@@ -22,6 +22,7 @@ cc_library(
     copts = [
         '-DMASTER_BIN_PATH=\\"/usr/local/bin/master\\"',
         '-DWORKER_BIN_PATH=\\"/usr/local/bin/datasystem_worker\\"',
+        '-DCOORDINATOR_BIN_PATH=\\"/usr/local/bin/datasystem_coordinator\\"',
         '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
     ],
     includes = [".."],

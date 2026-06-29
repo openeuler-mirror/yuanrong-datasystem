@@ -26,6 +26,7 @@
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/coordinator.stub.rpc.pb.h"
 #include "datasystem/protos/master_object.stub.rpc.pb.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
@@ -35,6 +36,7 @@
 // brpc stub headers
 #include <brpc/socket.h>
 #include <brpc/socket_map.h>
+#include "datasystem/protos/coordinator.brpc.stub.pb.h"
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/master_stream.brpc.stub.pb.h"
 #include "datasystem/protos/stream_posix.brpc.stub.pb.h"
@@ -69,12 +71,11 @@ void LogStubGetEvent(const char *eventName, const HostPort &hostPort, StubType t
     const auto totalElapsedMs = lookupElapsedMs + getDataElapsedMs + accessElapsedMs + createElapsedMs;
     const auto phase = GetSlowPhase(lookupElapsedMs, accessElapsedMs, createElapsedMs);
     if (rc == nullptr) {
-        LOG_IF(INFO, totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS)
-            << FormatString("[%s] dst=%s type=%d hit=%d phase=%s lookup=%ldms access=%ldms create=%ldms "
-                            "total=%ldms retry=%d trace=%s",
-                            eventName, hostPort.ToString(), static_cast<int>(type), cacheHit, phase, lookupElapsedMs,
-                            accessElapsedMs, createElapsedMs, totalElapsedMs, attempts,
-                            Trace::Instance().GetTraceID());
+        LOG_IF(INFO, totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS) << FormatString(
+            "[%s] dst=%s type=%d hit=%d phase=%s lookup=%ldms access=%ldms create=%ldms "
+            "total=%ldms retry=%d trace=%s",
+            eventName, hostPort.ToString(), static_cast<int>(type), cacheHit, phase, lookupElapsedMs, accessElapsedMs,
+            createElapsedMs, totalElapsedMs, attempts, Trace::Instance().GetTraceID());
         return;
     }
     if (totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS) {
@@ -136,6 +137,12 @@ Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcCh
         case StubType::WORKER_WORKER_TRANS_SVC:
             stub = std::make_shared<WorkerWorkerTransportService_Stub>(channel);
             break;
+        case StubType::TO_COORDINATOR_SVC:
+            stub = std::make_shared<coordinator::CoordinatorService_Stub>(channel);
+            break;
+        case StubType::COORDINATOR_WORKER_SVC:
+            stub = std::make_shared<coordinator::CoordinatorWatchService_Stub>(channel);
+            break;
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
@@ -171,6 +178,12 @@ Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc
         case StubType::WORKER_WORKER_TRANS_SVC:
             stub = std::make_shared<WorkerWorkerTransportService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
             break;
+        case StubType::TO_COORDINATOR_SVC:
+            stub = std::make_shared<coordinator::CoordinatorService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::COORDINATOR_WORKER_SVC:
+            stub = std::make_shared<coordinator::CoordinatorWatchService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
@@ -194,7 +207,7 @@ Status RpcStubCacheMgr::CreateRpcChannel(const HostPort &hostPort, const std::st
     return Status::OK();
 }
 
-bool WaitForBrpcSocketAvailable(const HostPort& brpcAddr, int maxRetries, int intervalUs)
+bool WaitForBrpcSocketAvailable(const HostPort &brpcAddr, int maxRetries, int intervalUs)
 {
     butil::EndPoint ep;
     if (butil::str2endpoint(brpcAddr.Host().c_str(), brpcAddr.Port(), &ep) != 0) {
@@ -221,9 +234,8 @@ Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_
     brpc::ChannelOptions opts;
     opts.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
     opts.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        brpcChannel->Init(brpcAddr.ToString().c_str(), &opts) == 0, K_RPC_UNAVAILABLE,
-        FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel->Init(brpcAddr.ToString().c_str(), &opts) == 0, K_RPC_UNAVAILABLE,
+                                         FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
     return Status::OK();
 }
 
@@ -259,6 +271,8 @@ void RpcStubCacheMgr::InitCreators()
         creators_.emplace(StubType::MASTER_WORKER_SC_SVC, makeBrpcCreator(StubType::MASTER_WORKER_SC_SVC));
         creators_.emplace(StubType::MASTER_MASTER_OC_SVC, makeBrpcCreator(StubType::MASTER_MASTER_OC_SVC));
         creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
+        creators_.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
+        creators_.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
         return;
     }
 
@@ -319,6 +333,18 @@ void RpcStubCacheMgr::InitCreators()
             return CreatorTemplate(
                 [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
                 StubType::WORKER_WORKER_TRANS_SVC, rpcStub);
+        });
+    creators_.emplace(
+        StubType::TO_COORDINATOR_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::TO_COORDINATOR_SVC, rpcStub);
+        });
+    creators_.emplace(
+        StubType::COORDINATOR_WORKER_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::COORDINATOR_WORKER_SVC, rpcStub);
         });
 }
 
@@ -424,8 +450,8 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
         HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
         (void)WaitForBrpcSocketAvailable(brpcAddr);
     }
-    LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
-                    accessElapsedMs, createElapsedMs, attempts);
+    LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs, accessElapsedMs,
+                    createElapsedMs, attempts);
     return Status::OK();
 }
 
@@ -434,11 +460,10 @@ Status RpcStubCacheMgr::Remove(const HostPort &hostPort, StubType type)
     Timer timer;
     Status rc = lruCache_->Remove(HashKeyForRpcStubCacheMgr(hostPort, type));
     auto totalElapsedMs = static_cast<int64_t>(timer.ElapsedMilliSecond());
-    LOG_IF(INFO, totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS
-                    || (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND))
-        << FormatString("[SLOW_RPC_STUB_REMOVE] dst=%s type=%d total=%ldms error=%s trace=%s",
-                        hostPort.ToString(), static_cast<int>(type), totalElapsedMs, rc.ToString(),
-                        Trace::Instance().GetTraceID());
+    LOG_IF(INFO,
+           totalElapsedMs > SLOW_RPC_STUB_THRESHOLD_MS || (rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND))
+        << FormatString("[SLOW_RPC_STUB_REMOVE] dst=%s type=%d total=%ldms error=%s trace=%s", hostPort.ToString(),
+                        static_cast<int>(type), totalElapsedMs, rc.ToString(), Trace::Instance().GetTraceID());
     return rc;
 }
 
@@ -455,6 +480,8 @@ StubPriority GetStubPriority(StubType type)
         case StubType::WORKER_MASTER_SC_SVC:
         case StubType::MASTER_WORKER_SC_SVC:
         case StubType::MASTER_MASTER_OC_SVC:
+        case StubType::TO_COORDINATOR_SVC:
+        case StubType::COORDINATOR_WORKER_SVC:
             return StubPriority::HIGH;
 #ifdef WITH_TESTS
         case StubType::TEST_TYPE_1:

@@ -1231,7 +1231,8 @@ protected:
         int64_t version = 0;
         int64_t revision = 0;
         DS_ASSERT_OK(coordinatorProxy_->Put(std::string(HASHRING_TABLE) + "/", ringData, 0,
-                                            COORDINATOR_NO_VERSION_CHECK, version, revision));
+                                            COORDINATOR_NO_VERSION_CHECK, version, revision,
+                                            DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
     }
 
     void PutRingToCoordinator(const std::string &jsonRing)

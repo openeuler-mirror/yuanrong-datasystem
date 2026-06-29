@@ -171,8 +171,7 @@ public:
      * @param[in] startRevision startRevision is an optional revision to watch from (inclusive).
      * @return Status of the call.
      */
-    Status WatchEvents(const std::string &tableName, const std::string &key,
-                       int64_t startRevision);
+    Status WatchEvents(const std::string &tableName, const std::string &key, int64_t startRevision);
 
     /**
      * @brief Renew an existing lease repeatedly upto ttl seconds.
@@ -445,7 +444,7 @@ public:
         return keepAliveTimeout_;
     }
 
-    bool IsCreateFirstLease()
+    bool IsFirstKeepAliveSent()
     {
         return keepAliveValue_.state == "recover";
     }
@@ -600,7 +599,7 @@ private:
 
     // Thread safety and control mechanisms
     std::shared_mutex tokenMutex_;                 // Protects concurrent read/write to authToken_
-    std::unique_ptr<Thread> tokenRefreshThread_;               // Background thread for token refresh
+    std::unique_ptr<Thread> tokenRefreshThread_;   // Background thread for token refresh
     std::atomic<bool> stopTokenRefresh_{ false };  // Flag to terminate the refresh thread
     uint32_t tokenRefreshInterval_{ 30 };          // default to refresh token every 30 seconds
 
@@ -680,6 +679,15 @@ public:
      */
     Status Delete(const std::string &key);
 
+    /**
+     * @brief Get the current mod revision of the ring.
+     * @return The current mod revision of the ring.
+     */
+    int64_t GetRevision() const
+    {
+        return revision_;
+    }
+
 private:
     class AutoDereference {
     public:
@@ -705,6 +713,9 @@ private:
 
     // The auth token
     std::string authToken_;
+
+    // The current mod revision of the ring.
+    int64_t revision_{ 0 };
 
     // Initialize flag.
     static std::once_flag flag_;

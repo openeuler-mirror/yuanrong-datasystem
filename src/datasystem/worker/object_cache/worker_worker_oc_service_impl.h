@@ -22,6 +22,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
@@ -31,7 +32,7 @@
 
 namespace datasystem {
 namespace object_cache {
-class  WorkerOCServiceImpl;
+class WorkerOCServiceImpl;
 
 class WorkerWorkerOCServiceImpl : public WorkerWorkerOCService, public IWorkerWorkerOCService {
 public:
@@ -42,7 +43,7 @@ public:
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
                               std::shared_ptr<AkSkManager> akSkManager, EtcdStore *etcdStore,
-                              ClusterManager *clusterManager);
+                              topology::ICoordinationBackend *coordinationBackend, ClusterManager *clusterManager);
 
     ~WorkerWorkerOCServiceImpl() override;
 
@@ -76,7 +77,7 @@ public:
      * @param[out] rsp Check etcd state response.
      * @return Status of the call.
      */
-    Status CheckEtcdState(const CheckEtcdStateReqPb &req, CheckEtcdStateRspPb &rsp) override;
+    Status CheckCoordinatorState(const CheckCoordinatorStateReqPb &req, CheckCoordinatorStateRspPb &rsp) override;
 
     /**
      * @brief Get cluster state.
@@ -164,8 +165,7 @@ private:
     Status GetObjectRemoteImpl(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                std::vector<RpcMessage> &outPayload, bool blocking, std::vector<uint64_t> &eventKeys,
                                std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                               RemoteH2DRootInfoPb *batchRootInfo = nullptr,
-                               Status *fallbackStatus = nullptr,
+                               RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                BatchRh2dContext *batchRh2dContext = nullptr);
 
     Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
@@ -312,8 +312,7 @@ private:
     Status GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                   std::vector<RpcMessage> &payload, bool blocking, std::vector<uint64_t> &eventKeys,
                                   std::shared_ptr<AggregateMemory> batchPtr = nullptr,
-                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr,
-                                  Status *fallbackStatus = nullptr,
+                                  RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                   BatchRh2dContext *batchRh2dContext = nullptr);
 
     /**
@@ -354,6 +353,7 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;  // pointer to EtcdStore
+    topology::ICoordinationBackend *coordinationBackend_;
     ClusterManager *clusterManager_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };

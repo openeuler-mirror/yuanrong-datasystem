@@ -176,20 +176,20 @@ Status WorkerRemoteWorkerOCApi::BatchGetObjectRemoteWrite(
     return WithRpcDiag(rc, "BatchGetObjectRemote", localHostPort_, hostPort_);
 }
 
-Status WorkerRemoteWorkerOCApi::CheckEtcdStateAsyncWrite(CheckEtcdStateReqPb &req, int64_t &tag)
+Status WorkerRemoteWorkerOCApi::CheckCoordinatorStateAsyncWrite(CheckCoordinatorStateReqPb &req, int64_t &tag)
 {
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckEtcdStateAsyncWrite(req, tag)
-                                  : rpcSession_->CheckEtcdStateAsyncWrite(req, tag));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckCoordinatorStateAsyncWrite(req, tag)
+                                  : rpcSession_->CheckCoordinatorStateAsyncWrite(req, tag));
     return Status::OK();
 }
 
-Status WorkerRemoteWorkerOCApi::CheckEtcdStateAsyncRead(int64_t tag, CheckEtcdStateRspPb &rsp)
+Status WorkerRemoteWorkerOCApi::CheckCoordinatorStateAsyncRead(int64_t tag, CheckCoordinatorStateRspPb &rsp)
 {
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckEtcdStateAsyncRead(tag, rsp)
-                                  : rpcSession_->CheckEtcdStateAsyncRead(tag, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->CheckCoordinatorStateAsyncRead(tag, rsp)
+                                  : rpcSession_->CheckCoordinatorStateAsyncRead(tag, rsp));
     return Status::OK();
 }
 

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 CoordinatorStore::CoordinatorStore(std::shared_ptr<MemoryKvStore> memKvStore,
@@ -89,6 +90,7 @@ Status CoordinatorStore::Put(const std::string &key, const std::string &value, i
 
     uint64_t ttlGeneration = 0;
     RETURN_IF_NOT_OK(memKvStore_->Put(key, value, ttlMs, expectedVersion, version, revision, ttlGeneration));
+    VLOG(1) << "Put key: " << key << " revision: " << revision;
 
     if (ttlMs > 0) {
         return ttlManager_->Schedule(key, ttlMs, revision, ttlGeneration);
@@ -101,6 +103,7 @@ Status CoordinatorStore::Range(const std::string &key, const std::string &rangeE
 {
     RETURN_IF_NOT_OK(CheckInitialized());
     memKvStore_->Range(key, rangeEnd, kvs, revision);
+    VLOG(1) << "Range key: " << key << " rangeEnd: " << rangeEnd << ", revision: " << revision;
     return Status::OK();
 }
 
@@ -111,6 +114,7 @@ Status CoordinatorStore::DeleteRange(const std::string &key, const std::string &
 
     std::vector<KeyValueEntry> deletedEntries;
     memKvStore_->Delete(key, rangeEnd, deleted, revision, deletedEntries);
+    VLOG(1) << "DeleteRange key: " << key << " rangeEnd: " << rangeEnd << ", revision: " << revision;
 
     return Status::OK();
 }
@@ -121,6 +125,7 @@ Status CoordinatorStore::WatchRange(const std::string &key, const std::string &r
     RETURN_IF_NOT_OK(CheckInitialized());
 
     watchId = watchRegistry_->Register(key, rangeEnd, watcherAddr);
+    VLOG(1) << "WatchRange key: " << key << " rangeEnd: " << rangeEnd << ", watchId: " << watchId;
     watchDispatcher_->AddChannel(watchId, watcherAddr);
 
     int64_t snapshotRevision = 0;
@@ -131,6 +136,7 @@ Status CoordinatorStore::WatchRange(const std::string &key, const std::string &r
 
 Status CoordinatorStore::CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds)
 {
+    VLOG(1) << "CancelWatch watcherAddr: " << watcherAddr << " watchIds: " << VectorToString(watchIds);
     RETURN_IF_NOT_OK(CheckInitialized());
     for (auto watchId : watchIds) {
         RETURN_IF_NOT_OK(watchRegistry_->Cancel(watchId, watcherAddr));
@@ -145,6 +151,7 @@ Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64
     int64_t revision = 0;
     uint64_t ttlGeneration = 0;
     RETURN_IF_NOT_OK(memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration));
+    VLOG(1) << "KeepAlive key: " << key << " ttlMs: " << ttlMs << ", remainingTtlMs: " << remainingTtlMs;
     return ttlManager_->Schedule(key, ttlMs, revision, ttlGeneration);
 }
 }  // namespace datasystem

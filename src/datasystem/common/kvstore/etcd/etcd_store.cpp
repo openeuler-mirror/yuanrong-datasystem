@@ -964,13 +964,15 @@ Status EtcdStore::Delete(const std::string &tableName, const std::string &key, u
 
 namespace {
 Status DoTransaction(const std::string &realKey, int64_t version, const std::string &value,
-                     const std::string &authToken)
+                     const std::string &authToken, int64_t &revision)
 {
     Transaction txn(authToken);
     txn.StartTransaction();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.CompareKeyVersion(realKey, version), "CompareKeyVersion failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.Put(realKey, value), "Transaction Put failed");
-    return txn.Commit();
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(txn.Commit(), "Transaction Commit failed");
+    revision = txn.GetRevision();
+    return Status::OK();
 }
 }  // namespace
 
@@ -1033,7 +1035,8 @@ Status EtcdStore::CAS(const std::string &tableName, const std::string &key, cons
             return Status::OK();
         }
         // 4. Execute a transaction. If the key-value is not changed, the transaction is successfully written.
-        if (status = DoTransaction(realKey, res.version, *newValue, GetAuthToken()), status.IsError()) {
+        status = DoTransaction(realKey, res.version, *newValue, GetAuthToken(), res.modRevision);
+        if (status.IsError()) {
             lastErr = status;
             errorRetryNum++;
             continue;
@@ -1135,6 +1138,7 @@ Status Transaction::Commit()
     if (!rsp.succeeded()) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Transaction comparison failed, maybe need to update req and try again");
     }
+    revision_ = rsp.header().revision();
     return Status::OK();
 }
 

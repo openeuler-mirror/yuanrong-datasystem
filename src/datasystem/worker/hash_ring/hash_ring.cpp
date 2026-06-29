@@ -31,6 +31,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/common/log/trace.h"
@@ -56,6 +57,7 @@
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(metastore_address);
 DS_DECLARE_string(master_address);
+DS_DECLARE_string(coordinator_address);
 DS_DECLARE_bool(enable_distributed_master);
 DS_DECLARE_uint32(add_node_wait_time_s);
 DS_DECLARE_bool(auto_del_dead_node);
@@ -114,7 +116,7 @@ void HashRing::RestoreScalingTaskIfNeeded(bool isRestartScenario)
     taskExecutor_->RestoreScalingTask(ringInfo_, isRestartScenario);
 }
 
-Status HashRing::InitWithoutEtcd(const std::string &hashRing)
+Status HashRing::InitWithoutCoordinator(const std::string &hashRing)
 {
     FLAGS_master_address = workerAddr_;
     startUpState_ = StartUpState::RESTART;
@@ -137,7 +139,7 @@ Status HashRing::InitWithoutEtcd(const std::string &hashRing)
     return Status::OK();
 }
 
-Status HashRing::InitWithEtcd()
+Status HashRing::InitWithCoordinator()
 {
     INJECT_POINT("HashRing.Init.ChangeDefaultHashTokenNum", [](int hashTokenNum) {
         HashRingAllocator::defaultHashTokenNum = hashTokenNum;
@@ -145,36 +147,32 @@ Status HashRing::InitWithEtcd()
     });
     // If initWorkerNum <= 0, do not return. Nodes rely on hashring to tell isRestart.
     LOG(INFO) << "HashRing start to init for worker:" << workerAddr_;
-    // Check if both etcd_address and metastore_address are empty
-    if (FLAGS_etcd_address.empty() && FLAGS_metastore_address.empty()) {
+    // Check if all coordination backend addresses are empty.
+    if (FLAGS_etcd_address.empty() && FLAGS_metastore_address.empty() && FLAGS_coordinator_address.empty()) {
         return Status::OK();
     }
     RETURN_IF_NOT_OK(InitMasterAddress());
 
     Timer timer;
     int waitTimeMs = 60'000;
-    INJECT_POINT_NO_RETURN("HashRing.InitWithEtcd.MotifyWaitTimeMs",
+    INJECT_POINT_NO_RETURN("HashRing.InitWithCoordinator.MotifyWaitTimeMs",
                            [&waitTimeMs](int timeoutMs) { waitTimeMs = timeoutMs; });
     const int retryIntervalMs = 200;
     Status status;
-    std::string oldVersionRingVal;
-    TryGetOldRing(oldVersionRingVal);
     RangeSearchResult res;
     while (status = clusterStore_->CAS(HASHRING_TABLE, "",
                                        std::bind(&HashRing::InitRing, this, std::placeholders::_1,
-                                                 std::placeholders::_2, std::placeholders::_3, oldVersionRingVal),
+                                                 std::placeholders::_2, std::placeholders::_3),
                                        res),
            status.GetCode() == K_TRY_AGAIN && timer.ElapsedMilliSecond() < waitTimeMs) {
         std::this_thread::sleep_for(std::chrono::milliseconds(retryIntervalMs));
     };
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "InitRing failed");
+    LOG(INFO) << "Worker " << workerAddr_ << " update baselineModRevisionOfRing_ to " << res.modRevision;
     baselineModRevisionOfRing_ = res.modRevision;
     taskExecutor_ = std::make_unique<HashRingTaskExecutor>(workerAddr_, workerUuid_, clusterStore_);
     timer_ = std::make_unique<Timer>();
 
-    // Use metastore_address if specified, otherwise use etcd_address
-    const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
-    (void)clusterStore_->Delete(HASHRING_TABLE, backendAddress);
     // reset the state for centralized master scenario
     // In the centralized master scenario, we don't use the hash ring, but we still need to set uuid to etcd to
     // distinguish the startup state like what we do in HashRing::InitRing above. This state will be used in etcd
@@ -208,27 +206,11 @@ Status HashRing::UpdateWhenNodeRestart(const std::string &oldValue, const HashRi
     return Status::OK();
 }
 
-void HashRing::TryGetOldRing(std::string &oldVersionRingVal)
-{
-    // Use metastore_address if specified, otherwise use etcd_address
-    const std::string &backendAddress = !FLAGS_metastore_address.empty() ? FLAGS_metastore_address : FLAGS_etcd_address;
-    while (!exitFlag_) {
-        auto status = clusterStore_->Get(HASHRING_TABLE, backendAddress, oldVersionRingVal);
-        if (status.GetCode() == K_NOT_FOUND || status.IsOk()) {
-            break;
-        } else {
-            static const int INTERVAL_MS_GET_KEY = 200;
-            std::this_thread::sleep_for(std::chrono::milliseconds(INTERVAL_MS_GET_KEY));
-        }
-    }
-}
-
-Status HashRing::InitRing(const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry,
-                          const std::string &oldVersionRingVal)
+Status HashRing::InitRing(const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry)
 {
     (void)retry;
     HashRingPb oldRing;
-    CHECK_FAIL_RETURN_STATUS(oldRing.ParseFromString(oldValue.empty() ? oldVersionRingVal : oldValue), K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(oldValue.empty() || oldRing.ParseFromString(oldValue), K_RUNTIME_ERROR,
                              "ParseFromString failed");
     auto lines = SplitRingJson(FormatString("InitRing for worker %s, the old ring is ", workerAddr_), oldRing);
     std::for_each(lines.begin(), lines.end(), [](const std::string &line) { VLOG(1) << line; });
@@ -461,6 +443,7 @@ void HashRing::InspectAndProcessPeriodically()
         return;
     }
 
+    LOG_EVERY_T(INFO, 3) << "InspectAndProcessPeriodically: state=" << state_.load();
     INJECT_POINT("HashRing.HealthProbe", []() { ResetHealthProbe(); });
 
     std::shared_lock<std::shared_timed_mutex> lock(mutex_, std::defer_lock);
@@ -906,8 +889,9 @@ void HashRing::ProcessUpdateRingEventIfLeaving(const HashRingPb &oldRing, const 
 
 bool HashRing::SkipUpdateRing(const HashRingPb &newRing, int64_t version, bool forceUpdate)
 {
-    if (!forceUpdate && version <= baselineModRevisionOfRing_.load()) {
-        LOG(INFO) << "Ignore ring update of version " << version
+    if (!forceUpdate && version < baselineModRevisionOfRing_.load()) {
+        LOG(INFO) << "Worker " << workerAddr_ << " ignore ring update of version " << version
+                  << " baselineModRevisionOfRing_:" << baselineModRevisionOfRing_.load()
                   << " because it's out-of-date. Ring summarize is: " << SummarizeHashRing(newRing);
         return true;
     }
@@ -948,7 +932,8 @@ Status HashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_t ve
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         RETURN_OK_IF_TRUE(SkipUpdateRing(newRing, version, forceUpdate));
         currHashRingVersion_++;
-        LOG(INFO) << "Update ring of version " << version << ". " << SummarizeHashRing(newRing);
+        LOG(INFO) << "Worker " << workerAddr_ << " update ring of version " << version << ". "
+                  << SummarizeHashRing(newRing);
         auto lines = SplitRingJson(FormatString("Worker %s update local hash ring to", workerAddr_), newRing);
         std::for_each(lines.begin(), lines.end(), [](const std::string &line) { LOG(INFO) << line; });
 

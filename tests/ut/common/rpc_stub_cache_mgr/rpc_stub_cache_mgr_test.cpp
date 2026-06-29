@@ -29,6 +29,7 @@
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
@@ -67,7 +68,7 @@ public:
             }
         }
     }
-   
+
 private:
     void TestHelper(int startNum, int endNum, StubType type)
     {
@@ -147,6 +148,17 @@ TEST_F(RpcStubCacheMgrTest, TestParallelGetStub)
     for (auto &t : threads) {
         t.join();
     }
+}
+
+TEST_F(RpcStubCacheMgrTest, TestCoordinatorCreatorsRemainRegisteredWhenBrpcEnabled)
+{
+    Raii raii([]() { FLAGS_use_brpc = false; });
+    FLAGS_use_brpc = true;
+
+    constexpr int cacheNum = 10;
+    DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().InitForTest(cacheNum));
+    EXPECT_TRUE(RpcStubCacheMgrForTest::Instance().HasCreatorForTest(StubType::TO_COORDINATOR_SVC));
+    EXPECT_TRUE(RpcStubCacheMgrForTest::Instance().HasCreatorForTest(StubType::COORDINATOR_WORKER_SVC));
 }
 
 TEST_F(RpcStubCacheMgrTest, TestCreateStubFailed)

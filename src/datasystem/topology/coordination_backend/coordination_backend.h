@@ -40,7 +40,7 @@
 
 namespace datasystem {
 namespace topology {
-
+constexpr int DEFAULT_COORDINATION_DELETE_TIMEOUT_MS = 3'000;
 enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE };
 
 struct CoordinationEvent {
@@ -77,6 +77,7 @@ public:
     virtual Status CAS(const std::string &tableName, const std::string &key, const std::string &oldValue,
                        const std::string &newValue) = 0;
     virtual Status Delete(const std::string &tableName, const std::string &key) = 0;
+    virtual Status Delete(const std::string &tableName, const std::string &key, int timeoutMs) = 0;
     virtual Status WatchEvents(const std::vector<WatchKey> &watchKeys) = 0;
     virtual Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                  bool isStoreAvailableWhenStart) = 0;
@@ -84,7 +85,7 @@ public:
     virtual Status GetStorePrefix(const std::string &tableName, std::string &prefix) = 0;
     virtual Status InformReconciliationDone(const HostPort &workerAddr) = 0;
     virtual bool IsKeepAliveTimeout() = 0;
-    virtual bool IsCreateFirstLease() = 0;
+    virtual bool IsFirstKeepAliveSent() = 0;
     virtual void SetEventHandler(EventHandler &&eventHandler) = 0;
     virtual void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) = 0;
 };
@@ -105,6 +106,7 @@ public:
     Status CAS(const std::string &tableName, const std::string &key, const std::string &oldValue,
                const std::string &newValue) override;
     Status Delete(const std::string &tableName, const std::string &key) override;
+    Status Delete(const std::string &tableName, const std::string &key, int timeoutMs) override;
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override;
@@ -112,7 +114,7 @@ public:
     Status GetStorePrefix(const std::string &tableName, std::string &prefix) override;
     Status InformReconciliationDone(const HostPort &workerAddr) override;
     bool IsKeepAliveTimeout() override;
-    bool IsCreateFirstLease() override;
+    bool IsFirstKeepAliveSent() override;
     void SetEventHandler(EventHandler &&eventHandler) override;
     void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) override;
 
@@ -146,7 +148,6 @@ private:
     std::thread keepAliveThread_;
     std::atomic<bool> keepAliveExit_{ false };
     std::atomic<bool> keepAliveTimeout_{ false };
-    std::atomic<bool> isCreateFirstLease_{ false };
     static constexpr int64_t MS_PER_SECOND = 1'000;
     int64_t keepAliveTtlMs_ = 0;
 };

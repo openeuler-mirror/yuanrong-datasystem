@@ -128,36 +128,42 @@ public:
     }
 
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-               int64_t &version, int64_t &revision) override
+               int64_t &version, int64_t &revision, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->Put(key, value, ttlMs, expectedVersion, version, revision);
     }
 
     Status Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
-                 int64_t &revision) override
+                 int64_t &revision, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->Range(key, rangeEnd, kvs, revision);
     }
 
-    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                       int64_t &revision) override
+    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
+                       int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->DeleteRange(key, rangeEnd, deleted, revision);
     }
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs) override
+                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->WatchRange(key, rangeEnd, watcherAddr, watchId, initialKvs);
     }
 
-    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds) override
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->CancelWatch(watcherAddr, watchIds);
     }
 
-    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs) override
+    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t timeoutMs) override
     {
+        (void)timeoutMs;
         return coordinatorStore_->KeepAlive(key, ttlMs, remainingTtlMs);
     }
 
@@ -167,15 +173,13 @@ public:
         constexpr uint32_t maxRetryNum = 1000;
         for (uint32_t i = 0; i < maxRetryNum; ++i) {
             std::vector<KeyValueEntry> kvs;
-            RETURN_IF_NOT_OK(Range(key, "", kvs, revision));
+            int64_t rangeRevision = 0;
+            RETURN_IF_NOT_OK(Range(key, "", kvs, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
             const bool exists = !kvs.empty();
             const std::string oldValue = exists ? kvs.front().value : "";
             const int64_t expectedVersion = exists ? kvs.front().version : COORDINATOR_KEY_NOT_EXISTS_VERSION;
-            const int64_t oldRevision = exists ? kvs.front().modRevision : 0;
-            version = expectedVersion;
-            revision = oldRevision;
 
-            std::string newValue;
+            std::unique_ptr<std::string> newValue;
             bool retry = true;
             auto status = processFunc(oldValue, newValue, retry);
             if (status.IsError()) {
@@ -184,13 +188,11 @@ public:
                 }
                 continue;
             }
-            if (newValue.empty()) {
+            if (newValue == nullptr) {
                 return Status::OK();
             }
 
-            int64_t newVersion = 0;
-            int64_t newRevision = 0;
-            status = Put(key, newValue, 0, expectedVersion, newVersion, newRevision);
+            status = Put(key, *newValue, 0, expectedVersion, version, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
             if (status.IsOk()) {
                 return Status::OK();
             }
@@ -229,7 +231,7 @@ inline Status ConstructClusterInfoViaCoordinator(topology::ICoordinationBackend 
     CHECK_FAIL_RETURN_STATUS(clusterStore != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
     std::vector<std::pair<std::string, std::string>> workers;
     RETURN_IF_NOT_OK(clusterStore->GetAll(CLUSTER_TABLE, workers));
-    clusterInfo.etcdAvailable = true;
+    clusterInfo.coordinatorAvailable = true;
     clusterInfo.revision = 0;
     clusterInfo.workers = std::move(workers);
     return Status::OK();
