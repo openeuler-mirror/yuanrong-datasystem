@@ -40,6 +40,7 @@ set(COMMON_RPC_ZMQ_SRCS
         rpc_auth_keys.cpp
         mem_view.cpp
         unix_sock_fd.cpp
+        brpc_stream_close_helper.cpp
         zmq/zmq_auth.cpp
         zmq/zmq_common.cpp
         zmq/zmq_context.cpp

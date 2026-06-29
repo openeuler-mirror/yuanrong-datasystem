@@ -29,4 +29,6 @@ message HelloResponse {
 
 service HelloService {
     rpc SayHello (HelloRequest) returns (HelloResponse);
+    rpc StreamHello (HelloRequest) returns (stream HelloResponse);
+    rpc BidiStreamHello (stream HelloRequest) returns (stream HelloResponse);
 }

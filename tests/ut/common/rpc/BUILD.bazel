@@ -32,3 +32,12 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "brpc_stream_close_helper_test",
+    srcs = ["brpc_stream_close_helper_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:brpc_stream_close_helper",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
