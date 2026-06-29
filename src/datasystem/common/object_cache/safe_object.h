@@ -27,7 +27,7 @@
 
 #include <sys/syscall.h>
 
-#include <bthread/bthread.h>
+#include <bthread/rwlock.h>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
@@ -41,19 +41,6 @@
 DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
-
-// RW spinlock state encoding for brpc mode SafeObject.
-//   bit 31       : WRITER_HELD (1 = write lock held; new readers see this bit and CAS-fail)
-//   bit 30       : RESERVED (always 0; reserved for future fairness extension)
-//   bits 0..29   : reader_count (up to 2^29 readers)
-// Why no owner-tracking: brpc bthreads migrate across pthreads; an owner-aware
-// lock (pthread_rwlock_t / std::shared_mutex) would SIGABRT on cross-pthread
-// unlock. atomic CAS is owner-free and portable.
-namespace safe_object_rwlock {
-constexpr uint32_t WRITER_HELD = 0x80000000;
-constexpr uint32_t READER_MASK = 0x1FFFFFFF;
-constexpr int SPIN_BEFORE_YIELD = 64;
-}  // namespace safe_object_rwlock
 
 /**
  * @brief A SafeObject provides an infrastructure to facilitate a thread-safe object.
@@ -82,7 +69,10 @@ public:
     /**
      * @brief Constructor 1 creates the safe object but real object not populated yet and remains empty.
      */
-    SafeObject() : realObject_(nullptr), deleted_(false), wLocked_(false) {}
+    SafeObject() : realObject_(nullptr), deleted_(false), wLocked_(false)
+    {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
+    }
 
     /**
      * @brief Constructor 2 takes a unique ptr to the object type and moves it into the safe object to take ownership of
@@ -90,7 +80,10 @@ public:
      * @param[in] objPtr A unique pointer of the data that this SafeObject will take control of.
      */
     explicit SafeObject(std::unique_ptr<ObjType> objPtr)
-        : realObject_(std::move(objPtr)), deleted_(false), wLocked_(false) {}
+        : realObject_(std::move(objPtr)), deleted_(false), wLocked_(false)
+    {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
+    }
 
     /**
      * @brief Constructor 3 takes the real object and makes a copy of it through its copy constructor (deep copy) and
@@ -99,7 +92,10 @@ public:
      * @param[in] obj The object reference of the data that will be copied into this SafeObject.
      */
     explicit SafeObject(const ObjType &obj)
-        : realObject_(std::make_unique<ObjType>(obj)), deleted_(false), wLocked_(false) {}
+        : realObject_(std::make_unique<ObjType>(obj)), deleted_(false), wLocked_(false)
+    {
+        bthread_rwlock_init(&bthread_mutex_, nullptr);
+    }
 
     /**
      * @brief Default destructor.
@@ -107,10 +103,13 @@ public:
      * @note Caller must guarantee no bthread still holds a read or write lock
      *       when this SafeObject is destroyed (e.g. LRU eviction must complete
      *       the eviction under WLock and release before dropping the object).
-     *       std::atomic<uint32_t> is trivially destructible; mutex_ is the only
-     *       member with non-trivial destruction, and it must not be held either.
+     *       Destroying a bthread_rwlock_t that is still held is UB; we cannot
+     *       query lock state portably, so we rely on the caller invariant.
      */
-    ~SafeObject() = default;
+    ~SafeObject()
+    {
+        bthread_rwlock_destroy(&bthread_mutex_);
+    }
 
     /**
      * @brief Assigns the real object into the SafeObject via copy constructor of the passed-in object.
@@ -254,21 +253,8 @@ public:
     SafeObject &operator=(SafeObject &&other) noexcept = delete;
 
 private:
-    // AcquireWriteSpinlock: spin-wait until WRITER_HELD is claimed and all
-    // in-flight readers drain. Kept as a separate helper to keep WLock()
-    // nesting depth within the project's 4-level codecheck limit (G.FUN.01).
-    inline void AcquireWriteSpinlock();
-
-    // AcquireReadSpinlock: spin-wait until reader_count can be incremented.
-    // Kept as a separate helper to keep RLock() nesting depth within the
-    // project's 4-level codecheck limit (G.FUN.01).
-    inline void AcquireReadSpinlock();
-
-    // ZMQ-REMOVAL marker: when ZMQ mode is removed, delete mutex_ and the
-    // !FLAGS_use_brpc branch in each lock method. The spinlock path will be
-    // the sole implementation.
     std::shared_mutex mutex_;              // The lock for the object metadata and data (ZMQ mode).
-    std::atomic<uint32_t> rwState_{ 0 };   // The lock for the object metadata and data (brpc mode, RW spinlock).
+    bthread_rwlock_t bthread_mutex_;      // The lock for the object metadata and data (brpc mode).
     std::mutex gRefLock_;                  // The lock for the object global reference.
     std::unique_ptr<ObjType> realObject_;  // The actual object stored in a unique_ptr.
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
@@ -289,67 +275,22 @@ void SafeObject<ObjType>::SetRealObject(const ObjType &obj)
 }
 
 template <typename ObjType>
-void SafeObject<ObjType>::AcquireWriteSpinlock()
-{
-    // Phase 1: spin until we CAS the WRITER_HELD bit on while no other
-    // writer holds it (reader_count may be non-zero — that's fine; we
-    // claim the writer bit and let existing readers drain in Phase 2).
-    // New RLock callers that observe WRITER_HELD=1 will spin, so no
-    // additional readers can sneak in once we win the CAS.
-    bool claimed = false;
-    int spin = 0;
-    while (!claimed) {
-        uint32_t cur = rwState_.load(std::memory_order_acquire);
-        if ((cur & safe_object_rwlock::WRITER_HELD) != 0) {
-            // Another writer holds the lock; spin + yield.
-            if (++spin >= safe_object_rwlock::SPIN_BEFORE_YIELD) {
-                bthread_yield();
-                spin = 0;
-            }
-            continue;
-        }
-        uint32_t desired = cur | safe_object_rwlock::WRITER_HELD;
-        claimed = rwState_.compare_exchange_weak(cur, desired,
-                                                 std::memory_order_acquire,
-                                                 std::memory_order_relaxed);
-        if (!claimed) {
-            // CAS lost the race (state changed between load and CAS); retry
-            // with a yield to avoid tight spinning under contention.
-            if (++spin >= safe_object_rwlock::SPIN_BEFORE_YIELD) {
-                bthread_yield();
-                spin = 0;
-            }
-        }
-    }
-    // Phase 2: in-flight readers must drain before we enter the critical
-    // section. No new reader can enter because WRITER_HELD is now
-    // observed by all RLock callers.
-    spin = 0;
-    while ((rwState_.load(std::memory_order_acquire) & safe_object_rwlock::READER_MASK) != 0) {
-        if (++spin >= safe_object_rwlock::SPIN_BEFORE_YIELD) {
-            bthread_yield();
-            spin = 0;
-        }
-    }
-}
-
-template <typename ObjType>
 Status SafeObject<ObjType>::WLock(bool nullable)
 {
     Timer timer;
-    if (!FLAGS_use_brpc) {
-        mutex_.lock();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_wrlock(&bthread_mutex_);
     } else {
-        AcquireWriteSpinlock();
+        mutex_.lock();
     }
     auto* reqCtx = GetRequestContext();
     reqCtx->workerTimeCost.Append("worker SafeObject WLock", timer.ElapsedMilliSecond());
     reqCtx->masterTimeCost.Append("master SafeObject WLock", timer.ElapsedMilliSecond());
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (!FLAGS_use_brpc) {
-            mutex_.unlock();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
         } else {
-            rwState_.fetch_and(~safe_object_rwlock::WRITER_HELD, std::memory_order_release);
+            mutex_.unlock();
         }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
@@ -362,23 +303,19 @@ template <typename ObjType>
 Status SafeObject<ObjType>::TryWLock(bool nullable)
 {
     bool locked;
-    if (!FLAGS_use_brpc) {
-        locked = mutex_.try_lock();
+    if (FLAGS_use_brpc) {
+        locked = (bthread_rwlock_trywrlock(&bthread_mutex_) == 0);
     } else {
-        // Single CAS that requires rwState_ == 0 (no writer, no reader).
-        uint32_t expected = 0;
-        locked = rwState_.compare_exchange_strong(expected, safe_object_rwlock::WRITER_HELD,
-                                                  std::memory_order_acquire,
-                                                  std::memory_order_relaxed);
+        locked = mutex_.try_lock();
     }
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (!FLAGS_use_brpc) {
-            mutex_.unlock();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
         } else {
-            rwState_.fetch_and(~safe_object_rwlock::WRITER_HELD, std::memory_order_release);
+            mutex_.unlock();
         }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
@@ -402,42 +339,10 @@ void SafeObject<ObjType>::WUnlock()
             }
         }
 #endif
-        if (!FLAGS_use_brpc) {
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
+        } else {
             mutex_.unlock();
-        } else {
-            rwState_.fetch_and(~safe_object_rwlock::WRITER_HELD, std::memory_order_release);
-        }
-    }
-}
-
-template <typename ObjType>
-void SafeObject<ObjType>::AcquireReadSpinlock()
-{
-    // Spin until WRITER_HELD is clear, then CAS reader_count += 1.
-    // Multiple readers may proceed concurrently.
-    bool acquired = false;
-    int spin = 0;
-    while (!acquired) {
-        uint32_t cur = rwState_.load(std::memory_order_acquire);
-        if ((cur & safe_object_rwlock::WRITER_HELD) != 0) {
-            // Writer holds the lock; spin + yield.
-            if (++spin >= safe_object_rwlock::SPIN_BEFORE_YIELD) {
-                bthread_yield();
-                spin = 0;
-            }
-            continue;
-        }
-        if (rwState_.compare_exchange_weak(cur, cur + 1,
-                                            std::memory_order_acquire,
-                                            std::memory_order_relaxed)) {
-            acquired = true;
-        } else {
-            // CAS lost the race (another reader or a writer flipped state);
-            // yield to avoid tight spinning under reader-contention.
-            if (++spin >= safe_object_rwlock::SPIN_BEFORE_YIELD) {
-                bthread_yield();
-                spin = 0;
-            }
         }
     }
 }
@@ -445,16 +350,16 @@ void SafeObject<ObjType>::AcquireReadSpinlock()
 template <typename ObjType>
 Status SafeObject<ObjType>::RLock(bool nullable)
 {
-    if (!FLAGS_use_brpc) {
-        mutex_.lock_shared();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_rdlock(&bthread_mutex_);
     } else {
-        AcquireReadSpinlock();
+        mutex_.lock_shared();
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (!FLAGS_use_brpc) {
-            mutex_.unlock_shared();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
         } else {
-            rwState_.fetch_sub(1, std::memory_order_release);
+            mutex_.unlock_shared();
         }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
@@ -465,30 +370,19 @@ template <typename ObjType>
 Status SafeObject<ObjType>::TryRLock(bool nullable)
 {
     bool locked;
-    if (!FLAGS_use_brpc) {
-        locked = mutex_.try_lock_shared();
+    if (FLAGS_use_brpc) {
+        locked = (bthread_rwlock_tryrdlock(&bthread_mutex_) == 0);
     } else {
-        // Load then CAS. If writer held, fail immediately; otherwise try to
-        // increment reader_count. CAS may race with a writer flipping
-        // WRITER_HELD on between our load and CAS - in that case CAS fails
-        // and we report try-again.
-        uint32_t cur = rwState_.load(std::memory_order_acquire);
-        if (cur & safe_object_rwlock::WRITER_HELD) {
-            locked = false;
-        } else {
-            locked = rwState_.compare_exchange_strong(cur, cur + 1,
-                                                      std::memory_order_acquire,
-                                                      std::memory_order_relaxed);
-        }
+        locked = mutex_.try_lock_shared();
     }
     if (!locked) {
         RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Object is in use.");
     }
     if (deleted_ || (!nullable && realObject_ == nullptr)) {
-        if (!FLAGS_use_brpc) {
-            mutex_.unlock_shared();
+        if (FLAGS_use_brpc) {
+            bthread_rwlock_unlock(&bthread_mutex_);
         } else {
-            rwState_.fetch_sub(1, std::memory_order_release);
+            mutex_.unlock_shared();
         }
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
@@ -498,10 +392,10 @@ Status SafeObject<ObjType>::TryRLock(bool nullable)
 template <typename ObjType>
 void SafeObject<ObjType>::RUnlock()
 {
-    if (!FLAGS_use_brpc) {
-        mutex_.unlock_shared();
+    if (FLAGS_use_brpc) {
+        bthread_rwlock_unlock(&bthread_mutex_);
     } else {
-        rwState_.fetch_sub(1, std::memory_order_release);
+        mutex_.unlock_shared();
     }
 }
 
