@@ -60,6 +60,7 @@ set(WORKER_DEPEND_LIBS
         worker_client_manager
         worker_update_flag_check
         cluster_manager
+        coordinator_watch_service_impl
         )
 
 if (WITH_TESTS)

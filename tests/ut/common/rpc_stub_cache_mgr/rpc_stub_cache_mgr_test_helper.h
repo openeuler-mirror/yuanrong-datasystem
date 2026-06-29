@@ -37,7 +37,7 @@ namespace datasystem {
 namespace ut {
 class RpcStubForTest : public RpcStubBase {
 public:
-    RpcStubForTest(std::string msg) : msg_(msg){};
+    RpcStubForTest(std::string msg) : msg_(msg) {};
 
     ~RpcStubForTest();
 
@@ -85,12 +85,12 @@ public:
                 CHECK_FAIL_RETURN_STATUS(BorrowFd(), K_RUNTIME_ERROR, "fd is exhausted");
                 return Status::OK();
             });
-        creators_.emplace(
-            StubType::TEST_TYPE_3, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) -> Status {
-                (void)hostPort;
-                (void)rpcStub;
-                RETURN_STATUS(K_RUNTIME_ERROR, "test create failed");
-            });
+        creators_.emplace(StubType::TEST_TYPE_3,
+                          [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) -> Status {
+                              (void)hostPort;
+                              (void)rpcStub;
+                              RETURN_STATUS(K_RUNTIME_ERROR, "test create failed");
+                          });
         remainingFd_ = maxFdNum;
         return Status::OK();
     };
@@ -120,6 +120,11 @@ public:
     void SetMaxFdNum(int maxFdNum)
     {
         remainingFd_ = maxFdNum;
+    }
+
+    bool HasCreatorForTest(StubType type) const
+    {
+        return creators_.find(type) != creators_.end();
     }
 
 private:

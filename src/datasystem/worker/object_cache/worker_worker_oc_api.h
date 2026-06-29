@@ -181,9 +181,9 @@ public:
         std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> &clientApi,
         BatchGetObjectRemoteReqPb &req);
 
-    Status CheckEtcdStateAsyncWrite(CheckEtcdStateReqPb &req, int64_t &tag);
+    Status CheckCoordinatorStateAsyncWrite(CheckCoordinatorStateReqPb &req, int64_t &tag);
 
-    Status CheckEtcdStateAsyncRead(int64_t tag, CheckEtcdStateRspPb &rsp);
+    Status CheckCoordinatorStateAsyncRead(int64_t tag, CheckCoordinatorStateRspPb &rsp);
 
     Status GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int64_t &tag);
 

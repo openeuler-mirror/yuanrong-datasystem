@@ -1,10 +1,10 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility=["//visibility:public"])
 
 ds_cc_library(
-    name = "coordinator_store",
-    srcs = [
+    name="coordinator_store",
+    srcs=[
         "coordinator_service_proxy.cpp",
         "coordinator_store.cpp",
         "memory_kv_store.cpp",
@@ -12,7 +12,7 @@ ds_cc_library(
         "watch_dispatcher.cpp",
         "watch_registry.cpp",
     ],
-    hdrs = [
+    hdrs=[
         "coordinator_service_proxy.h",
         "key_value_entry.h",
         "coordinator_store.h",
@@ -23,11 +23,14 @@ ds_cc_library(
         "watch_event.h",
         "watch_registry.h",
     ],
-    copts = ["-std=c++17"],
-    deps = [
+    copts=["-std=c++17"],
+    deps=[
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_brpc",
+        "//src/datasystem/protos:coordinator_zmq_cc_proto",
     ],
 )

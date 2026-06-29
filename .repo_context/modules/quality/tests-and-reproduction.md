@@ -173,7 +173,7 @@ python3 -m unittest
 - Verified from `tests/st/CMakeLists.txt`:
   - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, embedded-client, device, and helper files.
   - `ds_st_stream_cache`: ST files under `**/stream_cache`.
-  - `ds_st_object_cache`: ST files under `**/object_cache`.
+  - `ds_st_object_cache`: ST files under `**/object_cache`; includes `tests/st/worker/object_cache/coordinator_backend_cluster_test.cpp`, which starts one `datasystem_coordinator` plus two workers without ETCD and verifies coordinator watch propagation across worker restart.
   - `ds_st_kv_cache`: ST files under `**/kv_cache`.
   - `ds_st_embedded_client`: `tests/st/embedded_client` plus cluster helper sources.
   - `ds_device_llt`: device tests; generic hetero ST sources prefer a real runtime backend when

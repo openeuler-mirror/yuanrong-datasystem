@@ -44,6 +44,7 @@ public:
     Status CAS(const std::string &tableName, const std::string &key, const std::string &oldValue,
                const std::string &newValue) override;
     Status Delete(const std::string &tableName, const std::string &key) override;
+    Status Delete(const std::string &tableName, const std::string &key, int timeoutMs) override;
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override;
@@ -51,7 +52,7 @@ public:
     Status GetStorePrefix(const std::string &tableName, std::string &prefix) override;
     Status InformReconciliationDone(const HostPort &workerAddr) override;
     bool IsKeepAliveTimeout() override;
-    bool IsCreateFirstLease() override;
+    bool IsFirstKeepAliveSent() override;
     void SetEventHandler(EventHandler &&eventHandler) override;
     void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) override;
 

@@ -89,6 +89,12 @@ Status EtcdCoordinationBackend::Delete(const std::string &tableName, const std::
     return etcdStore_->Delete(tableName, key);
 }
 
+Status EtcdCoordinationBackend::Delete(const std::string &tableName, const std::string &key, int timeoutMs)
+{
+    CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
+    return etcdStore_->Delete(tableName, key, 0, timeoutMs);
+}
+
 Status EtcdCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
 {
     CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
@@ -131,9 +137,9 @@ bool EtcdCoordinationBackend::IsKeepAliveTimeout()
     return etcdStore_ != nullptr && etcdStore_->IsKeepAliveTimeout();
 }
 
-bool EtcdCoordinationBackend::IsCreateFirstLease()
+bool EtcdCoordinationBackend::IsFirstKeepAliveSent()
 {
-    return etcdStore_ != nullptr && etcdStore_->IsCreateFirstLease();
+    return etcdStore_ != nullptr && etcdStore_->IsFirstKeepAliveSent();
 }
 
 void EtcdCoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

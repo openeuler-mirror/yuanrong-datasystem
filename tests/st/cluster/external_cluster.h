@@ -90,6 +90,9 @@ public:
     // Parameters for starting the gcs
     std::string gcsGflagParams;
 
+    // Parameters for starting the coordinator.
+    std::string coordinatorGflagParams;
+
     // Path for writing to NAS.  Special keyword of "none" means read-only NAS
     std::string nasDir;
 
@@ -163,6 +166,15 @@ private:
     std::string nodeId_;
 };
 
+class CoordinatorProcess : public ServerProcess {
+public:
+    CoordinatorProcess(const std::string &cmd, const HostPort &addr) : ServerProcess(cmd, addr)
+    {
+    }
+
+    ~CoordinatorProcess() override = default;
+};
+
 class WorkerProcess : public ServerProcess {
 public:
     WorkerProcess(const std::string &cmd, const HostPort &addr) : ServerProcess(cmd, addr)
@@ -207,7 +219,7 @@ public:
     OBSProcess(const std::string &cmd, const HostPort &addr) : Subprocess(cmd), addr_(addr)
     {
     }
- 
+
     ~OBSProcess() override = default;
     const HostPort &GetAddr() const
     {
@@ -243,6 +255,8 @@ public:
 
     Status ShutdownEtcds();
 
+    Status ShutdownCoordinators();
+
     Status ShutdownOBSs();
 
     Status StartNode(ClusterNodeType nodeType, uint32_t idx, const std::string &params) override;
@@ -273,6 +287,8 @@ public:
 
     std::string GetEtcdAddrs() const override;
 
+    Status GetCoordinatorAddr(uint32_t idx, HostPort &addr) const;
+
     Status GetMasterAddr(uint32_t idx, HostPort &addr) const override;
 
     Status GetGCSAddr(uint32_t idx, HostPort &addr) const override;
@@ -292,6 +308,8 @@ public:
     pid_t GetWorkerPid(uint32_t idx) const override;
 
     Status StartEtcdCluster() override;
+
+    Status StartCoordinatorCluster() override;
 
     Status StartMasters() override;
 
@@ -368,6 +386,8 @@ public:
 protected:
     Status StartEtcdNode(int index);
 
+    Status StartCoordinatorNode(int index);
+
     Status StartMaster(int index);
 
     Status StartOBS(int index);
@@ -391,6 +411,8 @@ protected:
     ExternalClusterOptions opts_;
 
     std::vector<std::unique_ptr<EtcdProcess>> etcdProcesses_;
+
+    std::vector<std::unique_ptr<CoordinatorProcess>> coordinatorProcesses_;
 
     std::mutex mutex_master_;
     std::vector<std::unique_ptr<MasterProcess>> masterProcesses_;

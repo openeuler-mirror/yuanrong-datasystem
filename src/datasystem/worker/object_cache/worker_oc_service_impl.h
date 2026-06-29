@@ -88,6 +88,9 @@ namespace datasystem {
 namespace master {
 class MasterOCServiceImpl;
 }
+namespace topology {
+class ICoordinationBackend;
+}
 namespace object_cache {
 
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
@@ -117,7 +120,8 @@ public:
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                        master::MasterOCServiceImpl *masterOCService = nullptr);
+                        master::MasterOCServiceImpl *masterOCService = nullptr,
+                        topology::ICoordinationBackend *coordinationBackend = nullptr);
 
     ~WorkerOCServiceImpl() override;
 
@@ -1093,6 +1097,8 @@ private:
      */
     Status CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason, bool &shouldSetReady);
 
+    Status UpdateLocalNodeReady();
+
     HostPort localMasterAddress_;
 
     // Acquire writer lock before doing reconciliation; read lock before other RPCs
@@ -1127,6 +1133,7 @@ private:
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
     EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
+    topology::ICoordinationBackend *coordinationBackend_{ nullptr };
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;
     bool waited_{ false };

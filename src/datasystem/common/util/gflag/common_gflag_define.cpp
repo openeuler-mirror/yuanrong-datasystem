@@ -131,6 +131,8 @@ DS_DEFINE_int32(zmq_client_io_thread, 1,
 DS_DEFINE_int32(zmq_chunk_sz, 1048576, "Parallel payload split chunk size. Default to 1048756 bytes");
 DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and will be removed in future releases.");
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
+DS_DEFINE_string(coordinator_address, "",
+                 "Address of datasystem coordinator service. Empty means coordinator mode is disabled.");
 DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,

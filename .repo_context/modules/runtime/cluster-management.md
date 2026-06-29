@@ -26,7 +26,10 @@
   - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
   - `src/datasystem/worker/hash_ring/hash_ring.cpp`
   - `src/datasystem/protos/coordinator.proto`
+  - `src/datasystem/coordinator/coordinator_main.cpp`
+  - `src/datasystem/coordinator/coordinator_server.h`
   - `src/datasystem/coordinator/coordinator_service_impl.h`
+  - `src/datasystem/coordinator/watch_dispatcher_impl.h`
   - `src/datasystem/common/coordinator/coordinator_service_proxy.h`
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h`
   - `src/datasystem/worker/worker_oc_server.cpp`
@@ -41,8 +44,8 @@
   - current docs describe two metadata/cluster-management modes:
     - external ETCD
     - built-in Metastore
-  - coordinator backend work has a P0 skeleton: `coordinator.proto`, common coordinator service proxy skeleton, and server/worker-side service skeletons exist, but worker runtime is not yet wired to a coordinator mode.
-  - worker runtime enforces that at least one of `etcd_address` or `metastore_address` is configured.
+  - coordinator backend work now has a first single-leader implementation: `datasystem_coordinator` hosts `CoordinatorStore`, the common proxy sends coordinator RPCs, and worker runtime registers coordinator watch callbacks.
+  - worker startup selects coordinator-backed cluster coordination when `coordinator_address` is non-empty; otherwise it preserves the ETCD/Metastore path and enforces that at least one of `etcd_address` or `metastore_address` is configured.
   - `cluster_manager` currently builds around `cluster_manager.cpp` plus worker health-check support.
   - hash-ring logic is a separate worker subdomain that coordinates distribution/routing-related state and interacts with the metadata backend.
   - `dscli` supports both single-node `start` and multi-node `up`, and `up` has explicit handling for Metastore head-node sequencing.
@@ -69,20 +72,20 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 ## Two Supported Metadata Modes
 
-### Coordinator backend skeleton
+### Coordinator backend first implementation
 
 - Verified from source during the coordinator contract and cluster-store adapter additions:
   - `src/datasystem/protos/coordinator.proto` defines lightweight KV, watch, and keepalive RPC contracts for future coordinator integration; all coordinator response messages reserve `RedirectInfo redirect_info` for future leader redirection.
   - `src/datasystem/coordinator/coordinator_service_impl.h` defines the coordinator-side RPC service skeleton and inherits from generated `CoordinatorService`.
   - `src/datasystem/worker/coordinator/coordinator_watch_service_impl.h` defines the worker-side watch RPC service skeleton and inherits from generated `CoordinatorWatchService`.
-  - `src/datasystem/common/coordinator/coordinator_service_proxy.h` defines the shared `ICoordinatorServiceProxy` interface and `CoordinatorServiceProxyImpl` skeleton for worker and tests.
-  - `src/datasystem/common/coordinator` currently contains only the shared coordinator service proxy skeleton and key/value entry helpers for this phase.
+  - `src/datasystem/common/coordinator/coordinator_service_proxy.h` defines the shared `ICoordinatorServiceProxy` interface, with `CoordinatorServiceProxyZmqImpl` and `CoordinatorServiceProxyBrpcImpl` transport-specific implementations for worker and tests.
+  - `src/datasystem/worker/worker_oc_server.cpp` creates `CoordinatorServiceProxyBrpcImpl` when `use_brpc=true`; otherwise it uses `CoordinatorServiceProxyZmqImpl`.
+  - `src/datasystem/common/coordinator` currently contains the shared coordinator service proxies and key/value entry helpers for this phase.
   - `src/datasystem/topology/coordination_backend/coordination_backend.h` defines the topology coordination backend
     abstraction used by `ClusterManager` and hash-ring code; `EtcdCoordinationBackend` adapts the current `EtcdStore`
     backend into that abstraction.
 - Current limitation:
-  - this is not yet a supported runtime metadata mode; startup still constructs an `EtcdCoordinationBackend` adapter over
-    ETCD/Metastore until a coordinator-backed adapter is implemented.
+  - coordinator mode currently covers worker cluster coordination, hash-ring state, keepalive, and watches. Object metadata, ETCD-crash downgrade/reconciliation, and ETCD-only observability remain on the ETCD/Metastore path unless explicitly guarded.
 
 ### ETCD mode
 
@@ -152,12 +155,11 @@ Use this file as the cross-module map. Use the detailed package for source-level
 
 ### Startup
 
-1. `WorkerOCServer` validates `etcd_address` or `metastore_address`, initializes `EtcdStore`, and constructs
-   `ClusterManager`.
-2. `ClusterInfo` is loaded from ETCD/Metastore, or from RocksDB and peer reconciliation when ETCD is down.
+1. `WorkerOCServer` constructs `CoordinationBackend` when `coordinator_address` is set; otherwise it validates `etcd_address` or `metastore_address`, initializes `EtcdStore`, and constructs an `EtcdCoordinationBackend`.
+2. `ClusterInfo` is loaded from the selected coordination backend in coordinator mode, from ETCD/Metastore in normal ETCD mode, or from RocksDB and peer reconciliation when ETCD is down.
 3. `ClusterManager::Init` starts background event processing, enqueues startup node events, starts watches, and
    initializes `HashRing`.
-4. `EtcdStore::InitKeepAlive` writes the local worker row into `ETCD_CLUSTER_TABLE` with a lease.
+4. The selected coordination backend writes the local worker row into the cluster table with keepalive/TTL semantics.
 5. Worker object/stream services finish reconciliation, set the health probe, and move ETCD node state to `ready`.
 
 ### Scale Up

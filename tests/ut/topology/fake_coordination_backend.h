@@ -156,6 +156,12 @@ public:
         return DeleteForTest(tableName, key);
     }
 
+    Status Delete(const std::string &tableName, const std::string &key, int timeoutMs) override
+    {
+        (void)timeoutMs;
+        return DeleteForTest(tableName, key);
+    }
+
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override
     {
         watchKeys_ = watchKeys;
@@ -194,7 +200,7 @@ public:
         return false;
     }
 
-    bool IsCreateFirstLease() override
+    bool IsFirstKeepAliveSent() override
     {
         return false;
     }

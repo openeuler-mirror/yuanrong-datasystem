@@ -6,6 +6,7 @@ set(TOPOLOGY_COORDINATION_BACKEND_SRCS
 add_library(coordination_backend STATIC ${TOPOLOGY_COORDINATION_BACKEND_SRCS})
 target_include_directories(coordination_backend PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(coordination_backend PUBLIC
+        common_coordinator_store
         common_etcd
         common_util
         )

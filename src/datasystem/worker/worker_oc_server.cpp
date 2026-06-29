@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/worker_oc_server.h"
 
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
 
 #include <algorithm>
@@ -79,6 +80,7 @@
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
@@ -92,6 +94,7 @@
 #include "datasystem/worker/rebalance_executor.h"
 
 DS_DECLARE_bool(use_brpc);
+DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
 DS_DEFINE_uint32_dynamic(add_node_wait_time_s, 60, "Wait time (s) for the first node joining a working hash ring.");
@@ -252,8 +255,7 @@ bool IsWarmupKeyChar(unsigned char c)
 std::string BuildWarmupKey(const std::string &workerAddr)
 {
     std::string encoded = workerAddr;
-    std::replace_if(
-        encoded.begin(), encoded.end(), [](unsigned char c) { return !IsWarmupKeyChar(c); }, '_');
+    std::replace_if(encoded.begin(), encoded.end(), [](unsigned char c) { return !IsWarmupKeyChar(c); }, '_');
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 
@@ -355,6 +357,7 @@ void WorkerOCServer::InitSlotWorkerNamespace()
 Status WorkerOCServer::InitSlotRecovery()
 {
     RETURN_OK_IF_TRUE(!IsWorkerScopedSlotStoreEnabled());
+    RETURN_OK_IF_TRUE(etcdStore_ == nullptr);
     slotRecoveryOrchestrator_ = std::make_unique<object_cache::SlotRecoveryOrchestrator>(FLAGS_distributed_disk_path);
     RETURN_IF_NOT_OK(slotRecoveryOrchestrator_->Init());
     return slotRecoveryOrchestrator_->RepairLocalSlots();
@@ -414,6 +417,18 @@ Status WorkerOCServer::InitWorkerWorkerTransportService()
         cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
         builder_.AddService(objCacheWorkerTransSvc_.get(), cfg);
     }
+    return Status::OK();
+}
+
+Status WorkerOCServer::InitCoordinatorWatchService()
+{
+    RETURN_IF_NOT_OK(coordinatorWatchSvc_->Init());
+    RpcServiceCfg cfg;
+    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
+    cfg.numStreamSockets_ = 0;
+    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+    cfg.udsEnabled_ = false;
+    builder_.AddService(coordinatorWatchSvc_.get(), cfg);
     return Status::OK();
 }
 
@@ -663,6 +678,7 @@ void WorkerOCServer::CreateWorkerServices()
 
     // Some classes need back pointer to the etcdCM so that they can perform their own health checks or other
     // cluster-related tasks.
+    coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_, clusterManager_.get());
     // create WorkerServiceImpl
     workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, masterAddr_, DFT_TIMEOUT_MULT, this, akSkManager_);
     workerSvc_->SetWorkerUuid(clusterManager_->GetLocalWorkerUuid());
@@ -695,7 +711,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     // create WorkerOCServices
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
-        objCacheMasterSvc_.get());
+        objCacheMasterSvc_.get(), coordinationBackend_.get());
     objCacheClientWorkerSvc_->SetClusterManager(clusterManager_.get());
     CreateRebalanceExecutor(objectTable, evictionManager);
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &taskId) {
@@ -709,7 +725,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     });
     // create WorkerWorkerOCService
     objCacheWorkerWkSvc_ = std::make_shared<datasystem::object_cache::WorkerWorkerOCServiceImpl>(
-        objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), clusterManager_.get());
+        objCacheClientWorkerSvc_, akSkManager_, etcdStore_.get(), coordinationBackend_.get(), clusterManager_.get());
     // create MasterWorkerOCService
     objCacheWorkerMsSvc_ =
         std::make_shared<datasystem::object_cache::MasterWorkerOCServiceImpl>(objCacheClientWorkerSvc_, akSkManager_);
@@ -722,10 +738,9 @@ void WorkerOCServer::CreateRebalanceExecutor(
     const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
 {
-    RebalanceExecutorConfig rebalanceConfig{
-        hostPort_, clusterManager_.get(), akSkManager_, objectTable, evictionManager,
-        objCacheClientWorkerSvc_->GetWorkerMasterApiManager()
-    };
+    RebalanceExecutorConfig rebalanceConfig{ hostPort_,       clusterManager_.get(),
+                                             akSkManager_,    objectTable,
+                                             evictionManager, objCacheClientWorkerSvc_->GetWorkerMasterApiManager() };
     rebalanceExecutor_ = std::make_unique<RebalanceExecutor>(std::move(rebalanceConfig));
     object_cache::NodeSelector::Instance().RegisterRebalanceTaskHandler([this](const master::RebalanceTaskPb &task) {
         std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
@@ -775,6 +790,7 @@ Status WorkerOCServer::InitializeWorkerServices()
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerWorkerOCService(), "InitWorkerWorkerOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitMasterWorkerOCService(), "InitMasterWorkerOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerWorkerTransportService(), "InitWorkerWorkerTransportService failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitCoordinatorWatchService(), "InitCoordinatorWatchService failed");
     // In some cases services have dependencies between each other where they access each other via pointers.
     // For example, the WorkerOCService takes a pointer to the MasterOCService to provide a local bypass optimization.
     // However, there exist cases that have a circular dependency:
@@ -831,6 +847,52 @@ void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
     TryWarmupWorkerMasterRpcOnClusterEvent(event);
 }
 
+Status WorkerOCServer::InitCoordinationBackend()
+{
+    if (!FLAGS_coordinator_address.empty()) {
+        HostPort coordinatorAddr;
+        RETURN_IF_NOT_OK(coordinatorAddr.ParseString(FLAGS_coordinator_address));
+        backendAddress_ = FLAGS_coordinator_address;
+        if (FLAGS_use_brpc) {
+            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorAddr);
+        } else {
+            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorAddr);
+        }
+        coordinationBackend_ =
+            std::make_unique<topology::CoordinationBackend>(coordinatorServiceProxy_.get(), hostPort_.ToString());
+        LOG(INFO) << "Using coordinator as cluster coordination backend: " << backendAddress_;
+        return Status::OK();
+    }
+
+    // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
+    CHECK_FAIL_RETURN_STATUS(ValidateEtcdOrMetastoreAddress(), K_RUNTIME_ERROR,
+                             "Neither etcd_address nor metastore_address is specified");
+
+    // Determine which backend to use for metadata storage.
+    if (!FLAGS_metastore_address.empty()) {
+        // Use metastore as the backend.
+        backendAddress_ = FLAGS_metastore_address;
+        LOG(INFO) << "Using metastore as etcd replacement: " << backendAddress_;
+        if (FLAGS_start_metastore_service) {
+            // Start metastore service on this node (head worker).
+            RETURN_IF_NOT_OK(StartMetaStoreService());
+        }
+    } else {
+        // Use external etcd as the backend.
+        FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
+        backendAddress_ = FLAGS_etcd_address;
+        LOG(INFO) << "Using external etcd: " << backendAddress_;
+    }
+    etcdStore_ = std::make_unique<EtcdStore>(backendAddress_);
+    RETURN_IF_NOT_OK(etcdStore_->Init());
+    RETURN_IF_NOT_OK(
+        etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
+    etcdStore_->SetUpdateClusterInfoInRocksDbHandler(
+        std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
+    coordinationBackend_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
+    return Status::OK();
+}
+
 Status WorkerOCServer::ConstructCoordinationBackend()
 {
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
@@ -857,12 +919,12 @@ Status WorkerOCServer::ReconcileClusterInfo(
         GetClusterStateRspPb rsp;
         auto rc = pair.first->GetClusterStateAsyncRead(pair.second, rsp);
         if (rc.IsError()) {
-            LOG(WARNING) << "CheckEtcdStateAsyncRead failed, dest addr: " << pair.first->Address()
+            LOG(WARNING) << "CheckCoordinatorStateAsyncRead failed, dest addr: " << pair.first->Address()
                          << ", rc: " << rc.ToString();
             continue;
         }
         CHECK_FAIL_RETURN_STATUS(
-            !rsp.etcd_available(), K_RUNTIME_ERROR,
+            !rsp.coordinator_available(), K_RUNTIME_ERROR,
             pair.first->Address() + " confirms that etcd is normal, so this node needs to be restarted.");
         CHECK_FAIL_RETURN_STATUS(CompareMapFields<HashRingPb>(rsp.hash_ring(), localHashRingPb, "workers"),
                                  K_RUNTIME_ERROR,
@@ -923,7 +985,7 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
     CHECK_FAIL_RETURN_STATUS(FLAGS_enable_distributed_master, K_RUNTIME_ERROR,
                              "In the centralized master scenario, node restart lamely are not supported.");
     RETURN_IF_NOT_OK(ClusterManager::CreateEtcdStoreTable(etcdStore_.get()));
-    clusterInfo.etcdAvailable = false;
+    clusterInfo.coordinatorAvailable = false;
     // Load all hash rings from rocksdb and construct localHashRingPb.
     HashRingPb localHashRingPb;
     RETURN_IF_NOT_OK(LoadHashRingFromRocksDb(clusterInfo, localHashRingPb));
@@ -964,6 +1026,13 @@ Status WorkerOCServer::ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterI
 
 Status WorkerOCServer::ConstructClusterInfo(ClusterInfo &clusterInfo)
 {
+    if (!FLAGS_coordinator_address.empty()) {
+        clusterInfo.coordinatorAvailable = true;
+        RETURN_IF_NOT_OK(coordinationBackend_->GetAll(CLUSTER_TABLE, clusterInfo.workers));
+        clusterInfo.revision = 0;
+        return Status::OK();
+    }
+
     CHECK_FAIL_RETURN_STATUS(!backendAddress_.empty(), K_RUNTIME_ERROR, "Coordination backend address is empty.");
     auto etcdRc = CheckEtcdHealth(backendAddress_);
     if (etcdRc.IsError()) {
@@ -1057,36 +1126,11 @@ Status WorkerOCServer::Init()
     metadataManagerHolder_ = std::make_unique<MetadataManagerHolder>();
     resourceManager_ = std::make_unique<master::ResourceManager>();
 
-    // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
-    CHECK_FAIL_RETURN_STATUS(ValidateEtcdOrMetastoreAddress(), K_RUNTIME_ERROR,
-                             "Neither etcd_address nor metastore_address is specified");
-
-    // Determine which backend to use for metadata storage
-    if (!FLAGS_metastore_address.empty()) {
-        // Use metastore as the backend
-        backendAddress_ = FLAGS_metastore_address;
-        LOG(INFO) << "Using metastore as etcd replacement: " << backendAddress_;
-        if (FLAGS_start_metastore_service) {
-            // Start metastore service on this node (head worker)
-            RETURN_IF_NOT_OK(StartMetaStoreService());
-        }
-    } else {
-        // Use external etcd as the backend
-        FLAGS_etcd_address = ShuffleStringWithDelimiter(FLAGS_etcd_address, ETCD_ADDR_PATTREN);
-        backendAddress_ = FLAGS_etcd_address;
-        LOG(INFO) << "Using external etcd: " << backendAddress_;
-    }
-    etcdStore_ = std::make_unique<EtcdStore>(backendAddress_);
-    RETURN_IF_NOT_OK(etcdStore_->Init());
-    RETURN_IF_NOT_OK(
-        etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
-    etcdStore_->SetUpdateClusterInfoInRocksDbHandler(
-        std::bind(&WorkerOCServer::UpdateClusterInfoInRocksDb, this, std::placeholders::_1));
-    clusterManagerStore_ = std::make_unique<topology::EtcdCoordinationBackend>(etcdStore_.get());
+    RETURN_IF_NOT_OK(InitCoordinationBackend());
     // Need to start cluster manager first because many services relies on it, and cluster manager after start-up
     // could assign a master to this node by updating FLAGS_master_address.
-    clusterManager_ = std::make_unique<ClusterManager>(
-        hostPort_, masterAddr_, clusterManagerStore_.get(), akSkManager_);
+    clusterManager_ =
+        std::make_unique<ClusterManager>(hostPort_, masterAddr_, coordinationBackend_.get(), akSkManager_);
 
     RETURN_IF_NOT_OK(ClientManager::Instance().Init());
 
@@ -1119,9 +1163,8 @@ Status WorkerOCServer::Init()
     // rpc_server.cpp BuildAndStart() for details.
     if (FLAGS_use_brpc && rpcServer_) {
         int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
-            "Failed to start brpc server");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
+                                         "Failed to start brpc server");
     }
     RETURN_IF_NOT_OK(InitSlotRecovery());
 
@@ -1317,8 +1360,9 @@ void WorkerOCServer::RegisteringThirdComponentCallbackFunc()
     auto &instance = ResMetricCollector::Instance();
     if (EnableOCService()) {
         // The success rate of etcd request
-        instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE,
-                                        [this]() { return etcdStore_->GetEtcdRequestSuccessRate(); });
+        instance.RegisterCollectHandler(ResMetricName::ETCD_REQUEST_SUCCESS_RATE, [this]() {
+            return etcdStore_ == nullptr ? RES_ETCD_DEFAULT_USAGE : etcdStore_->GetEtcdRequestSuccessRate();
+        });
     }
     if (TESTFLAG(GetCurrentStorageType(), L2StorageType::OBS)) {
         // The success rate of obs request
@@ -1463,8 +1507,8 @@ bool WorkerOCServer::ShouldStopUrmaWarmup(int64_t elapsedMs, uint32_t stableRoun
 void WorkerOCServer::RunUrmaWarmupController()
 {
     Raii releaseWarmupPool([this]() { ReleaseWarmupThreadPool(); });
-    if (etcdStore_ == nullptr) {
-        LOG(WARNING) << "[URMA_WARMUP] etcd store is null, skip peer warmup.";
+    if (coordinationBackend_ == nullptr) {
+        LOG(WARNING) << "[URMA_WARMUP] coordination backend is null, skip peer warmup.";
         return;
     }
     const auto start = std::chrono::steady_clock::now();
@@ -1472,8 +1516,7 @@ void WorkerOCServer::RunUrmaWarmupController()
     std::vector<std::future<bool>> futures;
     for (uint32_t stableRounds = 0; !warmupExit_;) {
         std::vector<std::pair<std::string, std::string>> workers;
-        int64_t revision = 0;
-        auto rc = etcdStore_->GetAll(ETCD_CLUSTER_TABLE, workers, revision);
+        auto rc = coordinationBackend_->GetAll(CLUSTER_TABLE, workers);
         if (rc.IsError()) {
             LOG(WARNING) << "[URMA_WARMUP] get ready workers failed, status=" << rc.ToString();
         }
@@ -1819,8 +1862,9 @@ void WorkerOCServer::WaitClientsExit()
     // Set the exiting state to prevent 'frontend' from sending requests to me.
     (void)RetryUntilSuccessDuringGracefulExit([&] {
         if (checkThreadRunning_) {
-            LOG(INFO) << "Update node state in etcd to exiting";
-            return etcdStore_->UpdateNodeState(ETCD_NODE_EXITING);
+            LOG(INFO) << "Update node state in coordination backend to exiting";
+            CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
+            return coordinationBackend_->UpdateNodeState(ETCD_NODE_EXITING);
         }
         return Status::OK();
     });
@@ -2116,29 +2160,32 @@ void WorkerOCServer::SetCheckAsyncTasksDone(bool value)
 
 void WorkerOCServer::NotifyShutdownToEtcd()
 {
-    if (etcdStore_) {
-        constexpr int minRetryTimes = 3;
-        constexpr int64_t maxTimeoutMs = minRetryTimes * 60 * 1000;
-        int64_t timeoutMs = std::min(static_cast<int64_t>(FLAGS_node_timeout_s * 1000), maxTimeoutMs);
-        auto rpcTimeoutMs = std::min(std::max(1'000, static_cast<int>(FLAGS_node_timeout_s * 1000 / minRetryTimes)),
-                                     SEND_RPC_TIMEOUT_MS_DEFAULT);
-        auto startTime = std::chrono::steady_clock::now();
-        std::chrono::time_point<std::chrono::steady_clock> currTime;
-        uint64_t retryIntervalMs = 1000;
-        do {
-            auto rc = etcdStore_->Delete(ETCD_CLUSTER_TABLE, hostPort_.ToString(), 0, rpcTimeoutMs);
-            if (rc.IsOk() || rc.GetCode() == StatusCode::K_NOT_FOUND) {
-                LOG(INFO) << "Delete " << hostPort_.ToString() << " from etcd with status:" << rc.ToString();
-                break;
-            } else if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(retryIntervalMs));
-                currTime = std::chrono::steady_clock::now();
-            } else {
-                LOG(ERROR) << "Failed to proactively delete own key in etcd during exit process: " << rc.ToString();
-                break;
-            }
-        } while (std::chrono::duration_cast<std::chrono::milliseconds>(currTime - startTime).count() < timeoutMs);
+    if (coordinationBackend_ == nullptr) {
+        return;
     }
+    constexpr int minRetryTimes = 3;
+    constexpr int64_t maxTimeoutMs = minRetryTimes * 60 * 1000;
+    int64_t timeoutMs = std::min(static_cast<int64_t>(FLAGS_node_timeout_s * 1000), maxTimeoutMs);
+    auto rpcTimeoutMs = std::min(std::max(1'000, static_cast<int>(FLAGS_node_timeout_s * 1000 / minRetryTimes)),
+                                 SEND_RPC_TIMEOUT_MS_DEFAULT);
+    auto startTime = std::chrono::steady_clock::now();
+    std::chrono::time_point<std::chrono::steady_clock> currTime;
+    uint64_t retryIntervalMs = 1000;
+    do {
+        auto rc = coordinationBackend_->Delete(CLUSTER_TABLE, hostPort_.ToString(), rpcTimeoutMs);
+        if (rc.IsOk() || rc.GetCode() == StatusCode::K_NOT_FOUND) {
+            LOG(INFO) << "Delete " << hostPort_.ToString()
+                      << " from coordination backend with status:" << rc.ToString();
+            break;
+        } else if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryIntervalMs));
+            currTime = std::chrono::steady_clock::now();
+        } else {
+            LOG(ERROR) << "Failed to proactively delete own key in coordination backend during exit process: "
+                       << rc.ToString();
+            break;
+        }
+    } while (std::chrono::duration_cast<std::chrono::milliseconds>(currTime - startTime).count() < timeoutMs);
 }
 
 Status WorkerOCServer::UpdateConfig(const std::string &configJson)

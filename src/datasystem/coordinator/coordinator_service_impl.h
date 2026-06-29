@@ -20,15 +20,22 @@
 #ifndef DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 #define DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 
+#include <memory>
 #include <utility>
 
+#include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/protos/coordinator.service.rpc.pb.h"
 
 namespace datasystem {
 namespace coordinator {
 class CoordinatorServiceImpl : public CoordinatorService {
 public:
-    explicit CoordinatorServiceImpl(HostPort localAddress) : CoordinatorService(std::move(localAddress))
+    explicit CoordinatorServiceImpl(HostPort localAddress) : CoordinatorServiceImpl(std::move(localAddress), nullptr)
+    {
+    }
+
+    CoordinatorServiceImpl(HostPort localAddress, std::shared_ptr<CoordinatorStore> store)
+        : CoordinatorService(std::move(localAddress)), store_(std::move(store))
     {
     }
     ~CoordinatorServiceImpl() override = default;
@@ -37,7 +44,11 @@ public:
     Status Range(const RangeReqPb &req, RangeRspPb &rsp) override;
     Status DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp) override;
     Status WatchRange(const WatchRangeReqPb &req, WatchRangeRspPb &rsp) override;
+    Status CancelWatch(const CancelWatchReqPb &req, CancelWatchRspPb &rsp) override;
     Status KeepAlive(const KeepAliveReqPb &req, KeepAliveRspPb &rsp) override;
+
+private:
+    std::shared_ptr<CoordinatorStore> store_;
 };
 }  // namespace coordinator
 }  // namespace datasystem

@@ -167,12 +167,13 @@ TEST_F(KVClientEtcdDfxTest, DISABLED_TestWatchEventLost)
 
 TEST_F(KVClientEtcdDfxTest, TestEtcdCommitFailed)
 {
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({1}));
-    DS_ASSERT_NOT_OK(externalCluster_->StartWorkerAndWaitReady(
-        { 0 },
-        " -inject_actions=etcd.txn.commit:return(K_TRY_AGAIN);HashRing.InitWithEtcd.MotifyWaitTimeMs:call(3000)"));
-    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
-        { 2 }, " -inject_actions=etcd.txn.commit:30*return(K_TRY_AGAIN) "));
+    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 1 }));
+    DS_ASSERT_NOT_OK(
+        externalCluster_->StartWorkerAndWaitReady({ 0 },
+                                                  " -inject_actions=etcd.txn.commit:return(K_TRY_AGAIN);HashRing."
+                                                  "InitWithCoordinator.MotifyWaitTimeMs:call(3000)"));
+    DS_ASSERT_OK(
+        externalCluster_->StartWorkerAndWaitReady({ 2 }, " -inject_actions=etcd.txn.commit:30*return(K_TRY_AGAIN) "));
 }
 
 TEST_F(KVClientEtcdDfxTest, DISABLED_TestErrorMsgWhenEtcdFailed)
@@ -222,7 +223,7 @@ class KVClientEtcdDfxTestAdjustNodeTimeout : public KVClientEtcdDfxTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        timeoutS_ = 60;  // 60s
+        timeoutS_ = 60;       // 60s
         deadTimeoutS_ = 300;  // 300s
         KVClientEtcdDfxTest::SetClusterSetupOptions(opts);
         opts.disableRocksDB = false;
@@ -238,7 +239,7 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestSetHealthProbe)
                                                " -inject_actions=worker.RunKeepAliveTask:return(K_RPC_UNAVAILABLE)"));
     int waitReconciliationSec = 5;
     DS_ASSERT_NOT_OK(externalCluster_->WaitNodeReady(WORKER, 1, waitReconciliationSec));
-   
+
     DS_ASSERT_OK(externalCluster_->SetInjectAction(WORKER, 1, "WorkerOCServiceImpl.Reconciliation.SkipWait", "call()"));
     DS_ASSERT_OK(externalCluster_->ClearInjectAction(WORKER, 1, "worker.RunKeepAliveTask"));
     DS_ASSERT_OK(externalCluster_->WaitNodeReady(WORKER, 1, waitReconciliationSec));
@@ -313,5 +314,5 @@ TEST_F(KVClientEtcdDfxCentralizedMasterTest, DISABLED_LEVEL1_TestRestartWorkerDu
     DS_ASSERT_OK(externalCluster_->StartEtcdCluster());
 }
 
-}  // st
-}  // datasystem
+}  // namespace st
+}  // namespace datasystem

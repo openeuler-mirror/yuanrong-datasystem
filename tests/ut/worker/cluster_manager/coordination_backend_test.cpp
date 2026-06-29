@@ -109,7 +109,7 @@ TEST(CoordinationBackendTest, NullEtcdStoreReturnsRuntimeError)
     EXPECT_EQ(backend.GetStorePrefix(ETCD_RING_PREFIX, value).GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(backend.InformReconciliationDone(workerAddr).GetCode(), K_RUNTIME_ERROR);
     EXPECT_FALSE(backend.IsKeepAliveTimeout());
-    EXPECT_FALSE(backend.IsCreateFirstLease());
+    EXPECT_FALSE(backend.IsFirstKeepAliveSent());
 
     bool called = false;
     backend.SetEventHandler([&called](topology::CoordinationEvent &&) { called = true; });

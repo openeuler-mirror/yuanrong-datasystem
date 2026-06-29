@@ -15,6 +15,7 @@ set(DS_UT_DEPEND_LIBS
         common_etcd
         common_log_proto
         common_coordinator_store
+        coordinator_service_impl
         common_log
         common_metrics
         common_buffer

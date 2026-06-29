@@ -384,6 +384,8 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:template_util",
         "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/protos:coordinator_zmq_cc_proto",
+        "//src/datasystem/protos:coordinator_brpc",
         "//src/datasystem/protos:master_object_cc_proto",
         "//src/datasystem/protos:master_object_zmq_cc_proto",
         "//src/datasystem/protos:master_stream_cc_proto",

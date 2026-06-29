@@ -642,7 +642,7 @@ public:
     void SetHashRing(std::unique_ptr<worker::HashRing> &ring, HashRingPb &ringPb)
     {
         hashRing_ = std::move(ring);
-        DS_ASSERT_OK(hashRing_->InitWithoutEtcd(ringPb.SerializeAsString()));
+        DS_ASSERT_OK(hashRing_->InitWithoutCoordinator(ringPb.SerializeAsString()));
         routingView_ = hashRing_->GetRoutingView();
         PublishPlacementDirectorySnapshot();
     }

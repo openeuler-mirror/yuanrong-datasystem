@@ -90,7 +90,6 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 
-
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
@@ -337,10 +336,10 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     Status localRc = TryGetObjectFromLocal(request, remoteObjectKeys);
     const auto localProcessingUs = static_cast<uint64_t>(localProcessingTimer.ElapsedMicroSecond());
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && localProcessingUs >= config.processSlowerThanUs, 1,
-        FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
-                     "costUs: %zu, rc: %s",
-                     request->GetClientId(), request->GetRawObjectKeys().size(), remoteObjectKeys.size(),
-                     localProcessingUs, localRc.ToString()));
+                        FormatString("[Get] Local processing done, clientId: %s, objects: %zu, remoteObjects: %zu, "
+                                     "costUs: %zu, rc: %s",
+                                     request->GetClientId(), request->GetRawObjectKeys().size(),
+                                     remoteObjectKeys.size(), localProcessingUs, localRc.ToString()));
     RETURN_IF_NOT_OK(localRc);
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
 
@@ -815,8 +814,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
     const auto queryMetaUs = static_cast<uint64_t>(queryMetaTimer.ElapsedMicroSecond());
     const double queryMetaMs = static_cast<double>(queryMetaUs) / US_PER_MS;
     SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && queryMetaUs >= config.rpcSlowerThanUs, 1,
-        FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
-                     objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
+                        FormatString("[Get] Master query done, targets: %d, hits: %d, cost: %.3fms",
+                                     objectsNeedGetRemote.size(), queryMetas.size(), queryMetaMs));
     auto getRet = GetObjectsFromAnywhere(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     lastRc = getRet.IsError() ? getRet : lastRc;
     // If Get() is allowed to receive objects without meta, do it at last so that valid objects with meta can have
@@ -1305,7 +1304,8 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
     rpcPoint.Record();
     const auto remoteGetUs = static_cast<uint64_t>(remoteGetTimer.ElapsedMicroSecond());
     const double remoteGetMs = static_cast<double>(remoteGetUs) / US_PER_MS;
-    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && remoteGetUs >= config.rpcSlowerThanUs, 1,
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, config.rpcSlowerThanUs > 0 && remoteGetUs >= config.rpcSlowerThanUs, 1,
         AppendSrcDstForLog(
             FormatString("Remote get success, objectKey: %s, path: %s, cost: %.3fms", objectKV.GetObjKey(),
                          IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
@@ -1439,9 +1439,9 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromMasterImpl(const HostPort &destM
 }
 
 void WorkerOcServiceGetImpl::ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
-    const std::unordered_set<std::string> &routeFailedObjectKeys,
-    std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
-    std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys)
+    const std::unordered_set<std::string> &routeFailedObjectKeys, std::unordered_set<std::string> &&objectKeysNotExist,
+    const std::unordered_set<std::string> &objectKeysPuzzled, std::vector<master::QueryMetaInfoPb> &queryMetas,
+    std::vector<std::string> &absentObjectKeys)
 {
     absentObjectKeys.insert(absentObjectKeys.end(), objectKeysNotExist.begin(), objectKeysNotExist.end());
     if (routeFailedObjectKeys.empty() && objectKeysPuzzled.empty()) {
@@ -2154,6 +2154,8 @@ void WorkerOcServiceGetImpl::AsyncUpdateLocationFunc(UpdateLocationTask &&task)
     if (params.empty()) {
         return;
     }
+    const int64_t updateLocationTimeoutMs = 3000;
+    reqTimeoutDuration.Init(updateLocationTimeoutMs);
     PerfPoint point(PerfKey::WORKER_ASYNC_UPDATE_LOCATION_FUNCTION);
     if (params.size() == 1) {
         return AsyncUpdateSingleLocationFunc(std::move(task));
@@ -2729,9 +2731,9 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     }
     const auto totalExistUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalExistUs, config)) {
-        auto result = ComputePhaseDurations(
-            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-            Trace::Instance().GetLatencyTickDroppedCount());
+        auto result =
+            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+                                  Trace::Instance().GetLatencyTickDroppedCount());
         auto &downstream = Trace::Instance().GetDownstreamPhases();
         bool hasDownstream = downstream.count > 0;
         if (hasDownstream) {
@@ -2761,7 +2763,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     const double totalExistMs = static_cast<double>(totalExistUs) / US_PER_MS;
     GetWorkerTimeCost().Append("Total Exist", totalExistMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalExistUs >= config.processSlowerThanUs, 1,
-        FormatString("Exist done, cost: %.3fms, %s", totalExistMs, GetWorkerTimeCost().GetInfo()));
+                        FormatString("Exist done, cost: %.3fms, %s", totalExistMs, GetWorkerTimeCost().GetInfo()));
     return rc;
 }
 

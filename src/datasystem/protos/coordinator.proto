@@ -90,6 +90,15 @@ message WatchRangeRspPb {
   repeated KeyValue initial_kvs = 3;
 }
 
+message CancelWatchReqPb {
+  string watcher_addr = 1;
+  repeated int64 watch_ids = 2;
+}
+
+message CancelWatchRspPb {
+  ResponseHeader header = 1;
+}
+
 message KeepAliveReqPb {
   bytes key = 1;
 }
@@ -105,6 +114,7 @@ service CoordinatorService {
   rpc Range(RangeReqPb) returns (RangeRspPb) {}
   rpc DeleteRange(DeleteRangeReqPb) returns (DeleteRangeRspPb) {}
   rpc WatchRange(WatchRangeReqPb) returns (WatchRangeRspPb) {}
+  rpc CancelWatch(CancelWatchReqPb) returns (CancelWatchRspPb) {}
   rpc KeepAlive(KeepAliveReqPb) returns (KeepAliveRspPb) {}
 }
 

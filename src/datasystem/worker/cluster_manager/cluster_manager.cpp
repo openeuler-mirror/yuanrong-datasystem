@@ -152,7 +152,7 @@ ClusterManager::ClusterManager(const HostPort &workerAddress, const HostPort &ma
     workerWaitPost_ = std::make_unique<WaitPost>();
 
     clusterStore_->SetCheckStoreStateWhenNetworkFailedHandler(
-        std::bind(&ClusterManager::CheckEtcdStateWhenNetworkFailed, this));
+        std::bind(&ClusterManager::CheckCoordinatorStateWhenNetworkFailed, this));
 
     HashRingEvent::SyncClusterNodes::GetInstance().AddSubscriber(
         ETCD_CLUSTER_SUBSCRIBER,
@@ -217,7 +217,7 @@ Status ClusterManager::SetupInitialClusterNodes(const ClusterInfo &clusterInfo)
     for (const auto &node : clusterInfo.workers) {
         // node.first is the HostPort string key.  node.second is the timestamp
         // Enqueue a fake event and let the background thread to handle it.
-        if (workerAddress_.ToString() == node.first && clusterInfo.etcdAvailable) {
+        if (workerAddress_.ToString() == node.first && clusterInfo.coordinatorAvailable) {
             continue;
         }
         topology::CoordinationEvent fakeEvent{ topology::CoordinationEventType::PUT, clusterPrefix_ + "/" + node.first,
@@ -290,7 +290,7 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
 {
     LOG(INFO) << "Init cluster manager.";
     auto traceId = Trace::Instance().GetTraceID();
-    isEtcdAvailableWhenStart_ = clusterInfo.etcdAvailable;
+    isEtcdAvailableWhenStart_ = clusterInfo.coordinatorAvailable;
     clusterStore_->SetEventHandler([this, traceId](topology::CoordinationEvent &&event) {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         EnqueEvent(std::move(event));
@@ -320,10 +320,10 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
     RETURN_IF_NOT_OK(clusterStore_->WatchEvents(
         { { HASHRING_TABLE, "", clusterInfo.revision }, { CLUSTER_TABLE, "", clusterInfo.revision } }));
     // 5. Since the background and watch threads are up, it is time to initialize the hashring.
-    if (clusterInfo.etcdAvailable) {
-        RETURN_IF_NOT_OK(hashRing_->InitWithEtcd());
+    if (clusterInfo.coordinatorAvailable) {
+        RETURN_IF_NOT_OK(hashRing_->InitWithCoordinator());
     } else {
-        RETURN_IF_NOT_OK(hashRing_->InitWithoutEtcd(clusterInfo.localHashRing[0].second));
+        RETURN_IF_NOT_OK(hashRing_->InitWithoutCoordinator(clusterInfo.localHashRing[0].second));
     }
     PublishPlacementDirectorySnapshot();
 
@@ -1663,7 +1663,7 @@ bool ClusterManager::IfFindWorkerInTheClusterNode(HostPort &workerAddress)
     return clusterNodeTable_.find(accessor, workerAddress);
 }
 
-bool ClusterManager::CheckEtcdStateWhenNetworkFailed()
+bool ClusterManager::CheckCoordinatorStateWhenNetworkFailed()
 {
     if (akSkManager_ == nullptr) {
         LOG(ERROR) << "akskManager is nullptr";
@@ -1702,26 +1702,26 @@ bool ClusterManager::CheckEtcdStateWhenNetworkFailed()
 
     std::unordered_map<std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi>, int64_t> api2Tag;
     for (const auto &remoteWorkerApi : remoteWorkerApiTable) {
-        CheckEtcdStateReqPb req;
+        CheckCoordinatorStateReqPb req;
         int64_t tag;
-        auto rc = remoteWorkerApi->CheckEtcdStateAsyncWrite(req, tag);
+        auto rc = remoteWorkerApi->CheckCoordinatorStateAsyncWrite(req, tag);
         if (rc.IsError()) {
             LOG(WARNING) << "Rpc write failed, with rc: " << rc.ToString();
             continue;
         }
         api2Tag.emplace(remoteWorkerApi, tag);
     }
-    bool etcdAvailable = false;
+    bool coordinatorAvailable = false;
     for (const auto &pair : api2Tag) {
-        CheckEtcdStateRspPb rsp;
-        if (pair.first->CheckEtcdStateAsyncRead(pair.second, rsp) && !etcdAvailable && rsp.available()) {
+        CheckCoordinatorStateRspPb rsp;
+        if (pair.first->CheckCoordinatorStateAsyncRead(pair.second, rsp) && !coordinatorAvailable && rsp.available()) {
             LOG(INFO) << pair.first->Address() << " confirms that etcd is OK";
-            etcdAvailable = true;
+            coordinatorAvailable = true;
             // In ZmqStubImpl, the resources corresponding to the tags will be cleaned up only after reading,
             // so all tags need to be read.
         }
     }
-    return etcdAvailable;
+    return coordinatorAvailable;
 }
 
 std::string ClusterManager::GetWorkerIdByWorkerAddr(const std::string &address) const

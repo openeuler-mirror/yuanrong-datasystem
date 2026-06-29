@@ -1703,7 +1703,7 @@ TEST_F(STCScaleDownTest, LEVEL1_TestStartWorkerDuringScaleDown1)
     DS_ASSERT_OK(externalCluster_->StartWorker(
         0, HostPort(),
         FormatString(" -inject_actions=HashRing.InitRing.CheckQuickly:call(10);"
-                     "HashRing.InitWithEtcd.MotifyWaitTimeMs:call(%d)",
+                     "HashRing.InitWithCoordinator.MotifyWaitTimeMs:call(%d)",
                      restartWaitTimeMs)));
     ASSERT_FALSE(cluster_->WaitNodeReady(WORKER, 0, restartWaitTimeMs / msPerSec + 1).IsOk());
     WaitAllNodesJoinIntoHashRing(1, submitScaleDownTaskWaitTimeS + nodeDeadTimeoutS);

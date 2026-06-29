@@ -22,6 +22,7 @@
 #include <sstream>
 
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
 
 DS_DECLARE_bool(auto_del_dead_node);
@@ -36,7 +37,7 @@ std::string CoordinationEvent::ToString() const
 {
     std::stringstream ss;
     ss << "type: " << (type == CoordinationEventType::PUT ? "PUT" : "DELETE") << ", key: " << key
-       << ", value: " << value << ", version: " << version << ", revision: " << revision;
+       << ", version: " << version << ", revision: " << revision;
     return ss.str();
 }
 
@@ -82,11 +83,10 @@ Status CoordinationBackend::Get(const std::string &tableName, const std::string 
 Status CoordinationBackend::Get(const std::string &tableName, const std::string &key, RangeSearchResult &res,
                                 int32_t timeoutMs)
 {
-    (void)timeoutMs;
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision));
+    RETURN_IF_NOT_OK(proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision, timeoutMs));
     if (kvs.empty()) {
         RETURN_STATUS(K_NOT_FOUND, "The key does not exist in coordinator. key:" + key);
     }
@@ -106,20 +106,20 @@ Status CoordinationBackend::CAS(const std::string &tableName, const std::string 
     const std::string realKey = BuildRealKey(tableName, key);
     int64_t version = 0;
     int64_t revision = 0;
-    std::string oldValueFromCas;
-    auto coordinatorProcessFunc = [&processFunc, &oldValueFromCas](const std::string &oldValue, std::string &newValue,
-                                                                   bool &retry) -> Status {
-        oldValueFromCas = oldValue;
-        std::unique_ptr<std::string> out;
-        RETURN_IF_NOT_OK(processFunc(oldValue, out, retry));
-        if (out != nullptr) {
-            newValue = std::move(*out);
+    std::string valueFromCas;
+    auto coordinatorProcessFunc = [&processFunc, &valueFromCas](const std::string &oldValue,
+                                                                std::unique_ptr<std::string> &newValue,
+                                                                bool &retry) -> Status {
+        valueFromCas = oldValue;
+        RETURN_IF_NOT_OK(processFunc(oldValue, newValue, retry));
+        if (newValue != nullptr) {
+            valueFromCas = *newValue;
         }
         return Status::OK();
     };
     RETURN_IF_NOT_OK(proxy_->CAS(realKey, coordinatorProcessFunc, version, revision));
     res.key = realKey;
-    res.value = std::move(oldValueFromCas);
+    res.value = std::move(valueFromCas);
     res.version = version;
     res.modRevision = revision;
     return Status::OK();
@@ -151,10 +151,15 @@ Status CoordinationBackend::CAS(const std::string &tableName, const std::string 
 
 Status CoordinationBackend::Delete(const std::string &tableName, const std::string &key)
 {
+    return Delete(tableName, key, DEFAULT_COORDINATION_DELETE_TIMEOUT_MS);
+}
+
+Status CoordinationBackend::Delete(const std::string &tableName, const std::string &key, int timeoutMs)
+{
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     int64_t deleted = 0;
     int64_t revision = 0;
-    return proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision);
+    return proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs);
 }
 
 Status CoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
@@ -173,6 +178,7 @@ Status CoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
             event.value = kv.value;
             event.version = kv.version;
             event.revision = kv.modRevision;
+            LOG(INFO) << "WatchEvents: fake event " << event.ToString();
             HandleWatchEvent(std::move(event));
         }
     }
@@ -209,7 +215,6 @@ Status CoordinationBackend::InitKeepAlive(const std::string &tableName, const st
     } else {
         keepAliveValue_.state = "start";
     }
-    isCreateFirstLease_ = true;
     RETURN_IF_NOT_OK(AutoCreateKeepAliveKey());
     LaunchKeepAliveThread();
     return Status::OK();
@@ -231,8 +236,10 @@ Status CoordinationBackend::AutoCreateKeepAliveKey()
     }
     int64_t version = 0;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), value.ToString(), keepAliveTtlMs_,
-                                 COORDINATOR_NO_VERSION_CHECK, version, revision));
+    auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), value.ToString(), keepAliveTtlMs_,
+                          COORDINATOR_NO_VERSION_CHECK, version, revision);
+    LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
+    RETURN_IF_NOT_OK(rc);
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         if (keepAliveValue_.state == "start" || keepAliveValue_.state == "restart") {
@@ -276,6 +283,7 @@ void CoordinationBackend::RunKeepAliveLoop()
     const std::string realKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
     while (!keepAliveExit_) {
         auto rc = RenewKeepAliveOnce();
+        VLOG(1) << "Worker " << watcherAddr_ << " keepalive result: " << rc.ToString();
         if (rc.IsOk()) {
             keepAliveTimeout_ = false;
             keepAliveTimeoutTimer.Reset();
@@ -372,7 +380,6 @@ Status CoordinationBackend::UpdateNodeState(const std::string &state)
     int64_t revision = 0;
     RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), value.ToString(), keepAliveTtlMs_,
                                  COORDINATOR_NO_VERSION_CHECK, version, revision));
-    isCreateFirstLease_ = false;
     return Status::OK();
 }
 
@@ -407,9 +414,10 @@ bool CoordinationBackend::IsKeepAliveTimeout()
     return keepAliveTimeout_;
 }
 
-bool CoordinationBackend::IsCreateFirstLease()
+bool CoordinationBackend::IsFirstKeepAliveSent()
 {
-    return isCreateFirstLease_;
+    std::lock_guard<std::mutex> lock(keepAliveMutex_);
+    return keepAliveValue_.state == "recover";
 }
 
 void CoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

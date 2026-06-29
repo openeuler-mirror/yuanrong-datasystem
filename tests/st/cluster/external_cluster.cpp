@@ -136,11 +136,15 @@ Status ExternalCluster::ShutdownNodes(ClusterNodeType nodeType)
     if (ClusterNodeType::ALL == nodeType || ClusterNodeType::WORKER == nodeType) {
         ASSIGN_IF_NOT_OK(rc, ShutdownWorkers());
     }
-    /* 4th shutdown etcd. */
+    /* 4th shutdown coordinator. */
+    if (ClusterNodeType::ALL == nodeType || ClusterNodeType::COORDINATOR == nodeType) {
+        ASSIGN_IF_NOT_OK(rc, ShutdownCoordinators());
+    }
+    /* 5th shutdown etcd. */
     if (ClusterNodeType::ALL == nodeType || ClusterNodeType::ETCD == nodeType) {
         ASSIGN_IF_NOT_OK(rc, ShutdownEtcds());
     }
-    /* 5th shutdown obs. */
+    /* 6th shutdown obs. */
     if (ClusterNodeType::ALL == nodeType || ClusterNodeType::OBS == nodeType) {
         ASSIGN_IF_NOT_OK(rc, ShutdownOBSs());
     }
@@ -209,6 +213,21 @@ Status ExternalCluster::ShutdownMasters()
         }
     }
     masterProcesses_.clear();
+    return rc;
+}
+
+Status ExternalCluster::ShutdownCoordinators()
+{
+    Status rc = Status::OK();
+    for (auto &coordinatorProcess : coordinatorProcesses_) {
+        if (coordinatorProcess->IsProcessAlive()) {
+            ASSIGN_IF_NOT_OK_PRINT_ERROR_MSG(
+                rc, coordinatorProcess->Shutdown(),
+                FormatString("Coordinator process: %s shutdown failed.", coordinatorProcess->GetAddr().ToString()));
+            coordinatorProcess->Shutdown();
+        }
+    }
+    coordinatorProcesses_.clear();
     return rc;
 }
 
@@ -345,6 +364,14 @@ Status ExternalCluster::GetProcess(ClusterNodeType nodeType, uint32_t idx, Subpr
             }
             break;
         }
+        case ClusterNodeType::COORDINATOR: {
+            CHECK_FAIL_RETURN_STATUS(idx < coordinatorProcesses_.size(), K_INVALID, "Invalid index.");
+            process = coordinatorProcesses_[idx].get();
+            if (process->IsProcessAlive()) {
+                process->Shutdown();
+            }
+            break;
+        }
         default:
             RETURN_STATUS(K_INVALID, "Invalid node type.");
     }
@@ -440,6 +467,13 @@ std::string ExternalCluster::GetEtcdAddrs() const
         etcdAddress += addrs.first.ToString();
     }
     return etcdAddress;
+}
+
+Status ExternalCluster::GetCoordinatorAddr(uint32_t idx, HostPort &addr) const
+{
+    CHECK_FAIL_RETURN_STATUS(idx < coordinatorProcesses_.size(), StatusCode::K_INVALID, "Invalid idx.");
+    addr = coordinatorProcesses_[idx]->GetAddr();
+    return Status::OK();
 }
 
 Status ExternalCluster::GetMasterAddr(uint32_t idx, HostPort &addr) const
@@ -659,6 +693,17 @@ Status ExternalCluster::StartEtcdCluster()
     return WaitEtcdReadyOrTimeout(WAIT_TIMEOUT_SECS);
 }
 
+Status ExternalCluster::StartCoordinatorCluster()
+{
+    RETURN_OK_IF_TRUE(opts_.numCoordinators == 0);
+    CHECK_FAIL_RETURN_STATUS(opts_.numCoordinators <= opts_.coordinatorConfigs.size(), StatusCode::K_RUNTIME_ERROR,
+                             "The number of coordinatorConfigs is less than numCoordinators.");
+    for (size_t i = 0; i < opts_.numCoordinators; ++i) {
+        RETURN_IF_NOT_OK(StartCoordinatorNode(i));
+    }
+    return Status::OK();
+}
+
 Status ExternalCluster::StartMasters()
 {
     CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
@@ -735,6 +780,9 @@ Status ExternalCluster::WaitUntilClusterReadyOrTimeout(int timeoutSecs)
     for (size_t i = 0; i < opts_.numWorkers; ++i) {
         allAddrs.push_back(workerProcesses_[i]->GetAddr().ToString());
     }
+    for (size_t i = 0; i < opts_.numCoordinators; ++i) {
+        allAddrs.push_back(coordinatorProcesses_[i]->GetAddr().ToString());
+    }
     if (!opts_.isObjectCache) {
         for (size_t i = 0; i < opts_.numMasters; ++i) {
             allAddrs.push_back(masterProcesses_[i]->GetAddr().ToString());
@@ -773,9 +821,9 @@ Status ExternalCluster::CheckIpPortListen(const std::string &addr, int timeoutSe
         }
         timeval curr;
         gettimeofday(&curr, nullptr);
-        CHECK_FAIL_RETURN_STATUS(curr.tv_sec < deadLine, StatusCode::K_RUNTIME_ERROR,
-                                 FormatString("Process startup timed out. address: %s, port status: %s", addr,
-                                              lastRc.ToString()));
+        CHECK_FAIL_RETURN_STATUS(
+            curr.tv_sec < deadLine, StatusCode::K_RUNTIME_ERROR,
+            FormatString("Process startup timed out. address: %s, port status: %s", addr, lastRc.ToString()));
         std::this_thread::sleep_for(std::chrono::milliseconds(PORT_LISTEN_POLL_INTERVAL_MS));
     }
     return Status::OK();
@@ -851,7 +899,7 @@ Status ExternalCluster::StartOBS()
     }
     CHECK_FAIL_RETURN_STATUS(opts_.numOBS <= opts_.OBSIpAddrs.size(), StatusCode::K_RUNTIME_ERROR,
                              "The number of OBSIpAddrs is less than numOBS.");
- 
+
     for (size_t i = 0; i < opts_.numOBS; ++i) {
         RETURN_IF_NOT_OK(StartOBS(i));
     }
@@ -932,6 +980,21 @@ Status ExternalCluster::StartEtcdNode(int index)
     TestPortAllocator::Instance().RegisterChildPid(opts_.etcdIpAddrs[index].first.Port(), etcdProcess->Pid());
     TestPortAllocator::Instance().RegisterChildPid(opts_.etcdIpAddrs[index].second.Port(), etcdProcess->Pid());
     etcdProcesses_.emplace_back(std::move(etcdProcess));
+    return Status::OK();
+}
+
+Status ExternalCluster::StartCoordinatorNode(int index)
+{
+    std::string coordinatorCmd = COORDINATOR_BIN_PATH;
+    std::string rootDir = opts_.rootDir + "/coordinator" + std::to_string(index);
+    coordinatorCmd += " -coordinator_address=" + opts_.coordinatorConfigs[index].ToString() + " -log_dir=" + rootDir
+                      + "/log -v=" + std::to_string(opts_.vLogLevel) + " " + opts_.coordinatorGflagParams
+                      + " -rpc_thread_num=" + std::to_string(opts_.numRpcThreads);
+    LOG(INFO) << "Launch coordinator [" << index << "] command: " << coordinatorCmd;
+    auto coordinatorProcess = std::make_unique<CoordinatorProcess>(coordinatorCmd, opts_.coordinatorConfigs[index]);
+    RETURN_IF_NOT_OK(coordinatorProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.coordinatorConfigs[index].Port(), coordinatorProcess->Pid());
+    coordinatorProcesses_.emplace_back(std::move(coordinatorProcess));
     return Status::OK();
 }
 
@@ -1097,6 +1160,11 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     }
     if (opts_.enableLivenessProbe) {
         cmd += " -liveness_check_path=" + rootDir + "/liveness ";
+    }
+
+    if (opts_.numCoordinators > 0) {
+        CHECK_FAIL_RETURN_STATUS(!opts_.coordinatorConfigs.empty(), K_RUNTIME_ERROR, "Coordinator address is empty.");
+        cmd += " -coordinator_address=" + opts_.coordinatorConfigs[0].ToString();
     }
 
     if (opts_.numEtcd > 0) {

@@ -7,7 +7,55 @@ ds_cc_library(
     srcs = ["coordinator_service_impl.cpp"],
     hdrs = ["coordinator_service_impl.h"],
     deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_watch_dispatcher_impl",
+    srcs = ["watch_dispatcher_impl.cpp"],
+    hdrs = ["watch_dispatcher_impl.h"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/protos:coordinator_zmq_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_server",
+    srcs = ["coordinator_server.cpp"],
+    hdrs = ["coordinator_server.h"],
+    deps = [
+        ":coordinator_service_impl",
+        ":coordinator_watch_dispatcher_impl",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_auth_key_manager",
+        "//src/datasystem/common/rpc:rpc_channel",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/server:common_server",
+    ],
+)
+
+cc_binary(
+    name = "datasystem_coordinator",
+    srcs = ["coordinator_main.cpp"],
+    deps = [
+        ":coordinator_server",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/signal:signal",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/gflag:common_util_gflag_def",
     ],
 )

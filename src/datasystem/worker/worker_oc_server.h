@@ -44,7 +44,10 @@
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
+#include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
@@ -225,6 +228,12 @@ private:
     Status InitWorkerWorkerTransportService();
 
     /**
+     * @brief Init coordinator watch service for coordinator event callbacks.
+     * @return Status of the call.
+     */
+    Status InitCoordinatorWatchService();
+
+    /**
      * @brief Init object service for master request.
      * @return Status of the call.
      */
@@ -312,9 +321,8 @@ private:
     /**
      * @brief Create rebalance executor and register rebalance task handler.
      */
-    void CreateRebalanceExecutor(
-        const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
-        const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
+    void CreateRebalanceExecutor(const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+                                 const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
 
     /**
      * @brief Initialize all services above.
@@ -514,6 +522,12 @@ private:
     void UpdateClusterInfoInRocksDb(const mvccpb::Event &event);
 
     /**
+     * @brief Init remote coordination backend.
+     * @return Status of this call.
+     */
+    Status InitCoordinationBackend();
+
+    /**
      * @brief Construct coordination backend.
      * @return Status of this call.
      */
@@ -616,7 +630,8 @@ private:
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
     std::string backendAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<topology::EtcdCoordinationBackend> clusterManagerStore_;
+    std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
+    std::unique_ptr<topology::ICoordinationBackend> coordinationBackend_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
@@ -624,6 +639,7 @@ private:
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
     std::unique_ptr<datasystem::ClusterManager> clusterManager_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.
+    std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
     WaitPost waitCond_;
     // Object cache rpc service for client request.
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc_{ nullptr };

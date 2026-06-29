@@ -16,13 +16,43 @@
 
 #include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 
+#include "datasystem/common/util/status_helper.h"
+
 namespace datasystem {
 namespace coordinator {
+namespace {
+Status ConvertEventType(EventPb::EventType pbType, topology::CoordinationEventType &type)
+{
+    switch (pbType) {
+        case EventPb::PUT:
+            type = topology::CoordinationEventType::PUT;
+            return Status::OK();
+        case EventPb::DELETE:
+            type = topology::CoordinationEventType::DELETE;
+            return Status::OK();
+        default:
+            RETURN_STATUS(StatusCode::K_INVALID, "unknown coordinator watch event type");
+    }
+}
+}  // namespace
+
 Status CoordinatorWatchServiceImpl::HandleEvent(const EventReqPb &req, EventRspPb &rsp)
 {
-    (void)req;
     (void)rsp;
-    return Status(StatusCode::K_NOT_READY, "coordinator watch handler is not bound");
+    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
+                             "coordinator watch handler is not bound");
+
+    for (const auto &pbEvent : req.events()) {
+        topology::CoordinationEvent event;
+        RETURN_IF_NOT_OK(ConvertEventType(pbEvent.type(), event.type));
+        event.key = pbEvent.kv().key();
+        event.value = pbEvent.kv().value();
+        event.version = pbEvent.kv().version();
+        event.revision = pbEvent.kv().mod_revision();
+        VLOG(1) << "HandleEvent watchId: " << req.watch_id() << " event: " << event.ToString();
+        clusterManager_->EnqueueExternalEvent(std::move(event));
+    }
+    return Status::OK();
 }
 }  // namespace coordinator
 }  // namespace datasystem

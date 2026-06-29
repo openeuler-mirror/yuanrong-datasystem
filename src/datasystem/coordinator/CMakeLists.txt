@@ -1,4 +1,19 @@
 add_library(coordinator_service_impl STATIC coordinator_service_impl.cpp)
 target_include_directories(coordinator_service_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
-target_link_libraries(coordinator_service_impl PUBLIC coordinator_protos common_util)
+target_link_libraries(coordinator_service_impl PUBLIC coordinator_protos common_coordinator_store common_util)
 add_dependencies(coordinator_service_impl coordinator_protos)
+
+add_library(coordinator_watch_dispatcher_impl STATIC watch_dispatcher_impl.cpp)
+target_include_directories(coordinator_watch_dispatcher_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(coordinator_watch_dispatcher_impl PUBLIC coordinator_protos common_coordinator_store common_util common_flags rpc_stub_cache_mgr)
+add_dependencies(coordinator_watch_dispatcher_impl coordinator_protos)
+
+add_library(coordinator_server STATIC coordinator_server.cpp)
+target_include_directories(coordinator_server PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(coordinator_server PUBLIC coordinator_service_impl coordinator_watch_dispatcher_impl common_rpc_zmq common_log common_util ds_flags rpc_stub_cache_mgr ds_server)
+add_dependencies(coordinator_server coordinator_protos)
+
+add_executable(datasystem_coordinator coordinator_main.cpp)
+set_target_properties(datasystem_coordinator PROPERTIES LINK_FLAGS "-fPIE -pie")
+target_link_libraries(datasystem_coordinator PRIVATE coordinator_server common_signal common_log common_util)
+set_target_properties(datasystem_coordinator PROPERTIES OUTPUT_NAME datasystem_coordinator)
