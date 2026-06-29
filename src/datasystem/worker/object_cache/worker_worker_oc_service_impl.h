@@ -27,6 +27,7 @@
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/common/object_cache/shm_guard.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -166,6 +167,44 @@ private:
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr,
                                Status *fallbackStatus = nullptr,
                                BatchRh2dContext *batchRh2dContext = nullptr);
+
+    Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+                                      SafeObjType &entry, std::vector<RpcMessage> &outPayload,
+                                      const std::string &objectKey, uint64_t offset, uint64_t size,
+                                      bool blocking, std::vector<uint64_t> &eventKeys,
+                                      const std::shared_ptr<AggregateMemory> &batchPtr,
+                                      RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
+                                      Status *fallbackStatus, bool isFastTransportEnabled,
+                                      bool isUrmaFastTransport, bool isPipelineH2DRequest,
+                                      PerfPoint &batchImplPoint);
+
+    Status LockEntryForRemoteGet(const std::string &objectKey, bool tryLock, uint64_t version,
+                                 std::shared_ptr<SafeObjType> &safeEntry);
+
+    Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize,
+                                  const std::string &objectKey, bool isFastTransportEnabled,
+                                  GetObjectRemoteRspPb &rsp);
+
+    Status WriteViaFastTransport(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
+                                 std::shared_ptr<ShmUnit> shmUnit, uint64_t localSegAddress, uint64_t localSegSize,
+                                 uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
+                                 const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
+                                 bool isPipelineH2DRequest, Status &fastTransportStatus,
+                                 std::string &fastTransportName);
+
+    Status HandlePayloadFallback(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
+                                 std::vector<RpcMessage> &outPayload, ShmGuard &shmGuard,
+                                 std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
+                                 const std::string &fastTransportName,
+                                 const std::string &objectKey, bool isUrmaFastTransport,
+                                 bool isPipelineH2DRequest, bool blocking,
+                                 const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
+                                 RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
+                                 const ReadObjectKV &objKv, uint64_t localSegAddress, uint64_t localSegSize);
+
+    Status ProcessFallbackTrackError(const Status &rc, const Status &fastTransportStatus, bool blocking,
+        Status *fallbackStatus, bool &canPrepareFallbackPayload,
+        const std::string &objectKey);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.

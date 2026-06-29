@@ -404,6 +404,7 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
 
 Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &resp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     VLOG(1) << "Master " << GetLocalAddr().ToString()
             << " received GetObjectLocations req: " << LogHelper::IgnoreSensitive(req);
@@ -506,6 +507,7 @@ Status MasterOCServiceImpl::SendQueryGRefReq(const HostPort &addr, QueryGlobalRe
 
 Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received QueryGlobalRefNum req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -521,15 +523,15 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetClusterNodeAddresses(allWorkers),
                                      "cluster manager get cluster addrs failed");
 
-    std::unordered_set<std::string> reqObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    std::vector<std::string> objectKeys = { reqObjectKeys.begin(), reqObjectKeys.end() };
+    std::vector<std::string> objectKeys(req.object_keys().begin(), req.object_keys().end());
     ocMetadataManager->RedirectObjRefs(rsp, req.redirect(), objectKeys);
     if (rsp.ref_is_moving()) {
         return Status::OK();
     }
     if (req.object_keys_size() > 0) {
         std::unordered_map<std::string, QueryGlobalRefNumReqPb> queryTarget =
-            QueryWorkerGRefReqPbGen(reqObjectKeys, ocMetadataManager);
+            QueryWorkerGRefReqPbGen(
+                std::unordered_set<std::string>(objectKeys.begin(), objectKeys.end()), ocMetadataManager);
         for (const auto &targetWorker : queryTarget) {
             QueryGlobalRefNumRspPb rspWorker;
             HostPort addr;
@@ -804,6 +806,7 @@ Status MasterOCServiceImpl::ReportResource(const ResourceReportReqPb &req, Resou
 Status MasterOCServiceImpl::ReportRebalanceResult(const ReportRebalanceResultReqPb &req,
                                                   ReportRebalanceResultRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     INJECT_POINT("MasterOCServiceImpl.ReportRebalanceResult");
     return resourceManager_->ReportRebalanceResult(req, rsp);
@@ -821,6 +824,7 @@ Status MasterOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
 
 Status MasterOCServiceImpl::ReplacePrimary(const ReplacePrimaryReqPb &req, ReplacePrimaryRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master received ReplacePrimary req: %s, size: %ld", req.new_primary_addr(),
                               req.object_infos_size());
@@ -832,6 +836,7 @@ Status MasterOCServiceImpl::ReplacePrimary(const ReplacePrimaryReqPb &req, Repla
 
 Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received PureQueryMeta request, object size: " << req.object_keys_size();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -843,6 +848,7 @@ Status MasterOCServiceImpl::PureQueryMeta(const PureQueryMetaReqPb &req, PureQue
 Status MasterOCServiceImpl::CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req,
                                                     CheckObjectDataLocationRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received CheckObjectDataLocation request, object size: " << req.object_versions_size()
               << ", address: " << req.address();
@@ -855,6 +861,7 @@ Status MasterOCServiceImpl::CheckObjectDataLocation(const CheckObjectDataLocatio
 Status MasterOCServiceImpl::SubscribeReceiveEvent(
     std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     SubscribeReceiveEventReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -870,6 +877,7 @@ Status MasterOCServiceImpl::SubscribeReceiveEvent(
 Status MasterOCServiceImpl::GetP2PMeta(
     std::shared_ptr<ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     GetP2PMetaReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -883,6 +891,7 @@ Status MasterOCServiceImpl::GetP2PMeta(
 
 Status MasterOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received Send RootInfo req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
@@ -894,6 +903,7 @@ Status MasterOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootI
 Status MasterOCServiceImpl::RecvRootInfo(
     std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     RecvRootInfoReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -908,6 +918,7 @@ Status MasterOCServiceImpl::RecvRootInfo(
 
 Status MasterOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecvFinishRspPb &resp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received AckRecvFinish req: " << LogHelper::IgnoreSensitive(req);
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
@@ -933,6 +944,7 @@ std::string MasterOCServiceImpl::GetDbName()
 Status MasterOCServiceImpl::GetDataInfo(
     std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     GetDataInfoReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
@@ -947,6 +959,7 @@ Status MasterOCServiceImpl::GetDataInfo(
 
 Status MasterOCServiceImpl::ReleaseMetaData(const ReleaseMetaDataReqPb &req, ReleaseMetaDataRspPb &resp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::MasterDevOcManager> masterDevOcManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetDeviceOcManager(masterDevOcManager),
@@ -956,6 +969,7 @@ Status MasterOCServiceImpl::ReleaseMetaData(const ReleaseMetaDataReqPb &req, Rel
 
 Status MasterOCServiceImpl::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, RollbackMultiMetaRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     INJECT_POINT("master.RollbackMultiMeta.begin");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -971,6 +985,7 @@ Status MasterOCServiceImpl::RollbackMultiMeta(const RollbackMultiMetaReqPb &req,
 
 Status MasterOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << "Master received ExpireMeta request, object size: " << req.object_keys_size();
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
@@ -981,6 +996,7 @@ Status MasterOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 
 Status MasterOCServiceImpl::LivenessCheck(const LivenessCheckReqPb &req, LivenessCheckRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),

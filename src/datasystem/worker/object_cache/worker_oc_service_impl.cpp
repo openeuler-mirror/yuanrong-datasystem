@@ -417,6 +417,7 @@ std::string WorkerOCServiceImpl::GetHitInfo() const
 
 Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp, std::vector<RpcMessage> payloads)
 {
+    ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
@@ -433,6 +434,7 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
 Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp,
                                          std::vector<RpcMessage> payloads)
 {
+    ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
@@ -662,12 +664,14 @@ Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
 Status WorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                         std::vector<RpcMessage> payloads)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return gMigrateProc_->MigrateData(req, rsp, std::move(payloads));
 }
 
 Status WorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     return gMigrateProc_->MigrateDataDirect(req, rsp);
 }
@@ -960,6 +964,7 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
 
 Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
+    ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -973,6 +978,7 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 
 Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreateRspPb &resp)
 {
+    ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     Status returnStatus;
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
@@ -993,6 +999,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
 
 Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 {
+    ScopedRequestContext ctx;
     INJECT_POINT("Reconciliation.before");
     reqTimeoutDuration.Init(RPC_TIMEOUT);
     LOG(INFO) << "Reconciliation called between worker: " << localAddress_.ToString()
@@ -1047,6 +1054,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 
 Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
 {
+    ScopedRequestContext ctx;
     int hashWorkerNum = 0;
     RETURN_IF_NOT_OK(clusterManager_->GetHashRingWorkerNum(hashWorkerNum));
     if ((hashWorkerNum >= 0 && hashWorkerNum == numRecon_) || (hashWorkerNum < 0 && numRecon_ == 1)) {
@@ -1108,6 +1116,7 @@ Status WorkerOCServiceImpl::ReconciliationDecrRef(
 
 Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1494,6 +1503,7 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
 
 Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGRefsRspPb &resp)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1503,6 +1513,7 @@ Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
 
 Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1512,6 +1523,7 @@ Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
 
 Status WorkerOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1556,6 +1568,7 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
 
 Status WorkerOCServiceImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1568,12 +1581,14 @@ Status WorkerOCServiceImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteA
 
 Status WorkerOCServiceImpl::DeleteCopyNotification(const DeleteObjectReqPb &req, DeleteObjectRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     return deleteProc_->DeleteCopyNotification(req, rsp);
 }
 
 Status WorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenceObjectReqPb &req,
                                                     DeletePersistenceObjectRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     return deleteProc_->DeletePersistenceObject(req, rsp);
 }
 
@@ -1612,6 +1627,7 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
 
 Status WorkerOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -1990,6 +2006,7 @@ Status WorkerOCServiceImpl::CheckWaitNodeTableComplete()
 Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &req, PublishDeviceObjectRspPb &resp,
                                                 std::vector<RpcMessage> payloads)
 {
+    ScopedRequestContext ctx;
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -2012,6 +2029,7 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
 Status WorkerOCServiceImpl::GetDeviceObject(
     std::shared_ptr<ServerUnaryWriterReader<GetDeviceObjectRspPb, GetDeviceObjectReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2053,6 +2071,7 @@ Status WorkerOCServiceImpl::GetDeviceObject(
 
 Status WorkerOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRspPb &resp)
 {
+    ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_PUT_P2PMETA);
     std::string tenantId;
     CHECK_FAIL_RETURN_STATUS(req.dev_obj_meta_size() > 0 && req.dev_obj_meta(0).locations_size() > 0, K_INVALID,
@@ -2078,6 +2097,7 @@ Status WorkerOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
 Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_SUBSCRIBE_EVENT);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -2115,6 +2135,7 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
 Status WorkerOCServiceImpl::GetP2PMeta(
     std::shared_ptr<ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_GET_P2PMEATA);
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
@@ -2165,6 +2186,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
 
 Status WorkerOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
+    ScopedRequestContext ctx;
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.dst_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
@@ -2179,6 +2201,7 @@ Status WorkerOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootI
 Status WorkerOCServiceImpl::RecvRootInfo(
     std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2213,6 +2236,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
 
 Status WorkerOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecvFinishRspPb &resp)
 {
+    ScopedRequestContext ctx;
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.dst_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
@@ -2226,6 +2250,7 @@ Status WorkerOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecv
 
 Status WorkerOCServiceImpl::RemoveP2PLocation(const RemoveP2PLocationReqPb &req, RemoveP2PLocationRspPb &resp)
 {
+    ScopedRequestContext ctx;
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
         workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
@@ -2236,6 +2261,7 @@ Status WorkerOCServiceImpl::RemoveP2PLocation(const RemoveP2PLocationReqPb &req,
 Status WorkerOCServiceImpl::GetDataInfo(
     std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> serverApi)
 {
+    ScopedRequestContext ctx;
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2284,6 +2310,7 @@ Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetOb
 
 Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2292,6 +2319,7 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 
 Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2301,6 +2329,7 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 
 Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");
@@ -2342,6 +2371,7 @@ void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool su
 
 Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
+    ScopedRequestContext ctx;
     std::unordered_set<std::string> objectKeySet(req.object_keys().begin(), req.object_keys().end());
     QueryMetaMap queryMetas;
     std::unordered_set<std::string> failedIds;
