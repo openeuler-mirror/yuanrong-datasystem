@@ -29,6 +29,16 @@
 #include "datasystem/common/util/timer.h"
 
 namespace datasystem {
+namespace {
+// Half-word and full-word rotation amounts for hash mixing in GetRandomSeed.
+constexpr unsigned int ROTATE_BITS_HALF = 16;
+constexpr unsigned int ROTATE_BITS_WORD = 32;
+// Width (bits) of uint64_t and the corresponding rotation mask.
+constexpr unsigned int BITS_PER_UINT64 = 64;
+constexpr unsigned int UINT64_ROTATE_MASK = BITS_PER_UINT64 - 1;
+// Shift amount (bits) when folding std::random_device output into the high half.
+constexpr unsigned int RANDOM_DEVICE_SHIFT = 16;
+}  // namespace
 uint8_t RandomData::GetRandomUint8()
 {
     thread_local static std::uniform_int_distribution<uint8_t> distribution(0, std::numeric_limits<uint8_t>::max());
@@ -76,12 +86,31 @@ uint64_t RandomData::GetRandomSeed()
     static auto pidHash = std::hash<std::size_t>()(getpid());
     static thread_local auto tidHash = std::hash<std::thread::id>()(std::this_thread::get_id());
     uint64_t systemClock = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
-    uint64_t seed = static_cast<uint64_t>(rand()) ^ systemClock ^ hostHash;
     uint64_t highResClock = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    seed += highResClock ^ pidHash;
     uint64_t steadyClock = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
-    seed += steadyClock ^ tidHash;
+    // Mix entropy sources with rotation + addition so no pair can cancel out
+    // (the previous `^ pidHash` form could zero a contribution when the two
+    // operands happened to be equal). Folding pid by a prime and shifting tid
+    // into the high 32 bits guarantees that two processes (different pid) or
+    // two threads (different tid) cannot produce the same first mt19937 state,
+    // even if their wall/steady clocks align.
+    uint64_t seed = static_cast<uint64_t>(rand());
+    seed ^= systemClock ^ hostHash;
+    seed += highResClock;
+    seed ^= RotateLeft64(pidHash * 0x9E3779B97F4A7C15ULL, ROTATE_BITS_HALF);
+    seed ^= RotateLeft64(tidHash, ROTATE_BITS_WORD);
+    seed += steadyClock;
+    // Stir in hardware entropy so two processes started within the same
+    // clock tick still diverge; std::random_device is non-deterministic on
+    // Linux (reads /dev/urandom).
+    seed ^= (static_cast<uint64_t>(std::random_device()()) << RANDOM_DEVICE_SHIFT);
     return seed;
+}
+
+uint64_t RandomData::RotateLeft64(uint64_t value, unsigned int bits)
+{
+    bits &= UINT64_ROTATE_MASK;
+    return (value << bits) | (value >> ((BITS_PER_UINT64 - bits) & UINT64_ROTATE_MASK));
 }
 
 int32_t FastRand()

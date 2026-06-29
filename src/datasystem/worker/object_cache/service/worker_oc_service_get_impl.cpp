@@ -978,7 +978,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &o
         return Status::OK();
     }
     VLOG(1) << "Sync meta data to master as an object data copy provider.";
-    UpdateLocationParam param = { objectKey, version, static_cast<uint32_t>(entry->stateInfo.GetDataFormat()) };
+    UpdateLocationParam param = { objectKey, version, static_cast<uint32_t>(entry->stateInfo.GetDataFormat()),
+                                  Trace::Instance().GetTraceID() };
     UpdateLocationTask task = UpdateLocationTask(param);
     RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
     INJECT_POINT("create_copy_meta");
@@ -2121,7 +2122,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
     RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, objDatas, evictionManager_, memCpyThreadPool_));
     if (FLAGS_enable_data_replication) {
         UpdateLocationParam param = { objectKey, objectKV.GetObjEntry()->GetCreateTime(),
-                                      static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()) };
+                                      static_cast<uint32_t>(objectKV.GetObjEntry()->stateInfo.GetDataFormat()),
+                                      Trace::Instance().GetTraceID() };
         UpdateLocationTask task = UpdateLocationTask(param);
         RETURN_IF_NOT_OK(asyncUpdateLocationManager_->AddTask(std::move(task)));
         evictionManager_->Add(objectKey);
@@ -2135,12 +2137,25 @@ Status WorkerOcServiceGetImpl::GetObjectFromQueryMetaResultOnLock(const std::sha
 
 void WorkerOcServiceGetImpl::AsyncUpdateLocationFunc(UpdateLocationTask &&task)
 {
-    VLOG(1) << "AsyncUpdateLocationFunc, the size is " << task.GetParams().size();
-    if (task.GetParams().empty()) {
+    // The async update location worker thread does not inherit the trace ID from
+    // the handler that dispatched the task. Re-establish it from the first param
+    // (captured at AddTask time on the handler thread) so this VLOG and the
+    // downstream CreateCopyMeta RPC carry the original request's trace ID for
+    // correlation. Aggregated/batch tasks may merge params with different trace
+    // IDs; we pick the first for the entry log, single-param path restores it
+    // before the RPC. Use keep=true so the scope guard does not clear the trace
+    // for sibling work on this thread.
+    const auto &params = task.GetParams();
+    if (!params.empty() && !params.front().traceID.empty()) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(params.front().traceID, true);
+        (void)traceGuard;
+    }
+    VLOG(1) << "AsyncUpdateLocationFunc, the size is " << params.size();
+    if (params.empty()) {
         return;
     }
     PerfPoint point(PerfKey::WORKER_ASYNC_UPDATE_LOCATION_FUNCTION);
-    if (task.GetParams().size() == 1) {
+    if (params.size() == 1) {
         return AsyncUpdateSingleLocationFunc(std::move(task));
     }
     return AsyncBatchUpdateLocationFunc(std::move(task));

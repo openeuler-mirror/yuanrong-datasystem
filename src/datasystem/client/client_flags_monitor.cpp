@@ -20,8 +20,10 @@
 #include <cstring>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/gflag/config_monitor_state.h"
 #include "datasystem/common/util/uri.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_string(monitor_config_file);
@@ -83,6 +85,7 @@ void FlagsMonitor::Start()
 
 void FlagsMonitor::ListenConfigFile()
 {
+    Trace::Instance().SetTraceNewID("FlagsMonitor;" + GetStringUuid(), true);
     std::unique_lock<std::mutex> lock(mutex_);
     LOG(INFO) << "The path of the configuration file is:" << configFilePath_;
     while (!stop_) {

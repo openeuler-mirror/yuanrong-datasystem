@@ -274,8 +274,13 @@ TEST_F(MetricsTest, print_summary_uses_metrics_trace_id_test)
     testing::internal::CaptureStderr();
     metrics::PrintSummary();
     auto output = testing::internal::GetCapturedStderr();
-    auto traceId = (Logging::PodName() + "-metrics").substr(0, Trace::TRACEID_MAX_SIZE);
-    EXPECT_NE(output.find(" | " + traceId + " | "), std::string::npos);
+    // LogSummary now emits a stable per-process "Metrics;<uuid>" traceID
+    // (UUID is random per process, so assert on the literal prefix instead of
+    // the full value). The previous "<podName>-metrics" literal leaked the
+    // pod hostname into the traceID column and broke the role;<uuid>
+    // convention used by other background threads.
+    const std::string metricsTraceIdPrefix = "Metrics;";
+    EXPECT_NE(output.find(" | " + metricsTraceIdPrefix), std::string::npos);
     EXPECT_NE(output.find("{\"event\":\"metrics_summary\""), std::string::npos);
     EXPECT_EQ(output.find("\"trace_id\":"), std::string::npos);
 }

@@ -44,6 +44,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -218,6 +220,7 @@ Status WorkerOcEvictionManager::Init(const std::shared_ptr<ObjectGlobalRefTable<
     gRefTable_ = gRefTable;
     akSkManager_ = std::move(akSkManager);
     scheduleEvictThreadPool_->Submit([this]() {
+        Trace::Instance().SetTraceNewID("EvictionTimer;" + GetStringUuid(), true);
         Timer timer;
         while (!IsTermSignalReceived()) {
             auto evictInterval = 10;

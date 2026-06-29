@@ -40,6 +40,23 @@ __attribute__((weak)) Trace* GetBthreadTrace()
     return nullptr;
 }
 
+// Out-of-line definition (see header docstring for why this must NOT be inlined):
+// forces a single thread_local Trace instance shared across all DSOs that link
+// this translation unit (libdatasystem.so, the worker binary, and any SDK .so
+// that links libdatasystem.so). When the body was inlined in the header, each
+// DSO got its own thread_local instance and cross-DSO traceID propagation
+// silently broke (the client SDK's pybind lambdas wrote one instance while the
+// RPC-send / log-prefix paths read another, empty one).
+Trace &Trace::Instance()
+{
+    Trace* btTrace = GetBthreadTrace();
+    if (btTrace != nullptr) {
+        return *btTrace;
+    }
+    static thread_local Trace instance;
+    return instance;
+}
+
 }  // namespace datasystem
 
 namespace datasystem {

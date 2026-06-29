@@ -38,6 +38,8 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 bool ZmqStubConnMgr::logging_ = true;
@@ -317,6 +319,7 @@ Status ZmqFrontend::HandleEvent(int timeout)
 
 Status ZmqFrontend::WorkerEntry()
 {
+    Trace::Instance().SetTraceNewID("ZmqFrontend;" + GetStringUuid(), true);
     VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Async thread for ZMQ end point %s starts up", channel_->GetZmqEndPoint());
     // Initialize frontend socket in the thread that will use it.
     std::unique_ptr<Raii> initializeGuard = std::make_unique<Raii>([this]() { initWp_.Set(); });

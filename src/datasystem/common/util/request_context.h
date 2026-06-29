@@ -86,7 +86,17 @@ RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line 
 //   // Destructor automatically calls SetRequestContext(nullptr).
 class ScopedRequestContext {
 public:
-    ScopedRequestContext() { SetRequestContext(&ctx_); }
+    ScopedRequestContext()
+    {
+        // Snapshot the dispatcher's traceID, then re-set it onto ctx_.trace so LOG/access
+        // records inside the handler scope keep emitting the inherited traceID.
+        std::string inheritedTraceID = Trace::Instance().GetTraceID();
+        SetRequestContext(&ctx_);
+        if (!inheritedTraceID.empty()) {
+            TraceGuard guard = ctx_.trace.SetTraceNewID(inheritedTraceID, true);
+            (void)guard;
+        }
+    }
     ~ScopedRequestContext() { SetRequestContext(nullptr); }
 
     // Non-copyable, non-movable.

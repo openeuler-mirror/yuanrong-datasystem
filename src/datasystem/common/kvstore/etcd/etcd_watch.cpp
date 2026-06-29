@@ -21,6 +21,8 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 constexpr uint32_t WATCH_TASK_THREAD_NUM = 2;
 using std::chrono::milliseconds;
@@ -179,7 +181,7 @@ Status EtcdWatch::Run()
         // This thread polls Etcd stream for any events
         // And returns error if anything is wrong with Etcd
         producerStatus_ = watchPool_.Submit([this] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+            Trace::Instance().SetTraceNewID("EtcdWatch;" + GetStringUuid(), true);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WatchEvents(), "Watch Event thread failed");
             return Status::OK();
         });
@@ -187,7 +189,7 @@ Status EtcdWatch::Run()
         // Consumer thread to run user defined functions upon events
         if (!consumerStatus_.valid()) {
             consumerStatus_ = watchPool_.Submit([this] {
-                TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+                Trace::Instance().SetTraceNewID("EtcdEvent;" + GetStringUuid(), true);
                 return EventHandler();
             });
         }

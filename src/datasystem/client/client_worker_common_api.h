@@ -33,6 +33,11 @@
 #include <utility>
 #include <vector>
 
+// Defensive: this header uses LOG(INFO) inline and is included from many TUs.
+// Include log.h early so the datasystem spdlog-based LOG macro is in scope
+// before any brpc/butil header can #undef it.
+#include "datasystem/common/log/log.h"
+
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"

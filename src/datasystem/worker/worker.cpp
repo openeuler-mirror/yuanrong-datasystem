@@ -35,6 +35,8 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/failure_handler.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/signal/signal.h"
@@ -382,6 +384,7 @@ Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
 ///          Shared by both InitAndRun overloads.
 void Worker::RunEventLoopAndShutdown(Flags &flags)
 {
+    Trace::Instance().SetTraceNewID("WorkerMain;" + GetStringUuid(), true);
     PerfManager *perfManager = PerfManager::Instance();
     Timer timer;
     std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);

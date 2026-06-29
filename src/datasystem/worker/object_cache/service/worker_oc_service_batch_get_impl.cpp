@@ -370,6 +370,10 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     MarkNeedDeleteForDisconnectedMasters(successIds, entries, needSetDeleteObjectKeys);
 
     std::vector<UpdateLocationParam> asyncUpdateLocationParams;
+    // Capture trace ID once on the handler thread so the async update location
+    // worker can re-establish it for correlated logging and the downstream
+    // CreateCopyMeta RPC.
+    const std::string traceID = Trace::Instance().GetTraceID();
     if (successIds.size() == queryMetas.size()) {
         for (auto &queryMeta : queryMetas) {
             if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
@@ -377,7 +381,7 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
             }
             asyncUpdateLocationParams.emplace_back(
                 UpdateLocationParam{ queryMeta.meta().object_key(), queryMeta.meta().version(),
-                                     static_cast<uint32_t>(queryMeta.meta().config().data_format()) });
+                                     static_cast<uint32_t>(queryMeta.meta().config().data_format()), traceID });
         }
     } else {
         std::unordered_set<std::string> successIdSet;
@@ -391,7 +395,7 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
             const auto &objectKey = meta.object_key();
             if (successIdSet.find(objectKey) != successIdSet.end()) {
                 asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
-                    objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format()) });
+                    objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format()), traceID });
             }
         }
     }
@@ -409,6 +413,10 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     MarkNeedDeleteForDisconnectedMasters(successIds, entries, needSetDeleteObjectKeys);
 
     std::vector<UpdateLocationParam> asyncUpdateLocationParams;
+    // Capture trace ID once on the handler thread so the async update location
+    // worker can re-establish it for correlated logging and the downstream
+    // CreateCopyMeta RPC.
+    const std::string traceID = Trace::Instance().GetTraceID();
     for (const auto &objectKey : successIds) {
         if (needSetDeleteObjectKeys.find(objectKey) != needSetDeleteObjectKeys.end()) {
             continue;
@@ -416,7 +424,7 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
         const auto &meta = queryMetas.at(objectKey);
         asyncUpdateLocationParams.emplace_back(
             UpdateLocationParam{ meta.meta().object_key(), meta.meta().version(),
-                                 static_cast<uint32_t>(meta.meta().config().data_format()) });
+                                 static_cast<uint32_t>(meta.meta().config().data_format()), traceID });
     }
     SubmitAsyncUpdateLocation(asyncUpdateLocationParams);
 }

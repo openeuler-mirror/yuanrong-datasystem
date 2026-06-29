@@ -670,6 +670,16 @@ Status ZmqService::WorkerCB::HandleInternalRq(int fd, const MetaPb &meta, ZmqMsg
 
 Status ZmqService::WorkerCB::WorkerEntryImpl(MetaPb &meta, ZmqMsgFrames &inMsg, ZmqMsgFrames &replyMsg)
 {
+    // Re-establish traceID on this worker thread's thread_local Trace from the
+    // inbound meta. Without this, the handler-side thread_local Trace is empty
+    // (RouteToRegBackend's thrdPool_ lambda already called SetTraceNewID, but
+    // that wrote to a different thread's thread_local in some deployments, and
+    // DirectExecInternalMethod's SetTraceContextFromMeta is on the dispatcher
+    // thread, not the handler thread). WorkerEntryImpl is the synchronous
+    // entry to handler dispatch (CallMethod below), so a TraceGuard here keeps
+    // traceID alive for the entire handler scope — access log / log prefix
+    // then carry the traceID set by the client SDK.
+    TraceGuard workerEntryTraceGuard = SetTraceContextFromMeta(meta);
     int fd = meta.route_fd();
     const int idx = meta.method_index();
     if (idx >= 0) {

@@ -36,6 +36,8 @@
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/inject/inject_point.h"
 #endif
@@ -275,7 +277,16 @@ Status RocksStore::Put(const std::string &tableName, const std::string &key, con
         GetMasterTimeCost().Append("RocksDB Put", timer.ElapsedMilliSecond());
         return CheckAndRemoveDbPath(rc);
     } else if (mode_ == RocksdbWriteMode::ASYNC) {
-        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, value]() {
+        // Snapshot the caller's traceID so async-write error logs (rare, but
+        // important for diagnosis) inherit the request's traceID instead of
+        // appearing with an empty column. Falls back to a RocksStoreAsync;<uuid>
+        // tag when called from a background thread that has no active Trace.
+        auto callerTraceID = Trace::Instance().GetTraceID();
+        if (callerTraceID.empty()) {
+            callerTraceID = "RocksStoreAsync;" + GetStringUuid();
+        }
+        auto future = asyncThreadPool_->Submit(key, [this, tableHandle, key, value, callerTraceID]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(callerTraceID);
             rocksdb::Status rc = Put(tableHandle, key, value, FLAGS_rocksdb_sync_write);
             if (!rc.ok()) {
                 LOG(ERROR) << FormatString("Async Put key %s failed: %s", key, rc.getState());
