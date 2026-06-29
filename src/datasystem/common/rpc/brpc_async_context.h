@@ -26,6 +26,8 @@
 #ifndef DATASYSTEM_COMMON_RPC_BRPC_ASYNC_CONTEXT_H
 #define DATASYSTEM_COMMON_RPC_BRPC_ASYNC_CONTEXT_H
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <map>
@@ -57,9 +59,7 @@ struct BrpcAsyncCall {
     int errorCode = 0;
     std::string errorText;
     brpc::Controller cntl;
-    // Owned by BrpcAsyncCall: allocated by generated AsyncWrite,
-    // consumed (moved-from) by AsyncRead. unique_ptr guarantees cleanup
-    // for ForgetRequest or stub destruction while calls are in-flight.
+    // Owned by BrpcAsyncCall: allocated in generated AsyncWrite, consumed in AsyncRead.
     std::unique_ptr<google::protobuf::Message> response;
     // Heap-allocated copy of the request protobuf, passed to brpc::Channel::CallMethod.
     // brpc serializes the request asynchronously on a bthread; the pointer must outlive
@@ -72,17 +72,16 @@ struct BrpcAsyncCall {
 
 /**
  * Per-stub async context. Each BrpcStub instance owns one.
- * Thread-safe: the internal map is protected by a mutex.
- *
- * V10 note: contention on mapMtx_ is bounded per-stub (each stub has its
- * own BrpcAsyncContext), not global. A single stub's async QPS is limited
- * by the calling service's concurrency (typically <1000 QPS per stub).
- * If profiling shows this mutex hot, consider tbb::concurrent_hash_map or
- * a sharded map keyed by tagId % N. Tracked as low-priority follow-up.
+ * Thread-safe: pending calls are sharded into 32 buckets, each with its own
+ * mutex, keyed by tagId. OnRpcDone runs on a brpc bthread and only locks
+ * the per-call mutex (no shard-mutex contention from the callback path).
  */
 class BrpcAsyncContext {
 public:
-    BrpcAsyncContext() : nextTagId_(1) {}
+    static constexpr size_t kShardCount = 32;
+    static_assert((kShardCount & (kShardCount - 1)) == 0, "kShardCount must be a power of 2");
+
+    BrpcAsyncContext() = default;
     ~BrpcAsyncContext() = default;
 
     /**
@@ -91,10 +90,11 @@ public:
      */
     int64_t AllocateTag()
     {
-        std::lock_guard<std::mutex> lock(mapMtx_);
-        int64_t tagId = nextTagId_++;
+        int64_t tagId = nextTagId_.fetch_add(1, std::memory_order_relaxed);
         auto call = std::make_shared<BrpcAsyncCall>();
-        pendingCalls_[tagId] = call;
+        auto& shard = shards_[GetShardIndex(tagId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        shard.pendingCalls[tagId] = call;
         return tagId;
     }
 
@@ -104,9 +104,10 @@ public:
      */
     std::shared_ptr<BrpcAsyncCall> GetCall(int64_t tagId)
     {
-        std::lock_guard<std::mutex> lock(mapMtx_);
-        auto it = pendingCalls_.find(tagId);
-        if (it == pendingCalls_.end()) {
+        auto& shard = shards_[GetShardIndex(tagId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        auto it = shard.pendingCalls.find(tagId);
+        if (it == shard.pendingCalls.end()) {
             return nullptr;
         }
         return it->second;
@@ -118,7 +119,6 @@ public:
      */
     google::protobuf::Closure *MakeDone(std::shared_ptr<BrpcAsyncCall> call)
     {
-        // brpc::NewCallback allocates; closure is self-deleted after Run().
         return brpc::NewCallback(&OnRpcDone, call);
     }
 
@@ -127,13 +127,14 @@ public:
      */
     std::shared_ptr<BrpcAsyncCall> TakeCall(int64_t tagId)
     {
-        std::lock_guard<std::mutex> lock(mapMtx_);
-        auto it = pendingCalls_.find(tagId);
-        if (it == pendingCalls_.end()) {
+        auto& shard = shards_[GetShardIndex(tagId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        auto it = shard.pendingCalls.find(tagId);
+        if (it == shard.pendingCalls.end()) {
             return nullptr;
         }
         auto call = std::move(it->second);
-        pendingCalls_.erase(it);
+        shard.pendingCalls.erase(it);
         return call;
     }
 
@@ -145,58 +146,87 @@ public:
      */
     void ForgetCall(int64_t tagId)
     {
-        std::lock_guard<std::mutex> lock(mapMtx_);
-        pendingCalls_.erase(tagId);
-        CleanupExpiredLocked();
+        size_t idx = GetShardIndex(tagId);
+        {
+            auto& shard = shards_[idx];
+            std::lock_guard<std::mutex> lock(shard.mutex);
+            shard.pendingCalls.erase(tagId);
+            CleanupExpiredInShard(shard);
+        }
+        // Round-robin: each ForgetCall also reaps one other shard,
+        // so 32 consecutive ForgetCalls cover the whole table.
+        size_t cleanIdx = nextCleanupShard_.fetch_add(1, std::memory_order_relaxed) % kShardCount;
+        if (cleanIdx != idx) {
+            auto& s = shards_[cleanIdx];
+            std::lock_guard<std::mutex> lock(s.mutex);
+            CleanupExpiredInShard(s);
+        }
     }
 
 private:
+    struct Shard {
+        std::mutex mutex;
+        std::map<int64_t, std::shared_ptr<BrpcAsyncCall>> pendingCalls;
+    };
+
+    size_t GetShardIndex(int64_t tagId) const
+    {
+        return static_cast<size_t>(tagId) & (kShardCount - 1);
+    }
+
+    std::array<Shard, kShardCount> shards_;
+    std::atomic<int64_t> nextTagId_{1};
+    std::atomic<size_t> nextCleanupShard_{0};
+
     static constexpr auto kPendingCallTtl = std::chrono::minutes(5);
     static constexpr size_t kCleanupLogInterval = 100;
 
-    /// Remove entries older than kPendingCallTtl (called under mapMtx_).
-    void CleanupExpiredLocked()
+    // Scan a single shard for expired entries. Old code scanned the global
+    // map on every ForgetCall; now each ForgetCall only cleans its own shard.
+    // Worst case: a shard with no ForgetCall activity may retain orphaned
+    // entries up to 32× the typical ForgetCall interval before cleanup.
+    // This is acceptable because (a) orphaned calls are rare in practice
+    // (every AsyncWrite is paired with AsyncRead or ForgetRequest), and
+    // (b) the stub destructor cleans up all remaining entries on shutdown.
+    void CleanupExpiredInShard(Shard& shard)
     {
         auto now = std::chrono::steady_clock::now();
-        for (auto it = pendingCalls_.begin(); it != pendingCalls_.end();) {
+        for (auto it = shard.pendingCalls.begin(); it != shard.pendingCalls.end();) {
             if (now - it->second->createdAt > kPendingCallTtl) {
                 LOG_EVERY_N(WARNING, kCleanupLogInterval) << "BrpcAsyncContext: expiring stale pending call tag="
                                           << it->first << " (age="
                                           << std::chrono::duration_cast<std::chrono::seconds>(
                                                  now - it->second->createdAt).count()
                                           << "s) — AsyncRead never called";
-                it = pendingCalls_.erase(it);
+                it = shard.pendingCalls.erase(it);
             } else {
                 ++it;
             }
         }
     }
+
     /**
      * Called by brpc when the async RPC completes (runs on bthread).
      * Signals the condition variable so AsyncRead can proceed.
      */
     static void OnRpcDone(std::shared_ptr<BrpcAsyncCall> call)
     {
-        {
-            std::lock_guard<std::mutex> lock(call->mtx);
-            call->failed = call->cntl.Failed();
-            if (call->failed) {
-                call->errorCode = call->cntl.ErrorCode();
-                call->errorText = call->cntl.ErrorText();
-            }
-            call->responseAttachment = call->cntl.response_attachment();
-            call->completed = true;
-            call->cv.notify_one();
+        std::lock_guard<std::mutex> lock(call->mtx);
+        call->failed = call->cntl.Failed();
+        if (call->failed) {
+            call->errorCode = call->cntl.ErrorCode();
+            call->errorText = call->cntl.ErrorText();
         }
+        // Snapshot response_attachment under lock so AsyncRead does not access
+        // cntl after OnRpcDone returns (lock-free access safety).
+        call->responseAttachment = call->cntl.response_attachment();
+        call->completed = true;
+        call->cv.notify_one();
         // The shared_ptr<BrpcAsyncCall> is also held by pendingCalls_.
         // When this closure self-deletes after Run(), it drops its ref.
         // Orphaned calls (AsyncRead never invoked) are cleaned up by
-        // CleanupExpiredLocked (5-minute TTL, piggybacked on ForgetCall).
+        // ForgetCall via round-robin CleanupExpiredInShard (5-minute TTL).
     }
-
-    std::mutex mapMtx_;
-    std::map<int64_t, std::shared_ptr<BrpcAsyncCall>> pendingCalls_;
-    int64_t nextTagId_;
 };
 
 }  // namespace datasystem

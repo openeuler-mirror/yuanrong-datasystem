@@ -1,0 +1,12 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "async_echo_bench",
+    srcs = ["async_echo_bench.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "//src/datasystem/common/rpc/brpc:hello_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "@com_github_gflags_gflags//:gflags",
+    ],
+)
