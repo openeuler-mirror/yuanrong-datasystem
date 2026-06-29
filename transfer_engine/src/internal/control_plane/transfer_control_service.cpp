@@ -6,9 +6,8 @@
 #include <thread>
 #include <utility>
 
-#include <glog/logging.h>
-
 #include "internal/log/environment_dump.h"
+#include "internal/log/logging.h"
 #include "internal/runtime/acl_runtime_helper.h"
 #include "internal/connection/connection_manager.h"
 #include "internal/memory/registered_memory_table.h"
@@ -77,7 +76,7 @@ public:
             if (ownerInitQueue_.size() >= kMaxOwnerInitQueueSize) {
                 rsp->code = static_cast<int32_t>(ErrorCode::kNotReady);
                 rsp->msg = "owner init queue is full";
-                LOG(WARNING) << "owner init queue full"
+                TE_LOG_WARNING << "owner init queue full"
                              << ", requester=" << req.requesterHost << ":" << req.requesterPort
                              << ", requester_device_id=" << req.requesterDeviceId
                              << ", queue_size=" << ownerInitQueue_.size();
@@ -85,7 +84,7 @@ public:
             }
             ownerInitQueue_.push_back(std::move(task));
         }
-        LOG(INFO) << "exchange root info accepted"
+        TE_LOG_INFO << "exchange root info accepted"
                   << ", requester=" << req.requesterHost << ":" << req.requesterPort
                   << ", requester_device_id=" << req.requesterDeviceId
                   << ", owner_device_id=" << localDeviceId_;
@@ -119,7 +118,7 @@ public:
         if (!registeredMemory_->FindDeviceIdByRange(req.remoteAddr, req.length, &registeredNpuId)) {
             rsp->code = static_cast<int32_t>(ErrorCode::kNotAuthorized);
             rsp->msg = "remote range is not registered";
-            LOG(WARNING) << "read trigger rejected: remote range not registered"
+            TE_LOG_WARNING << "read trigger rejected: remote range not registered"
                          << ", request_id=" << req.requestId
                          << ", requester=" << req.requesterHost << ":" << req.requesterPort
                          << ", remote_addr=0x" << std::hex << req.remoteAddr << std::dec
@@ -130,7 +129,7 @@ public:
             if (registeredNpuId != localDeviceId_) {
                 rsp->code = static_cast<int32_t>(ErrorCode::kNotSupported);
                 rsp->msg = "registered npu_id does not match owner initialized device_id";
-                LOG(WARNING) << "read trigger rejected: registered npu mismatch"
+                TE_LOG_WARNING << "read trigger rejected: registered npu mismatch"
                              << ", request_id=" << req.requestId
                              << ", registered_npu_id=" << registeredNpuId
                              << ", owner_device_id=" << localDeviceId_;
@@ -150,7 +149,7 @@ public:
         if (sendRc.IsError()) {
             rsp->code = static_cast<int32_t>(sendRc.GetCode());
             rsp->msg = sendRc.GetMsg();
-            LOG(ERROR) << "read trigger post send failed"
+            TE_LOG_ERROR << "read trigger post send failed"
                        << ", request_id=" << req.requestId
                        << ", requester=" << req.requesterHost << ":" << req.requesterPort
                        << ", reason=" << sendRc.ToString();
@@ -159,7 +158,7 @@ public:
 
         rsp->code = kRpcOkCode;
         rsp->msg = "accepted";
-        LOG(INFO) << "read trigger accepted"
+        TE_LOG_INFO << "read trigger accepted"
                   << ", request_id=" << req.requestId
                   << ", requester=" << req.requesterHost << ":" << req.requesterPort
                   << ", requester_device_id=" << req.requesterDeviceId
@@ -242,13 +241,13 @@ private:
             }
             if (rc.IsOk()) {
                 connMgr_->MarkOwnerSendReady(task.key);
-                LOG(INFO) << "owner init done"
+                TE_LOG_INFO << "owner init done"
                           << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
                           << ", peer_device_id=" << task.spec.peerDeviceId
                           << ", owner_device_id=" << localDeviceId_;
             } else {
                 connMgr_->MarkStale(task.key);
-                LOG(ERROR) << "owner init failed"
+                TE_LOG_ERROR << "owner init failed"
                            << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
                            << ", peer_device_id=" << task.spec.peerDeviceId
                            << ", reason=" << rc.ToString();

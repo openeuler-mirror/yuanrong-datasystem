@@ -10,9 +10,8 @@
 #include <cerrno>
 #include <cstring>
 
-#include <glog/logging.h>
-
 #include "datasystem/transfer_engine/status_helper.h"
+#include "internal/log/logging.h"
 
 namespace datasystem {
 namespace {
@@ -134,7 +133,7 @@ Result ConnectTo(const std::string &host, uint16_t port, int *fd)
     const std::string portStr = std::to_string(port);
     const int gaiRc = getaddrinfo(host.c_str(), portStr.c_str(), &hints, &result);
     if (gaiRc != 0) {
-        LOG(WARNING) << "getaddrinfo failed"
+        TE_LOG_WARNING << "getaddrinfo failed"
                      << ", host=" << host << ", port=" << port << ", gai_rc=" << gaiRc;
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, std::string("getaddrinfo failed: ") + gai_strerror(gaiRc));
     }
@@ -154,7 +153,7 @@ Result ConnectTo(const std::string &host, uint16_t port, int *fd)
         sock = -1;
     }
     freeaddrinfo(result);
-    LOG(WARNING) << "connect failed, host=" << host << ", port=" << port;
+    TE_LOG_WARNING << "connect failed, host=" << host << ", port=" << port;
     return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "connect failed");
 }
 
@@ -177,12 +176,12 @@ Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, i
         return addrRc;
     }
     if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-        LOG(ERROR) << "bind failed, host=" << host << ", port=" << port << ", errno=" << errno;
+        TE_LOG_ERROR << "bind failed, host=" << host << ", port=" << port << ", errno=" << errno;
         ::close(fd);
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "bind failed");
     }
     if (::listen(fd, backlog) != 0) {
-        LOG(ERROR) << "listen failed, host=" << host << ", port=" << port << ", errno=" << errno;
+        TE_LOG_ERROR << "listen failed, host=" << host << ", port=" << port << ", errno=" << errno;
         ::close(fd);
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "listen failed");
     }
@@ -251,7 +250,7 @@ Result InvokeRpc(const std::string &host, uint16_t port, RpcMethod expectedMetho
     RpcMethod method;
     TE_RETURN_IF_ERROR(RecvFrame(scopedFd.Get(), &method, rspPayload));
     if (method != expectedMethod) {
-        LOG(ERROR) << "rpc method mismatch, expected=" << static_cast<int>(expectedMethod)
+        TE_LOG_ERROR << "rpc method mismatch, expected=" << static_cast<int>(expectedMethod)
                    << ", actual=" << static_cast<int>(method);
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "rpc method mismatch");
     }

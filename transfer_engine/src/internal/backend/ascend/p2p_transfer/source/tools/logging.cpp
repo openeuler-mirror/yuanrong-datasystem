@@ -3,22 +3,83 @@
  */
 #include "tools/logging.h"
 
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
-#include <iostream>
+#include <string>
 
-#ifdef P2P_TRANSFER_USE_GLOG
-#include <glog/logging.h>
-#endif
+#include <pthread.h>
+#include <unistd.h>
 
 extern char **environ;
 
 namespace p2p {
-
 namespace {
 
-void PrintFallback(const char *level, const std::string &message)
+enum class LogSeverity {
+    INFO = 0,
+    WARNING = 1,
+    ERROR = 2,
+};
+
+std::atomic<P2pLogCallback> g_logCallback{ nullptr };
+
+const char *SeverityName(LogSeverity severity)
 {
-    std::cerr << "[P2P][" << level << "] " << message << std::endl;
+    switch (severity) {
+        case LogSeverity::INFO:
+            return "INFO";
+        case LogSeverity::WARNING:
+            return "WARNING";
+        case LogSeverity::ERROR:
+            return "ERROR";
+        default:
+            return "INFO";
+    }
+}
+
+void WriteAll(int fd, const char *data, size_t size)
+{
+    while (size > 0) {
+        const ssize_t written = write(fd, data, size);
+        if (written > 0) {
+            data += written;
+            size -= static_cast<size_t>(written);
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+}
+
+void PrintFallback(LogSeverity severity, const std::string &message)
+{
+    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    const bool locked = pthread_mutex_lock(&mutex) == 0;
+
+    char prefix[64] = {};
+    const int prefixSize = std::snprintf(prefix, sizeof(prefix), "[P2P][%s] ", SeverityName(severity));
+    if (prefixSize > 0) {
+        WriteAll(STDERR_FILENO, prefix, static_cast<size_t>(prefixSize));
+    }
+    WriteAll(STDERR_FILENO, message.data(), message.size());
+    WriteAll(STDERR_FILENO, "\n", 1);
+    if (locked) {
+        (void)pthread_mutex_unlock(&mutex);
+    }
+}
+
+bool EmitToCallback(P2pLogSeverity severity, int vlogLevel, const std::string &message, const char *file, int line)
+{
+    P2pLogCallback callback = g_logCallback.load(std::memory_order_acquire);
+    if (callback == nullptr) {
+        return false;
+    }
+    callback(severity, vlogLevel, file, line, message.c_str());
+    return true;
 }
 
 bool IsEnvDumpEnabled()
@@ -34,31 +95,33 @@ bool IsEnvDumpEnabled()
 
 }  // namespace
 
+void SetLogCallback(P2pLogCallback callback)
+{
+    g_logCallback.store(callback, std::memory_order_release);
+}
+
 void LogInfo(const std::string &message)
 {
-#ifdef P2P_TRANSFER_USE_GLOG
-    VLOG(1) << "[P2P] " << message;
-#else
-    PrintFallback("INFO", message);
-#endif
+    if (EmitToCallback(P2P_LOG_INFO, 1, message, __FILE__, __LINE__)) {
+        return;
+    }
+    PrintFallback(LogSeverity::INFO, message);
 }
 
 void LogWarning(const std::string &message)
 {
-#ifdef P2P_TRANSFER_USE_GLOG
-    LOG(WARNING) << "[P2P] " << message;
-#else
-    PrintFallback("WARN", message);
-#endif
+    if (EmitToCallback(P2P_LOG_WARNING, -1, message, __FILE__, __LINE__)) {
+        return;
+    }
+    PrintFallback(LogSeverity::WARNING, message);
 }
 
 void LogError(const std::string &message)
 {
-#ifdef P2P_TRANSFER_USE_GLOG
-    LOG(ERROR) << "[P2P] " << message;
-#else
-    PrintFallback("ERROR", message);
-#endif
+    if (EmitToCallback(P2P_LOG_ERROR, -1, message, __FILE__, __LINE__)) {
+        return;
+    }
+    PrintFallback(LogSeverity::ERROR, message);
 }
 
 void DumpProcessEnvironment(const char *stage)
@@ -79,3 +142,8 @@ void DumpProcessEnvironment(const char *stage)
 }
 
 }  // namespace p2p
+
+extern "C" void P2PSetLogCallback(P2pLogCallback callback)
+{
+    p2p::SetLogCallback(callback);
+}

@@ -1,0 +1,71 @@
+diff --git a/src/butil/logging.cc b/src/butil/logging.cc
+index e4964d0..27f2716 100644
+--- a/src/butil/logging.cc
++++ b/src/butil/logging.cc
+@@ -132,3 +132,3 @@ BUTIL_VALIDATE_GFLAG(print_stack_on_check, butil::PassValidate);
+-DEFINE_int32(v, 0, "Show all VLOG(m) messages for m <= this."
+-             " Overridable by --vmodule.");
+-DEFINE_string(vmodule, "", "per-module verbose level."
++DEFINE_int32(brpc_v, 0, "Show all VLOG(m) messages for m <= this."
++             " Overridable by --brpc_vmodule.");
++DEFINE_string(brpc_vmodule, "", "per-module verbose level."
+@@ -138 +138 @@ DEFINE_string(vmodule, "", "per-module verbose level."
+-              " LOG_LEVEL overrides any value given by --v.");
++              " LOG_LEVEL overrides any value given by --brpc_v.");
+@@ -144 +144 @@ DEFINE_bool(log_bid, true, "Log bthread id");
+-DEFINE_int32(minloglevel, 0, "Any log at or above this level will be "
++DEFINE_int32(brpc_minloglevel, 0, "Any log at or above this level will be "
+@@ -147 +147 @@ DEFINE_int32(minloglevel, 0, "Any log at or above this level will be "
+-BUTIL_VALIDATE_GFLAG(minloglevel, butil::NonNegativeInteger);
++BUTIL_VALIDATE_GFLAG(brpc_minloglevel, butil::NonNegativeInteger);
+@@ -815 +815 @@ void SetMinLogLevel(int level) {
+-    FLAGS_minloglevel = std::min(BLOG_FATAL, level);
++    FLAGS_brpc_minloglevel = std::min(BLOG_FATAL, level);
+@@ -819 +819 @@ int GetMinLogLevel() {
+-    return FLAGS_minloglevel;
++    return FLAGS_brpc_minloglevel;
+@@ -1573 +1573 @@ void RawLog(int level, const char* message) {
+-    if (level >= FLAGS_minloglevel) {
++    if (level >= FLAGS_brpc_minloglevel) {
+@@ -1680 +1680 @@ private:
+-    // --vmodule > --v
++    // --brpc_vmodule > --brpc_v
+@@ -1824 +1824 @@ private:
+-// local_default_v != FLAGS_v, repeat the assigment.
++// local_default_v != FLAGS_brpc_v, repeat the assigment.
+@@ -1829 +1829 @@ private:
+-// use the updated vmodule_list and FLAGS_v, nothing will be missed.
++// use the updated vmodule_list and FLAGS_brpc_v, nothing will be missed.
+@@ -1839,2 +1839,2 @@ static int vlog_site_list_add(VLogSite* site,
+-    if (*expected_default_v != FLAGS_v) {
+-        *expected_default_v = FLAGS_v;
++    if (*expected_default_v != FLAGS_brpc_v) {
++        *expected_default_v = FLAGS_brpc_v;
+@@ -1855 +1855 @@ bool add_vlog_site(const int** v, const char* filename, int line_no,
+-    int default_v = FLAGS_v;
++    int default_v = FLAGS_brpc_v;
+@@ -1883 +1883 @@ void print_vlog_sites(VLogSitePrinter* printer) {
+-// [Thread-safe] Reset FLAGS_vmodule.
++// [Thread-safe] Reset FLAGS_brpc_vmodule.
+@@ -1909 +1909 @@ static int on_reset_vmodule(const char* vmodule) {
+-            p->v() = FLAGS_v;
++            p->v() = FLAGS_brpc_v;
+@@ -1938 +1938 @@ const bool ALLOW_UNUSED validate_vmodule_dummy = GFLAGS_NAMESPACE::RegisterFlagV
+-    &FLAGS_vmodule, &validate_vmodule);
++    &FLAGS_brpc_vmodule, &validate_vmodule);
+@@ -1940 +1940 @@ const bool ALLOW_UNUSED validate_vmodule_dummy = GFLAGS_NAMESPACE::RegisterFlagV
+-// [Thread-safe] Reset FLAGS_v.
++// [Thread-safe] Reset FLAGS_brpc_v.
+@@ -1966 +1966 @@ static bool validate_v(const char*, int32_t v) {
+-BUTIL_VALIDATE_GFLAG(v, validate_v);
++BUTIL_VALIDATE_GFLAG(brpc_v, validate_v);
+diff --git a/src/butil/logging.h b/src/butil/logging.h
+index d612e86..552ed52 100644
+--- a/src/butil/logging.h
++++ b/src/butil/logging.h
+@@ -441 +441 @@ const LogSeverity BLOG_0 = BLOG_ERROR;
+-    (::logging::FLAGS_v >= (verbose_level))
++    (::logging::FLAGS_brpc_v >= (verbose_level))
+@@ -446 +446 @@ const LogSeverity BLOG_0 = BLOG_ERROR;
+-DECLARE_int32(v);
++DECLARE_int32(brpc_v);

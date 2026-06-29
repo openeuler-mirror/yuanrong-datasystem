@@ -23,7 +23,7 @@
   - `tests/ut/CMakeLists.txt`
   - `tests/st/CMakeLists.txt`
 - Last verified against source:
-  - `2026-05-04`
+  - `2026-06-26`
 - Related context docs:
   - `tests-and-reproduction.md`
   - `build-test-debug.md`
@@ -102,8 +102,8 @@
 Failure-sensitive steps:
 
 - test binaries must be runnable at build time so `--gtest_list_tests` succeeds;
-- runtime library paths in `TEST_ENVIRONMENT` must include worker, OpenSSL, gRPC, optional observability, UCX, and URMA
-  paths when those builds are enabled;
+- runtime library paths in `TEST_ENVIRONMENT` must include worker, OpenSSL, gRPC, protobuf, absl, gflags, brpc, optional
+  observability, UCX, and URMA paths when those builds are enabled;
 - generated CTest files must exist before CTest discovery.
 
 ### CMake Test Execution

@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <string>
 
-#include <glog/logging.h>
+#include "internal/log/logging.h"
 
 extern char **environ;
 
@@ -30,15 +30,15 @@ void DumpProcessEnvironment(const char *stage)
         return;
     }
     const char *safeStage = stage == nullptr ? "unknown" : stage;
-    LOG(INFO) << "process environment dump begin, stage=" << safeStage;
+    TE_LOG_INFO << "process environment dump begin, stage=" << safeStage;
     if (::environ == nullptr) {
-        LOG(WARNING) << "process environment dump skipped: environ is null, stage=" << safeStage;
+        TE_LOG_WARNING << "process environment dump skipped: environ is null, stage=" << safeStage;
         return;
     }
     for (int index = 0; ::environ[index] != nullptr; ++index) {
-        LOG(INFO) << "env[" << index << "] " << ::environ[index];
+        TE_LOG_INFO << "env[" << index << "] " << ::environ[index];
     }
-    LOG(INFO) << "process environment dump end, stage=" << safeStage;
+    TE_LOG_INFO << "process environment dump end, stage=" << safeStage;
 }
 
 }  // namespace internal

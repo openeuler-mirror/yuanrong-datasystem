@@ -107,7 +107,8 @@ set(brpc_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(brpc_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 set(brpc_PATCHES
-    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/fix-boringssl-compat.patch)
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/fix-boringssl-compat.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/avoid-glog-flag-conflicts.patch)
 
 # brpc's build runs the project's protoc which dlopen-s libprotoc.so.<ver> at runtime.
 # Without LD_LIBRARY_PATH the protoc invocation fails with "cannot open shared object file".

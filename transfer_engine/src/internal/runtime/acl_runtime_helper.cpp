@@ -5,9 +5,8 @@
 
 #include <string>
 
-#include <glog/logging.h>
-
 #include "datasystem/transfer_engine/status_helper.h"
+#include "internal/log/logging.h"
 
 namespace datasystem {
 namespace internal {
@@ -59,7 +58,7 @@ Result EnsureAclSetDeviceForCurrentThread(int32_t deviceId)
     }
 
     const char *visible = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
-    LOG(INFO) << "EnsureAclSetDeviceForCurrentThread"
+    TE_LOG_INFO << "EnsureAclSetDeviceForCurrentThread"
               << ", device_id=" << deviceId
               << ", ASCEND_RT_VISIBLE_DEVICES=" << (visible == nullptr ? "<unset>" : visible);
 

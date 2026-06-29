@@ -63,3 +63,7 @@ cmake --build "${BUILD_DIR}" --target _transfer_engine --parallel "${PARALLEL_JO
 if compgen -G "${BUILD_DIR}/lib/libp2p_transfer.so*" >/dev/null; then
   cp -a "${BUILD_DIR}"/lib/libp2p_transfer.so* "${PACKAGE_DIR}/lib/"
 fi
+
+if compgen -G "${BUILD_DIR}/lib/libds-spdlog.so*" >/dev/null; then
+  cp -a "${BUILD_DIR}"/lib/libds-spdlog.so* "${PACKAGE_DIR}/lib/"
+fi

@@ -142,6 +142,12 @@ add_executable(hashring_parser ./hashring_parser.cpp)
 target_link_libraries(hashring_parser PRIVATE hash_ring_protos_client)
 install(TARGETS hashring_parser DESTINATION tools)
 
+if (BUILD_OBSERVABILITY)
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
+else()
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
+endif()
+
 add_custom_command(
         TARGET ds_st POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -157,8 +163,7 @@ add_custom_command(
         COMMAND ${CMAKE_COMMAND} -E copy
         ${CMAKE_BINARY_DIR}/tests/st/curve_keygen
         ${CMAKE_INSTALL_PREFIX}/tools/curve_keygen)
-set(CURVE_COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${gflags_LIB_PATH}:${OpenSSL_LIB_PATH}:${Protobuf_LIB_PATH}:$ENV{LD_LIBRARY_PATH}
-        ${CMAKE_BINARY_DIR}/tests/st/curve_keygen)
+set(CURVE_COMMAND ${CMAKE_COMMAND} -E env ${TEST_ENVIRONMENT} ${CMAKE_BINARY_DIR}/tests/st/curve_keygen)
 add_custom_command(
         TARGET ds_st POST_BUILD
         COMMAND ${CURVE_COMMAND} -n worker

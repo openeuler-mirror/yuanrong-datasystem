@@ -13,10 +13,9 @@
 #include <memory>
 #include <vector>
 
-#include <glog/logging.h>
-
 #include "acl_test_utils.h"
 #include "internal/backend/mock_data_plane_backend.h"
+#include "internal/log/logging.h"
 #include "datasystem/transfer_engine/status_helper.h"
 #include "datasystem/transfer_engine/transfer_engine.h"
 
@@ -123,12 +122,7 @@ bool ReadByteWithTimeoutMs(int fd, uint8_t *value, int timeoutMs)
 
 [[noreturn]] void ExitWithShutdown(int exitCode)
 {
-    if (google::IsGoogleLoggingInitialized()) {
-        google::FlushLogFiles(google::GLOG_INFO);
-        google::FlushLogFiles(google::GLOG_WARNING);
-        google::FlushLogFiles(google::GLOG_ERROR);
-        google::ShutdownGoogleLogging();
-    }
+    internal::FlushLogs();
     _exit(exitCode);
 }
 

@@ -15,8 +15,6 @@
 #include <thread>
 #include <vector>
 
-#include <glog/logging.h>
-
 #include "acl_test_utils.h"
 #include "internal/log/logging.h"
 #include "datasystem/transfer_engine/transfer_engine.h"
@@ -66,7 +64,7 @@ void PrintUsage(const char *prog)
         << "       --remote-addrs <a0,a1,...> | --remote-addr <a0>\n"
         << "       [--dst-addr <hex|dec>] [--verify-pattern --pattern <0-255>] [--auto-verify-data]\n"
         << "       [--requester-count <n>] [--requester-port-step <n>] [--requester-device-step <n>]\n"
-        << "       注意：requester 会统一走 BatchTransferSyncRead，batch 大小=remote-addrs 个数。\n";
+        << "       注意：requester 会统一�?BatchTransferSyncRead，batch 大小=remote-addrs 个数。\n";
 }
 
 bool ParseUint64(const std::string &in, uint64_t *out)
@@ -588,7 +586,7 @@ Result RunRequesterConcurrent(const Options &opt)
 
             Result rc = RunRequester(worker);
             if (rc.IsError()) {
-                LOG(ERROR) << "concurrent requester worker failed, index=" << i
+                TE_LOG_ERROR << "concurrent requester worker failed, index=" << i
                            << ", device_id=" << worker.deviceId
                            << ", local_port=" << worker.localPort
                            << ", detail=" << rc.ToString();
@@ -618,7 +616,7 @@ Result RunRequesterConcurrent(const Options &opt)
         return Result(ErrorCode::kRuntimeError, "concurrent requester failed: " + errStream.str());
     }
 
-    LOG(INFO) << "concurrent requester succeeded, workers=" << opt.requesterCount
+    TE_LOG_INFO << "concurrent requester succeeded, workers=" << opt.requesterCount
               << ", peer=" << opt.peerIp << ":" << opt.peerPort
               << ", batch_size=" << opt.remoteAddrs.size();
     return Result::OK();
@@ -630,19 +628,19 @@ Result RunRequesterConcurrent(const Options &opt)
 int main(int argc, char **argv)
 {
     using namespace datasystem;
-    internal::EnsureGlogInitialized(argv[0]);
+    internal::InitializeLogging();
 
     Options opt;
     std::string err;
     if (!ParseArgs(argc, argv, &opt, &err)) {
-        LOG(ERROR) << "Argument error: " << err;
+        TE_LOG_ERROR << "Argument error: " << err;
         PrintUsage(argv[0]);
         return 2;
     }
 
     Result rc = (opt.role == "owner") ? RunOwner(opt) : RunRequesterConcurrent(opt);
     if (rc.IsError()) {
-        LOG(ERROR) << "Failed: " << rc.ToString();
+        TE_LOG_ERROR << "Failed: " << rc.ToString();
         return 1;
     }
     return 0;
