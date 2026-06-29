@@ -207,9 +207,13 @@
         "value": "true",
         "description": "Record performance and resource logs."
     },
+    "json_log_monitor": {
+        "value": "true",
+        "description": "Record JSON-Lines monitor logs kv_resource.log and kv_metrics.log."
+    },
     "log_monitor_exporter": {
         "value": "harddisk",
-        "description": "Specify the type of exporter, either harddisk or backend. Only takes effect when log_monitor is true."
+        "description": "Specify the type of exporter, either harddisk or backend. Only takes effect when log_monitor or json_log_monitor is true."
     },
     "log_monitor_interval_ms": {
         "value": "10000",

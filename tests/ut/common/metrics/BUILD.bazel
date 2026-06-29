@@ -23,6 +23,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "resource_json_schema_test",
+    srcs = ["resource_json_schema_test.cpp"],
+    deps = [
+        "//src/datasystem/common/metrics:common_metrics",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "shm_leak_metrics_test",
     srcs = ["shm_leak_metrics_test.cpp"],
     deps = [

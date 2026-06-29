@@ -179,12 +179,13 @@ public:
 
         std::string ToString()
         {
-            // maxRunning/total/tasksDelta/maxWaiting/usage
+            // Field order aligns with res_metrics.def:
+            // IDLE_NUM / CURRENT_TOTAL_NUM / MAX_THREAD_NUM / WAITING_TASK_NUM / THREAD_POOL_USAGE.
             if (currentTotalNum == 0) {
                 return "";
             }
-            return FormatString("%ld/%ld/%ld/%ld/%.3f", maxRunningInPeriod, currentTotalNum, tasksCompletedDelta,
-                                maxWaitingInPeriod, 0.0f);
+            size_t idleNum = (currentTotalNum > runningTasksNum) ? (currentTotalNum - runningTasksNum) : 0;
+            return FormatString("%ld/%ld/%ld/%ld/%.3f", idleNum, currentTotalNum, maxThreadNum, waitingTaskNum, 0.0f);
         }
 
         std::string ToString(int64_t intervalMs)
@@ -197,8 +198,10 @@ public:
             if (currentTotalNum > 0 && intervalNs > 0) {
                 usage = static_cast<float>(totalWorkTimeNs) / static_cast<float>(currentTotalNum * intervalNs);
             }
-            return FormatString("%ld/%ld/%ld/%ld/%.3f", maxRunningInPeriod, currentTotalNum, tasksCompletedDelta,
-                                maxWaitingInPeriod, usage);
+            // Field order aligns with res_metrics.def:
+            // IDLE_NUM / CURRENT_TOTAL_NUM / MAX_THREAD_NUM / WAITING_TASK_NUM / THREAD_POOL_USAGE.
+            size_t idleNum = (currentTotalNum > runningTasksNum) ? (currentTotalNum - runningTasksNum) : 0;
+            return FormatString("%ld/%ld/%ld/%ld/%.3f", idleNum, currentTotalNum, maxThreadNum, waitingTaskNum, usage);
         }
     };
 

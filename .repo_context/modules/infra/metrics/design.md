@@ -220,6 +220,7 @@
   - family descriptions and units are sourced from `metrics_description.def`.
 - CLI commands, config flags, or environment variables:
   - `log_monitor`
+  - `json_log_monitor`
   - `log_monitor_exporter`
   - `log_monitor_interval_ms`
   - `log_dir`
@@ -372,7 +373,8 @@ Failure-sensitive steps:
 
 | Config | Type | Default or source | Effect | Risk if changed |
 | --- | --- | --- | --- | --- |
-| `log_monitor` | gflag | shared observability flag, runtime default in common flags | enables collector and exporter path | can disable all monitor output while runtime logic keeps working |
+| `log_monitor` | gflag | shared observability flag, runtime default in common flags | enables text monitor outputs such as `resource.log` and INFO `metrics_summary` | can disable text monitor output while runtime logic keeps working |
+| `json_log_monitor` | gflag | JSON monitor flag, runtime default in common flags | enables `kv_resource.log` and `kv_metrics.log` JSON-Lines outputs | can disable JSON monitor output independently from `log_monitor` |
 | `log_monitor_exporter` | gflag | current supported value `"harddisk"` | selects exporter backend | unsupported values fail initialization |
 | `log_monitor_interval_ms` | gflag | defined in `res_metric_collector.cpp`, default `10000` | controls sampling cadence | changes load, freshness, and output volume |
 | `log_dir` | gflag | shared logging config | controls output directory | bad path or permissions break persistence |

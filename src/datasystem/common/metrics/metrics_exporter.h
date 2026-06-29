@@ -39,6 +39,8 @@
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem {
+constexpr int K_INVALID_FD = -1;
+
 class MetricsExporter {
 public:
     virtual ~MetricsExporter()
@@ -82,6 +84,43 @@ protected:
      */
     void GetFlushBufferFromQueue(std::unique_ptr<std::vector<std::string>> &flushBuffer);
 
+    /**
+     * @brief Flush queued buffered messages to the active log file and rotate when needed.
+     */
+    void FlushBufferedMessages();
+
+    /**
+     * @brief Create log file by absolute path.
+     * @param[in] filePath Absolute path to the log file.
+     * @return Status of the call.
+     */
+    Status CreateFileByPath(const std::string &filePath);
+
+    /**
+     * @brief Rename old file and create new file when size exceeds the limit.
+     */
+    void ChangeLogFile();
+
+    /**
+     * @brief Get new rotated file path.
+     * @param timestamp[in] The timestamp required to create the file.
+     * @param filePath[out] The file path need to create.
+     */
+    void GetLogFilePath(uint64_t &timestamp, std::string &filePath);
+
+    /**
+     * @brief Collect rotated log files.
+     * @param[in] filePath The active log file path.
+     * @param[out] files Rotated log files matching the pattern.
+     */
+    void CollectRotatedLogFiles(const std::string &filePath, std::vector<std::string> &files);
+
+    /**
+     * @brief Prune oldest rotated logs to satisfy max_log_file_num.
+     * @param[in] files Rotated log files.
+     */
+    void PruneOldLogFiles(const std::vector<std::string> &files);
+
     // Protects 'activeBuffer_' and 'bufferSize_'.
     mutable std::mutex mtx_;
     WaitPost cvLock_;
@@ -95,6 +134,12 @@ protected:
     size_t bufferSize_ = 0;
     std::unique_ptr<std::vector<std::string>> activeBuffer_;
     std::queue<std::unique_ptr<std::vector<std::string>>> bufferPool_;
+
+    int fd_ = K_INVALID_FD;
+    std::string filePath_;
+    size_t fileSize_ = 0;
+    std::string podName_;
+    std::string fileSuffix_ = ".log";
 
 private:
     /**

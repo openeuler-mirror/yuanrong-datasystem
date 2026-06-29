@@ -28,6 +28,7 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/metrics/metrics_exporter.h"
+#include "datasystem/common/metrics/json_lines_exporter.h"
 #include "datasystem/common/metrics/res_metric_name.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread.h"
@@ -88,9 +89,17 @@ private:
      */
     void CollectMetrics();
 
+    /**
+     * @brief Build the kv_resource.log JSON line from cached handler results.
+     * @param[in] handlerResults Per-metric handler return strings, indexed by ResMetricName.
+     * @return One complete JSON object string (no text prefix).
+     */
+    std::string BuildResourceJson(const std::vector<std::string> &handlerResults);
+
     int msInterval_;   //
     std::atomic<bool> exitFlag_{ false };
     std::unique_ptr<MetricsExporter> exporter_{ nullptr };
+    std::unique_ptr<JsonLinesExporter> jsonExporter_{ nullptr };
     std::unique_ptr<Thread> collectorThread_{ nullptr };
     std::unordered_map<int, std::function<std::string()>> collectHandler_;
     bool isInit_ = false;

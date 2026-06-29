@@ -42,7 +42,7 @@
   - `common_metrics` is built from `res_metric_collector.cpp` plus the shared exporter base.
   - `metrics_exporter_base` provides the asynchronous buffered exporter framework.
   - `HardDiskExporter` is the current concrete exporter used for resource-monitor logs and also by `AccessRecorder`.
-  - `ResMetricCollector` is a singleton periodic collector that emits resource metrics when `log_monitor` is enabled.
+  - `ResMetricCollector` is a singleton periodic collector that emits text resource metrics when `log_monitor` is enabled and JSON resource snapshots when `json_log_monitor` is enabled.
   - metrics are not auto-discovered; they are registered explicitly through `RegisterCollectHandler`.
   - `worker_oc_server.cpp` is a major registration point for many resource metrics.
   - `metrics.h/.cpp` now provide a lightweight typed `datasystem::metrics` API with `Counter`, `Gauge`, `Histogram`, `ScopedTimer`, and a periodic `LOG(INFO)` summary writer for release-scoped request-path instrumentation.
@@ -78,6 +78,7 @@
 
 - Collector control flags:
   - `log_monitor`
+  - `json_log_monitor`
   - `log_monitor_exporter`
   - `log_monitor_interval_ms`
 - Exporter behavior also depends on logging-related flags:

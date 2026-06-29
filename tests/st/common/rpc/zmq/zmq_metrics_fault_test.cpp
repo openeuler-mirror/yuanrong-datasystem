@@ -101,6 +101,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/zmq_test.stub.rpc.pb.h"
 
+DS_DECLARE_bool(json_log_monitor);
+
 namespace datasystem {
 namespace st {
 
@@ -168,89 +170,20 @@ uint64_t ExtractHistogramAvg(const json &dump, const std::string &metricName)
 // ---------------------------------------------------------------------------
 class ZmqMetricsFaultTest : public testing::Test {
 public:
-    static void SetUpTestSuite()
-    {
-        ASSERT_TRUE(StartSharedServer().IsOk());
-    }
-
-    static void TearDownTestSuite()
-    {
-        StopSharedServer();
-    }
-
-    void SetUp() override
-    {
-        metrics::ResetKvMetricsForTest();
-        ASSERT_TRUE(metrics::InitKvMetrics().IsOk());
-        CreateStub();
-        opt_.SetTimeout(kTimeoutMs);
-    }
-
-    void TearDown() override
-    {
-        stub_.reset();
-        metrics::ResetKvMetricsForTest();
-    }
+    static void SetUpTestSuite();
+    static void TearDownTestSuite();
+    void SetUp() override;
+    void TearDown() override;
 
 protected:
-    static Status StartSharedServer()
-    {
-        if (rpc_ != nullptr) {
-            return Status::OK();
-        }
-        demo_ = std::make_unique<arbitrary::workspace::DemoServiceImpl>();
-        auto bld = RpcServer::Builder();
-        RpcServiceCfg cfg;
-        cfg.udsEnabled_ = false;
-        cfg.numRegularSockets_ = RPC_NUM_BACKEND;
-        cfg.numStreamSockets_ = RPC_NUM_BACKEND;
-        bld.SetDebug().AddEndPoint("tcp://127.0.0.1:*").AddService(demo_.get(), cfg);
-        auto rc = bld.InitAndStart(rpc_);
-        if (rc.IsError()) {
-            return rc;
-        }
-        std::vector<std::string> ports = rpc_->GetListeningPorts();
-        if (ports.empty()) {
-            return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "No listening port available");
-        }
-        sharedPort_ = std::stoi(ports.front());
-        return Status::OK();
-    }
+    static Status StartSharedServer();
+    static void StopSharedServer();
+    void CreateStub();
+    json RunNormalRpcs(int n);
 
-    static void StopSharedServer()
-    {
-        if (rpc_ != nullptr) {
-            rpc_->Shutdown();
-            rpc_.reset();
-        }
-        demo_.reset();
-    }
-
-    void CreateStub()
-    {
-        LOG(INFO) << "[SETUP] ZMQ server listening on port " << sharedPort_;
-        HostPort addr("127.0.0.1", sharedPort_);
-        auto channel = std::make_shared<RpcChannel>(addr, RpcCredential());
-        stub_ = std::make_unique<arbitrary::workspace::DemoService::Stub>(channel);
-    }
-
-    // Send N successful "Hello" RPCs, return metrics dump.
-    json RunNormalRpcs(int n)
-    {
-        for (int i = 0; i < n; ++i) {
-            arbitrary::workspace::SayHelloPb req;
-            arbitrary::workspace::ReplyHelloPb rsp;
-            req.set_msg("Hello");
-            auto st = stub_->SimpleGreeting(opt_, req, rsp);
-            EXPECT_TRUE(st.IsOk()) << "RPC failed: " << st.ToString();
-            EXPECT_EQ(rsp.reply(), "World");
-        }
-        return DumpSummaryJson();
-    }
-
-    // High enough for loaded CI/remote hosts; still short vs old 1000ms+ multi-minute ST.
     static constexpr int kTimeoutMs = 2000;
     std::unique_ptr<arbitrary::workspace::DemoService::Stub> stub_;
+    bool oldJsonLogMonitor_ = true;
     static std::unique_ptr<RpcServer> rpc_;
     static std::unique_ptr<arbitrary::workspace::DemoServiceImpl> demo_;
     static int sharedPort_;
@@ -260,6 +193,88 @@ protected:
 std::unique_ptr<RpcServer> ZmqMetricsFaultTest::rpc_;
 std::unique_ptr<arbitrary::workspace::DemoServiceImpl> ZmqMetricsFaultTest::demo_;
 int ZmqMetricsFaultTest::sharedPort_ = -1;
+
+void ZmqMetricsFaultTest::SetUpTestSuite()
+{
+    ASSERT_TRUE(StartSharedServer().IsOk());
+}
+
+void ZmqMetricsFaultTest::TearDownTestSuite()
+{
+    StopSharedServer();
+}
+
+void ZmqMetricsFaultTest::SetUp()
+{
+    oldJsonLogMonitor_ = FLAGS_json_log_monitor;
+    FLAGS_json_log_monitor = false;
+    metrics::ResetKvMetricsForTest();
+    ASSERT_TRUE(metrics::InitKvMetrics().IsOk());
+    CreateStub();
+    opt_.SetTimeout(kTimeoutMs);
+}
+
+void ZmqMetricsFaultTest::TearDown()
+{
+    stub_.reset();
+    metrics::ResetKvMetricsForTest();
+    FLAGS_json_log_monitor = oldJsonLogMonitor_;
+}
+
+Status ZmqMetricsFaultTest::StartSharedServer()
+{
+    if (rpc_ != nullptr) {
+        return Status::OK();
+    }
+    demo_ = std::make_unique<arbitrary::workspace::DemoServiceImpl>();
+    auto bld = RpcServer::Builder();
+    RpcServiceCfg cfg;
+    cfg.udsEnabled_ = false;
+    cfg.numRegularSockets_ = RPC_NUM_BACKEND;
+    cfg.numStreamSockets_ = RPC_NUM_BACKEND;
+    bld.SetDebug().AddEndPoint("tcp://127.0.0.1:*").AddService(demo_.get(), cfg);
+    auto rc = bld.InitAndStart(rpc_);
+    if (rc.IsError()) {
+        return rc;
+    }
+    std::vector<std::string> ports = rpc_->GetListeningPorts();
+    if (ports.empty()) {
+        return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "No listening port available");
+    }
+    sharedPort_ = std::stoi(ports.front());
+    return Status::OK();
+}
+
+void ZmqMetricsFaultTest::StopSharedServer()
+{
+    if (rpc_ != nullptr) {
+        rpc_->Shutdown();
+        rpc_.reset();
+    }
+    demo_.reset();
+}
+
+void ZmqMetricsFaultTest::CreateStub()
+{
+    LOG(INFO) << "[SETUP] ZMQ server listening on port " << sharedPort_;
+    HostPort addr("127.0.0.1", sharedPort_);
+    auto channel = std::make_shared<RpcChannel>(addr, RpcCredential());
+    stub_ = std::make_unique<arbitrary::workspace::DemoService::Stub>(channel);
+}
+
+json ZmqMetricsFaultTest::RunNormalRpcs(int n)
+{
+    for (int i = 0; i < n; ++i) {
+        arbitrary::workspace::SayHelloPb req;
+        arbitrary::workspace::ReplyHelloPb rsp;
+        req.set_msg("Hello");
+        auto st = stub_->SimpleGreeting(opt_, req, rsp);
+        EXPECT_TRUE(st.IsOk()) << "RPC failed: " << st.ToString();
+        EXPECT_EQ(rsp.reply(), "World");
+    }
+    return DumpSummaryJson();
+}
+
 
 // ---------------------------------------------------------------------------
 // Scenario 1 – Normal RPCs: histograms populate, all fault counters stay zero

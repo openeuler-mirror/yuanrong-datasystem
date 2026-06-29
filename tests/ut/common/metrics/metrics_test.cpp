@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include "datasystem/common/metrics/json_lines_exporter.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <random>
 #include <set>
@@ -27,14 +29,18 @@
 #include <thread>
 #include <vector>
 
+#include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/file_util.h"
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(json_log_monitor);
 DS_DECLARE_int32(log_monitor_interval_ms);
+DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace ut {
@@ -113,6 +119,28 @@ std::string ScalarMetricJson(const std::string &name, int64_t total, int64_t del
     return os.str();
 }
 
+
+template <typename F, typename Rep, typename Period>
+bool Retry(F const &func, const int times, std::chrono::duration<Rep, Period> interval)
+{
+    int count = 0;
+    while (count < times) {
+        ++count;
+        if (func()) {
+            return true;
+        }
+        std::this_thread::sleep_for(interval);
+    }
+    return false;
+}
+
+bool FileContains(const std::string &filePath, const std::string &content)
+{
+    std::string data;
+    Status rc = ReadFileToString(filePath, data);
+    return rc.IsOk() && data.find(content) != std::string::npos;
+}
+
 std::string HistogramMetricJson(const std::string &name, uint64_t totalCount, uint64_t totalAvg, uint64_t totalMax,
                                 uint64_t totalP50, uint64_t totalP90, uint64_t totalP99, uint64_t deltaCount,
                                 uint64_t deltaAvg, uint64_t deltaMax, uint64_t deltaP50, uint64_t deltaP90,
@@ -134,6 +162,7 @@ public:
         metrics::ResetKvMetricsForTest();
         metrics::ResetForTest();
         FLAGS_log_monitor = true;
+        FLAGS_json_log_monitor = true;
         FLAGS_log_monitor_interval_ms = 10000;
     }
 };
@@ -297,8 +326,9 @@ TEST_F(MetricsTest, print_summary_histogram_json_includes_p99)
     std::string err = testing::internal::GetCapturedStderr();
     EXPECT_NE(err.find("{\"event\":\"metrics_summary\""), std::string::npos) << err;
     EXPECT_NE(err.find("\"p99\":30"), std::string::npos) << err;
-    EXPECT_NE(err.find(HistogramMetricJson("test_histogram", 2, 20, 30, 30, 30, 30, 2, 20, 30, 30, 30, 30)), std::string::npos)
-        << err;
+    const auto expectedHistogram = HistogramMetricJson("test_histogram", 2, 20, 30, 30, 30, 30, 2, 20, 30,
+                                                       30, 30, 30);
+    EXPECT_NE(err.find(expectedHistogram), std::string::npos) << err;
     EXPECT_NE(err.find("\"p90\":30"), std::string::npos) << err;
     EXPECT_NE(err.find("\"p50\":30"), std::string::npos) << err;
 }
@@ -693,8 +723,9 @@ TEST_F(MetricsTest, writer_print_summary_updates_delta_snapshot_test)
 
 TEST_F(MetricsTest, writer_disabled_test)
 {
-    InitMetrics();
     FLAGS_log_monitor = false;
+    FLAGS_json_log_monitor = false;
+    InitMetrics();
     FLAGS_log_monitor_interval_ms = 0;
     metrics::GetCounter(COUNTER_ID).Inc(5);
     metrics::Tick();
@@ -1138,8 +1169,9 @@ TEST_F(MetricsTest, kv_metrics_summary_format_test)
 
 TEST_F(MetricsTest, kv_metrics_disabled_test)
 {
-    InitKvMetricsForTest();
     FLAGS_log_monitor = false;
+    FLAGS_json_log_monitor = false;
+    InitKvMetricsForTest();
     FLAGS_log_monitor_interval_ms = 0;
     METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
     metrics::Tick();
@@ -1187,6 +1219,40 @@ TEST_F(MetricsTest, kv_metrics_print_summary_test)
     metrics::PrintSummary();
     EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_request_total", 1, 0)),
               std::string::npos);
+}
+
+// WrapJsonWithPodCluster prepends pod_name/cluster_name as the first top-level fields of a
+// metrics_summary body, without re-serializing the rest. Labels are JSON-escaped so a pod name
+// containing a quote/backslash still yields valid JSON.
+
+TEST_F(MetricsTest, kv_metrics_print_summary_respects_json_log_monitor_independently)
+{
+    FLAGS_log_monitor = false;
+    FLAGS_json_log_monitor = true;
+    const std::string filePath = FLAGS_log_dir + "/" + KV_METRICS_LOG_NAME + ".log";
+    (void)DeleteFile(filePath);
+    InitKvMetricsForTest();
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    metrics::PrintSummary();
+    constexpr int retryTimes = 30;
+    ASSERT_TRUE(Retry([&filePath]() { return FileContains(filePath, "metrics_summary"); }, retryTimes,
+                      std::chrono::milliseconds(100)));
+}
+
+TEST_F(MetricsTest, wrap_with_pod_cluster_prepends_labels)
+{
+    const std::string body = R"({"event":"metrics_summary","cycle":1})";
+    const auto wrapped = WrapJsonWithPodCluster(body, "worker_0", "recs");
+    EXPECT_EQ(wrapped, R"({"pod_name":"worker_0","cluster_name":"recs",)" + body.substr(1));
+    EXPECT_TRUE(wrapped.find("{\"pod_name\":\"worker_0\",\"cluster_name\":\"recs\",\"event\":") == 0);
+    // Non-JSON input is returned unchanged.
+    EXPECT_EQ(WrapJsonWithPodCluster("not json", "p", "c"), "not json");
+    EXPECT_EQ(WrapJsonWithPodCluster("", "p", "c"), "");
+    // Labels are JSON-escaped by the JSON library, including all control characters.
+    const auto escaped = WrapJsonWithPodCluster(body, std::string(R"(a"b\c)") + '\b' + '\f' +
+                                                '\x01' + '\0', "recs\ncluster");
+    EXPECT_EQ(escaped, R"({"pod_name":"a\"b\\c\b\f\u0001\u0000",)"
+                       R"("cluster_name":"recs\ncluster",)" + body.substr(1));
 }
 }  // namespace ut
 }  // namespace datasystem

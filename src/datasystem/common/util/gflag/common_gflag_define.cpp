@@ -101,6 +101,8 @@ DS_DEFINE_int64(payload_nocopy_threshold, 1048576L * 100L, "minimum payload size
 DS_DEFINE_bool(enable_multi_stubs, false, "deprecated");
 DS_DEFINE_bool(enable_tcp_direct_for_multi_stubs, false, "deprecated");
 DS_DEFINE_bool_dynamic(log_monitor, true, "Indicates whether to enable log monitoring, default is true.");
+DS_DEFINE_bool_dynamic(json_log_monitor, true,
+                       "Indicates whether to enable JSON log monitoring for kv_resource.log and kv_metrics.log.");
 DS_DEFINE_bool_dynamic(auto_del_dead_node, true, "Remove dead node from hash ring when enabled.");
 DS_DEFINE_bool(enable_huge_tlb, false,
                "enable_huge_tlb can improve memory access and reducing the overhead of page table,"

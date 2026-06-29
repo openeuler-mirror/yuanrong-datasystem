@@ -793,6 +793,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > 一旦 `access_sample_rate` 或 `diagnostic_sample_rate` 被显式设置，派生规则即失效，此后使用各自独立的值。显式设置 `1.0` 与默认 `1.0` 具有不同语义：前者阻止派生，后者允许派生。
 | log_only_write_info_file | bool | `true` | 否 | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
 | log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志 |
+| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 否 | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 否 | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | log_monitor_interval_ms | int | `10000` | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |

@@ -29,6 +29,8 @@ static const std::string CLIENT_ACCESS_LOG_NAME = "ds_client_access";
 static const std::string ACCESS_LOG_NAME = "access";
 static const std::string REQUEST_OUT_LOG_NAME = "request_out";
 static const std::string RESOURCE_LOG_NAME = "resource";
+static const std::string KV_RESOURCE_LOG_NAME = "kv_resource";
+static const std::string KV_METRICS_LOG_NAME = "kv_metrics";
 static const std::string SC_METRICS_LOG_NAME = "sc_metrics";
 // The maximum number of randomly selected nodes for reconciliation.
 static const size_t MAX_QUERY_WORKER_NUM_FOR_RECONCILIATION = 5;
