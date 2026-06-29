@@ -96,6 +96,11 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG")
 # -Wl,--build-id=none: for build consistency.
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wl,--build-id=none")
 
+# Override -g3 (common flags) with -g1 for release builds to reduce compiler memory.
+# -g3 emits full macro debug info which increases cc1plus RSS by 20-30%.
+# -g1 still preserves function names and line numbers needed for backtraces.
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -g1")
+
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
 

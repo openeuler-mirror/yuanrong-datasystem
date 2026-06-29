@@ -95,6 +95,18 @@ add_dependencies(worker_transport_api worker_object_protos)
 
 add_library(worker_object_cache STATIC ${WORKER_OC_SRCS} ${WORKER_TRANSPORT_API_SRCS})
 target_link_libraries(worker_object_cache PRIVATE ${WORKER_OBJECT_CACHE_DEPEND_LIBS})
+
+# Reduce optimization for protobuf-heavy source files to prevent cc1plus OOM during parallel builds.
+# Each of these files transitively includes multiple .pb.h headers; with -O2 each cc1plus process
+# can consume 2-3 GB RSS.  Lowering to -O1 cuts per-process memory while preserving _FORTIFY_SOURCE compatibility.
+set(WORKER_OC_HEAVY_FILES
+    worker_oc_service_impl.cpp
+    service/worker_oc_service_get_impl.cpp
+    service/worker_oc_service_migrate_impl.cpp
+    worker_oc_eviction_manager.cpp
+)
+set_source_files_properties(${WORKER_OC_HEAVY_FILES}
+    PROPERTIES COMPILE_FLAGS "-O1")
 add_dependencies(worker_object_cache
         master_heartbeat_protos
         posix_protos
