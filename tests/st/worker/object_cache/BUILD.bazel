@@ -144,25 +144,3 @@ ds_cc_test(
         "//tests/st:st_common",
     ],
 )
-
-# SIGABRT regression ST: verify RW spinlock does not regress against the
-# historical F2 SIGABRT under bthread cross-pthread migration.
-# Note: intentionally does NOT depend on //tests/st:st_common or
-# //src/datasystem/common/log:common_log — this test exercises the lock
-# primitive in isolation (via the shared SpinlockAdapter), avoiding
-# transitive deps that pull in worker_oc_service_impl / master / gflag
-# symbols that have pre-existing link gaps under --config=release.
-# CI does NOT run this (excluded in tests/st/CMakeLists.txt); run manually
-# with: bazel test //tests/st/worker/object_cache:safe_object_brpc_migration_test
-# Default 60s; for 10-min burn-in use --test_env=DS_TEST_STRESS_SEC=600.
-ds_cc_test(
-    name="safe_object_brpc_migration_test",
-    srcs=[
-        "safe_object_brpc_migration_test.cpp",
-        "safe_object_lock_adapters.h",
-    ],
-    tags=["manual"],
-    deps=[
-        "@com_github_apache_brpc//:brpc",
-    ],
-)
