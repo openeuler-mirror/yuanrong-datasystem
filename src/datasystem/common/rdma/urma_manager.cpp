@@ -856,7 +856,9 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
         return Status(K_URMA_WAIT_TIMEOUT,
                       FormatString("urma write deadline exceeded: %fms, %s", totalElapsedMs, waitRc.GetMsg()));
     }
-    SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs, 1,
+    SLOW_LOG_IF_OR_VLOG(INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs)
+                                      || FLAGS_enable_perf_trace_log,
+                        1,
                         "[URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost "
                         << totalElapsedMs << "ms, wait os sched thread finish time(std::condition_variable.wait_for): "
                         << waitElapsedMs << "ms, request id:" << requestId
