@@ -32,6 +32,7 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/trace_attachment.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -83,6 +84,7 @@ public:
             if (timeoutMs_ > 0) {
                 cntl.set_timeout_ms(timeoutMs_);
             }
+            AttachTraceIDToAttachment(cntl.request_attachment());
             if (!payloadBuf_.empty()) {
                 cntl.request_attachment().append(payloadBuf_);
                 payloadBuf_.clear();

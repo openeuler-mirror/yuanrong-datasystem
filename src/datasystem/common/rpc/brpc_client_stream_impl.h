@@ -41,6 +41,7 @@
 #include <butil/iobuf.h>
 #include <google/protobuf/message.h>
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/trace_attachment.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -130,6 +131,7 @@ public:
             response_.reset(
                 google::protobuf::MessageFactory::generated_factory()
                     ->GetPrototype(respProto)->New());
+            AttachTraceIDToAttachment(cntl_->request_attachment());
             channel_->CallMethod(method_, cntl_.get(),
                                  static_cast<const google::protobuf::Message *>(&pb),
                                  response_.get(), nullptr);
@@ -353,6 +355,7 @@ public:
         // Send the RPC with the request in the body.
         // The response is a placeholder — real responses arrive via the stream.
         R dummyResponse;
+        AttachTraceIDToAttachment(cntl_->request_attachment());
         channel_->CallMethod(method_, cntl_.get(), &pb, &dummyResponse, nullptr);
         if (cntl_->Failed()) {
             Status embedded = TryExtractStatusFromResponse(dummyResponse);

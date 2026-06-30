@@ -479,7 +479,9 @@ void WorkerOcServiceGetImpl::SubmitAsyncAddEvictTask(std::vector<std::string> ob
     PerfPoint point(PerfKey::ASYNC_EVICT_TASK_ADD);
     static const size_t isAsyncThreshold = 64;
     if (objectIds.size() > isAsyncThreshold) {
-        threadPool_->Execute([ids = std::move(objectIds), this]() {
+        auto traceContext = Trace::Instance().GetContext();
+        threadPool_->Execute([ids = std::move(objectIds), traceContext, this]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             for (const auto &id : ids) {
                 evictionManager_->Add(id);
             }

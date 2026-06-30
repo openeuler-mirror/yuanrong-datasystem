@@ -86,12 +86,24 @@ RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line 
 //   // Destructor automatically calls SetRequestContext(saved).
 class ScopedRequestContext {
 public:
-    ScopedRequestContext()
+    // When traceID is provided (brpc adapter extracts it from the request attachment),
+    // use it directly — bypassing the unreliable brpc M:N thread_local fallback.
+    // When empty (legacy ZMQ path, or nested ScopedRequestContext in handler code),
+    // inherit traceID from Trace::Instance().GetTraceID() as before.
+    explicit ScopedRequestContext(const std::string& traceID = "")
         : saved_(GetRequestContext())
     {
-        // Snapshot the dispatcher's traceID, then re-set it onto ctx_.trace so LOG/access
-        // records inside the handler scope keep emitting the inherited traceID.
-        std::string inheritedTraceID = Trace::Instance().GetTraceID();
+        // Snapshot the inherited traceID BEFORE SetRequestContext overwrites
+        // the bthread-local pointer. Under brpc M:N, Trace::Instance() routes
+        // through GetBthreadTrace() -> bthread_getspecific, which returns the
+        // outer (saved) RequestContext's trace. After SetRequestContext, the
+        // key points to ctx_ which has an empty trace.
+        std::string inheritedTraceID;
+        if (!traceID.empty()) {
+            inheritedTraceID = traceID;
+        } else {
+            inheritedTraceID = Trace::Instance().GetTraceID();
+        }
         SetRequestContext(&ctx_);
         if (!inheritedTraceID.empty()) {
             TraceGuard guard = ctx_.trace.SetTraceNewID(inheritedTraceID, true);

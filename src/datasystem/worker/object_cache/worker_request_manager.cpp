@@ -329,8 +329,11 @@ Status GetRequest::ReturnToClient(const Status &rc)
     });
     std::map<std::string, uint64_t> needDeleteObjects;
     Raii deleteRaii([this, &needDeleteObjects] {
-        threadPool_->Submit(
-            [keysWithVersion = std::move(needDeleteObjects)] { WorkerRequestManager::DeleteObjects(keysWithVersion); });
+        auto delTraceContext = Trace::Instance().GetContext();
+        threadPool_->Submit([keysWithVersion = std::move(needDeleteObjects), delTraceContext] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(delTraceContext);
+            WorkerRequestManager::DeleteObjects(keysWithVersion);
+        });
     });
     int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {

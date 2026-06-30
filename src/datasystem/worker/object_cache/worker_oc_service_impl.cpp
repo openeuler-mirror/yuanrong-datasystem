@@ -923,8 +923,11 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
     if (threadPool_ == nullptr) {
         return RecoverMetadataOfRestartedWorker(workerAddr);
     }
-    threadPool_->Execute([this, workerAddr]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    auto restartTraceID = Trace::Instance().GetTraceID();
+    threadPool_->Execute([this, workerAddr, restartTraceID]() {
+        TraceGuard traceGuard = restartTraceID.empty()
+            ? Trace::Instance().SetTraceUUID()
+            : Trace::Instance().SetTraceNewID(restartTraceID, true);
         LOG_IF_ERROR(RecoverMetadataOfRestartedWorker(workerAddr),
                      "RecoverMetadataOfRestartedWorker failed after NodeRestartEvent");
     });
@@ -1389,7 +1392,9 @@ Status WorkerOCServiceImpl::StartDecreaseReferenceProcess()
         INJECT_POINT("worker.Decrease_Reference_Deadlock");
         return Status::OK();
     };
-    decThreadPool_->Execute([this, &dfxTestFunc, decreaseRPCQ]() {
+    auto decTraceID = Trace::Instance().GetTraceID();
+    decThreadPool_->Execute([this, &dfxTestFunc, decreaseRPCQ, decTraceID]() {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(decTraceID);
         constexpr int timeKilo = 1000;
         const struct timespec timeoutStruct = { .tv_sec = static_cast<long int>(RPC_TIMEOUT / timeKilo), .tv_nsec = 0 };
         while (!exitFlag_->load()) {

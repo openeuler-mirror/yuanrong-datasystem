@@ -125,7 +125,12 @@ void OCGlobalCacheDeleteManager::ProcessDeleteObjects()
         std::vector<std::future<void>> futures;
         for (const auto &objectKeys : parts) {
             if (!objectKeys.empty()) {
-                futures.emplace_back(threadPool_->Submit([this, &objectKeys] { DeleteObjects(objectKeys); }));
+                auto gDelTraceID = Trace::Instance().GetTraceID();
+                futures.emplace_back(threadPool_->Submit(
+                    [this, &objectKeys, gDelTraceID] {
+                        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(gDelTraceID);
+                        DeleteObjects(objectKeys);
+                    }));
             }
         }
 

@@ -211,6 +211,7 @@ ds_cc_library(
         "client_writer_reader_base.h",
         "rpc_stub.h",
         "rpc_stub_base.h",
+        "trace_attachment.h",
     ],
     deps = [
         ":brpc_status_util",
@@ -250,6 +251,7 @@ ds_cc_library(
         "brpc_client_stream_writer_reader.h",
         "brpc_client_unary_writer_reader.h",
         "rpc_unary_client_impl.h",
+        "trace_attachment.h",
     ],
     deps = [
         ":brpc_status_util",
