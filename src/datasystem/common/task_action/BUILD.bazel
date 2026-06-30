@@ -16,6 +16,7 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:meta_route_tool_header",
+        "//src/datasystem/common/util:no_destructor_header",
         "//src/datasystem/common/util:status_helper",
     ],
 )

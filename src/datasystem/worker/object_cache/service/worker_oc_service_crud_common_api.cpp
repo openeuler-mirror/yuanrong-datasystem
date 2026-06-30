@@ -21,6 +21,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 #include <cstddef>
+#include <utility>
 
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -45,9 +46,9 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 
 AsyncPersistenceDelManager::AsyncPersistenceDelManager(std::shared_ptr<ThreadPool> oldVerDelAsyncPool,
                                                        std::shared_ptr<PersistenceApi> persistenceApi)
-    : persistenceApi_(persistenceApi)
+    : persistenceApi_(std::move(persistenceApi))
 {
-    oldVerDelAsyncPool->Execute([this]() { ProcessDelPersistenceOldVerSion(); });
+    workerFuture_ = oldVerDelAsyncPool->Submit([this]() { ProcessDelPersistenceOldVerSion(); });
 }
 
 void AsyncPersistenceDelManager::Add(const std::string &objectKey, uint64_t oldVersionMax)
@@ -67,7 +68,17 @@ void AsyncPersistenceDelManager::Add(const std::string &objectKey, uint64_t oldV
 
 AsyncPersistenceDelManager::~AsyncPersistenceDelManager()
 {
-    exit_ = true;
+    Stop();
+}
+
+void AsyncPersistenceDelManager::Stop()
+{
+    if (exit_.exchange(true)) {
+        return;
+    }
+    if (workerFuture_.valid()) {
+        workerFuture_.wait();
+    }
 }
 
 void AsyncPersistenceDelManager::ProcessDelPersistenceOldVerSion()

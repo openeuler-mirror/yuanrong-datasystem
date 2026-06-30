@@ -18,7 +18,13 @@
  * Description: Provider.
  */
 #include "datasystem/common/log/spdlog/provider.h"
+
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/pod_identifier.h"
+#include "datasystem/common/util/file_util.h"
+#include "datasystem/common/util/no_destructor.h"
+
+DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 
@@ -50,9 +56,10 @@ bool Provider::IsAlive()
     return g_ProviderAlive;
 }
 
-std::string Provider::GetPodName()
+std::string &Provider::GetPodName()
 {
-    return GetPodIdentifier();
+    static NoDestructor<std::string> podName(GetPodIdentifier());
+    return *podName;
 }
 
 void Provider::FlushLogs()

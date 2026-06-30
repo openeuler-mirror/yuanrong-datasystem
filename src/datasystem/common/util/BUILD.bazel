@@ -116,6 +116,11 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "no_destructor_header",
+    hdrs = ["no_destructor.h"],
+)
+
 # Umbrella target (backward compatible)
 ds_cc_library(
     name = "common_util",

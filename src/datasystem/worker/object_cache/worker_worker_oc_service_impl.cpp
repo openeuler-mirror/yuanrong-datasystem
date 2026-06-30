@@ -804,7 +804,7 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
         return Status::OK();
     }
     std::string host;
-    int port;
+    int port = 0;
     if (req.has_urma_info()) {
         host = req.urma_info().request_address().host();
         port = req.urma_info().request_address().port();

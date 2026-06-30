@@ -11,6 +11,7 @@ set(APPEND_LIB
         ds_spdlog::spdlog
         ds_flags
         common_perf
+        common_util
         )
 
 add_library(ds_spdlog STATIC ${SPDLOG_SRCS})

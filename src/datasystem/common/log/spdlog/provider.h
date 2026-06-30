@@ -52,11 +52,9 @@ public:
     static bool IsAlive();
 
     /**
-     * @brief Retrieve the pod identifier from environment variables.
-     *
-     * The priority is POD_IP, POD_NAME, HOSTNAME, then a blank placeholder.
+     * @brief Retrieve the cached pod identifier.
      */
-    static std::string GetPodName();
+    static std::string &GetPodName();
 
     /**
      * @brief Flush all pending log messages.
@@ -68,7 +66,7 @@ public:
     void SetLoggerProvider(const std::shared_ptr<LoggerProvider> &tp) noexcept;
 
 private:
-    std::shared_mutex mutex_; // Protects access to provider_ for thread-safe read/write operations.
+    std::shared_mutex mutex_;  // Protects access to provider_ for thread-safe read/write operations.
     std::shared_ptr<LoggerProvider> provider_ = nullptr;
 };
 

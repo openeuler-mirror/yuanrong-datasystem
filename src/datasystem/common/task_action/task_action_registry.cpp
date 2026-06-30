@@ -69,9 +69,7 @@ private:
     void RemoveSubscriberWithoutLock(const std::string &name)
     {
         auto iter = std::find_if(subscribers_.begin(), subscribers_.end(),
-                                 [&name](const Subscriber &subscriber) {
-                                     return subscriber.name == name;
-                                 });
+                                 [&name](const Subscriber &subscriber) { return subscriber.name == name; });
         if (iter != subscribers_.end()) {
             subscribers_.erase(iter);
         }
@@ -83,8 +81,8 @@ private:
 
 TaskActionRegistry &TaskActionRegistry::GetInstance()
 {
-    static TaskActionRegistry instance;
-    return instance;
+    static NoDestructor<TaskActionRegistry> instance;
+    return *instance;
 }
 
 void TaskActionRegistry::AddSubscriber(TransferTaskType type, const std::string &subscriberName, TaskActionFn fn)
@@ -124,23 +122,23 @@ Status TaskActionRegistry::Dispatch(const TransferTask &task) const
     {
         std::shared_lock<std::shared_timed_mutex> lock(mutex_);
         auto iter = subscribers_.find(task.type);
-        CHECK_FAIL_RETURN_STATUS(iter != subscribers_.end() && iter->second != nullptr, K_NOT_READY,
-                                 FormatString("Task action subscriber is not registered, type=%s",
-                                              TransferTaskTypeToString(task.type)));
+        CHECK_FAIL_RETURN_STATUS(
+            iter != subscribers_.end() && iter->second != nullptr, K_NOT_READY,
+            FormatString("Task action subscriber is not registered, type=%s", TransferTaskTypeToString(task.type)));
         subscriberSet = iter->second;
     }
     auto subscribers = subscriberSet->Snapshot();
-    CHECK_FAIL_RETURN_STATUS(!subscribers.empty(), K_NOT_READY,
-                             FormatString("Task action subscriber is not registered, type=%s",
-                                          TransferTaskTypeToString(task.type)));
+    CHECK_FAIL_RETURN_STATUS(
+        !subscribers.empty(), K_NOT_READY,
+        FormatString("Task action subscriber is not registered, type=%s", TransferTaskTypeToString(task.type)));
     for (const auto &subscriber : subscribers) {
         CHECK_FAIL_RETURN_STATUS(subscriber.fn != nullptr, K_INVALID,
                                  FormatString("Task action subscriber function is null, type=%s, subscriber=%s",
                                               TransferTaskTypeToString(task.type), subscriber.name));
         auto status = subscriber.fn(task);
         if (status.IsError()) {
-            return Status(status.GetCode(), FormatString("Task action subscriber %s failed: %s",
-                                                         subscriber.name, status.ToString()));
+            return Status(status.GetCode(),
+                          FormatString("Task action subscriber %s failed: %s", subscriber.name, status.ToString()));
         }
     }
     return Status::OK();

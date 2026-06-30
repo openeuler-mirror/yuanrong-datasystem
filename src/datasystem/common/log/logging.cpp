@@ -41,7 +41,6 @@
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uri.h"
@@ -75,8 +74,8 @@ DS_DEFINE_uint32_dynamic(
     "Maximum number of log files to retain per severity level. And every log file size is limited by max_log_size."
     "If set to 0, the log num is not limited.");
 DS_DEFINE_bool_dynamic(log_compress, DEFAULT_LOG_COMPRESS,
-               "Compress old log files in .gz format. This parameter takes effect only when "
-               "the size of the generated log is greater than max log size.");
+                       "Compress old log files in .gz format. This parameter takes effect only when "
+                       "the size of the generated log is greater than max log size.");
 DS_DEFINE_uint32(log_retention_day, DEFAULT_LOG_RETENTION_DAY,
                  "If log_retention_day is greater than 0, any log file from your project whose last modified time is "
                  "greater than log_retention_day days will be "
@@ -101,11 +100,12 @@ DS_DEFINE_bool(enable_perf_trace_log, GetBoolFromEnv(PERF_TRACE_LOG_ENV.c_str(),
                "Enable perf log output, When true always output perf related log.");
 
 DS_DEFINE_double_dynamic(request_sample_rate, 1.0,
-                 "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");
+                         "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled.");
 DS_DEFINE_double_dynamic(access_sample_rate, 1.0,
-                 "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled.");
-DS_DEFINE_double_dynamic(diagnostic_sample_rate, 1.0,
-                  "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled.");
+                         "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled.");
+DS_DEFINE_double_dynamic(
+    diagnostic_sample_rate, 1.0,
+    "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled.");
 
 DS_DECLARE_bool(log_monitor);
 DS_DECLARE_bool(log_only_write_info_file);
@@ -124,7 +124,7 @@ bool g_hasClientAccessLogNameConfig = false;
 std::string g_clientAccessLogNameConfig;
 }  // namespace
 
-std::string Logging::podName_ = Provider::GetPodName();
+std::string &Logging::podName_ = Provider::GetPodName();
 
 Logging *Logging::GetInstance()
 {
@@ -183,9 +183,12 @@ bool Logging::InitLogSampler()
     std::vector<FlagInfo> allFlags;
     GetAllFlags(allFlags);
     for (const auto &fi : allFlags) {
-        if (fi.name == "request_sample_rate") cfg.requestSampleRateExplicit = fi.wasSpecified;
-        if (fi.name == "access_sample_rate") cfg.accessSampleRateExplicit = fi.wasSpecified;
-        if (fi.name == "diagnostic_sample_rate") cfg.diagnosticSampleRateExplicit = fi.wasSpecified;
+        if (fi.name == "request_sample_rate")
+            cfg.requestSampleRateExplicit = fi.wasSpecified;
+        if (fi.name == "access_sample_rate")
+            cfg.accessSampleRateExplicit = fi.wasSpecified;
+        if (fi.name == "diagnostic_sample_rate")
+            cfg.diagnosticSampleRateExplicit = fi.wasSpecified;
     }
     if (!LogSampler::Instance().UpdateConfigFromFlags(cfg)) {
         LOG(FATAL) << "Illegal log sampler config at startup: "
@@ -386,8 +389,8 @@ void Logging::InitClientAdvancedConfig()
     }
 
     if (!WasCommandLineFlagSpecified("log_only_write_info_file")) {
-        FLAGS_log_only_write_info_file = GetBoolFromEnv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(),
-                                                        DEFAULT_LOG_ONLY_WRITE_INFO_FILE);
+        FLAGS_log_only_write_info_file =
+            GetBoolFromEnv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), DEFAULT_LOG_ONLY_WRITE_INFO_FILE);
     }
 }
 
@@ -451,6 +454,8 @@ void Logging::ResetClientLogConfigForTest()
 
 Logging::Logging() : init_(false)
 {
+    // Ensure spdlog is initialized early to avoid static initialization order issues.
+    LoggerContext::GetDefaultLogger();
 }
 
 Logging::~Logging()
@@ -494,15 +499,15 @@ void Logging::Start(const std::string logFilename, bool isClient, uint32_t logPr
         SetLoggingInitialized(true);
         podName_ = GetStringFromEnvOrFile("POD_IP", GetWorkerEnvFilePath(FLAGS_log_dir), WORKER_ENV_POD_IP_KEY,
                                           Provider::GetPodName());
-        LogMessageImpl::SetPodName(podName_);
+
         LOG(INFO) << "InitLoggingWrapper success.";
         if (isClient_) {
             LOG(INFO) << "The client log config is: log_dir: " << FLAGS_log_dir
                       << ", max_log_size: " << FLAGS_max_log_size << ", max_log_file_num: " << FLAGS_max_log_file_num
                       << ", log_compress: " << FLAGS_log_compress << ", log_retention_day: " << FLAGS_log_retention_day
                       << ", log_async: " << FLAGS_log_async << ", log_async_queue_size: " << FLAGS_log_async_queue_size
-                      << ", log_v: " << FLAGS_v
-                      << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file << std::endl;
+                      << ", log_v: " << FLAGS_v << ", log_only_write_info_file: " << FLAGS_log_only_write_info_file
+                      << std::endl;
         }
     } else {
         FLAGS_log_monitor = false;

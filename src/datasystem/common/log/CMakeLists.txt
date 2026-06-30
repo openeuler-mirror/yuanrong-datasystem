@@ -27,6 +27,7 @@ add_library(common_log STATIC ${LOG_SRCS})
 # PUBLIC ensures all consumers of common_log resolve this symbol at link time.
 target_link_libraries(common_log PUBLIC common_request_context PRIVATE ${LOG_LIBS})
 target_include_directories(common_log PRIVATE ${CMAKE_BINARY_DIR}/src)
+target_compile_definitions(common_log PUBLIC SPDLOG_COMPILED_LIB)
 
 add_library(common_log_proto STATIC log_sampler_proto.cpp)
 target_link_libraries(common_log_proto PUBLIC common_log share_memory_protos)
