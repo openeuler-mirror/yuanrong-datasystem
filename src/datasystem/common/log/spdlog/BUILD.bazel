@@ -36,6 +36,8 @@ ds_cc_library(
         "//src/datasystem/common/log:log_base",
         "//src/datasystem/common/log:log_sampler",
         "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:no_destructor_header",
         "@ds-spdlog//:ds-spdlog",
     ],
 )

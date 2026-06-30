@@ -56,11 +56,6 @@ public:
      */
     std::ostream &Stream();
 
-    static void SetPodName(const std::string &podName)
-    {
-        podName_ = podName;
-    }
-
 private:
     void Init();
 
@@ -74,7 +69,7 @@ private:
     LogSeverity logSeverity_;
     ds_spdlog::level::level_enum level_;
     ds_spdlog::source_loc sourceLoc_;
-    static std::string podName_;
+    static const std::string &podName_;
     LogStreamBuf streamBuf_;
     std::ostream logStream_;
     bool forceLog_;

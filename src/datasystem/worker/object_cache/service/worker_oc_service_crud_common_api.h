@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <thread>
 
 #include "datasystem/common/string_intern/string_ref.h"
@@ -53,6 +54,11 @@ public:
     ~AsyncPersistenceDelManager();
 
     /**
+     * @brief Stop background old-version deletion task.
+     */
+    void Stop();
+
+    /**
      * @brief Add need to del key with version
      */
     void Add(const std::string &objId, uint64_t version);
@@ -67,6 +73,7 @@ private:
     // protect persistenceDelList_
     std::mutex mutex_;
     std::unordered_map<std::string, uint64_t> persistenceDelMap_;
+    std::future<void> workerFuture_;
     std::atomic<bool> exit_{ false };
 };
 

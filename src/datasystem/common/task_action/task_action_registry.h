@@ -25,6 +25,7 @@
 #include <unordered_map>
 
 #include "datasystem/common/task_action/task_action.h"
+#include "datasystem/common/util/no_destructor.h"
 
 namespace datasystem {
 
@@ -43,6 +44,8 @@ public:
     std::string GetSubscribers(TransferTaskType type) const;
 
 private:
+    friend class NoDestructor<TaskActionRegistry>;
+
     TaskActionRegistry() = default;
 
     struct TransferTaskTypeHash {

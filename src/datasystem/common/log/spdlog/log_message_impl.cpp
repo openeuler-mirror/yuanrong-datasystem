@@ -118,10 +118,9 @@ static DsLogger GetMessageLogger()
     return nullptr;
 }
 
-std::string LogMessageImpl::podName_ = Provider::GetPodName();
+const std::string &LogMessageImpl::podName_ = Provider::GetPodName();
 
-LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog,
-                               bool samplerChecked)
+LogMessageImpl::LogMessageImpl(LogSeverity logSeverity, const char *file, int line, bool forceLog, bool samplerChecked)
     : logSeverity_(logSeverity),
       level_(ToSpdlogLevel(logSeverity)),
       sourceLoc_{ file, line, "" },
@@ -151,8 +150,7 @@ void LogMessageImpl::Init()
         // Backstop for direct LogMessage construction that bypasses LOG macros.
         // When samplerChecked=true (macro path), sampler check was already done at macro level.
         // When samplerChecked=false (direct construction), do sampler backstop only when enabled.
-        if (!samplerChecked_ && logSeverity_ != LogSeverity::FATAL
-            && LogSampler::Instance().IsSamplerEnabledFast()
+        if (!samplerChecked_ && logSeverity_ != LogSeverity::FATAL && LogSampler::Instance().IsSamplerEnabledFast()
             && !LogSampler::Instance().ShouldCreateRuntimeLog(logSeverity_, forceLog_)) {
             skip_ = true;
             return;
@@ -163,7 +161,7 @@ void LogMessageImpl::Init()
 
 void LogMessageImpl::ToSpdlog()
 {
-    logger_->log(sourceLoc_, level_, ds_spdlog::string_view_t{g_ThreadLogData, msgSize_});
+    logger_->log(sourceLoc_, level_, ds_spdlog::string_view_t{ g_ThreadLogData, msgSize_ });
 
     if (level_ == SPDLOG_LEVEL_CRITICAL) {
         logger_->flush();

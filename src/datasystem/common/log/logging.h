@@ -213,7 +213,7 @@ private:
     std::unique_ptr<LogManager> logManager_;
     WriterPrefRWLock mux_;  // protects the initialization process of log.
     std::atomic<bool> init_{ false };
-    static std::string podName_;
+    static std::string &podName_;
     bool isClient_;
     bool isEmbeddedClient_ = false;
     bool isLoggingInitialized_ = false;
