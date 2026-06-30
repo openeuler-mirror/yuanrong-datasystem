@@ -63,7 +63,13 @@ Status Buffer::Init()
     if (bufferInfo_->pointer == nullptr && bufferInfo_->payloadPointer != nullptr) {
         bufferInfo_->pointer = static_cast<uint8_t *>(bufferInfo_->payloadPointer->Data());
     }
-    // Step 2: lazy/remote data — pointer stays null, fetched on demand
+    // Step 2: UB pool pre-allocation (pointer set, no local SHM) or lazy remote
+    bool ubPoolPreAlloc = (bufferInfo_->ubUrmaDataInfo != nullptr && bufferInfo_->pointer != nullptr);
+    if (ubPoolPreAlloc) {
+        isShm_ = false;
+        latch_ = std::make_shared<object_cache::CommonLock>();
+        return latch_->Init();
+    }
     if (bufferInfo_->remoteHostInfo != nullptr || bufferInfo_->ubUrmaDataInfo != nullptr) {
         bufferInfo_->pointer = nullptr;
         isShm_ = false;
@@ -226,7 +232,12 @@ Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(length > 0 && length <= dataSize, K_INVALID,
                                          "Data length must be in (0, buffer_size].");
     if (bufferInfo_->ubUrmaDataInfo) {
-        Status ubStatus = clientImpl->SendBufferViaUb(bufferInfo_, data, length, traceEnabled);
+        Status ubStatus;
+        if (bufferInfo_->ubGetBufferHandle && bufferInfo_->pointer != nullptr) {
+            ubStatus = clientImpl->SendBufferViaUbFromPool(bufferInfo_, data, length, traceEnabled);
+        } else {
+            ubStatus = clientImpl->SendBufferViaUb(bufferInfo_, data, length, traceEnabled);
+        }
         if (ubStatus.IsOk()) {
             if (actualTransportKind != nullptr) {
                 *actualTransportKind = static_cast<uint8_t>(AccessTransportKind::UB);
@@ -239,6 +250,7 @@ Status Buffer::MemoryCopyWithTransport(const void *data, uint64_t length, uint8_
         }
         AccessTransportTracker::Record(AccessTransportKind::TCP);
         // fallback to TCP if UB send fails, allocate buffer for that purpose.
+        bufferInfo_->ubGetBufferHandle.reset();
         RETURN_IF_NOT_OK(MallocBufferHelper());
     }
     uint8_t *dstData = bufferInfo_->pointer + bufferInfo_->metadataSize;
@@ -270,7 +282,12 @@ Status Buffer::Publish(const std::unordered_set<std::string> &nestedKeys)
         uint64_t dataSize = GetSize();
         const void *dataPtr = ImmutableData();
         if (dataPtr != nullptr && dataSize > 0) {
-            Status ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize, traceEnabled);
+            Status ubStatus;
+            if (bufferInfo_->ubGetBufferHandle && bufferInfo_->pointer != nullptr) {
+                ubStatus = clientImplSharedPtr->SendBufferViaUbFromPool(bufferInfo_, dataPtr, dataSize, traceEnabled);
+            } else {
+                ubStatus = clientImplSharedPtr->SendBufferViaUb(bufferInfo_, dataPtr, dataSize, traceEnabled);
+            }
             if (ubStatus.IsOk()) {
                 AccessTransportTracker::Record(AccessTransportKind::UB);
             } else {
@@ -393,6 +410,10 @@ void *Buffer::MutableData()
                                        status.ToString());
             return nullptr;
         }
+    }
+    if (bufferInfo_->ubGetBufferHandle && bufferInfo_->pointer != nullptr) {
+        // UB pool pre-allocated: reset flag so Publish() will re-send via RDMA
+        bufferInfo_->ubDataSentByMemoryCopy = false;
     }
     return static_cast<void *>(bufferInfo_->pointer + bufferInfo_->metadataSize);
 }

@@ -203,6 +203,15 @@ public:
     uint64_t GetUBMaxSetBufferSize();
 
     /**
+     * @brief Get the local URMA segment base address and size for direct RDMA writes.
+     * @return pair of {segmentBaseAddr, segmentSize}
+     */
+    std::pair<uint64_t, uint64_t> GetLocalSegmentInfo() const
+    {
+        return {reinterpret_cast<uint64_t>(memoryBuffer_), ubTransportMemSize_.load()};
+    }
+
+    /**
      * @brief Check we should register whole arena upfront
      * @return True if flag is set, else false
      */

@@ -462,6 +462,9 @@ public:
     virtual Status SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
                                    uint64_t length, bool traceEnabled) = 0;
 
+    virtual Status SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                           uint64_t length, bool traceEnabled) = 0;
+
 protected:
     /**
      * @brief Prepare the put request.

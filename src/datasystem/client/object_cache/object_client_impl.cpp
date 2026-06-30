@@ -2050,6 +2050,22 @@ Status ObjectClientImpl::Create(const std::string &objectKey, uint64_t dataSize,
     return Status::OK();
 }
 
+std::shared_ptr<ObjectBufferInfo> ObjectClientImpl::MakeUbPoolBufferInfo(const std::string &objectKey,
+                                                                         uint64_t dataSize, const FullParam &param,
+                                                                         uint32_t version, const ShmKey &shmId)
+{
+#ifdef USE_URMA
+    std::shared_ptr<UrmaManager::BufferHandle> ubBufHandle;
+    if (UrmaManager::Instance().GetMemoryBufferHandle(ubBufHandle, dataSize).IsOk()) {
+        auto info = MakeObjectBufferInfo(objectKey, static_cast<uint8_t*>(ubBufHandle->GetPointer()),
+                                         dataSize, 0, param, false, version, shmId);
+        info->ubGetBufferHandle = ubBufHandle;
+        return info;
+    }
+#endif
+    return MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version, shmId);
+}
+
 Status ObjectClientImpl::CreateShmBuffer(const std::string &objectKey, uint64_t dataSize, const FullParam &param,
                                          const std::shared_ptr<IClientWorkerApi> &workerApi,
                                          const LatencyTraceConfig &config, bool traceEnabled,
@@ -2086,7 +2102,7 @@ Status ObjectClientImpl::CreateShmBuffer(const std::string &objectKey, uint64_t 
                 MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, dataSize, metadataSize,
                                      param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
         } else {
-            bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, dataSize, 0, param, false, version, shmBuf->id);
+            bufferInfo = MakeUbPoolBufferInfo(objectKey, dataSize, param, version, shmBuf->id);
         }
         // Store URMA info for later use in SendBufferViaUb.
         bufferInfo->ubUrmaDataInfo = urmaDataInfo;
@@ -2385,6 +2401,15 @@ Status ObjectClientImpl::SendBufferViaUb(const std::shared_ptr<ObjectBufferInfo>
     return api->SendBufferViaUb(bufferInfo, data, length, traceEnabled);
 }
 
+Status ObjectClientImpl::SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                                 const void *data, uint64_t length, bool traceEnabled)
+{
+    std::shared_ptr<IClientWorkerApi> api;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(api, raii));
+    return api->SendBufferViaUbFromPool(bufferInfo, data, length, traceEnabled);
+}
+
 Status ObjectClientImpl::InvalidateBuffer(const std::string &objectKey)
 {
     RETURN_IF_NOT_OK(IsClientReady());
@@ -2422,7 +2447,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
         objInfo = MakeObjectBufferInfo(objectKey, (uint8_t *)(shmBuf->pointer) + shmBuf->offset, size, metadataSize,
                                        param, false, version, shmBuf->id, nullptr, std::move(mmapEntry));
     } else {
-        objInfo = MakeObjectBufferInfo(objectKey, nullptr, size, 0, param, false, version, shmBuf->id);
+        objInfo = MakeUbPoolBufferInfo(objectKey, size, param, version, shmBuf->id);
     }
     // Store URMA info for later use in SendBufferViaUb
     objInfo->ubUrmaDataInfo = urmaDataInfo;
