@@ -158,6 +158,24 @@ public:
                           bool traceEnabled);
 
     /**
+     * @brief Send buffer data via UB using a pre-allocated URMA pool buffer.
+     *        Copies user data into the pool-allocated buffer, then RDMA-writes
+     *        directly to the worker. Avoids the temporary pool allocation in
+     *        SendBufferViaUb.
+     * @param[in] bufferInfo The buffer info with pool-allocated pointer.
+     * @param[in] data The data to be sent.
+     * @param[in] length The length of the data to be sent.
+     * @param[in] traceEnabled Whether latency trace is enabled.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, const void *data,
+                                   uint64_t length, bool traceEnabled);
+
+    std::shared_ptr<ObjectBufferInfo> MakeUbPoolBufferInfo(const std::string &objectKey, uint64_t dataSize,
+                                                           const FullParam &param, uint32_t version,
+                                                           const ShmKey &shmId);
+
+    /**
      * @brief Invoke worker client to publish all buffers of all the given object keys.
      * @param[in] buffers The vector of the all the buffers.
      * @param[out]  failList The objects that are failed to be published

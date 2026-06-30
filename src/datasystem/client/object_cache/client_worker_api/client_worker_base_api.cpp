@@ -321,6 +321,45 @@ Status ClientWorkerBaseApi::SendBufferViaUb(const std::shared_ptr<ObjectBufferIn
 #endif
 }
 
+Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<ObjectBufferInfo> &bufferInfo,
+                                                    const void *data, uint64_t length, bool traceEnabled)
+{
+#ifdef USE_URMA
+    const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
+    errno_t memRet = memcpy_s(bufferInfo->pointer, bufferInfo->dataSize, data, length);
+    if (memRet != 0) {
+        return Status(K_RUNTIME_ERROR, "memcpy_s failed in SendBufferViaUbFromPool");
+    }
+    auto [segAddr, segSize] = UrmaManager::Instance().GetLocalSegmentInfo();
+    std::vector<uint64_t> eventKeys;
+    const uint8_t srcChipId = INVALID_CHIP_ID;
+    const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
+                                  ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
+                                  : INVALID_CHIP_ID;
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_START);
+    }
+    Status rc = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), segAddr, segSize,
+                                 reinterpret_cast<uint64_t>(bufferInfo->pointer), 0, totalSize, 0,
+                                 srcChipId, dstChipId, true, eventKeys);
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);
+    }
+    RecordUrmaDataPlaneResult(rc.IsOk());
+    if (rc.IsOk()) {
+        bufferInfo->ubDataSentByMemoryCopy = true;
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    }
+    return rc;
+#else
+    (void)bufferInfo;
+    (void)data;
+    (void)length;
+    (void)traceEnabled;
+    return Status(K_INVALID, "Failed to send buffer from UB pool");
+#endif
+}
+
 Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutMs, GetReqPb &req)
 {
     const std::vector<std::string> &objectKeys = getParam.objectKeys;
