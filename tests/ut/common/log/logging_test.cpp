@@ -138,11 +138,11 @@ public:
         return Status::OK();
     }
 
-    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress)
+    Status CreateLogFiles(int fileNum, int fileSize, bool enableCompress, const std::string &logName = "ds_llt")
     {
         for (int i = 0; i < fileNum; ++i) {
             std::stringstream filename;
-            filename << "ds_llt.INFO." << GetCurrentTimestamp();
+            filename << logName << ".INFO." << GetCurrentTimestamp();
             const std::string log_suffix = enableCompress ? ".log.gz" : ".log";
             filename << log_suffix;
             DS_EXPECT_OK(CreateTextFile(filename.str(), fileSize));
@@ -151,6 +151,28 @@ public:
         }
 
         return Status::OK();
+    }
+
+    std::string ClientAccessLogName()
+    {
+        std::string accessLogName = GetStringFromEnv(ACCESS_LOG_NAME_ENV.c_str(), "");
+        if (Logging::ValidateLogName(accessLogName)) {
+            return accessLogName;
+        }
+        return Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid());
+    }
+
+    std::string EscapeRegex(const std::string &value)
+    {
+        std::string escaped;
+        escaped.reserve(value.size());
+        for (char c : value) {
+            if (c == '.') {
+                escaped.push_back('\\');
+            }
+            escaped.push_back(c);
+        }
+        return escaped;
     }
 
     template <typename F, typename Rep, typename Period>
@@ -407,7 +429,8 @@ TEST_F(LoggingTest, TestEnvSucceed)
 {
     constexpr int NUM_LOG_FILES_TO_CREATE = 10;
     constexpr size_t LOG_FILE_SIZE_BYTES = 1024 * 1024;
-    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true));
+    const std::string logName = Logging::GetClientLogName("ds_llt", getpid());
+    DS_EXPECT_OK(CreateLogFiles(NUM_LOG_FILES_TO_CREATE, LOG_FILE_SIZE_BYTES, true, logName));
 
     int replace = 1;
     (void)setenv(LOG_DIR_ENV.c_str(), FLAGS_log_dir.c_str(), replace);
@@ -417,7 +440,7 @@ TEST_F(LoggingTest, TestEnvSucceed)
     (void)setenv(LOG_RETENTION_DAY_ENV.c_str(), "0", replace);
 
     Logging::GetInstance()->Start("ds_llt", true, 1);
-    std::string pattern = "ds_llt(_\\d+)?\\.INFO\\.\\d{14}\\.log\\.gz";
+    std::string pattern = EscapeRegex(logName) + "\\.INFO\\.\\d{14}\\.log\\.gz";
     auto interval = std::chrono::milliseconds(1000);
     constexpr int EXPECTED_LOG_FILE_COUNT = 5;
     constexpr int RETRY_TIMEOUT_SECONDS = 30;
@@ -491,11 +514,8 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
 
     // wait compress success
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << ".[0-9]*";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << ClientAccessLogName() << ".[0-9]*";
     std::string pattern = ssTimeCostFile.str();
-    std::stringstream ssTimeCostPidFile;
-    ssTimeCostPidFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*.[0-9]*";
-    std::string patternPid = ssTimeCostPidFile.str();
     int timeout = 10;
     bool success = false;
     Timer timer;
@@ -503,7 +523,6 @@ TEST_F(LoggingTest, TestMonitorLogMaxLogFileNum)
     while (timer.ElapsedSecond() < timeout) {
         std::vector<std::string> files;
         DS_ASSERT_OK(Glob(pattern, files));
-        DS_ASSERT_OK(Glob(patternPid, files));
         LOG(INFO) << VectorToString(files);
         if (files.size() == FLAGS_max_log_file_num) {
             success = true;
@@ -545,8 +564,7 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
     std::this_thread::sleep_for(interval);
 
     std::stringstream ssTimeCostFile;
-    ssTimeCostFile << FLAGS_log_dir.c_str() << "/"
-                   << Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid()) << ".log";
+    ssTimeCostFile << FLAGS_log_dir.c_str() << "/" << ClientAccessLogName() << ".log";
     std::string pattern = ssTimeCostFile.str();
     std::vector<std::string> files;
     DS_ASSERT_OK(Glob(pattern, files));
@@ -646,8 +664,7 @@ TEST_F(LoggingTest, TestAccessLogSampledMarker)
     Trace::Instance().SetRequestSampleDecision(false, false);
 
     std::vector<std::string> clientFiles;
-    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + Logging::GetClientLogName(CLIENT_ACCESS_LOG_NAME, getpid()) + ".log",
-                      clientFiles));
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/" + ClientAccessLogName() + ".log", clientFiles));
     ASSERT_EQ(clientFiles.size(), 1ul);
     std::string clientContent = ReadFileContent(clientFiles[0]);
     auto findLine = [](const std::string &content, const std::string &key) {

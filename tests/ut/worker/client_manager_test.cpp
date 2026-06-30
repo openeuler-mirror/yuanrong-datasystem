@@ -284,6 +284,22 @@ TEST_F(ClientManagerTest, TestMaxClientNumOnlyCountsShmEnabled)
     }
 }
 
+TEST_F(ClientManagerTest, TestClientShmEnabled)
+{
+    ClientManager &clientMgr = ClientManager::Instance();
+    DS_ASSERT_OK(clientMgr.Init());
+
+    uint32_t lockId = 0;
+    auto shmClientId = ClientKey::Intern(GetBytesUuid());
+    DS_ASSERT_OK(clientMgr.AddClient(shmClientId, true, -1, "", true, "", "", lockId));
+    ASSERT_TRUE(clientMgr.ClientShmEnabled(shmClientId));
+
+    auto nonShmClientId = ClientKey::Intern(GetBytesUuid());
+    DS_ASSERT_OK(clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", lockId));
+    ASSERT_FALSE(clientMgr.ClientShmEnabled(nonShmClientId));
+    ASSERT_FALSE(clientMgr.ClientShmEnabled(ClientKey::Intern(GetBytesUuid())));
+}
+
 TEST_F(ClientManagerTest, TestRemovableClientCount)
 {
     ClientManager &clientMgr = ClientManager::Instance();

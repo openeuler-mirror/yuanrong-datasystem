@@ -245,6 +245,13 @@ std::shared_ptr<ClientInfo> ClientManager::GetClientInfo(const ClientKey &client
     return nullptr;
 }
 
+bool ClientManager::ClientShmEnabled(const ClientKey &clientId) const
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    TbbClientInfoTable::const_accessor accessor;
+    return tbbClientTable_.find(accessor, clientId) && accessor->second != nullptr && accessor->second->ShmEnabled();
+}
+
 std::string ClientManager::GetAuthTenantIdByClientId(const ClientKey &clientId, bool &clientExist)
 {
     auto clientInfo = GetClientInfo(clientId);

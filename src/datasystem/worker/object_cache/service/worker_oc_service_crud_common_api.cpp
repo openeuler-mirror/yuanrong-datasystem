@@ -202,8 +202,7 @@ Status WorkerOcServiceCrudCommonApi::CheckIfL2CacheNeededAndWritable(const L2Sto
 
 bool WorkerOcServiceCrudCommonApi::ClientShmEnabled(const ClientKey &clientId)
 {
-    auto clientInfo = worker::ClientManager::Instance().GetClientInfo(clientId);
-    return clientInfo != nullptr && clientInfo->ShmEnabled();
+    return worker::ClientManager::Instance().ClientShmEnabled(clientId);
 }
 
 bool WorkerOcServiceCrudCommonApi::CanTransferByShm(uint64_t dataSize)

@@ -149,6 +149,13 @@ public:
     std::shared_ptr<ClientInfo> GetClientInfo(const ClientKey &clientId);
 
     /**
+     * @brief Check whether the client allows shared memory.
+     * @param[in] clientId Uuid of client.
+     * @return True if client exists and allows shared memory.
+     */
+    bool ClientShmEnabled(const ClientKey &clientId) const;
+
+    /**
      * @brief Check the UUID Validity.
      * @param[in] clientId The uuid of client connected with worker.
      * @return Status of the call.
