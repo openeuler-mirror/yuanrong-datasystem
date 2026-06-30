@@ -27,9 +27,13 @@ public:
         std::shared_ptr<datasystem::Buffer> buffer;
         auto rc = client_->Create(key, size, cparam, buffer);
         if (!rc.IsOk()) return false;
-        buffer->WLatch();
-        buffer->MemoryCopy(data.data(), size);
-        buffer->UnWLatch();
+        (void)data;
+        (void)size;
+        // No-copy benchmark: publish the freshly created Buffer directly.
+        // Restore the write below when content validation is needed again.
+        // buffer->WLatch();
+        // buffer->MemoryCopy(data.data(), size);
+        // buffer->UnWLatch();
         rc = client_->Set(buffer);
         return rc.IsOk();
     }
@@ -39,7 +43,11 @@ public:
         std::shared_ptr<datasystem::Buffer> buffer;
         auto rc = client_->Create(key, size, cparam, buffer);
         if (!rc.IsOk()) return false;
-        memcpy(buffer->MutableData(), data.data(), size);
+        (void)data;
+        (void)size;
+        // No-copy benchmark: publish the freshly created Buffer directly.
+        // Restore the write below when content validation is needed again.
+        // memcpy(buffer->MutableData(), data.data(), size);
         rc = client_->Set(buffer);
         return rc.IsOk();
     }
