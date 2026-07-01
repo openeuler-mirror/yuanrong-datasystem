@@ -317,3 +317,8 @@ int DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry* entries, uint32_t batchS
 {
     return P2PScatterBatchFromRemoteHostMem(entries, batchSize, comm, stream);
 }
+
+int DSP2PScatterBatchFromRemoteHostMemDone(P2PComm comm)
+{
+    return P2PScatterBatchFromRemoteHostMemDone(comm);
+}

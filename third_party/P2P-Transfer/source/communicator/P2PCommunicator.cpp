@@ -182,6 +182,17 @@ Status P2PCommunicator::Read(P2PIScatterEntry *entries, uint32_t batchSize, aclr
     return Status::Success();
 }
 
+Status P2PCommunicator::ScatterBatchFromRemoteHostMemDone()
+{
+    if (role != P2PCommRole::P2P_COMM_RECEIVER) {
+        return Status::Error(ErrorCode::NOT_SUPPORTED, "P2P Comm is not of type receiver");
+    }
+
+    CHECK_STATUS(receiver->ScatterBatchFromRemoteHostMemDone());
+
+    return Status::Success();
+}
+
 Status P2PCommunicator::Send(void **srcPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream)
 {
     if (role != P2PCommRole::P2P_COMM_SENDER) {

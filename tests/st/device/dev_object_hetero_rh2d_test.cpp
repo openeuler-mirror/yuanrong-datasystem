@@ -60,6 +60,13 @@ namespace st {
 namespace {
 // NPU range [BASE_DEV_ID, BASE_DEV_ID + 8).
 constexpr int32_t BASE_DEV_ID = 0;
+constexpr int32_t DEVICE_NUM = 8;
+
+int32_t GetDeviceIdWithOffset(int32_t startDeviceId, int32_t offset)
+{
+    // Treat DS_TEST_DEVICE_ID as the start point and wrap within the test NPU range.
+    return BASE_DEV_ID + (startDeviceId - BASE_DEV_ID + offset) % DEVICE_NUM;
+}
 
 std::string DevIdsFlag(std::initializer_list<int> offsets)
 {
@@ -375,9 +382,8 @@ void DevObjectHeteroRH2DTest::RunMGetMultiProcessH2DTest(int setWorkerIndex, int
         }
         inObjectIdsConcat.insert(inObjectIdsConcat.end(), inObjectIds[i].begin(), inObjectIds[i].end());
         // idx: 0..clientNum-1, used as logical index into inObjectIds/verifyList.
-        // devId: deviceId_ + idx, the actual NPU id used by this forked process.
         pids.emplace_back(ForkForTest([&, idx = i]() {
-            const int32_t devId = deviceId_ + idx;
+            const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
             InitAcl(devId);
             std::shared_ptr<DsClient> client;
             InitTestDsClientForRemoteH2D(setWorkerIndex, client);
@@ -404,7 +410,7 @@ void DevObjectHeteroRH2DTest::RunMGetMultiProcessH2DTest(int setWorkerIndex, int
 
     for (int i = 0; i < clientNum; i++) {
         pids.emplace_back(ForkForTest([&, idx = i]() {
-            const int32_t devId = deviceId_ + idx;
+            const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
             InitAcl(devId);
             std::shared_ptr<DsClient> client;
             InitTestDsClientForRemoteH2D(getWorkerIndex, client);
@@ -831,8 +837,8 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
 
     for (size_t j = 0; j < clientBatches.size(); j++) {
         for (size_t i = 0; i < clientBatches[j]; i++) {
-            pids.emplace_back(ForkForTest([&, idx = (i % 8)]() {
-                const int32_t devId = deviceId_ + idx;
+            pids.emplace_back(ForkForTest([&, idx = static_cast<int32_t>(i % DEVICE_NUM)]() {
+                const int32_t devId = GetDeviceIdWithOffset(deviceId_, idx);
                 InitAcl(devId);
 
                 std::shared_ptr<DsClient> client1;

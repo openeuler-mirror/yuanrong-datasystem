@@ -16,10 +16,8 @@
 
 #include <cstdint>
 #include <string>
-#include <cstring>
-#include <mutex>
 #include <memory>
-#include <unordered_map>
+#include <vector>
 #include "communicator/P2PCommunicator.h"
 #include "communicator/P2PCommunicatorManager.h"
 #include "tools/hccl-convert.h"
@@ -32,6 +30,12 @@
 
 // Manages P2PCommunicators of the current process
 P2PCommunicatorManager commManager;
+
+static HcclResult LogP2PCommInitError(HcclResult result, const std::string &message)
+{
+    std::cerr << "[P2P] " << message << std::endl;
+    return result;
+}
 
 HcclResult P2PGetRootInfo(HcclRootInfo *rootInfo)
 {
@@ -61,37 +65,46 @@ HcclResult P2PGetRootInfo(HcclRootInfo *rootInfo)
 HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLink link, P2PComm *comm,
                                P2PCommInitOptions *p2pCommInitOptions)
 {
-    if (rootInfo == nullptr) {
-        std::cerr << "[P2P] P2PCommInitRootInfo: rootInfo is empty" << std::endl;
-        return HCCL_E_PARA;
-    }
-
-    if (comm == nullptr) {
-        std::cerr << "[P2P] P2PCommInitRootInfo: comm should not be null" << std::endl;
-        return HCCL_E_PARA;
-    }
-
-    if (kind != P2P_RECEIVER && kind != P2P_SENDER) {
-        std::cerr << "[P2P] P2PCommInitRootInfo: P2P kind not supported " << kind << std::endl;
-        return HCCL_E_PARA;
-    }
-
     P2PCommInitOptions defaultOptions;
     P2PCommInitOptions *options = (p2pCommInitOptions != nullptr) ? p2pCommInitOptions : &defaultOptions;
 
+    if (rootInfo == nullptr) {
+        return LogP2PCommInitError(HCCL_E_PARA, "P2PCommInitRootInfo failed: rootInfo is empty");
+    }
+
+    if (comm == nullptr) {
+        return LogP2PCommInitError(HCCL_E_PARA, "P2PCommInitRootInfo failed: comm should not be null");
+    }
+
+    if (kind != P2P_RECEIVER && kind != P2P_SENDER) {
+        return LogP2PCommInitError(HCCL_E_PARA,
+                                   "P2PCommInitRootInfo failed: P2P kind not supported " + std::to_string(kind));
+    }
+
     int32_t deviceId;
-    ACL_CHECK_HCCL(hrtGetDeviceRefresh(&deviceId));
+    HcclResult deviceResult = hrtGetDeviceRefresh(&deviceId);
+    if (deviceResult != HCCL_SUCCESS) {
+        return LogP2PCommInitError(HCCL_E_RUNTIME,
+                                   "P2PCommInitRootInfo hrtGetDeviceRefresh failed: ret="
+                                       + std::to_string(static_cast<int>(deviceResult)));
+    }
 
     // Spin up hccp
     std::shared_ptr<RdmaAgent> agent;
-    CHECK_STATUS_HCCL(RdmaAgent::GetInstance(deviceId, agent));
+    Status status = RdmaAgent::GetInstance(deviceId, agent);
+    if (!status.IsSuccess()) {
+        return LogP2PCommInitError(HCCL_E_INTERNAL,
+                                   "P2PCommInitRootInfo RdmaAgent::GetInstance failed: deviceId="
+                                       + std::to_string(deviceId) + ", status=" + status.ToString());
+    }
 
     P2PRootHandle rootHandle;
     memcpy_s(&rootHandle, sizeof(rootHandle), rootInfo->internal, sizeof(rootHandle));
     std::string identifier(rootHandle.identifier, ROOTHANDLE_INDENTIFIER_MAX_LENGTH);
 
     if (commManager.IsFailedIdentifier(identifier)) {
-        return HCCL_E_INTERNAL;
+        return LogP2PCommInitError(HCCL_E_INTERNAL,
+                                   "P2PCommInitRootInfo failed: root identifier was previously marked failed");
     }
 
     // Get root communicator associated with identifier. If no root communicator is found, P2PCommInitRootInfo
@@ -99,11 +112,21 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
     std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetAndRemoveUnboundCommunicator(identifier);
     if (!p2pComm) {
         p2pComm = std::make_shared<P2PCommunicator>(false);
-        CHECK_STATUS_HCCL(p2pComm->StartClient(rootHandle));
+        status = p2pComm->StartClient(rootHandle);
+        if (!status.IsSuccess()) {
+            return LogP2PCommInitError(HCCL_E_INTERNAL,
+                                       "P2PCommInitRootInfo StartClient failed: deviceId="
+                                           + std::to_string(deviceId) + ", status=" + status.ToString());
+        }
     }
 
     P2PCommRole role;
-    CHECK_STATUS_HCCL(p2pKindToCommRole(kind, role));
+    status = p2pKindToCommRole(kind, role);
+    if (!status.IsSuccess()) {
+        return LogP2PCommInitError(HCCL_E_INTERNAL,
+                                   "P2PCommInitRootInfo p2pKindToCommRole failed: kind=" + std::to_string(kind)
+                                       + ", status=" + status.ToString());
+    }
 
     P2PCommArgs args = { deviceId,
                          link,
@@ -115,12 +138,12 @@ HcclResult P2PCommInitRootInfo(const HcclRootInfo *rootInfo, P2pKind kind, P2pLi
                          options->enableTwoSidedBuffer};
 
     // Establish connection between root and client communicators
-    Status status = p2pComm->EstablishConnection(args, commManager.GetBufferPool(), options->heartbeatCallback);
+    status = p2pComm->EstablishConnection(args, commManager.GetBufferPool(), options->heartbeatCallback);
     if (!status.IsSuccess()) {
         commManager.AddFailedIdentifier(identifier);
-        std::cerr << "[P2P] P2PCommInitRootInfo failed: deviceId=" << deviceId << ", " << status.ToString()
-                  << std::endl;
-        return HCCL_E_INTERNAL;
+        return LogP2PCommInitError(HCCL_E_INTERNAL,
+                                   "P2PCommInitRootInfo EstablishConnection failed: deviceId="
+                                       + std::to_string(deviceId) + ", status=" + status.ToString());
     }
 
     P2PComm resComm = p2pComm.get();
@@ -289,8 +312,29 @@ HcclResult P2PScatterBatchFromRemoteHostMem(P2pScatterEntry *entries, uint32_t b
         iscatterEntries[b].sizes = sizes[b].data();
     }
 
-    CHECK_STATUS_HCCL(p2pComm->Read(iscatterEntries, batchSize, stream));
+    Status status = p2pComm->Read(iscatterEntries, batchSize, stream);
+    if (!status.IsSuccess()) {
+        std::cerr << "[P2P][ScatterBatch] Read failed: " << status << std::endl;
+        return HCCL_E_INTERNAL;
+    }
 
+    return HCCL_SUCCESS;
+}
+
+HcclResult P2PScatterBatchFromRemoteHostMemDone(P2PComm comm)
+{
+    if (comm == nullptr) {
+        std::cerr << "[P2P] P2PScatterBatchFromRemoteHostMemDone: comm should not be null" << std::endl;
+        return HCCL_E_PARA;
+    }
+
+    std::shared_ptr<P2PCommunicator> p2pComm = commManager.GetCommunicator(comm);
+    if (!p2pComm) {
+        std::cerr << "[P2P] P2PScatterBatchFromRemoteHostMemDone: comm does not exist" << std::endl;
+        return HCCL_E_NOT_FOUND;
+    }
+
+    CHECK_STATUS_HCCL(p2pComm->ScatterBatchFromRemoteHostMemDone());
     return HCCL_SUCCESS;
 }
 

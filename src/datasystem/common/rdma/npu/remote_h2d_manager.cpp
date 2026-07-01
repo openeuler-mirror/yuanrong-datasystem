@@ -644,10 +644,12 @@ Status RemoteH2DManager::ScatterBatch(P2pScatterEntry *entries, uint32_t size,
     // Thread safety needs to be ensured for the p2p communicator.
     std::lock_guard<std::mutex> lock(p2pComm->mutex);
     PerfPoint waitPoint(PerfKey::P2P_COMM_INIT_WAIT_READY);
-    RETURN_IF_NOT_OK(p2pComm->waitPost.WaitAndGetStatus());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(p2pComm->waitPost.WaitAndGetStatus(),
+                                     "[RH2D][ScatterBatch][Manager] waitPost failed");
     waitPoint.Record();
 
-    RETURN_IF_NOT_OK(transport_->ScatterBatch(entries, size, p2pComm->remoteEndpoint, p2pComm->stream));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(transport_->ScatterBatch(entries, size, p2pComm->remoteEndpoint, p2pComm->stream),
+                                     "[RH2D][ScatterBatch][Manager] transport ScatterBatch failed");
     return Status::OK();
 }
 
@@ -792,8 +794,7 @@ void RemoteH2DManager::CleanupDisconnectedClients(const std::vector<std::string>
             std::string remoteEndpoint = accessor.entry->data->remoteEndpoint;
             communicatorMap_->BlockingErase(accessor);
             if (transport_) {
-                LOG_IF_ERROR(transport_->Disconnect(remoteEndpoint),
-                             "Transport disconnect failed for evicted peer");
+                LOG_IF_ERROR(transport_->Disconnect(remoteEndpoint), "Transport disconnect failed for evicted peer");
             }
         }
     }

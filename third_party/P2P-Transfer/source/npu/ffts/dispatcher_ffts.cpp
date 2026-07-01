@@ -435,12 +435,14 @@ HcclResult DispatcherFFTS::InitFftsDescMemcpy(void *dst, const void *src, uint64
 HcclResult DispatcherFFTS::AddTaskDependency(uint32_t predecessorId, uint32_t successorId)
 {
     if (FftsCtxReady()) {
-        std::cerr << "Launch has already been called for the current context" << std::endl;
+        std::cerr << "Launch has already been called for the current context, predecessorId=" << predecessorId
+                  << ", successorId=" << successorId << std::endl;
         return HCCL_E_RUNTIME;
     }
 
     if (fftsCtxsPtr->contexts[predecessorId].successorNum == RT_CTX_SUCCESSOR_NUM) {
-        std::cerr << "Context cannot have more than 26 successors" << std::endl;
+        std::cerr << "Context cannot have more than 26 successors, predecessorId=" << predecessorId
+                  << ", successorId=" << successorId << ", refreshIndex=" << fftsCtxsPtr->refreshIndex << std::endl;
         return HCCL_E_RUNTIME;
     }
 

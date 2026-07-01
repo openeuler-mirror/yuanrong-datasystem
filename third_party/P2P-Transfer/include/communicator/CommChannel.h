@@ -16,6 +16,10 @@ public:
     virtual Status Initialize(TCPObjectClient *client, TCPObjectServer *server) = 0;
     virtual Status Receive(void **dstPtrs, uint64_t* sizes, uint32_t count, aclrtStream stream) = 0;
     virtual Status Read(P2PIScatterEntry* entries, uint32_t batchSize, aclrtStream stream) = 0;
+    virtual Status ScatterBatchFromRemoteHostMemDone()
+    {
+        return Status::Success();
+    }
     virtual ~ReceiveChannel() {}
 };
 

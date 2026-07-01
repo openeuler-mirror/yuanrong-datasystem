@@ -56,6 +56,10 @@ private:
         int32_t devId = -1;
     };
 
+    Status GetP2PCommContext(const std::string &remoteEndpoint, std::shared_ptr<P2PCommContext> &ctx);
+    Status SubmitScatterBatch(P2pScatterEntry *entries, P2PComm p2pComm, aclrtStream stream, uint32_t start,
+                              uint32_t size, uint32_t blobCount, bool isFinal);
+
     // Map from remote endpoint (base64 rootInfo) to P2PComm handle and its device context.
     // Uses std::shared_ptr on P2PCommContext to manage connection lifetime:
     //   - ScatterBatch copies the shared_ptr, keeping the connection alive after releasing the lock.

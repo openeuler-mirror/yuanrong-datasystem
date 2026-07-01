@@ -4,6 +4,9 @@
 #ifndef P2P_ROCE_RECEIVER_H
 #define P2P_ROCE_RECEIVER_H
 
+#include <array>
+#include <optional>
+
 #include "tools/Status.h"
 #include "tools/npu-error.h"
 #include "include/communicator/roce/proto/RoceInitMsg.pb.h"
@@ -37,6 +40,7 @@ public:
     Status Initialize(TCPObjectClient *client, TCPObjectServer *server) override;
     Status Receive(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream) override;
     Status Read(P2PIScatterEntry *entries, uint32_t batchSize, aclrtStream stream) override;
+    Status ScatterBatchFromRemoteHostMemDone() override;
 
 private:
     Status ReceiveChunk(void **dstPtrs, uint64_t *sizes, uint32_t count, aclrtStream stream, uint32_t *lastTaskIds,
@@ -44,7 +48,9 @@ private:
     Status ReadChunk(void *srcPtr, uint64_t srcSize, void **dstPtrs, uint64_t *dstSizes, uint32_t count,
                      aclrtStream stream, uint32_t &lastRdmaTaskId, uint32_t &lastRdmaTaskCount,
                      uint32_t *lastSdmaTaskIds, uint32_t &lastSdmaTaskCount, uint32_t srcRkey, bool isLast,
-                     bool isFirst);
+                     bool isFirst,
+                     std::vector<std::array<uint32_t, RECEIVER_MAX_PARALLEL_TASKS>> &bufferReleaseTaskIds,
+                     std::vector<uint32_t> &bufferReleaseTaskCounts);
 
     TCPObjectClient *client;
     TCPObjectServer *server;
@@ -59,6 +65,7 @@ private:
 
     bool enableTwoSidedBuffer;
     PingpongBufferPool *pingpongPool;
+    std::optional<PingpongBufferPool::BufferHandle> pendingScatterBatchPingpongBuff;
 
     int32_t recvDeviceId;
     std::string tag;
@@ -79,15 +86,11 @@ private:
     void *notifySrcValAddr;
     uint32_t notifySize;
 
-    // Unify implementation with Send/Recv, later reuse comm buffer across comms
-    bool onesidedStarted = false;
     uint64_t remotenotifySrcValAddr;
     std::vector<std::shared_ptr<P2PMem>> oneSidedBuffs;
     std::vector<std::vector<uint32_t>> oneSidedBuffLkeys;
     std::vector<std::unique_ptr<RdmaNotify>> readChunkDoneNotifies;
     std::vector<uint64_t> readChunkDoneNotifyAddrOffsets;
-    std::vector<std::unique_ptr<P2PNotify>> blockAvailableNotifies;  // record first time so usable
-    std::vector<uint64_t> blockAvailableNotifyAddr;
     std::unique_ptr<RdmaNotify> writeOpFinishNotify;
     union hccp_ip_addr remoteIp;
 

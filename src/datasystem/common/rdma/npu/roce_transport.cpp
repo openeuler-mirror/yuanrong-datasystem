@@ -17,6 +17,7 @@
 #include "datasystem/common/rdma/npu/roce_transport.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -79,7 +80,6 @@ constexpr uint32_t P2P_SCATTER_MAX_BATCH_BLOBS = 128 * 128;  // 16384
 // Maximum length for endpoint identity in log output (truncate longer identities)
 constexpr size_t MAX_ENDPOINT_LOG_LEN = 32;
 constexpr int32_t WAIT_INTERVAL_MS = 5000;
-
 }  // namespace
 
 Status RoCETransport::Init(const std::vector<int32_t> &deviceIds)
@@ -128,7 +128,12 @@ Status RoCETransport::Connect(const std::string &remoteIdentity, P2pKind kind, s
     P2PComm p2pComm = nullptr;
     Status rc = acl::AclDeviceManager::Instance()->DSP2PCommInitRootInfo(&remoteRootInfo, kind, P2P_LINK_ROCE, &p2pComm,
                                                                          &p2pCommInitOptions);
-    if (!rc.IsOk()) {
+    if (rc.IsError()) {
+        const char *visibleDevices = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
+        LOG(ERROR) << "RoCE DSP2PCommInitRootInfo failed, kind=" << kind << ", devId=" << devId
+                   << ", remoteIdentity=" << remoteIdentity.substr(0, MAX_ENDPOINT_LOG_LEN)
+                   << ", ASCEND_RT_VISIBLE_DEVICES=" << (visibleDevices == nullptr ? "<unset>" : visibleDevices)
+                   << ", status=" << rc.ToString();
         return Status(StatusCode::K_RUNTIME_ERROR, "DSP2PCommInitRootInfo failed: " + rc.GetMsg());
     }
 
@@ -179,35 +184,76 @@ Status RoCETransport::ImportRemoteAddressInfo(const std::string &remoteEndpoint,
     return acl::AclDeviceManager::Instance()->DSP2PImportHostSegment(segInfo);
 }
 
-Status RoCETransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
-                                   std::shared_ptr<aclrtStream> stream)
+Status RoCETransport::GetP2PCommContext(const std::string &remoteEndpoint, std::shared_ptr<P2PCommContext> &ctx)
 {
     // Only hold connMutex_ while looking up endpointToComm_; copy the shared_ptr and release it immediately.
     // This avoids serializing all endpoints during the subsequent transfer, including the blocking
     // RtSynchronizeStreamWithTimeout calls (up to 5 seconds each).
-    std::shared_ptr<P2PCommContext> ctx;
-    {
-        std::lock_guard<std::mutex> lock(connMutex_);
-        auto it = endpointToComm_.find(remoteEndpoint);
-        if (it == endpointToComm_.end()) {
-            return Status(StatusCode::K_NOT_FOUND,
-                          "No RoCE connection for endpoint: " + remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN));
-        }
-        ctx = it->second;
+    std::lock_guard<std::mutex> lock(connMutex_);
+    auto it = endpointToComm_.find(remoteEndpoint);
+    if (it == endpointToComm_.end()) {
+        LOG(ERROR) << "[RH2D][ScatterBatch][RoCE] no connection for endpoint="
+                   << remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN);
+        return Status(StatusCode::K_NOT_FOUND,
+                      "No RoCE connection for endpoint: " + remoteEndpoint.substr(0, MAX_ENDPOINT_LOG_LEN));
     }
+    ctx = it->second;
+    return Status::OK();
+}
+
+Status RoCETransport::SubmitScatterBatch(P2pScatterEntry *entries, P2PComm p2pComm, aclrtStream stream,
+                                         uint32_t start, uint32_t size, uint32_t blobCount, bool isFinal)
+{
+    Status rc = acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMem(entries + start, size, p2pComm,
+                                                                                      stream);
+    if (rc.IsError()) {
+        Status doneRc = acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMemDone(p2pComm);
+        std::string errMsg = FormatString(
+            "[RH2D][ScatterBatch][RoCE] RoCE ScatterBatch submit failed, %sbatchStart=%u, "
+            "batchSize=%u, batchBlobCount=%u, stream=%p, status=%s",
+            isFinal ? "final " : "", start, size, blobCount, stream, rc.ToString().c_str());
+        LOG(ERROR) << errMsg;
+        LOG_IF_ERROR(doneRc,
+                     "[RH2D][ScatterBatch][RoCE] ScatterBatchFromRemoteHostMem done failed after submit error");
+        return Status(rc.GetCode(), errMsg);
+    }
+
+    rc = acl::AclDeviceManager::Instance()->RtSynchronizeStreamWithTimeout(stream, WAIT_INTERVAL_MS);
+    Status doneRc = acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMemDone(p2pComm);
+    if (rc.IsError()) {
+        std::string errMsg = FormatString(
+            "[RH2D][ScatterBatch][RoCE] RoCE ScatterBatch stream sync failed, %sbatchStart=%u, "
+            "batchSize=%u, batchBlobCount=%u, stream=%p, timeoutMs=%d, status=%s",
+            isFinal ? "final " : "", start, size, blobCount, stream, WAIT_INTERVAL_MS, rc.ToString().c_str());
+        LOG(ERROR) << errMsg;
+        LOG_IF_ERROR(doneRc, "[RH2D][ScatterBatch][RoCE] ScatterBatchFromRemoteHostMem done failed after sync error");
+        return Status(rc.GetCode(), errMsg);
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(doneRc, "[RH2D][ScatterBatch][RoCE] ScatterBatchFromRemoteHostMem done failed");
+    return Status::OK();
+}
+
+Status RoCETransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
+                                   std::shared_ptr<aclrtStream> stream)
+{
+    std::shared_ptr<P2PCommContext> ctx;
+    RETURN_IF_NOT_OK(GetP2PCommContext(remoteEndpoint, ctx));
     P2PComm p2pComm = ctx->comm;
 
     // RoCE path requires a valid stream
+    if (stream == nullptr) {
+        LOG(ERROR) << "[RH2D][ScatterBatch][RoCE] stream is null";
+    }
     RETURN_RUNTIME_ERROR_IF_NULL(stream);
 
     uint32_t batchStart = 0;
     uint32_t batchSize = 0;
     uint32_t batchBlobCount = 0;
-
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t entryBlobs = entries[i].numEl;
 
         if (entryBlobs == 0 || entryBlobs > P2P_SCATTER_MAX_BATCH_BLOBS) {
+            LOG(ERROR) << "[RH2D][ScatterBatch][RoCE] invalid entry, index=" << i << ", entryBlobs=" << entryBlobs;
             return Status(StatusCode::K_INVALID,
                           FormatString("RoCE ScatterBatch entry numEl out of range: %u, expected (0, %u]", entryBlobs,
                                        P2P_SCATTER_MAX_BATCH_BLOBS));
@@ -215,12 +261,8 @@ Status RoCETransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
 
         // If adding this entry exceeds limit and we have a pending batch, submit it and sync
         if (batchSize > 0 && batchBlobCount + entryBlobs > P2P_SCATTER_MAX_BATCH_BLOBS) {
-            // Submit current batch
-            RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMem(
-                entries + batchStart, batchSize, p2pComm, *stream));
-            // Must synchronize after each batch to avoid driver resource overrun / race condition
-            RETURN_IF_NOT_OK(
-                acl::AclDeviceManager::Instance()->RtSynchronizeStreamWithTimeout(*stream, WAIT_INTERVAL_MS));
+            RETURN_IF_NOT_OK(SubmitScatterBatch(entries, p2pComm, *stream, batchStart, batchSize, batchBlobCount,
+                                                false));
 
             // Start new batch from current entry
             batchStart = i;
@@ -234,9 +276,7 @@ Status RoCETransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
 
     // Submit final batch if any entries remain
     if (batchSize > 0) {
-        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->DSP2PScatterBatchFromRemoteHostMem(
-            entries + batchStart, batchSize, p2pComm, *stream));
-        RETURN_IF_NOT_OK(acl::AclDeviceManager::Instance()->RtSynchronizeStreamWithTimeout(*stream, WAIT_INTERVAL_MS));
+        RETURN_IF_NOT_OK(SubmitScatterBatch(entries, p2pComm, *stream, batchStart, batchSize, batchBlobCount, true));
     }
 
     return Status::OK();

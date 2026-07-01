@@ -194,6 +194,7 @@ void AclDeviceManager::DlsymFuncObj()
     DLSYM_FUNC_OBJ(DSP2PRegisterHostMem, pluginHandle_);
     DLSYM_FUNC_OBJ(DSP2PImportHostSegment, pluginHandle_);
     DLSYM_FUNC_OBJ(DSP2PScatterBatchFromRemoteHostMem, pluginHandle_);
+    DLSYM_FUNC_OBJ(DSP2PScatterBatchFromRemoteHostMemDone, pluginHandle_);
 }
 
 Status AclDeviceManager::CheckPluginOk()
@@ -733,7 +734,22 @@ Status AclDeviceManager::DSP2PScatterBatchFromRemoteHostMem(P2pScatterEntry *ent
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSP2PScatterBatchFromRemoteHostMemFunc_);
-    RETURN_ACL_RESULT(DSP2PScatterBatchFromRemoteHostMemFunc_(entries, batchSize, comm, stream));
+    int ret = DSP2PScatterBatchFromRemoteHostMemFunc_(entries, batchSize, comm, stream);
+    if (ret != 0) {
+        return Status(StatusCode::K_HCCL_ERROR, __LINE__, __FILE__,
+                      FormatString("[RH2D][ScatterBatch][AclDeviceManager] DSP2PScatterBatchFromRemoteHostMem failed, "
+                                   "ret=%d, batchSize=%u, comm=%p, stream=%p. HCCL/P2P api failed with error code %d, "
+                                   "please refer to P2P-Transfer logs for detailed error information. ",
+                                   ret, batchSize, comm, stream, ret));
+    }
+    return Status::OK();
+}
+
+Status AclDeviceManager::DSP2PScatterBatchFromRemoteHostMemDone(P2PComm comm)
+{
+    RETURN_IF_NOT_OK(CheckPluginOk());
+    RETURN_RUNTIME_ERROR_IF_NULL(DSP2PScatterBatchFromRemoteHostMemDoneFunc_);
+    RETURN_HCCL_RESULT(DSP2PScatterBatchFromRemoteHostMemDoneFunc_(comm));
 }
 
 // ==================== DeviceManagerBase Interface Implementation ====================
