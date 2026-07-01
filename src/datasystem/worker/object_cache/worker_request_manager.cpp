@@ -196,6 +196,18 @@ Status GetRequest::MarkSuccessImpl(const ObjectKey &objectKey, std::unique_ptr<G
             found, K_TRY_AGAIN,
             FormatString("Response is not ready yet for object %s, comm id %s", objectKey, GetClientCommUuid()));
     }
+
+    if (OsXprtPipln::IsPiplnH2DRequest(GetH2DChunkManager())) {
+        // trigger local pipeline h2d if data is fetched from other point
+        // ignore failure now, this will be treated in fillinresponse
+        if (params->shmUnit != nullptr) {
+            OsXprtPipln::MaybeTriggerLocalPipelineRH2D(
+                GetH2DChunkManager(), objectKey, params->shmUnit,
+                params->metaSize + 0 /* read offset is always 0 */, params->dataSize);
+        } else {
+            LOG(WARNING) << "local pipeline is not triggered because shmunit is nullptr";
+        }
+    }
     {
         std::lock_guard<std::mutex> locker(mutex_);
         RETURN_OK_IF_TRUE(iter->second.params != nullptr);

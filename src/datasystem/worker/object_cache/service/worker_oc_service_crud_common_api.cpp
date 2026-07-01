@@ -159,14 +159,6 @@ Status WorkerOcServiceCrudCommonApi::UpdateRequestForSuccess(ReadObjectKV &objec
     const auto dataFormat = objectKV.GetObjEntry()->stateInfo.GetDataFormat();
     if (dataFormat == DataFormat::BINARY) {
         if (request != nullptr) {
-            // trigger local pipeline h2d if data is fetched from other point
-            // ignore failure now, this will be treated in fillinresponse
-            if (OsXprtPipln::IsPiplnH2DRequest(request->GetH2DChunkManager())) {
-                OsXprtPipln::MaybeTriggerLocalPipelineRH2D(
-                    request->GetH2DChunkManager(), objectKV.GetObjKey(), objectKV.GetObjEntry()->GetShmUnit(),
-                    objectKV.GetReadOffset() + objectKV.GetObjEntry()->GetMetadataSize(), objectKV.GetReadSize());
-            }
-
             return request->MarkSuccess(objectKV.GetObjKey(), objectKV.GetObjEntry());
         }
         return workerRequestManager_.NotifyPendingGetRequest(objectKV);
