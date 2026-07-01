@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 
 #include <cmath>
 #include <sstream>

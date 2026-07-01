@@ -11,7 +11,7 @@
   - `src/datasystem/common/l2cache/sfs_client/*`
   - `src/datasystem/common/l2cache/obs_client/*`
   - `src/datasystem/common/l2cache/slot_client/slot_client.*`
-  - `src/datasystem/common/util/gflag/common_gflag_define.cpp`
+  - `src/datasystem/common/flags/common_flag_define.cpp`
   - `src/datasystem/common/util/validator.h`
   - `src/datasystem/worker/worker_oc_server.cpp`
 - Why this module exists:
@@ -26,8 +26,8 @@
   - `src/datasystem/common/l2cache/sfs_client/sfs_client.*`
   - `src/datasystem/common/l2cache/obs_client/obs_client.*`
   - `src/datasystem/common/l2cache/slot_client/slot_client.*`
-  - `src/datasystem/common/util/gflag/common_gflag_define.cpp`
-  - `src/datasystem/common/util/gflag/common_gflags_validate.cpp`
+  - `src/datasystem/common/flags/common_flag_define.cpp`
+  - `src/datasystem/common/flags/common_flags_validate.cpp`
   - `src/datasystem/common/util/validator.h`
 
 ## Responsibilities

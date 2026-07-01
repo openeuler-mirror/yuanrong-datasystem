@@ -68,7 +68,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/object_cache:node_info",
-        "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
         "//src/datasystem/master:memory_rebalance_scheduler",
         "//src/datasystem/protos:master_object_cc_proto",
         "//tests/ut:ut_common",

@@ -21,7 +21,7 @@
 #include "datasystem/common/rpc/zmq/zmq_epoll.h"
 
 #include <utility>
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {

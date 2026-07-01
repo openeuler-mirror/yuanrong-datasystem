@@ -74,8 +74,8 @@
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/dynamic_config_updater.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_config_updater.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
@@ -152,8 +152,8 @@ void ShuffleWorkerCandidates(std::vector<HostPort> &candidates)
 
 void LogClientConfigInitSnapshot()
 {
-    Flags flags;
-    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
+    DynamicFlagConfig flagConfig;
+    OperationLogger::Instance().LogConfigInit(flagConfig.GetAllFlagsStr());
 }
 
 std::unordered_map<std::string, std::string> GetGflagArgs(const KVClientConfig &clientConfig)
@@ -2340,7 +2340,7 @@ Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
             }
         }
     }
-    DynamicConfigUpdater updater(FlagsMonitor::GetInstance()->GetFlags());
+    DynamicConfigUpdater updater(FlagsMonitor::GetInstance()->GetDynamicFlagConfig());
     return updater.ApplyJson(configJson, "UpdateConfig");
 }
 

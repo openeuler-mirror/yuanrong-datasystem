@@ -36,7 +36,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/kv_client.h"
 
 DS_DECLARE_string(log_dir);

@@ -1,4 +1,3 @@
-add_subdirectory(gflag)
 add_subdirectory(queue)
 
 set(UTIL_SRCS
@@ -37,7 +36,7 @@ set(UTIL_LIBS
         common_log
         common_inject
         common_util_queue
-        common_util_gflag
+        dynamic_flag_config
         common_rdma_util)
 
 set_source_files_properties(version.cpp PROPERTIES

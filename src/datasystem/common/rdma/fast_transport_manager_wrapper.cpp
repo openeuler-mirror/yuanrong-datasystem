@@ -19,7 +19,7 @@
 #include <chrono>
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #ifdef USE_NPU
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif

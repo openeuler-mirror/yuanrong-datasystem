@@ -22,7 +22,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/uri.h"

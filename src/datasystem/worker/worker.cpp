@@ -41,7 +41,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
@@ -299,7 +299,7 @@ Status Worker::UpdateConfig(const std::string &configJson)
     return worker_->UpdateConfig(configJson);
 }
 
-Status Worker::InitWorker(Flags &flags, const bool isEmbeddedClient)
+Status Worker::InitWorker(DynamicFlagConfig &flags, const bool isEmbeddedClient)
 {
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
@@ -354,11 +354,11 @@ Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
         "Provide POSIX data semantic service interfaces (data objects (KVs) and stream). "
         "It builds the local cache capability based on the proximity computing memory space to cache hotspot data.");
 
-    Flags flags;
+    DynamicFlagConfig flags;
     flags.SetValidateSpecial(WorkerFlagValidateSpecial);
-    GFlagsMap defaultGflagMap = flags.GetAllFlagsToMap();
+    FlagInfoMap defaultFlagInfoMap = flags.GetAllFlagsToMap();
     LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
-    LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
+    LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultFlagInfoMap);
     FLAGS_log_filename = "datasystem_worker";
     FLAGS_logfile_mode = 0640;  // 0640: default permission for log files.
     std::string errMsg;
@@ -382,7 +382,7 @@ Status Worker::InitEmbeddedWorker(const EmbeddedConfig &config)
 /// @brief Run the event loop, then perform PreShutDown and ShutDown.
 /// @details Blocks until a termination signal or Stop() is received.
 ///          Shared by both InitAndRun overloads.
-void Worker::RunEventLoopAndShutdown(Flags &flags)
+void Worker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
 {
     Trace::Instance().SetTraceNewID("WorkerMain;" + GetStringUuid(), true);
     PerfManager *perfManager = PerfManager::Instance();
@@ -417,7 +417,7 @@ void Worker::RunEventLoopAndShutdown(Flags &flags)
     LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
 }
 
-Status Worker::DoInit(Flags &flags, const char *crashReporterLabel)
+Status Worker::DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel)
 {
     auto setSchedRuntimeResult = SetWorkerSchedRuntime();
     auto rc = InitWorker(flags, false);
@@ -439,7 +439,7 @@ Status Worker::DoInit(Flags &flags, const char *crashReporterLabel)
 
 Status Worker::InitAndRun(int argc, char **argv)
 {
-    Flags flags;
+    DynamicFlagConfig flags;
     {
         std::lock_guard<std::mutex> lock(initMutex_);
         if (started_.load()) {
@@ -474,7 +474,7 @@ Status Worker::InitAndRun(int argc, char **argv)
 
 Status Worker::InitAndRun(const WorkerOptions &options)
 {
-    Flags flags;
+    DynamicFlagConfig flags;
     {
         std::lock_guard<std::mutex> lock(initMutex_);
         if (started_.load()) {

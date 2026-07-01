@@ -27,7 +27,7 @@
 
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/zmq/zmq_common.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/status_helper.h"

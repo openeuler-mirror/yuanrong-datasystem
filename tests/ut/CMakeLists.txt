@@ -199,14 +199,14 @@ target_link_libraries(flags_ut
 add_datasystem_test(flags_ut)
 
 add_executable(util_flags_ut
-        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/dynamic_flag_config_test.cpp"
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 target_link_libraries(util_flags_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        common_util_gflag
+        dynamic_flag_config
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
 add_datasystem_test(util_flags_ut)
@@ -224,10 +224,10 @@ target_link_libraries(operation_logger_ut
 add_datasystem_test(operation_logger_ut)
 
 add_executable(dynamic_config_updater_ut
-        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/dynamic_config_updater_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/dynamic_config_updater_test.cpp"
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 target_link_libraries(dynamic_config_updater_ut
-        common_util_gflag
+        dynamic_flag_config
         common_log
         ds_flags
         common_util
@@ -239,11 +239,11 @@ target_link_libraries(dynamic_config_updater_ut
 add_datasystem_test(dynamic_config_updater_ut)
 
 add_executable(flags_monitor_gate_ut
-        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_monitor_gate_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_monitor_gate_test.cpp"
         "${CMAKE_SOURCE_DIR}/src/datasystem/client/client_flags_monitor.cpp"
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 target_link_libraries(flags_monitor_gate_ut
-        common_util_gflag
+        dynamic_flag_config
         common_log
         ds_flags
         common_util
@@ -254,14 +254,14 @@ target_link_libraries(flags_monitor_gate_ut
 add_datasystem_test(flags_monitor_gate_ut)
 
 add_executable(flags_config_monitor_ut
-        "${CMAKE_CURRENT_SOURCE_DIR}/common/util/flags_config_monitor_test.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/flags/flags_config_monitor_test.cpp"
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 target_link_libraries(flags_config_monitor_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
-        common_util_gflag
+        dynamic_flag_config
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
 add_datasystem_test(flags_config_monitor_ut)

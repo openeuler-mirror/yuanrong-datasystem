@@ -17,8 +17,8 @@
 /**
  * Description: Runtime accessors for evict/spill watermark gflags.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_GFLAG_EVICTION_WATERMARK_H
-#define DATASYSTEM_COMMON_UTIL_GFLAG_EVICTION_WATERMARK_H
+#ifndef DATASYSTEM_COMMON_FLAGS_EVICTION_WATERMARK_H
+#define DATASYSTEM_COMMON_FLAGS_EVICTION_WATERMARK_H
 
 namespace datasystem {
 
@@ -31,4 +31,4 @@ double GetSpillLowWaterFactor();
 
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_UTIL_GFLAG_EVICTION_WATERMARK_H
+#endif  // DATASYSTEM_COMMON_FLAGS_EVICTION_WATERMARK_H

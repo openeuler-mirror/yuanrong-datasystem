@@ -109,7 +109,7 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_local",
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/master/object_cache:master_worker_oc_api",
         "//src/datasystem/master/object_cache/store:object_meta_store",

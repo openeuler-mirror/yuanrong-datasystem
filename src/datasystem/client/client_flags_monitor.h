@@ -25,7 +25,7 @@
 #include <thread>
 #include <atomic>
 
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 
 namespace datasystem {
 class FlagsMonitor {
@@ -52,10 +52,10 @@ public:
     bool IsMonitorThreadRunning() const;
 
     /**
-     * @brief Get the Flags instance used by file monitor and UpdateConfig.
-     * @return Reference to internal Flags.
+     * @brief Get the DynamicFlagConfig instance used by file monitor and UpdateConfig.
+     * @return Reference to internal DynamicFlagConfig.
      */
-    Flags &GetFlags();
+    DynamicFlagConfig &GetDynamicFlagConfig();
 
     /**
      * @brief Listen to file changes cyclically and process the changes.
@@ -63,7 +63,7 @@ public:
     void ListenConfigFile();
 
 private:
-    Flags flags_;
+    DynamicFlagConfig flagConfig_;
     std::string configFilePath_;
     std::thread monitorThread_;
     std::atomic<bool> stop_;

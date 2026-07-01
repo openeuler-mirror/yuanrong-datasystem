@@ -20,7 +20,7 @@
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"

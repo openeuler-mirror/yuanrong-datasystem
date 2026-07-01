@@ -94,7 +94,7 @@
   - `modules/infra/slot/*` owns the distributed-disk slot persistence format, recovery, and DFX model as a standalone
     module context.
   - `worker/object_cache` owns restart and failed-worker recovery orchestration on top of the persistence API.
-  - `common/util/gflag/*` owns flag declaration and validation.
+  - `common/flags/*` owns flag declaration and validation.
 
 ## Terminology
 

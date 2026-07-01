@@ -46,7 +46,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"

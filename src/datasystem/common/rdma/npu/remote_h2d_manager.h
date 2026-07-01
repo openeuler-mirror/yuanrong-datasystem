@@ -32,7 +32,7 @@
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/npu/rh2d_transport_strategy.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"

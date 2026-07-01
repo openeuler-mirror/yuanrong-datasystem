@@ -26,7 +26,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/zmq/zmq_stub.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/meta_zmq.pb.h"

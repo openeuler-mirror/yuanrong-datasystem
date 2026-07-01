@@ -37,7 +37,7 @@
 #include "datasystem/common/log/operation_logger.h"
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_message_impl.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/spdlog/log_severity.h"
 #include "datasystem/common/log/trace.h"

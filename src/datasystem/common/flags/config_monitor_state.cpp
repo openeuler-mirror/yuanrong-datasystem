@@ -17,7 +17,7 @@
 /**
  * Description: Process-level file monitor state for UpdateConfig mutual exclusion.
  */
-#include "datasystem/common/util/gflag/config_monitor_state.h"
+#include "datasystem/common/flags/config_monitor_state.h"
 
 namespace datasystem {
 

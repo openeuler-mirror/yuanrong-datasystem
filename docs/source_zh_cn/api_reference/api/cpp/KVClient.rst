@@ -28,13 +28,15 @@ KVClient
  
        建立与数据系统 Worker 之间的连接并完成初始化。
        语义上等价于传入未通过 Builder 设置任何字段的空 :cpp:class:`KVClientConfig`，
-       并调用 :cpp:func:`Init(const KVClientConfig &clientConfig) <Init>`。
+       并调用 :ref:`Init(const KVClientConfig &clientConfig) <KVClient_InitWithConfig>`。
        进程内首次 ``Init`` 会固化该空配置快照；若此后再以显式配置调用 ``Init``，
        新配置不会覆盖已生效设置。配置优先级与后续 ``Init`` 行为详见
        :cpp:class:`KVClientConfig` 章节。
  
        返回：
            返回值状态码为 ``StatusCode::K_OK`` 时表示初始化成功，否则返回其他错误码。
+
+    .. _KVClient_InitWithConfig:
 
     .. cpp:function:: Status Init(const KVClientConfig &clientConfig)
  

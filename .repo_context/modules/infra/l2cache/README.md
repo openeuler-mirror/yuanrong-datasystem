@@ -109,7 +109,7 @@
   - `common_inject`
   - `common_httpclient`
   - `common_metrics` for OBS response-code accounting
-  - shared gflags under `src/datasystem/common/util/gflag/*`
+  - shared flags under `src/datasystem/common/flags/*`
 - The standalone slot module is consumed by:
   - worker startup in `src/datasystem/worker/worker_oc_server.cpp`
   - worker restart and failed-worker recovery in `src/datasystem/worker/object_cache/slot_recovery/*`

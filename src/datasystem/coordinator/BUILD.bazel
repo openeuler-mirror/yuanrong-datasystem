@@ -22,7 +22,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
     ],
 )
@@ -43,7 +43,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/server:common_server",
     ],
 )
@@ -56,6 +56,6 @@ cc_binary(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/signal:signal",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
     ],
 )

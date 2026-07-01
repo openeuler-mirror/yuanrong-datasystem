@@ -23,7 +23,7 @@
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/thread_local.h"

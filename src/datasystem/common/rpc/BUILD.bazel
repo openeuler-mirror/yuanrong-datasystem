@@ -414,7 +414,7 @@ ds_cc_library(
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:template_util",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
         "//src/datasystem/protos:coordinator_brpc",
         "//src/datasystem/protos:master_object_cc_proto",

@@ -19,9 +19,9 @@
  */
 #include "datasystem/client/client_flags_monitor.h"
 
-#include "datasystem/common/util/gflag/config_monitor_state.h"
-#include "datasystem/common/util/gflag/dynamic_config_updater.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/config_monitor_state.h"
+#include "datasystem/common/flags/dynamic_config_updater.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 
 #include "gtest/gtest.h"
 
@@ -58,7 +58,7 @@ TEST_F(FlagsMonitorGateTest, StartSkipsThreadWhenPathEmpty)
 
 TEST_F(FlagsMonitorGateTest, UpdateConfigAppliesViaFlagsMonitorFlags)
 {
-    DynamicConfigUpdater updater(FlagsMonitor::GetInstance()->GetFlags());
+    DynamicConfigUpdater updater(FlagsMonitor::GetInstance()->GetDynamicFlagConfig());
     auto status = updater.ApplyJson(R"({"v":"2"})");
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(FLAGS_v, 2);

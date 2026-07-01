@@ -23,7 +23,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/common/task_action/task_action_registry.h"

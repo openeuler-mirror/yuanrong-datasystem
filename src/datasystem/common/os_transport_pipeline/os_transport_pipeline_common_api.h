@@ -25,7 +25,7 @@
 
 #ifdef BUILD_PIPLN_H2D
 #include <ub/umdk/urma/urma_api.h>
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/os_transport_pipeline/chunk_manager.h"
 static inline bool SupportPipelineRH2D()
 {

@@ -69,7 +69,7 @@
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/memory.h"

@@ -11,7 +11,7 @@
   - `src/datasystem/common/log/spdlog/*`
   - `src/datasystem/common/metrics/hard_disk_exporter/*`
   - `src/datasystem/common/rpc/zmq/*`
-  - `src/datasystem/common/util/gflag/*`
+  - `src/datasystem/common/flags/*`
 - Primary source-of-truth files:
   - `src/datasystem/common/log/log.h`
   - `src/datasystem/common/log/logging.cpp`
@@ -20,7 +20,7 @@
   - `src/datasystem/common/log/trace.cpp`
   - `src/datasystem/common/log/spdlog/log_message_impl.cpp`
   - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`
-  - `src/datasystem/common/util/gflag/flags.cpp`
+  - `src/datasystem/common/flags/dynamic_flag_config.cpp`
   - `src/datasystem/common/rpc/zmq/zmq_common.h`
   - `src/datasystem/protos/share_memory.proto`
   - `src/datasystem/protos/meta_zmq.proto`

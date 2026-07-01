@@ -33,7 +33,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/common/util/gflag:eviction_watermark",
+        "//src/datasystem/common/flags:eviction_watermark",
     ],
 )
 
@@ -162,7 +162,7 @@ ds_cc_library(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/common/util:wait_post",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/master:master_service_impl",
         "//src/datasystem/master:metadata_manager_holder",
         "//src/datasystem/master/object_cache:master_oc_service_impl",
@@ -291,7 +291,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/util:thread_local",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/worker/client_manager",
     ],
 )
@@ -316,7 +316,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
     ],
 )
 
@@ -361,7 +361,7 @@ ds_cc_library(
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uri",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/worker:worker_cli",
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:worker_oc_server",

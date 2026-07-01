@@ -30,8 +30,8 @@
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
 #include "datasystem/client/client_flags_monitor.h"
-#include "datasystem/common/util/gflag/config_monitor_state.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/config_monitor_state.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/object_client.h"
 
 DS_DECLARE_string(monitor_config_file);

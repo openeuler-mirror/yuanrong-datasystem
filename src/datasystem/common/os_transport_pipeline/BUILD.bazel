@@ -50,7 +50,7 @@ ds_cc_library(
             "//src/datasystem/common/rdma:urma_dlopen_util",
             "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
             "//src/datasystem/common/rdma:fast_transport_base_header",
-            "//src/datasystem/common/util/gflag:common_util_gflag_header",
+            "//src/datasystem/common/flags:dynamic_flag_config_header",
             "@mlcachedirect//:os_transport_prefixed_hdrs",
             "@local_cuda//:cuda_headers",
         ],
@@ -81,7 +81,7 @@ ds_cc_library(
         "//:enable_pipeline_h2d": [
             "//include/datasystem:headers",
             "//src/datasystem/common/rdma:fast_transport_base_header",
-            "//src/datasystem/common/util/gflag:common_util_gflag_header",
+            "//src/datasystem/common/flags:dynamic_flag_config_header",
             "//src/datasystem/protos:object_posix_cc_proto",
             "@mlcachedirect//:os_transport_prefixed_hdrs",
             "@local_cuda//:cuda_headers",

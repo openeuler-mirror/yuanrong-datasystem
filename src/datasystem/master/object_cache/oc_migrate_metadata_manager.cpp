@@ -29,7 +29,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"

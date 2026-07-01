@@ -15,10 +15,9 @@
  */
 
 /**
- * Description: Defines operations related to gflag.
+ * Description: Runtime dynamic flag configuration operations.
  */
-#include "datasystem/common/util/gflag/flags.h"
-
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -29,6 +28,7 @@
 
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
+
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/operation_logger.h"
 
@@ -37,27 +37,27 @@
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_string(monitor_config_file);
 
 namespace datasystem {
-GFlagsMap Flags::GetAllFlagsToMap()
+FlagInfoMap DynamicFlagConfig::GetAllFlagsToMap()
 {
     std::vector<FlagInfo> defaultFlags;
     GetAllFlags(defaultFlags);
-    GFlagsMap gflagsMap;
+    FlagInfoMap flagInfoMap;
     std::transform(defaultFlags.begin(), defaultFlags.end(),
-                   std::insert_iterator<GFlagsMap>(gflagsMap, gflagsMap.begin()),
+                   std::insert_iterator<FlagInfoMap>(flagInfoMap, flagInfoMap.begin()),
                    [](const FlagInfo &flag) -> std::pair<std::string, FlagInfo> {
                        return std::make_pair(flag.name, std::move(flag));
                    });
-    return gflagsMap;
+    return flagInfoMap;
 }
 
-std::string Flags::GetNonDefaultFlags(const GFlagsMap &defaultFlags)
+std::string DynamicFlagConfig::GetNonDefaultFlags(const FlagInfoMap &defaultFlags)
 {
     std::ostringstream args;
     std::vector<FlagInfo> currentFlags;
@@ -77,7 +77,7 @@ std::string Flags::GetNonDefaultFlags(const GFlagsMap &defaultFlags)
     return args.str();
 }
 
-std::string Flags::GetExplicitDeclaredFlags()
+std::string DynamicFlagConfig::GetExplicitDeclaredFlags()
 {
     // The differences between this and GetNonDefaultFlags() are:
     // 1. This function returns all flags user defined and passed in through the commandline,
@@ -94,7 +94,7 @@ std::string Flags::GetExplicitDeclaredFlags()
     return args.str();
 }
 
-std::string Flags::GetAllFlagsStr()
+std::string DynamicFlagConfig::GetAllFlagsStr()
 {
     std::vector<FlagInfo> defaultFlags;
     GetAllFlags(defaultFlags);
@@ -105,7 +105,7 @@ std::string Flags::GetAllFlagsStr()
     return args.str();
 }
 
-Status Flags::EraseInfo(int argc, char **argv)
+Status DynamicFlagConfig::EraseInfo(int argc, char **argv)
 {
     if (argc == 0 || argv == nullptr) {
         return Status::OK();
@@ -139,7 +139,7 @@ Status Flags::EraseInfo(int argc, char **argv)
     return Status::OK();
 }
 
-void Flags::MonitorConfigFile(const std::string &configFilePath)
+void DynamicFlagConfig::MonitorConfigFile(const std::string &configFilePath)
 {
     if (configFilePath.empty()) {
         return;
@@ -151,8 +151,8 @@ void Flags::MonitorConfigFile(const std::string &configFilePath)
     }
 }
 
-void Flags::StartConfigFileHandle(const std::string &configFilePath,
-                                  std::chrono::time_point<std::chrono::steady_clock> nowTime)
+void DynamicFlagConfig::StartConfigFileHandle(const std::string &configFilePath,
+                                              std::chrono::time_point<std::chrono::steady_clock> nowTime)
 {
     // Check whether the configfile exists.
     preConfigCheckTime_ = nowTime;
@@ -178,7 +178,7 @@ void Flags::StartConfigFileHandle(const std::string &configFilePath,
     LOG_IF_ERROR(UpdateFlagParameter(flagMap), "UpdateFlagParameter failed");
 }
 
-std::unordered_map<std::string, std::string> Flags::ProcessFlagFile(const std::string &configFilePath)
+std::unordered_map<std::string, std::string> DynamicFlagConfig::ProcessFlagFile(const std::string &configFilePath)
 {
     std::unordered_map<std::string, std::string> flagMap;
     if (configFilePath.empty()) {
@@ -200,7 +200,7 @@ std::unordered_map<std::string, std::string> Flags::ProcessFlagFile(const std::s
     return ProcessOptions(fileContext);
 }
 
-std::string::size_type Flags::FindFirstSeparator(const std::string &content)
+std::string::size_type DynamicFlagConfig::FindFirstSeparator(const std::string &content)
 {
     auto spaceSeparator = content.find_first_of(' ');
     auto horizontalTab = content.find_first_of('\t');
@@ -222,7 +222,7 @@ std::string::size_type Flags::FindFirstSeparator(const std::string &content)
     return min == std::numeric_limits<std::string::size_type>::max() ? std::string::npos : min;
 }
 
-std::unordered_map<std::string, std::string> Flags::ProcessOptions(const std::string &flagFileContext)
+std::unordered_map<std::string, std::string> DynamicFlagConfig::ProcessOptions(const std::string &flagFileContext)
 {
     std::unordered_map<std::string, std::string> nameAndValue;
     const char *fileContext = flagFileContext.c_str();
@@ -268,7 +268,7 @@ std::unordered_map<std::string, std::string> Flags::ProcessOptions(const std::st
     return nameAndValue;
 }
 
-bool Flags::SplitArgument(const char *flagCommand, std::pair<std::string, std::string> &nameAndVal)
+bool DynamicFlagConfig::SplitArgument(const char *flagCommand, std::pair<std::string, std::string> &nameAndVal)
 {
     // skip the leading -
     const char *kv = flagCommand + 1;
@@ -297,7 +297,7 @@ bool Flags::SplitArgument(const char *flagCommand, std::pair<std::string, std::s
     return false;
 }
 
-bool Flags::ValidateFlagName(const std::string &flagName)
+bool DynamicFlagConfig::ValidateFlagName(const std::string &flagName)
 {
     if (!FlagManager::GetInstance()->IsModifiableFlag(flagName)) {
         LOG(ERROR) << FormatString("Invalid flag parameter:%s. Flag is not dynamically modifiable.", flagName);
@@ -307,13 +307,14 @@ bool Flags::ValidateFlagName(const std::string &flagName)
     return true;
 }
 
-void Flags::SetIsToHandle(
+void DynamicFlagConfig::SetIsToHandle(
     std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> handler)
 {
     isToHandle_ = handler;
 }
 
-bool Flags::IsToHandle(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName)
+bool DynamicFlagConfig::IsToHandle(const std::unordered_map<std::string, std::string> &flagMap,
+                                   const std::string &flagName)
 {
     if (isToHandle_) {
         return isToHandle_(flagMap, flagName);
@@ -321,7 +322,7 @@ bool Flags::IsToHandle(const std::unordered_map<std::string, std::string> &flagM
     return true;
 }
 
-bool Flags::ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap)
+bool DynamicFlagConfig::ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, std::string> &flagMap)
 {
     static const std::unordered_set<std::string> samplerFlagNames = {
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
@@ -354,7 +355,7 @@ bool Flags::ValidateAndCommitSamplerFlags(const std::unordered_map<std::string, 
     return CommitSamplerFlagsTransaction(candidates, cfg);
 }
 
-bool Flags::CommitSamplerFlagsTransaction(
+bool DynamicFlagConfig::CommitSamplerFlagsTransaction(
     const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg)
 {
     std::unordered_map<std::string, std::string> prevVals;
@@ -390,7 +391,7 @@ bool Flags::CommitSamplerFlagsTransaction(
     return true;
 }
 
-Status Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
+Status DynamicFlagConfig::UpdateFlagParameter(const std::unordered_map<std::string, std::string> &flagMap)
 {
     static const std::unordered_set<std::string> samplerFlagNames = {
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"
@@ -420,14 +421,14 @@ Status Flags::UpdateFlagParameter(const std::unordered_map<std::string, std::str
             return status;
         }
     }
-    if (hasSamplerFlags && !ValidateAndCommitSamplerFlags(flagMap)) {
+    if (hasSamplerFlags && batchCommitHandler_ && !batchCommitHandler_(flagMap)) {
         RollbackFlagValues(prevVals);
         RETURN_STATUS(StatusCode::K_INVALID, "failed to update sampler flags");
     }
     return Status::OK();
 }
 
-void Flags::RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals)
+void DynamicFlagConfig::RollbackFlagValues(const std::unordered_map<std::string, std::string> &prevVals)
 {
     for (const auto &kv : prevVals) {
         std::string errMsg;
@@ -437,8 +438,8 @@ void Flags::RollbackFlagValues(const std::unordered_map<std::string, std::string
     }
 }
 
-Status Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
-                               const std::string &flagName, const std::string &newVal)
+Status DynamicFlagConfig::UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
+                                           const std::string &flagName, const std::string &newVal)
 {
     if (!IsToHandle(flagMap, flagName)) {
         return Status::OK();
@@ -483,7 +484,7 @@ Status Flags::UpdateSingleFlag(const std::unordered_map<std::string, std::string
     return Status::OK();
 }
 
-void Flags::TrimSpace(std::string &value)
+void DynamicFlagConfig::TrimSpace(std::string &value)
 {
     if (value.empty()) {
         return;
@@ -492,19 +493,33 @@ void Flags::TrimSpace(std::string &value)
     value.erase(value.find_last_not_of(' ') + 1);
 }
 
-void Flags::SetValidateSpecial(const std::function<bool(const std::string &, const std::string &)> &validator)
+void DynamicFlagConfig::SetValidateSpecial(
+    const std::function<bool(const std::string &, const std::string &)> &validator)
 {
     validateSpecial_ = validator;
 }
 
-bool Flags::ValidateSpecial(const std::string &flagName, const std::string &newVal)
+bool DynamicFlagConfig::ValidateSpecial(const std::string &flagName, const std::string &newVal)
 {
     return validateSpecial_ && validateSpecial_(flagName, newVal);
 }
 
-bool Flags::ValidateSpecialConstraint(const std::unordered_map<std::string, std::string> &flagMap,
-                                      const std::string &flagName, const std::string &newVal,
-                                      std::string &errMsg)
+void DynamicFlagConfig::SetBatchCommitHandler(
+    std::function<bool(const std::unordered_map<std::string, std::string> &)> handler)
+{
+    // nullptr restores the default built-in log sampler transactional commit handler installed in the constructor.
+    if (handler) {
+        batchCommitHandler_ = std::move(handler);
+    } else {
+        batchCommitHandler_ = [this](const std::unordered_map<std::string, std::string> &flagMap) {
+            return ValidateAndCommitSamplerFlags(flagMap);
+        };
+    }
+}
+
+bool DynamicFlagConfig::ValidateSpecialConstraint(const std::unordered_map<std::string, std::string> &flagMap,
+                                                  const std::string &flagName, const std::string &newVal,
+                                                  std::string &errMsg)
 {
     static const std::unordered_set<std::string> samplerFlagNames = {
         "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate"

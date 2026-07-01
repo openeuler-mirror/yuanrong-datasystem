@@ -48,7 +48,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"

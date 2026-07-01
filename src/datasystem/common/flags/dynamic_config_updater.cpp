@@ -17,7 +17,7 @@
 /**
  * Description: JSON-based dynamic configuration updater.
  */
-#include "datasystem/common/util/gflag/dynamic_config_updater.h"
+#include "datasystem/common/flags/dynamic_config_updater.h"
 
 #include <sstream>
 #include <utility>
@@ -27,7 +27,7 @@
 
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/log/operation_logger.h"
-#include "datasystem/common/util/gflag/config_monitor_state.h"
+#include "datasystem/common/flags/config_monitor_state.h"
 
 namespace datasystem {
 namespace {
@@ -46,7 +46,7 @@ std::string JoinErrors(const std::vector<std::string> &errors)
 
 }  // namespace
 
-DynamicConfigUpdater::DynamicConfigUpdater(Flags &flags) : flags_(&flags)
+DynamicConfigUpdater::DynamicConfigUpdater(DynamicFlagConfig &flagConfig) : flagConfig_(&flagConfig)
 {
 }
 
@@ -110,7 +110,7 @@ Status DynamicConfigUpdater::ApplyJson(const std::string &configJson, const std:
             continue;
         }
         std::string specialErr;
-        if (!flags_->ValidateSpecialConstraint(flagMap, kv.first, kv.second, specialErr)) {
+        if (!flagConfig_->ValidateSpecialConstraint(flagMap, kv.first, kv.second, specialErr)) {
             const std::string msg = apiPrefix + ": flag '" + kv.first + "' " + specialErr;
             errors.push_back(msg);
             OperationLogger::Instance().LogConfigFailed(kv.first, specialErr);
@@ -119,7 +119,7 @@ Status DynamicConfigUpdater::ApplyJson(const std::string &configJson, const std:
     if (!errors.empty()) {
         return Status(StatusCode::K_INVALID, JoinErrors(errors));
     }
-    RETURN_IF_NOT_OK(flags_->UpdateFlagParameter(flagMap));
+    RETURN_IF_NOT_OK(flagConfig_->UpdateFlagParameter(flagMap));
     return Status::OK();
 }
 

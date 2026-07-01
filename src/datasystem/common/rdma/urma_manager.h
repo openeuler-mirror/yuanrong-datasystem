@@ -36,7 +36,7 @@
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"

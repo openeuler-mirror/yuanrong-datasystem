@@ -24,7 +24,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/signal/signal.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/flags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/coordinator/coordinator_server.h"
 

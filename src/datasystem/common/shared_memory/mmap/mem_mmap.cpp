@@ -33,7 +33,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/shared_memory/mmap/allocation.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"

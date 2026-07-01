@@ -36,7 +36,7 @@
 #include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/object_cache/shm_guard.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/worker_object.pb.h"

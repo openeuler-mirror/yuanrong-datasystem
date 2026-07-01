@@ -18,7 +18,7 @@
  * Description: Test oc service disable.
  */
 #include "common.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/kv_client.h"

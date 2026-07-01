@@ -375,7 +375,7 @@ global:
 
   reliability:
     # Client reconnect wait seconds, default value is 5 seconds. (Must be greater than 0)
-    clientReconnectWaitS: 5
+    clientReconnectWaitS: 10
     # Maximum time interval for the worker to determine client death, value range: [3, UINT64_MAX).
     clientDeadTimeoutS: 120
     # Time interval between worker and etcd heartbeats.
@@ -479,6 +479,10 @@ global:
     urmaEventMode: false
     # Enable fast transport (urma/rdma) fallback to tcp transport.
     enableTransportFallback: true
+    # Client-side URMA data-plane success-rate ratio threshold for worker failover. 0.0 disables URMA failover.
+    urmaFailoverSuccessRateRatio: 0.5
+    # Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.
+    urmaFailoverMinSampleCount: 5
     # Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.
     sharedDiskDirectory: ""
     # Upper limit of the shared disk, the unit is mb.
