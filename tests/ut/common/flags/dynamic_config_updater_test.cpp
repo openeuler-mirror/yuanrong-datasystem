@@ -17,10 +17,10 @@
 /**
  * Description: DynamicConfigUpdater unit tests.
  */
-#include "datasystem/common/util/gflag/dynamic_config_updater.h"
+#include "datasystem/common/flags/dynamic_config_updater.h"
 
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/util/gflag/config_monitor_state.h"
+#include "datasystem/common/flags/config_monitor_state.h"
 
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
@@ -32,7 +32,7 @@ namespace datasystem {
 
 class DynamicConfigUpdaterTest : public ::testing::Test {
 protected:
-    Flags flags_;
+    DynamicFlagConfig flagConfig_;
 
     void SetUp() override
     {
@@ -51,7 +51,7 @@ protected:
 
 TEST_F(DynamicConfigUpdaterTest, ApplyValidJson)
 {
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
     auto status = updater.ApplyJson(R"({"v":"2"})");
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(FLAGS_v, 2);
@@ -59,7 +59,7 @@ TEST_F(DynamicConfigUpdaterTest, ApplyValidJson)
 
 TEST_F(DynamicConfigUpdaterTest, RejectNonStringValue)
 {
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
     auto status = updater.ApplyJson(R"({"v":2})");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("invalid JSON"));
@@ -67,7 +67,7 @@ TEST_F(DynamicConfigUpdaterTest, RejectNonStringValue)
 
 TEST_F(DynamicConfigUpdaterTest, AggregateMultipleErrors)
 {
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
     auto status = updater.ApplyJson(R"({"not_a_flag":"1","v":"bad"})");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("not in trust list"));
@@ -76,7 +76,7 @@ TEST_F(DynamicConfigUpdaterTest, AggregateMultipleErrors)
 TEST_F(DynamicConfigUpdaterTest, RejectWhenFileMonitorEnabled)
 {
     ConfigMonitorState::Instance().SetFileMonitorEnabled(true);
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
     auto status = updater.ApplyJson(R"({"v":"2"})");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.GetMsg(), testing::HasSubstr("file monitor is enabled"));
@@ -86,7 +86,7 @@ TEST_F(DynamicConfigUpdaterTest, RejectWhenFileMonitorEnabled)
 TEST_F(DynamicConfigUpdaterTest, AllOrNothingOnValidationFailure)
 {
     FLAGS_v = 0;
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
     auto status = updater.ApplyJson(R"({"v":"3","not_a_flag":"1"})");
     EXPECT_TRUE(status.IsError());
     EXPECT_EQ(FLAGS_v, 0);
@@ -94,10 +94,10 @@ TEST_F(DynamicConfigUpdaterTest, AllOrNothingOnValidationFailure)
 
 TEST_F(DynamicConfigUpdaterTest, RejectWhenSpecialValidationFailsBeforeCommit)
 {
-    flags_.SetValidateSpecial([](const std::string &flagName, const std::string &newVal) {
+    flagConfig_.SetValidateSpecial([](const std::string &flagName, const std::string &newVal) {
         return flagName == "v" && newVal == "4";
     });
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
 
     auto status = updater.ApplyJson(R"({"v":"4"})");
     EXPECT_TRUE(status.IsError());
@@ -107,10 +107,10 @@ TEST_F(DynamicConfigUpdaterTest, RejectWhenSpecialValidationFailsBeforeCommit)
 
 TEST_F(DynamicConfigUpdaterTest, RejectSpecialValidationBeforePartialCommit)
 {
-    flags_.SetValidateSpecial([](const std::string &flagName, const std::string &newVal) {
+    flagConfig_.SetValidateSpecial([](const std::string &flagName, const std::string &newVal) {
         return flagName == "v" && newVal == "4";
     });
-    DynamicConfigUpdater updater(flags_);
+    DynamicConfigUpdater updater(flagConfig_);
 
     auto status = updater.ApplyJson(R"({"request_sample_rate":"0.5","v":"4"})");
     EXPECT_TRUE(status.IsError());

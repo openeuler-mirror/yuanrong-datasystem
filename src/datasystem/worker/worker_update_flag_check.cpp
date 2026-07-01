@@ -19,7 +19,7 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/validator.h"
 

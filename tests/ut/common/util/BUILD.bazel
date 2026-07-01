@@ -288,17 +288,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
-        "//tests/ut:ut_common",
-    ],
-)
-
-ds_cc_test(
-    name = "eviction_watermark_test",
-    srcs = ["eviction_watermark_test.cpp"],
-    deps = [
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
-        "//src/datasystem/common/util/gflag:eviction_watermark",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//tests/ut:ut_common",
     ],
 )
@@ -315,21 +305,9 @@ ds_cc_test(
     ],
 )
 
-ds_cc_test(
-    name = "flags_test",
-    srcs = ["flags_test.cpp"],
-    deps = [
-        "//src/datasystem/common/util/gflag:common_util_gflag_header",
-        "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/worker:worker_update_flag_check",
-        "//tests/ut:ut_common",
-    ],
-)
-
 test_suite(
     name = "all_util_tests",
     tests = [
-        "eviction_watermark_test",
         "watermark_flag_parse_test",
         "blocking_queue_test",
         "request_context_test",
@@ -338,7 +316,6 @@ test_suite(
         "fd_pass_over_scmtcp_test",
         "fd_pass_test",
         "file_util_test",
-        "flags_test",
         "format_test",
         "hash_algorithm_test",
         "immutable_string_test",

@@ -32,7 +32,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/fd_manager.h"
 #include "datasystem/common/util/file_util.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"

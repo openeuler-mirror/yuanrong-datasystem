@@ -26,7 +26,7 @@
 #include "ut/common.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/worker_update_flag_check.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 
 DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_uint32(node_dead_timeout_s);
@@ -44,48 +44,48 @@ class FlagsTest : public CommonTest {};
 
 TEST_F(FlagsTest, TestTrimSpace)
 {
-    Flags flag;
+    DynamicFlagConfig flagConfig;
     std::string command1 = " -FlagName=Value  ";
-    flag.TrimSpace(command1);
+    flagConfig.TrimSpace(command1);
     EXPECT_EQ(command1, "-FlagName=Value");
 
     std::string command2 = " -FlagName = Value  ";
-    flag.TrimSpace(command2);
+    flagConfig.TrimSpace(command2);
     EXPECT_EQ(command2, "-FlagName = Value");
 }
 
 TEST_F(FlagsTest, TestSplitArgument)
 {
-    Flags flag;
+    DynamicFlagConfig flagConfig;
     // Valid parameter.
     std::string command1 = "--heartbeat_interval_ms=Value";
     std::pair<std::string, std::string> kv1;
-    EXPECT_TRUE(flag.SplitArgument(command1.c_str(), kv1));
+    EXPECT_TRUE(flagConfig.SplitArgument(command1.c_str(), kv1));
     EXPECT_EQ(kv1.first, "heartbeat_interval_ms");
     EXPECT_EQ(kv1.second, "Value");
 
     // Valid parameter. Spaces are not allowed before and after the equal sign (=).
     std::string command2 = "--heartbeat_interval_ms = Value";
     std::pair<std::string, std::string> kv2;
-    EXPECT_FALSE(flag.SplitArgument(command2.c_str(), kv2));
+    EXPECT_FALSE(flagConfig.SplitArgument(command2.c_str(), kv2));
     EXPECT_NE(kv2.first, "heartbeat_interval_ms");
     EXPECT_NE(kv2.second, "Value");
 
     // Invalid parameter.
     std::string command3 = "-xx=Value";
     std::pair<std::string, std::string> kv3;
-    EXPECT_FALSE(flag.SplitArgument(command3.c_str(), kv3));
+    EXPECT_FALSE(flagConfig.SplitArgument(command3.c_str(), kv3));
     EXPECT_NE(kv3.first, "xx");
     EXPECT_NE(kv3.second, "Value");
 }
 
 TEST_F(FlagsTest, TestUpdateFlagParameter)
 {
-    Flags flag;
+    DynamicFlagConfig flagConfig;
     std::unordered_map<std::string, std::string> flagMap{ { "v", "3" },
                                                           { "max_log_file_num", "20" },
                                                           { "logbufsecs", "15" } };
-    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_v, 3);
     EXPECT_EQ(FLAGS_max_log_file_num, 20ul);
     EXPECT_EQ(FLAGS_logbufsecs, 15);  // 15s
@@ -93,47 +93,47 @@ TEST_F(FlagsTest, TestUpdateFlagParameter)
 
 TEST_F(FlagsTest, TestValidateFlagName)
 {
-    Flags flag;
-    EXPECT_FALSE(flag.ValidateFlagName("logbufsecs"));
-    EXPECT_TRUE(flag.ValidateFlagName("log_compress"));
-    EXPECT_TRUE(flag.ValidateFlagName("minloglevel"));
-    EXPECT_TRUE(flag.ValidateFlagName("log_monitor"));
+    DynamicFlagConfig flagConfig;
+    EXPECT_FALSE(flagConfig.ValidateFlagName("logbufsecs"));
+    EXPECT_TRUE(flagConfig.ValidateFlagName("log_compress"));
+    EXPECT_TRUE(flagConfig.ValidateFlagName("minloglevel"));
+    EXPECT_TRUE(flagConfig.ValidateFlagName("log_monitor"));
 }
 
 TEST_F(FlagsTest, TestFindFirstSeparator)
 {
-    Flags flag;
+    DynamicFlagConfig flagConfig;
     std::string context1 = " -flagName=value\r\n ";
-    auto index1 = flag.FindFirstSeparator(context1);
+    auto index1 = flagConfig.FindFirstSeparator(context1);
     EXPECT_EQ(index1, 0);
 
     std::string context2 = "-flagName=value\r\n ";
-    auto index2 = flag.FindFirstSeparator(context2);
+    auto index2 = flagConfig.FindFirstSeparator(context2);
     EXPECT_EQ(index2, 15);
 
     std::string context3 = "-flagName=value\n ";
-    auto index3 = flag.FindFirstSeparator(context3);
+    auto index3 = flagConfig.FindFirstSeparator(context3);
     EXPECT_EQ(index3, 15);
 
     std::string context4 = "-flagName=value";
-    auto index4 = flag.FindFirstSeparator(context3);
+    auto index4 = flagConfig.FindFirstSeparator(context3);
     EXPECT_EQ(index4, 15);
 
     std::string context5 = "-flagName=value\t";
-    auto index5 = flag.FindFirstSeparator(context5);
+    auto index5 = flagConfig.FindFirstSeparator(context5);
     EXPECT_EQ(index5, 15);
 }
 
 TEST_F(FlagsTest, TestProcessOptions)
 {
     auto oldLogAsyncQueueSize = FLAGS_log_async_queue_size;
-    Flags flag;
+    DynamicFlagConfig flagConfig;
     std::string fileContext =
         "-heartbeat_interval_ms=10\n--v=3\r\n-log_async_queue_size=4096\r-log_compress=false\t-max_log_file_num=22 "
         "-arena_per_tenant=30";
-    auto flagMap = flag.ProcessOptions(fileContext);
+    auto flagMap = flagConfig.ProcessOptions(fileContext);
     EXPECT_EQ(flagMap.count("log_async_queue_size"), 0ul);
-    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_heartbeat_interval_ms, 10);
     EXPECT_EQ(FLAGS_v, 3);
     EXPECT_EQ(FLAGS_log_async_queue_size, oldLogAsyncQueueSize);
@@ -149,11 +149,11 @@ TEST_F(FlagsTest, TestProcessOptionsUpdatesRuntimeLogControlFlags)
     FLAGS_minloglevel = 0;
     FLAGS_log_monitor = true;
 
-    Flags flag;
-    auto flagMap = flag.ProcessOptions("-minloglevel=2\n-log_monitor=false");
+    DynamicFlagConfig flagConfig;
+    auto flagMap = flagConfig.ProcessOptions("-minloglevel=2\n-log_monitor=false");
     EXPECT_EQ(flagMap.count("minloglevel"), 1ul);
     EXPECT_EQ(flagMap.count("log_monitor"), 1ul);
-    EXPECT_TRUE(flag.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
     EXPECT_EQ(FLAGS_minloglevel, 2);
     EXPECT_FALSE(FLAGS_log_monitor);
 

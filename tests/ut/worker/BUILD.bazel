@@ -210,7 +210,7 @@ ds_cc_test(
     srcs = ["object_cache/migrate_data_service_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:shm_guard",
-        "//src/datasystem/common/util/gflag:common_util_gflag_header",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:worker_object_cc_proto",

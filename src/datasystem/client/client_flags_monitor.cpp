@@ -21,7 +21,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/gflag/config_monitor_state.h"
+#include "datasystem/common/flags/config_monitor_state.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
@@ -37,7 +37,7 @@ FlagsMonitor *FlagsMonitor::GetInstance()
     return &instance;
 }
 
-FlagsMonitor::FlagsMonitor() : flags_(), monitorThread_(), stop_(false), isStarted_(false)
+FlagsMonitor::FlagsMonitor() : flagConfig_(), monitorThread_(), stop_(false), isStarted_(false)
 {
 }
 
@@ -58,9 +58,9 @@ bool FlagsMonitor::IsMonitorThreadRunning() const
     return monitorThread_.joinable();
 }
 
-Flags &FlagsMonitor::GetFlags()
+DynamicFlagConfig &FlagsMonitor::GetDynamicFlagConfig()
 {
-    return flags_;
+    return flagConfig_;
 }
 
 void FlagsMonitor::Start()
@@ -89,7 +89,7 @@ void FlagsMonitor::ListenConfigFile()
     std::unique_lock<std::mutex> lock(mutex_);
     LOG(INFO) << "The path of the configuration file is:" << configFilePath_;
     while (!stop_) {
-        flags_.StartConfigFileHandle(configFilePath_, std::chrono::steady_clock::now());
+        flagConfig_.StartConfigFileHandle(configFilePath_, std::chrono::steady_clock::now());
         condition_.wait_for(lock, std::chrono::seconds(LISTENGING_FILE_TIME_INTERVAL));
     }
 }

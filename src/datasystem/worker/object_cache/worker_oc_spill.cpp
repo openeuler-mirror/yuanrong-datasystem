@@ -45,7 +45,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/utils/status.h"

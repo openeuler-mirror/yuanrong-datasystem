@@ -36,7 +36,7 @@
 #include "datasystem/common/device/ascend/acl_device_manager.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/file_util.h"

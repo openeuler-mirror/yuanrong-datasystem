@@ -164,8 +164,8 @@
         "description": "Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99. Must be less than spill_high_watermark_ratio."
     },
     "client_reconnect_wait_s": {
-        "value": "5",
-        "description": "Client reconnect wait seconds, default is 5."
+        "value": "10",
+        "description": "Client reconnect wait seconds, default is 10."
     },
     "page_size": {
         "value": "1048576",

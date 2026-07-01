@@ -15,3 +15,26 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+# DynamicFlagConfig 测试 (原 tests/ut/common/util/flags_test.cpp)
+ds_cc_test(
+    name = "dynamic_flag_config_test",
+    srcs = ["dynamic_flag_config_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_update_flag_check",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# Eviction watermark 测试 (原 tests/ut/common/util/eviction_watermark_test.cpp)
+ds_cc_test(
+    name = "eviction_watermark_test",
+    srcs = ["eviction_watermark_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/flags:eviction_watermark",
+        "//tests/ut:ut_common",
+    ],
+)

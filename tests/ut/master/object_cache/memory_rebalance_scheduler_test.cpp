@@ -27,7 +27,7 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/common/object_cache/node_info.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "ut/common.h"
 
 DS_DECLARE_bool(enable_memory_rebalance);

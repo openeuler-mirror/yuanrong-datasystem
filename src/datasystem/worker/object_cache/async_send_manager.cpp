@@ -34,7 +34,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_uint64(spill_size_limit);

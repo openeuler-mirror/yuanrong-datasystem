@@ -48,7 +48,7 @@
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/format.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_diagnostic.h"

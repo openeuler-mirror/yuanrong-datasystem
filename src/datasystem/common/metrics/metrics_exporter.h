@@ -30,7 +30,7 @@
 #include <vector>
 #include <sstream>
 
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/wait_post.h"

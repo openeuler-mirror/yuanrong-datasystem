@@ -31,7 +31,7 @@
 
 namespace datasystem {
 
-class Flags;
+class DynamicFlagConfig;
 
 namespace worker {
 
@@ -90,7 +90,7 @@ public:
 
 private:
     /// @brief Initialize WorkerOCServer and start all services.
-    Status InitWorker(Flags &flags, bool isEmbeddedClient);
+    Status InitWorker(DynamicFlagConfig &flags, bool isEmbeddedClient);
 
     /// @brief Shutdown Worker.
     Status ShutDown();
@@ -99,10 +99,10 @@ private:
     Status PreShutDown();
 
     /// @brief Run the blocking event loop, then perform PreShutDown and ShutDown.
-    void RunEventLoopAndShutdown(Flags &flags);
+    void RunEventLoopAndShutdown(DynamicFlagConfig &flags);
 
     /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
-    Status DoInit(Flags &flags, const char *crashReporterLabel);
+    Status DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel);
 
     Worker() = default;
     std::unique_ptr<WorkerOCServer> worker_{nullptr};

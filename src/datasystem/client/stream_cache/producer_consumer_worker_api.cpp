@@ -26,7 +26,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/trace.h"

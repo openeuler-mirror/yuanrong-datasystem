@@ -54,7 +54,7 @@ KV接口
       - 析构KV缓存客户端实例，析构过程中会自动断开与 Worker 的连接，释放客户端持有的资源。
     * - :cpp:func:`KVClient::Init`
       - 建立与数据系统 Worker 之间的连接并完成初始化。
-    * - :cpp:func:`KVClient::Init(const KVClientConfig &clientConfig) <Init>`
+    * - :ref:`KVClient::Init(const KVClientConfig &clientConfig) <KVClient_InitWithConfig>`
       - 使用显式客户端配置完成初始化。
     * - :cpp:func:`KVClient::ShutDown`
       - 断开与数据系统 Worker 之间的连接。

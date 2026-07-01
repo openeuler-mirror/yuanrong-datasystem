@@ -15,12 +15,13 @@
  */
 
 /**
- * Description: Defines operations related to gflag.
+ * Description: Runtime dynamic flag configuration.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_FLAGS_H
-#define DATASYSTEM_COMMON_UTIL_FLAGS_H
+#ifndef DATASYSTEM_COMMON_FLAGS_DYNAMIC_FLAG_CONFIG_H
+#define DATASYSTEM_COMMON_FLAGS_DYNAMIC_FLAG_CONFIG_H
 
 #include <chrono>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -28,27 +29,32 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
-using GFlagsMap = std::unordered_map<std::string, FlagInfo>;
-class Flags {
+using FlagInfoMap = std::unordered_map<std::string, FlagInfo>;
+class DynamicFlagConfig {
 public:
-    Flags() : preConfigCheckTime_(clock::now())
+    DynamicFlagConfig() : preConfigCheckTime_(clock::now())
     {
+        // Default grouped-flag commit handler: built-in log sampler transactional commit.
+        // Callers may override via SetBatchCommitHandler to decouple sampler (or other grouped-flag) semantics.
+        batchCommitHandler_ = [this](const std::unordered_map<std::string, std::string> &flagMap) {
+            return ValidateAndCommitSamplerFlags(flagMap);
+        };
     }
 
-    ~Flags() = default;
+    ~DynamicFlagConfig() = default;
 
     /**
      * @brief Obtains all gflag parameters and converts them to maps.
-     * @return GFlagsMap - Map containing all flags.
+     * @return FlagInfoMap - Map containing all flags.
      */
-    GFlagsMap GetAllFlagsToMap();
+    FlagInfoMap GetAllFlagsToMap();
 
     /**
      * @brief Obtains the non-default flag.
      * @param[in] defaultFlags Default values of all flags.
      * @return std::string - Strings containing all non-default values.
      */
-    std::string GetNonDefaultFlags(const GFlagsMap &defaultFlags);
+    std::string GetNonDefaultFlags(const FlagInfoMap &defaultFlags);
 
     /**
      * @brief Obtains flags explicitly declared through commandline or flags changed at runtime.
@@ -85,13 +91,6 @@ public:
                                std::chrono::time_point<std::chrono::steady_clock> nowTime);
 
     /**
-     * @brief Process the flagfile and return the valid flag parameter in the map format.
-     * @param[in] configFilePath The path of the worker configuration file.
-     * @return std::unordered_map<std::string, std::string> - <key:flagName, value:flagValue>
-     */
-    std::unordered_map<std::string, std::string> ProcessFlagFile(const std::string &configFilePath);
-
-    /**
      * @brief Find the position of the first occurrence of "\n" "\r" "\t" or " " in a string.
      * @param[in] content The string to be found.
      * @return std::string::size_type Returns the character index, or npos if not found.
@@ -125,14 +124,6 @@ public:
     bool ValidateFlagName(const std::string &flagName);
 
     /**
-     * @brief Check whether the flag parameter needs to be processed.
-     * @param[in] flagMap The flag parameter and value parsed from the configuration file
-     * @param[in] flagName The flag parameter name to be judged
-     * @return bool - If the flag parameter needs to be processed, true is returned. Otherwise, false is returned.
-     */
-    bool IsToHandle(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName);
-
-    /**
      * @brief Dynamically update the value of the flag parameter.
      * @param[in] flagMap The flag parameter and value parsed from the configuration file
      * @return K_OK on success; the error code otherwise.
@@ -146,24 +137,10 @@ public:
     void TrimSpace(std::string &value);
 
     /**
-     * @brief Set handler to isToHandle.
-     * @param[in] handler Value to set.
-     */
-    void SetIsToHandle(
-        std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> handler);
-
-    /**
      * @brief  Set handler to validateSpecial.
      * @param[in] validator  Value to set.
      */
     void SetValidateSpecial(const std::function<bool(const std::string &, const std::string &)> &validator);
-
-    /**
-     * @brief Validate some special cases
-     * @param[in] flagName Flag name.
-     * @param[in] newVal New value assigned to the flag.
-     */
-    bool ValidateSpecial(const std::string &flagName, const std::string &newVal);
 
     /**
      * @brief Dry-run special validation for one pending dynamic update.
@@ -176,6 +153,16 @@ public:
     bool ValidateSpecialConstraint(const std::unordered_map<std::string, std::string> &flagMap,
                                    const std::string &flagName, const std::string &newVal,
                                    std::string &errMsg);
+
+    /**
+     * @brief Inject a handler that transactionally commits a group of related flags.
+     * @details When set, UpdateFlagParameter delegates grouped-flag commit (e.g. log sampler sample-rate flags)
+     *          to this handler instead of the built-in sampler logic. Pass nullptr to restore the default
+     *          built-in handler. The handler receives the full pending flag map and returns true on success.
+     * @param[in] handler Handler that commits a related flag group transactionally, or nullptr to reset.
+     */
+    void SetBatchCommitHandler(
+        std::function<bool(const std::unordered_map<std::string, std::string> &)> handler);
 
 private:
     using clock = std::chrono::steady_clock;
@@ -200,6 +187,29 @@ private:
 
     std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> isToHandle_;
     std::function<bool(const std::string &, const std::string &)> validateSpecial_;
+    std::function<bool(const std::unordered_map<std::string, std::string> &)> batchCommitHandler_;
+
+    /// @brief Process the flagfile and return the valid flag parameter in the map format.
+    /// @param[in] configFilePath The path of the worker configuration file.
+    /// @return Map of <flagName, flagValue> parsed from the configuration file.
+    std::unordered_map<std::string, std::string> ProcessFlagFile(const std::string &configFilePath);
+
+    /// @brief Check whether the flag parameter needs to be processed.
+    /// @param[in] flagMap The flag parameters parsed from the configuration file.
+    /// @param[in] flagName The flag parameter name to be judged.
+    /// @return True if the flag parameter needs to be processed.
+    bool IsToHandle(const std::unordered_map<std::string, std::string> &flagMap, const std::string &flagName);
+
+    /// @brief Set the handler that decides whether a flag parameter needs to be processed.
+    /// @param[in] handler Handler to set.
+    void SetIsToHandle(
+        std::function<bool(const std::unordered_map<std::string, std::string> &, const std::string &)> handler);
+
+    /// @brief Validate a flag value against the injected special-constraint handler.
+    /// @param[in] flagName Flag name.
+    /// @param[in] newVal New value assigned to the flag.
+    /// @return True if the special validation passes.
+    bool ValidateSpecial(const std::string &flagName, const std::string &newVal);
 
     Status UpdateSingleFlag(const std::unordered_map<std::string, std::string> &flagMap,
                             const std::string &flagName, const std::string &newVal);
@@ -212,4 +222,4 @@ private:
         const std::unordered_map<std::string, std::string> &candidates, const LogSampleUserConfig &cfg);
 };
 };      // namespace datasystem
-#endif  // DATASYSTEM_COMMON_UTIL_FLAGS_H
+#endif  // DATASYSTEM_COMMON_FLAGS_DYNAMIC_FLAG_CONFIG_H

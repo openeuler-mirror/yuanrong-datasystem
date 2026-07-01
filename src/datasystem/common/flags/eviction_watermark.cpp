@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 
 #include "datasystem/common/flags/flags.h"
 

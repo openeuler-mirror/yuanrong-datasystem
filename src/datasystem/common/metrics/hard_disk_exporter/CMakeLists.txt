@@ -4,7 +4,7 @@ set(HARD_DISK_EXPORTER_SRCS
 
 set(HARD_DISK_EXPORTER_LIBS
         common_util
-        common_util_gflag
+        dynamic_flag_config
         metrics_exporter_base)
 
 add_library(hard_disk_exporter STATIC ${HARD_DISK_EXPORTER_SRCS})

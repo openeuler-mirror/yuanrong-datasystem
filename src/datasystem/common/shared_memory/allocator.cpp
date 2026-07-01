@@ -41,7 +41,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 
 DS_DECLARE_string(shared_disk_directory);
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);

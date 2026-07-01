@@ -27,7 +27,7 @@
 #include <net/if.h>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {

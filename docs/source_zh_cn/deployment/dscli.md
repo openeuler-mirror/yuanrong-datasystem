@@ -838,13 +838,13 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
 |-----|------|---------|-----|-------------|
-| client_reconnect_wait_s | int | `5` | 是 | 客户端断链重连最大等待时间（单位为秒） |
+| client_reconnect_wait_s | int | `10` | 是 | 客户端断链重连最大等待时间（单位为秒） |
 | client_dead_timeout_s | int | `120` | 否 | 客户端存活检测最大时间间隔（单位为秒）, client_dead_timeout_s >= 3 |
 | heartbeat_interval_ms | int | `1000` | 是 | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
 | node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
 | enable_reconciliation | bool | `true` | 否 | 当节点重启时是否启用对账功能 |
-| enable_hash_ring_self_healing | bool | `false` | 是 | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
+| enable_hash_ring_self_healing | bool | `false` | 否 | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
 | add_node_wait_time_s | int | `60` | 是 | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |

@@ -33,7 +33,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/l2cache/persistence_api.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
@@ -176,9 +176,9 @@ public:
 
     /**
      * @brief Set the Flags pointer for runtime configuration updates.
-     * @param[in] flags Pointer to the Flags instance. Must outlive this WorkerOCServer.
+     * @param[in] flags Pointer to the DynamicFlagConfig instance. Must outlive this WorkerOCServer.
      */
-    void SetFlags(Flags *flags)
+    void SetFlags(DynamicFlagConfig *flags)
     {
         runtimeFlags_ = flags;
     }
@@ -710,8 +710,8 @@ private:
     std::unique_ptr<PerfServiceImpl> perfService_{ nullptr };
 #endif
 
-    /** Non-owning pointer to caller Flags; valid only between Init and Shutdown. */
-    Flags *runtimeFlags_{ nullptr };
+    /** Non-owning pointer to caller DynamicFlagConfig; valid only between Init and Shutdown. */
+    DynamicFlagConfig *runtimeFlags_{ nullptr };
 };
 }  // namespace worker
 }  // namespace datasystem

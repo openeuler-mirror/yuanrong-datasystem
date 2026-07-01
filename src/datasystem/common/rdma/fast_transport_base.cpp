@@ -15,7 +15,7 @@
  */
 
 #include "datasystem/utils/status.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 
 #ifdef USE_URMA

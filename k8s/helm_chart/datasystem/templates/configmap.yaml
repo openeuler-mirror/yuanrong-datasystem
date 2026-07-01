@@ -29,6 +29,8 @@ data:
     -heartbeat_interval_ms={{ .Values.global.reliability.heartbeatIntervalMs }}
     -add_node_wait_time_s={{ .Values.global.reliability.addNodeWaitTimeS }}
     -async_delete={{ .Values.global.performance.asyncDelete}}
+    -urma_failover_success_rate_ratio={{ .Values.global.performance.urmaFailoverSuccessRateRatio }}
+    -urma_failover_min_sample_count={{ .Values.global.performance.urmaFailoverMinSampleCount }}
     -auto_del_dead_node={{ .Values.global.reliability.autoDelDeadNode }}
     -enable_hash_ring_self_healing={{ .Values.global.reliability.enableHashRingSelfHealing }}
     -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}

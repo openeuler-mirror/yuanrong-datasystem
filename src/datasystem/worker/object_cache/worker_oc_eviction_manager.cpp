@@ -19,7 +19,7 @@
  */
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 
 #include <algorithm>
 #include <chrono>

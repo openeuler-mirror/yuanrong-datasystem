@@ -17,7 +17,7 @@
 /**
  * Description: Unit tests for evict/spill watermark gflags and accessors.
  */
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "ut/common.h"

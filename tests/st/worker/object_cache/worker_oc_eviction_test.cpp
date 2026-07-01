@@ -43,7 +43,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/common/util/gflag/eviction_watermark.h"
+#include "datasystem/common/flags/eviction_watermark.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #undef private
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"

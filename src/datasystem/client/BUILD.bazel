@@ -136,7 +136,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:common_util",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
     ],
     alwayslink = True,
 )

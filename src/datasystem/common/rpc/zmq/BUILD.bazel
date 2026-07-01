@@ -34,7 +34,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc/zmq:zmq_stub",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
     ],
 )
 

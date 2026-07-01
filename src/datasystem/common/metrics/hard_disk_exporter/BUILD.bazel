@@ -9,7 +9,7 @@ ds_cc_library(
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:timer",
         "//src/datasystem/common/util:uri",
-        "//src/datasystem/common/util/gflag:common_util_gflag_def",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/metrics:metrics_exporter_base",
         "//src/datasystem/common/log:log_base",
     ],

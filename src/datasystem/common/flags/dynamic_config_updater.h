@@ -17,21 +17,21 @@
 /**
  * Description: JSON-based dynamic configuration updater.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_GFLAG_DYNAMIC_CONFIG_UPDATER_H
-#define DATASYSTEM_COMMON_UTIL_GFLAG_DYNAMIC_CONFIG_UPDATER_H
+#ifndef DATASYSTEM_COMMON_FLAGS_DYNAMIC_CONFIG_UPDATER_H
+#define DATASYSTEM_COMMON_FLAGS_DYNAMIC_CONFIG_UPDATER_H
 
 #include <mutex>
 #include <string>
 #include <unordered_map>
 
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 
 class DynamicConfigUpdater {
 public:
-    explicit DynamicConfigUpdater(Flags &flags);
+    explicit DynamicConfigUpdater(DynamicFlagConfig &flagConfig);
     ~DynamicConfigUpdater() = default;
 
     DynamicConfigUpdater(const DynamicConfigUpdater &) = delete;
@@ -51,10 +51,10 @@ private:
     bool ParseJsonToMap(const std::string &json, const std::string &apiPrefix,
                         std::unordered_map<std::string, std::string> &out, std::string &errMsg) const;
 
-    Flags *flags_;
+    DynamicFlagConfig *flagConfig_;
     std::mutex mutex_;
 };
 
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_UTIL_GFLAG_DYNAMIC_CONFIG_UPDATER_H
+#endif  // DATASYSTEM_COMMON_FLAGS_DYNAMIC_CONFIG_UPDATER_H

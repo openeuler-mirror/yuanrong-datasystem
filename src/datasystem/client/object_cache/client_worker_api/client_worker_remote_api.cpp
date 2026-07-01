@@ -37,7 +37,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_constants.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_diagnostic.h"

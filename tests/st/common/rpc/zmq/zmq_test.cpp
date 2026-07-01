@@ -36,7 +36,7 @@
 #include "datasystem/common/rpc/zmq/zmq_context.h"
 #include "datasystem/common/rpc/zmq/zmq_service.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/uuid_generator.h"

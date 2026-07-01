@@ -17,8 +17,8 @@
 /**
  * Description: Process-level file monitor state for UpdateConfig mutual exclusion.
  */
-#ifndef DATASYSTEM_COMMON_UTIL_GFLAG_CONFIG_MONITOR_STATE_H
-#define DATASYSTEM_COMMON_UTIL_GFLAG_CONFIG_MONITOR_STATE_H
+#ifndef DATASYSTEM_COMMON_FLAGS_CONFIG_MONITOR_STATE_H
+#define DATASYSTEM_COMMON_FLAGS_CONFIG_MONITOR_STATE_H
 
 #include <atomic>
 
@@ -45,4 +45,4 @@ private:
 
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_UTIL_GFLAG_CONFIG_MONITOR_STATE_H
+#endif  // DATASYSTEM_COMMON_FLAGS_CONFIG_MONITOR_STATE_H

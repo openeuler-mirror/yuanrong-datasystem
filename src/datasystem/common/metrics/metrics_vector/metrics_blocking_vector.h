@@ -25,7 +25,7 @@
 #include <numeric>
 #include <vector>
 
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/format.h"
 
 namespace datasystem {

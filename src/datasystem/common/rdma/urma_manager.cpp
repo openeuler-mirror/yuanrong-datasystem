@@ -38,7 +38,7 @@
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"

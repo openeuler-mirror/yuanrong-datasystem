@@ -3,19 +3,46 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+_FLAG_RUNTIME_HDRS = [
+    "common_flags.h",
+    "config_monitor_state.h",
+    "dynamic_config_updater.h",
+    "dynamic_flag_config.h",
+    "eviction_watermark.h",
+]
+
+_FLAG_CORE_HDRS = [
+    "flag_manager.h",
+    "flags.h",
+    "string_to_long.h",
+]
+
 # Header-only target (no circular deps - used by common_log_header)
 ds_cc_library(
     name = "ds_flags_header",
-    hdrs = glob(["*.h"]),
+    hdrs = _FLAG_CORE_HDRS,
     deps = [
         "//include/datasystem/utils:utils_headers",
     ],
 )
 
 ds_cc_library(
+    name = "dynamic_flag_config_header",
+    hdrs = _FLAG_RUNTIME_HDRS,
+    deps = [
+        ":ds_flags_header",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
     name = "ds_flags",
-    srcs = glob(["*.cpp"], exclude = ["kv_client_config.cpp"]),
-    hdrs = glob(["*.h"]),
+    srcs = [
+        "embedded_config.cpp",
+        "flag_manager.cpp",
+        "flags.cpp",
+    ],
+    hdrs = _FLAG_CORE_HDRS,
     copts = [
         "-std=c++17",
     ],
@@ -26,6 +53,39 @@ ds_cc_library(
         "//src/datasystem/common/util:format",
         "@nlohmann_json//:json",
         "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "dynamic_flag_config",
+    srcs = [
+        "common_flag_define.cpp",
+        "common_flags_validate.cpp",
+        "config_monitor_state.cpp",
+        "dynamic_config_updater.cpp",
+        "dynamic_flag_config.cpp",
+    ],
+    visibility = ["//src/datasystem:__subpackages__"],
+    deps = [
+        ":dynamic_flag_config_header",
+        ":ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log:operation_logger",
+        "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//src/datasystem/common/util:validator",
+        "@nlohmann_json//:json",
+        "@securec",
+    ],
+)
+
+ds_cc_library(
+    name = "eviction_watermark",
+    srcs = ["eviction_watermark.cpp"],
+    hdrs = ["eviction_watermark.h"],
+    deps = [
+        ":dynamic_flag_config",
+        ":dynamic_flag_config_header",
     ],
 )
 

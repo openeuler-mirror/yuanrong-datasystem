@@ -21,7 +21,7 @@
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/util/gflag/common_gflags.h"
+#include "datasystem/common/flags/common_flags.h"
 
 #include <cstdlib>
 #include <iostream>

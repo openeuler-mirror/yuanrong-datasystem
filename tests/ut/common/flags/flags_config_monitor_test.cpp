@@ -19,7 +19,7 @@
  */
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
-#include "datasystem/common/util/gflag/flags.h"
+#include "datasystem/common/flags/dynamic_flag_config.h"
 
 #include <chrono>
 #include <fstream>
@@ -117,9 +117,9 @@ protected:
 
 TEST_F(FlagsConfigMonitorTest, MissingConfigFileLogsWarning)
 {
-    Flags flags;
+    DynamicFlagConfig flagConfig;
     const std::string missingPath = FLAGS_log_dir + "/missing-datasystem.config";
-    flags.StartConfigFileHandle(missingPath, std::chrono::steady_clock::now());
+    flagConfig.StartConfigFileHandle(missingPath, std::chrono::steady_clock::now());
     Provider::Instance().FlushLogs();
 
     const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
@@ -136,13 +136,13 @@ TEST_F(FlagsConfigMonitorTest, MissingConfigFileLogsWarning)
 
 TEST_F(FlagsConfigMonitorTest, ConfigFileChangeAppliesModifiableFlag)
 {
-    Flags flags;
+    DynamicFlagConfig flagConfig;
     WriteConfigFile(configPath_, "-v=2\n");
-    flags.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
     EXPECT_EQ(FLAGS_v, 2);
 
     WriteConfigFile(configPath_, "-v=3\n");
-    flags.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
     EXPECT_EQ(FLAGS_v, 3);
 
     const std::string content = ReadFile(OperationLogger::Instance().OperationLogPath());
@@ -151,10 +151,10 @@ TEST_F(FlagsConfigMonitorTest, ConfigFileChangeAppliesModifiableFlag)
 
 TEST_F(FlagsConfigMonitorTest, InvalidFlagValueRecordsConfigFailed)
 {
-    Flags flags;
-    auto flagMap = flags.ProcessOptions("-minloglevel=invalid");
+    DynamicFlagConfig flagConfig;
+    auto flagMap = flagConfig.ProcessOptions("-minloglevel=invalid");
     ASSERT_EQ(flagMap.count("minloglevel"), 1ul);
-    EXPECT_TRUE(flags.UpdateFlagParameter(flagMap).IsError());
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsError());
 
     const std::string content = ReadFile(OperationLogger::Instance().OperationLogPath());
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'minloglevel'"));
@@ -162,12 +162,12 @@ TEST_F(FlagsConfigMonitorTest, InvalidFlagValueRecordsConfigFailed)
 
 TEST_F(FlagsConfigMonitorTest, NonModifiableFlagRecordsConfigFailed)
 {
-    Flags flags;
-    auto flagMap = flags.ProcessOptions("-rpc_thread_num=32");
+    DynamicFlagConfig flagConfig;
+    auto flagMap = flagConfig.ProcessOptions("-rpc_thread_num=32");
     EXPECT_EQ(flagMap.count("rpc_thread_num"), 0ul);
 
     std::pair<std::string, std::string> kv;
-    EXPECT_FALSE(flags.SplitArgument("--rpc_thread_num=32", kv));
+    EXPECT_FALSE(flagConfig.SplitArgument("--rpc_thread_num=32", kv));
 
     const std::string content = ReadFile(OperationLogger::Instance().OperationLogPath());
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_FAILED: flag 'rpc_thread_num' not modifiable"));
@@ -175,10 +175,10 @@ TEST_F(FlagsConfigMonitorTest, NonModifiableFlagRecordsConfigFailed)
 
 TEST_F(FlagsConfigMonitorTest, MultipleFlagsRecordedSeparately)
 {
-    Flags flags;
-    auto flagMap = flags.ProcessOptions("-v=1\n-minloglevel=2\n-heartbeat_interval_ms=3000");
+    DynamicFlagConfig flagConfig;
+    auto flagMap = flagConfig.ProcessOptions("-v=1\n-minloglevel=2\n-heartbeat_interval_ms=3000");
     EXPECT_EQ(flagMap.size(), 3ul);
-    EXPECT_TRUE(flags.UpdateFlagParameter(flagMap).IsOk());
+    EXPECT_TRUE(flagConfig.UpdateFlagParameter(flagMap).IsOk());
 
     const std::string content = ReadFile(OperationLogger::Instance().OperationLogPath());
     EXPECT_THAT(content, testing::HasSubstr("CONFIG_CHANGED: v="));
@@ -189,9 +189,9 @@ TEST_F(FlagsConfigMonitorTest, MultipleFlagsRecordedSeparately)
 TEST_F(FlagsConfigMonitorTest, ManifestFlagEndToEndViaConfigFile)
 {
     ASSERT_TRUE(FlagManager::GetInstance()->IsModifiableFlag("heartbeat_interval_ms"));
-    Flags flags;
+    DynamicFlagConfig flagConfig;
     WriteConfigFile(configPath_, "-heartbeat_interval_ms=2500\n");
-    flags.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
     EXPECT_EQ(FLAGS_heartbeat_interval_ms, 2500);
 
     const std::string content = ReadFile(OperationLogger::Instance().OperationLogPath());
@@ -200,9 +200,9 @@ TEST_F(FlagsConfigMonitorTest, ManifestFlagEndToEndViaConfigFile)
 
 TEST_F(FlagsConfigMonitorTest, HeartbeatIntervalRuntimeUpdateChangesEtcdRenewInterval)
 {
-    Flags flags;
+    DynamicFlagConfig flagConfig;
     WriteConfigFile(configPath_, "-heartbeat_interval_ms=2500\n");
-    flags.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
+    flagConfig.StartConfigFileHandle(configPath_, std::chrono::steady_clock::now());
 
     EtcdKeepAlive keepAlive("", 0);
     EXPECT_EQ(keepAlive.GetLeaseRenewIntervalMs(), 2500);
