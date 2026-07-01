@@ -16,8 +16,8 @@ set(ETCD_DEPEND_LIBS
 
 add_library(common_etcd STATIC ${ETCD_SRCS})
 target_include_directories(common_etcd PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/etcd/proto)
-target_link_libraries(common_etcd PRIVATE ${ETCD_DEPEND_LIBS} common_encrypt)
+target_link_libraries(common_etcd PUBLIC worker_node_info PRIVATE ${ETCD_DEPEND_LIBS} common_encrypt coordinator_protos)
 
 add_library(common_etcd_client STATIC ${ETCD_SRCS})
 target_include_directories(common_etcd_client PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/etcd/proto)
-target_link_libraries(common_etcd_client PRIVATE ${ETCD_DEPEND_LIBS} common_encrypt_client)
+target_link_libraries(common_etcd_client PUBLIC worker_node_info_client PRIVATE ${ETCD_DEPEND_LIBS} common_encrypt_client coordinator_protos_client)

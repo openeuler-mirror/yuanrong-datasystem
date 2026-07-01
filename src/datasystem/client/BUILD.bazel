@@ -281,7 +281,10 @@ ds_cc_library(
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/topology:worker_node_info",
+        "//src/datasystem/worker/cluster_manager:cluster_constants",
     ],
     alwayslink = True,
 )

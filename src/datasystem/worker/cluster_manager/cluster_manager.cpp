@@ -51,6 +51,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/cluster_manager/cluster_node.h"
@@ -424,7 +425,7 @@ Status ClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
         if (eventNode->NodeWasRecovered() && eventNodeKey == workerAddress_) {
             // if etcd restart, set worker to ready from recover.
             INJECT_POINT("etcdrecover.worker.delaytoready");
-            RETURN_IF_NOT_OK(clusterStore_->UpdateNodeState(ETCD_NODE_READY));
+            RETURN_IF_NOT_OK(clusterStore_->UpdateNodeState(topology::WorkerServiceState::READY));
         }
     } else {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Existing node has an unknown state during node addition event.");
@@ -669,17 +670,19 @@ Status ClusterManager::HandleClusterEvent(const topology::CoordinationEvent &eve
     // Parse the type of event of addition appended to timestamp.
     std::string additionEventType;  // "start", "restart", "recover"
     if (event.type == topology::CoordinationEventType::PUT || nodeTimestamp == FAKE_NODE_EVENT_VALUE) {
-        KeepAliveValue keepAliveValue;
-        auto parseRc = KeepAliveValue::FromString(nodeTimestamp, keepAliveValue);
-        if (parseRc.IsOk()) {
-            additionEventType = keepAliveValue.state;
-            nodeTimestamp = keepAliveValue.timestamp;
-        } else {
+        topology::WorkerServiceInfo workerNodeInfo;
+        auto parseRc = topology::WorkerServiceInfo::FromProto(nodeTimestamp, workerNodeInfo);
+        if (parseRc.IsError()) {
+            parseRc = topology::WorkerServiceInfo::FromString(nodeTimestamp, workerNodeInfo);
+        }
+        if (parseRc.IsError()) {
             std::stringstream ss;
             ss << "Event of node, key: " << nodeHostPortStr << " value: " << nodeTimestamp
                << " type: " << event.ToString() << ", is not recognized.";
             RETURN_STATUS(K_RUNTIME_ERROR, ss.str());
         }
+        RETURN_IF_NOT_OK(topology::WorkerServiceStateToString(workerNodeInfo.state, additionEventType));
+        nodeTimestamp = std::to_string(workerNodeInfo.timestamp);
     }
 
     // Remove /TableName/ from key to get IP and port

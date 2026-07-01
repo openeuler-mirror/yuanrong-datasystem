@@ -73,49 +73,21 @@ Status ParseWorkerEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint)
     return Status::OK();
 }
 
-Status StringToServiceState(const std::string &value, WorkerServiceState &state)
-{
-    if (value == "start") {
-        state = WorkerServiceState::START;
-        return Status::OK();
-    }
-    if (value == "restart") {
-        state = WorkerServiceState::RESTART;
-        return Status::OK();
-    }
-    if (value == "recover") {
-        state = WorkerServiceState::RECOVER;
-        return Status::OK();
-    }
-    if (value == ETCD_NODE_READY) {
-        state = WorkerServiceState::READY;
-        return Status::OK();
-    }
-    if (value == ETCD_NODE_EXITING) {
-        state = WorkerServiceState::EXITING;
-        return Status::OK();
-    }
-    if (value == ETCD_NODE_DOWNGRADE_RESTART) {
-        state = WorkerServiceState::DOWNGRADE_RESTART;
-        return Status::OK();
-    }
-    RETURN_STATUS(K_INVALID, "invalid worker service state");
-}
-
 Status DecodeWorkerValue(const WorkerId &workerId, const std::string &value, Revision revision, WorkerRecord &record)
 {
     record = {};
-    KeepAliveValue keepAliveValue;
-    RETURN_IF_NOT_OK(KeepAliveValue::FromString(value, keepAliveValue));
-    WorkerServiceState state{ WorkerServiceState::START };
-    RETURN_IF_NOT_OK(StringToServiceState(keepAliveValue.state, state));
-    CHECK_FAIL_RETURN_STATUS(!keepAliveValue.timestamp.empty(), K_INVALID, "worker timestamp is empty");
-
     record.workerId = workerId;
     RETURN_IF_NOT_OK(ParseWorkerEndpoint(workerId, record.endpoint));
-    record.serviceState = state;
-    record.capability.hostId = keepAliveValue.hostId;
-    record.registerTimestamp = keepAliveValue.timestamp;
+    WorkerServiceInfo nodeInfo;
+    auto protoRc = WorkerServiceInfo::FromProto(value, nodeInfo);
+    if (protoRc.IsError()) {
+        RETURN_IF_NOT_OK(WorkerServiceInfo::FromString(value, nodeInfo));
+    }
+    record.serviceState = nodeInfo.state;
+    CHECK_FAIL_RETURN_STATUS(nodeInfo.timestamp > 0, K_INVALID, "worker timestamp is empty");
+    record.capability.hostId = nodeInfo.hostId;
+    record.capability.compatibilityVersion = nodeInfo.compatibilityVersion;
+    record.registerTimestamp = std::to_string(nodeInfo.timestamp);
     record.modRevision = revision;
     return Status::OK();
 }

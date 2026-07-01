@@ -1212,22 +1212,20 @@ Status WorkerOCServer::InitMetadataManagerHolder()
 void WorkerOCServer::RegisterTaskActions()
 {
     auto &registry = TaskActionRegistry::GetInstance();
-    registry.AddSubscriber(
-        TransferTaskType::CHECK_VOLUNTARY_READY, WORKER_OC_SERVER, [this](const TransferTask &) {
-            return IsClientsExist() || IsAsyncTasksRunning() ? Status(K_NOT_READY, "Not Ready") : Status::OK();
-        });
-    registry.AddSubscriber(
-        TransferTaskType::MIGRATE_VOLUNTARY_DATA, WORKER_OC_SERVER, [this](const TransferTask &task) {
-            CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
-                                     "Worker object-cache service is not initialized.");
-            return objCacheClientWorkerSvc_->ProcessVoluntaryScaledown(task.taskId);
-        });
-    registry.AddSubscriber(
-        TransferTaskType::CLEANUP_VOLUNTARY_SOURCE, WORKER_OC_SERVER, [this](const TransferTask &) {
-            CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
-                                     "Worker object-cache service is not initialized.");
-            return objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation();
-        });
+    registry.AddSubscriber(TransferTaskType::CHECK_VOLUNTARY_READY, WORKER_OC_SERVER, [this](const TransferTask &) {
+        return IsClientsExist() || IsAsyncTasksRunning() ? Status(K_NOT_READY, "Not Ready") : Status::OK();
+    });
+    registry.AddSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_DATA, WORKER_OC_SERVER,
+                           [this](const TransferTask &task) {
+                               CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
+                                                        "Worker object-cache service is not initialized.");
+                               return objCacheClientWorkerSvc_->ProcessVoluntaryScaledown(task.taskId);
+                           });
+    registry.AddSubscriber(TransferTaskType::CLEANUP_VOLUNTARY_SOURCE, WORKER_OC_SERVER, [this](const TransferTask &) {
+        CHECK_FAIL_RETURN_STATUS(objCacheClientWorkerSvc_ != nullptr, K_NOT_READY,
+                                 "Worker object-cache service is not initialized.");
+        return objCacheClientWorkerSvc_->RemoveWriteBackIdsLocation();
+    });
 }
 
 void WorkerOCServer::UnregisterTaskActions()
@@ -1457,9 +1455,12 @@ void WorkerOCServer::ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::st
         if (worker.first == hostPort_.ToString() || scheduledPeers.count(worker.first) > 0) {
             continue;
         }
-        KeepAliveValue keepAliveValue;
-        auto parseRc = KeepAliveValue::FromString(worker.second, keepAliveValue);
-        if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+        topology::WorkerServiceInfo workerNodeInfo;
+        auto parseRc = topology::WorkerServiceInfo::FromProto(worker.second, workerNodeInfo);
+        if (parseRc.IsError()) {
+            parseRc = topology::WorkerServiceInfo::FromString(worker.second, workerNodeInfo);
+        }
+        if (parseRc.IsError() || workerNodeInfo.state != topology::WorkerServiceState::READY) {
             continue;
         }
         scheduledPeers.emplace(worker.first);
@@ -1575,9 +1576,8 @@ Status WorkerOCServer::MaybeStartWorkerMasterRpcWarmup()
     try {
         auto warmupTraceID = Trace::Instance().GetTraceID();
         (void)warmupThreadPoolForSubmit->Submit([this, warmupTraceID]() {
-            TraceGuard traceGuard = warmupTraceID.empty()
-                ? Trace::Instance().SetTraceUUID()
-                : Trace::Instance().SetTraceNewID(warmupTraceID, true);
+            TraceGuard traceGuard = warmupTraceID.empty() ? Trace::Instance().SetTraceUUID()
+                                                          : Trace::Instance().SetTraceNewID(warmupTraceID, true);
             WarmupReadyWorkerMasterRpcOnStartup();
         });
     } catch (const std::exception &e) {
@@ -1665,9 +1665,12 @@ size_t WorkerOCServer::ScheduleWorkerMasterRpcWarmupTasks(
         if (masterRpcWarmupExit_) {
             break;
         }
-        KeepAliveValue keepAliveValue;
-        auto parseRc = KeepAliveValue::FromString(worker.second, keepAliveValue);
-        if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+        topology::WorkerServiceInfo workerNodeInfo;
+        auto parseRc = topology::WorkerServiceInfo::FromProto(worker.second, workerNodeInfo);
+        if (parseRc.IsError()) {
+            parseRc = topology::WorkerServiceInfo::FromString(worker.second, workerNodeInfo);
+        }
+        if (parseRc.IsError() || workerNodeInfo.state != topology::WorkerServiceState::READY) {
             continue;
         }
         if (warmedAddrs != nullptr && warmedAddrs->count(worker.first) > 0) {
@@ -1756,9 +1759,9 @@ void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event 
     if (key.find(ETCD_CLUSTER_TABLE) == std::string::npos) {
         return;
     }
-    KeepAliveValue keepAliveValue;
-    auto parseRc = KeepAliveValue::FromString(event.kv().value(), keepAliveValue);
-    if (parseRc.IsError() || keepAliveValue.state != ETCD_NODE_READY) {
+    topology::WorkerServiceInfo workerNodeInfo;
+    auto parseRc = topology::WorkerServiceInfo::FromString(event.kv().value(), workerNodeInfo);
+    if (parseRc.IsError() || workerNodeInfo.state != topology::WorkerServiceState::READY) {
         return;
     }
     auto masterAddr = GetSubStringAfterField(key, std::string(ETCD_CLUSTER_TABLE) + "/");
@@ -1871,7 +1874,7 @@ void WorkerOCServer::WaitClientsExit()
         if (checkThreadRunning_) {
             LOG(INFO) << "Update node state in coordination backend to exiting";
             CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-            return coordinationBackend_->UpdateNodeState(ETCD_NODE_EXITING);
+            return coordinationBackend_->UpdateNodeState(topology::WorkerServiceState::EXITING);
         }
         return Status::OK();
     });

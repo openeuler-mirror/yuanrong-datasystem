@@ -141,55 +141,54 @@ protected:
     int eventCount_ = 0;
 };
 
-TEST(EtcdStoreKeepAliveValueTest, TestToStringAndFromStringRoundTrip)
+TEST(EtcdStoreWorkerServiceInfoTest, TestToStringAndFromStringRoundTrip)
 {
-    KeepAliveValue in{ "12345", "ready", "host-a" };
+    topology::WorkerServiceInfo in{ 12345, topology::WorkerServiceState::READY, "host-a", "v1" };
     std::string str = in.ToString();
-    EXPECT_EQ(str, "12345;ready;host-a");
+    EXPECT_EQ(str, "12345;ready;host-a;v1");
 
-    KeepAliveValue out;
-    Status rc = KeepAliveValue::FromString(str, out);
+    topology::WorkerServiceInfo out;
+    Status rc = topology::WorkerServiceInfo::FromString(str, out);
     DS_EXPECT_OK(rc);
-    EXPECT_EQ(out.timestamp, "12345");
-    EXPECT_EQ(out.state, "ready");
+    EXPECT_EQ(out.timestamp, 12345);
+    EXPECT_EQ(out.state, topology::WorkerServiceState::READY);
     EXPECT_EQ(out.hostId, "host-a");
+    EXPECT_EQ(out.compatibilityVersion, "v1");
 }
 
-TEST(EtcdStoreKeepAliveValueTest, TestWithoutSecondDelimiter)
+TEST(EtcdStoreWorkerServiceInfoTest, TestWithoutSecondDelimiter)
 {
-    KeepAliveValue value;
-    value.timestamp = "123";
-    value.state = "ready";
-    value.hostId = "";
+    topology::WorkerServiceInfo value{ 123, topology::WorkerServiceState::READY, "", "" };
     std::string str = value.ToString();
     EXPECT_EQ(str, "123;ready");
-    KeepAliveValue parsed;
-    Status rc = KeepAliveValue::FromString(str, parsed);
+    topology::WorkerServiceInfo parsed;
+    Status rc = topology::WorkerServiceInfo::FromString(str, parsed);
     DS_EXPECT_OK(rc);
-    EXPECT_EQ(parsed.timestamp, "123");
-    EXPECT_EQ(parsed.state, "ready");
+    EXPECT_EQ(parsed.timestamp, 123);
+    EXPECT_EQ(parsed.state, topology::WorkerServiceState::READY);
     EXPECT_EQ(parsed.hostId, "");
 }
 
-TEST(EtcdStoreKeepAliveValueTest, TestEmptyHostId)
+TEST(EtcdStoreWorkerServiceInfoTest, TestEmptyHostId)
 {
-    KeepAliveValue parsed;
-    Status rc = KeepAliveValue::FromString("123;ready;", parsed);
+    topology::WorkerServiceInfo parsed;
+    Status rc = topology::WorkerServiceInfo::FromString("123;ready;", parsed);
     DS_EXPECT_OK(rc);
-    EXPECT_EQ(parsed.timestamp, "123");
-    EXPECT_EQ(parsed.state, "ready");
+    EXPECT_EQ(parsed.timestamp, 123);
+    EXPECT_EQ(parsed.state, topology::WorkerServiceState::READY);
     EXPECT_EQ(parsed.hostId, "");
 }
 
-TEST(EtcdStoreKeepAliveValueTest, TestFromStringWithoutFirstDelimiter)
+TEST(EtcdStoreWorkerServiceInfoTest, TestFromStringWithoutFirstDelimiter)
 {
-    KeepAliveValue out{ "ts", "state", "host" };
-    Status rc = KeepAliveValue::FromString("invalid_value", out);
+    topology::WorkerServiceInfo out{ 1, topology::WorkerServiceState::READY, "host", "v1" };
+    Status rc = topology::WorkerServiceInfo::FromString("invalid_value", out);
     DS_EXPECT_NOT_OK(rc);
     EXPECT_EQ(rc.GetCode(), K_INVALID);
-    EXPECT_EQ(out.timestamp, "");
-    EXPECT_EQ(out.state, "");
+    EXPECT_EQ(out.timestamp, 0);
+    EXPECT_EQ(out.state, topology::WorkerServiceState::UNSPECIFIED);
     EXPECT_EQ(out.hostId, "");
+    EXPECT_EQ(out.compatibilityVersion, "");
 }
 
 TEST_F(EtcdStoreTest, TestPutGetKeyValue1)

@@ -96,6 +96,7 @@ ds_cc_library(
         "//src/datasystem/master/object_cache/store:object_meta_store",
         "//src/datasystem/worker:cluster_event_type",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
+        "//src/datasystem/topology:worker_node_info",
         "//src/datasystem/worker:worker_update_flag_check",
         "//src/datasystem/worker/cluster_manager:worker_health_check",
         "//src/datasystem/worker/hash_ring",

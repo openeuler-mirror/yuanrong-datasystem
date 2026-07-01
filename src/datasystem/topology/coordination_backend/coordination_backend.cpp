@@ -21,6 +21,7 @@
 
 #include <sstream>
 
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
@@ -33,6 +34,7 @@ DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem {
 namespace topology {
+
 std::string CoordinationEvent::ToString() const
 {
     std::stringstream ss;
@@ -165,12 +167,21 @@ Status CoordinationBackend::Delete(const std::string &tableName, const std::stri
 Status CoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
+    std::vector<int64_t> registeredWatchIds;
+    std::vector<CoordinationEvent> initialEvents;
     for (const auto &watchKey : watchKeys) {
         const std::string realKey = BuildRealKey(watchKey.tableName, watchKey.key);
         std::vector<KeyValueEntry> initialKvs;
         int64_t watchId = 0;
-        RETURN_IF_NOT_OK(proxy_->WatchRange(realKey, StringPlusOne(realKey), watcherAddr_, watchId, initialKvs));
-        watchIds_.emplace_back(watchId);
+        auto rc = proxy_->WatchRange(realKey, StringPlusOne(realKey), watcherAddr_, watchId, initialKvs);
+        if (rc.IsError()) {
+            if (!registeredWatchIds.empty()) {
+                LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredWatchIds),
+                             "Rollback registered coordinator watches failed");
+            }
+            return rc;
+        }
+        registeredWatchIds.emplace_back(watchId);
         for (const auto &kv : initialKvs) {
             CoordinationEvent event;
             event.type = CoordinationEventType::PUT;
@@ -178,9 +189,13 @@ Status CoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
             event.value = kv.value;
             event.version = kv.version;
             event.revision = kv.modRevision;
-            LOG(INFO) << "WatchEvents: fake event " << event.ToString();
-            HandleWatchEvent(std::move(event));
+            initialEvents.emplace_back(std::move(event));
         }
+    }
+    watchIds_.insert(watchIds_.end(), registeredWatchIds.begin(), registeredWatchIds.end());
+    for (auto &event : initialEvents) {
+        LOG(INFO) << "WatchEvents: fake event " << event.ToString();
+        HandleWatchEvent(std::move(event));
     }
     return Status::OK();
 }
@@ -206,14 +221,14 @@ Status CoordinationBackend::InitKeepAlive(const std::string &tableName, const st
     keepAliveTableName_ = tableName;
     keepAliveKey_ = key;
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
-    keepAliveValue_.timestamp = "_";
+    keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
     if (!isStoreAvailableWhenStart) {
-        keepAliveValue_.state = ETCD_NODE_DOWNGRADE_RESTART;
+        keepAliveValue_.state = WorkerServiceState::DOWNGRADE_RESTART;
     } else if (isRestart) {
-        keepAliveValue_.state = "restart";
+        keepAliveValue_.state = WorkerServiceState::RESTART;
     } else {
-        keepAliveValue_.state = "start";
+        keepAliveValue_.state = WorkerServiceState::START;
     }
     RETURN_IF_NOT_OK(AutoCreateKeepAliveKey());
     LaunchKeepAliveThread();
@@ -225,25 +240,29 @@ Status CoordinationBackend::AutoCreateKeepAliveKey()
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!keepAliveTableName_.empty(), K_INVALID, "Coordinator keepalive table is empty");
     CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty(), K_INVALID, "Coordinator keepalive key is empty");
-    CHECK_FAIL_RETURN_STATUS(!keepAliveValue_.state.empty(), K_INVALID, "Node state should not be empty.");
+    CHECK_FAIL_RETURN_STATUS(keepAliveValue_.state != WorkerServiceState::UNSPECIFIED, K_INVALID,
+                             "Node state should not be empty.");
 
-    KeepAliveValue value;
+    WorkerServiceInfo value;
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_.timestamp = std::to_string(timeStamp);
+        keepAliveValue_.timestamp = timeStamp;
         value = keepAliveValue_;
     }
+    std::string valueStr = value.ToProto();
+    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
     int64_t version = 0;
     int64_t revision = 0;
-    auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), value.ToString(), keepAliveTtlMs_,
+    auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
                           COORDINATOR_NO_VERSION_CHECK, version, revision);
     LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
     RETURN_IF_NOT_OK(rc);
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        if (keepAliveValue_.state == "start" || keepAliveValue_.state == "restart") {
-            keepAliveValue_.state = "recover";
+        if (keepAliveValue_.state == WorkerServiceState::START
+            || keepAliveValue_.state == WorkerServiceState::RESTART) {
+            keepAliveValue_.state = WorkerServiceState::RECOVER;
         }
     }
     return Status::OK();
@@ -365,20 +384,22 @@ void CoordinationBackend::ShutdownKeepAliveThread()
     }
 }
 
-Status CoordinationBackend::UpdateNodeState(const std::string &state)
+Status CoordinationBackend::UpdateNodeState(WorkerServiceState state)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
-    KeepAliveValue value;
+    WorkerServiceInfo value;
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         keepAliveValue_.state = state;
         value = keepAliveValue_;
     }
+    std::string valueStr = value.ToProto();
+    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
     int64_t version = 0;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), value.ToString(), keepAliveTtlMs_,
+    RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
                                  COORDINATOR_NO_VERSION_CHECK, version, revision));
     return Status::OK();
 }
@@ -397,14 +418,16 @@ Status CoordinationBackend::InformReconciliationDone(const HostPort &workerAddr)
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::string valueStr;
     RETURN_IF_NOT_OK(Get(CLUSTER_TABLE, workerAddr.ToString(), valueStr));
-    KeepAliveValue value;
-    RETURN_IF_NOT_OK(KeepAliveValue::FromString(valueStr, value));
-    if (value.state == "restart" || value.state == "recover") {
-        value.state = ETCD_NODE_READY;
+    WorkerServiceInfo value;
+    RETURN_IF_NOT_OK(WorkerServiceInfo::FromProto(valueStr, value));
+    if (value.state == WorkerServiceState::RESTART || value.state == WorkerServiceState::RECOVER) {
+        value.state = WorkerServiceState::READY;
+        std::string readyValue = value.ToProto();
+        CHECK_FAIL_RETURN_STATUS(!readyValue.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
         int64_t version = 0;
         int64_t revision = 0;
-        RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(CLUSTER_TABLE, workerAddr.ToString()), value.ToString(),
-                                     keepAliveTtlMs_, COORDINATOR_NO_VERSION_CHECK, version, revision));
+        RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(CLUSTER_TABLE, workerAddr.ToString()), readyValue, keepAliveTtlMs_,
+                                     COORDINATOR_NO_VERSION_CHECK, version, revision));
     }
     return Status::OK();
 }
@@ -417,7 +440,7 @@ bool CoordinationBackend::IsKeepAliveTimeout()
 bool CoordinationBackend::IsFirstKeepAliveSent()
 {
     std::lock_guard<std::mutex> lock(keepAliveMutex_);
-    return keepAliveValue_.state == "recover";
+    return keepAliveValue_.state == WorkerServiceState::RECOVER;
 }
 
 void CoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

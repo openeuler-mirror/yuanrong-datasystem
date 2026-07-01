@@ -49,9 +49,18 @@ message KeyValue {
   int64 mod_revision = 4;
 }
 
-message WorkerNodeInfoPb {
-  string timestamp = 1;
-  string state = 2;
+message WorkerServiceInfoPb {
+  enum StatePb {
+    UNSPECIFIED = 0;
+    START = 1;
+    RESTART = 2;
+    RECOVER = 3;
+    READY = 4;
+    EXITING = 5;
+    DOWNGRADE_RESTART = 6;
+  }
+  int64 timestamp = 1;
+  StatePb state = 2;
   string host_id = 3;
   string compatibility_version = 4;
 }

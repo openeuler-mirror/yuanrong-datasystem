@@ -30,12 +30,15 @@ namespace datasystem {
 namespace topology {
 namespace {
 
-std::string MakeKeepAliveValue(const std::string &timestamp, const std::string &state,
-                               const std::string &hostId = "host-a")
+std::string MakeWorkerServiceInfoValue(const std::string &timestamp, const std::string &state,
+                                       const std::string &hostId = "host-a")
 {
-    KeepAliveValue value;
-    value.timestamp = timestamp;
-    value.state = state;
+    WorkerServiceInfo value;
+    auto rc = StringToWorkerServiceState(state, value.state);
+    if (rc.IsError()) {
+        return timestamp + ";" + state + ";" + hostId;
+    }
+    value.timestamp = timestamp.empty() ? 0 : std::stoll(timestamp);
     value.hostId = hostId;
     return value.ToString();
 }
@@ -43,8 +46,8 @@ std::string MakeKeepAliveValue(const std::string &timestamp, const std::string &
 TEST(ClusterRegistryTest, ListsWorkersAndIsolatesBadRecords)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue("100", ETCD_NODE_READY, "host-a")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
+                                  MakeWorkerServiceInfoValue("100", ETCD_NODE_READY, "host-a")));
     DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", "bad-value"));
     ClusterRegistry registry(store);
 
@@ -63,9 +66,10 @@ TEST(ClusterRegistryTest, ListsWorkersAndIsolatesBadRecords)
 TEST(ClusterRegistryTest, ParsesIpv6AndLifecycleStates)
 {
     FakeCoordinationBackend store;
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:7001",
+                                  MakeWorkerServiceInfoValue("100", ETCD_NODE_DOWNGRADE_RESTART)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:7001", MakeKeepAliveValue("100", ETCD_NODE_DOWNGRADE_RESTART)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeKeepAliveValue("101", ETCD_NODE_EXITING)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("101", ETCD_NODE_EXITING)));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
@@ -79,9 +83,9 @@ TEST(ClusterRegistryTest, ParsesIpv6AndLifecycleStates)
 TEST(ClusterRegistryTest, ParsesStartupServiceStatesAndBuildsWorkerKey)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue("100", "start")));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeKeepAliveValue("101", "restart")));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7003", MakeKeepAliveValue("102", "recover")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("100", "start")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("101", "restart")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7003", MakeWorkerServiceInfoValue("102", "recover")));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
@@ -100,7 +104,7 @@ TEST(ClusterRegistryTest, ParsesStartupServiceStatesAndBuildsWorkerKey)
 TEST(ClusterRegistryTest, IsolatesUnknownServiceState)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue("100", "unknown")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("100", "unknown")));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
@@ -113,17 +117,21 @@ TEST(ClusterRegistryTest, IsolatesUnknownServiceState)
 TEST(ClusterRegistryTest, IsolatesInvalidWorkerKeysAndValues)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "", MakeKeepAliveValue("100", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1", MakeKeepAliveValue("101", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:abc", MakeKeepAliveValue("102", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:65536", MakeKeepAliveValue("103", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:1:2", MakeKeepAliveValue("104", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1", MakeKeepAliveValue("105", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "", MakeWorkerServiceInfoValue("100", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1", MakeWorkerServiceInfoValue("101", ETCD_NODE_READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001|bad", MakeKeepAliveValue("106", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[]:7001", MakeKeepAliveValue("107", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:", MakeKeepAliveValue("108", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeKeepAliveValue("", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:abc", MakeWorkerServiceInfoValue("102", ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:65536", MakeWorkerServiceInfoValue("103", ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:1:2", MakeWorkerServiceInfoValue("104", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1", MakeWorkerServiceInfoValue("105", ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001|bad", MakeWorkerServiceInfoValue("106", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[]:7001", MakeWorkerServiceInfoValue("107", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:", MakeWorkerServiceInfoValue("108", ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("", ETCD_NODE_READY)));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
@@ -144,7 +152,7 @@ TEST(ClusterRegistryTest, DecodesPutDeleteEvents)
     CoordinationEvent put;
     put.type = CoordinationEventType::PUT;
     put.key = "/datasystem/cluster/127.0.0.1:7001";
-    put.value = MakeKeepAliveValue("200", ETCD_NODE_READY);
+    put.value = MakeWorkerServiceInfoValue("200", ETCD_NODE_READY);
     put.revision = 8;
     WorkerWatchEvent typed;
     DS_ASSERT_OK(registry.HandleWorkerEvent(put, typed));
