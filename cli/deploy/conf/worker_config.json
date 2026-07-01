@@ -1,8 +1,16 @@
 {
+    "service_type": {
+        "value": "worker",
+        "description": "Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process."
+    },
     "worker_address": {
         "value": "127.0.0.1:31501",
         "description": "Address of worker in 'host:port' format (e.g., \"127.0.0.1:31501\"). The value cannot be empty."
     },
+    "coordinator_address": {
+	      "value": "",
+	      "description": "Address of datasystem coordinator service. Empty means coordinator mode is disabled."
+	  },
     "etcd_address": {
         "value": "",
         "description": "Address of ETCD server, (such as \"192.168.0.1:10001,192.168.0.2:10001,192.168.0.3:10001\")."

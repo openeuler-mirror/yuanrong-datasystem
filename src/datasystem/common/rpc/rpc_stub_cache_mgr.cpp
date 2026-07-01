@@ -93,6 +93,9 @@ Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress
 {
     LOG(INFO) << FormatString("Init RpcStubCacheMgr for %s, max cache num: %d", localAddress.ToString(), maxStubCount);
     std::lock_guard<std::mutex> lck(initMutex_);
+    if (init_) {
+        return Status::OK();
+    }
 
     // Pre-warm ZmqStubConnMgr singleton to avoid initialization delay on first use
     (void)ZmqStubConnMgr::Instance();

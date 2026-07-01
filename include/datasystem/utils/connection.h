@@ -46,7 +46,7 @@ struct ConnectOptions {
     bool enableCrossNodeConnection = false;
     bool enableExclusiveConnection = false;
     bool enableRemoteH2D = false;
-    std::shared_ptr<ServiceDiscovery> serviceDiscovery = nullptr;
+    std::shared_ptr<IServiceDiscovery> serviceDiscovery = nullptr;
     uint64_t fastTransportMemSize = 256 * 1024 * 1024;  // 256M
     std::string deviceId = "";
 };

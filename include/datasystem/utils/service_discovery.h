@@ -44,6 +44,56 @@ enum class ServiceAffinityPolicy : uint8_t {
     RANDOM = 2,
 };
 
+class __attribute((visibility("default"))) IServiceDiscovery {
+public:
+    virtual ~IServiceDiscovery() = default;
+
+    /**
+     * @brief Initialize service discovery.
+     * @return Status of the call.
+     */
+    virtual Status Init() = 0;
+
+    /**
+     * @brief Select a worker address.
+     * @param[out] workerIp
+     * @param[out] workerPort
+     * @param[out] isSameNode If non-null, set to true when the selected worker is on the same node.
+     * @param[out] isNoAvailableWorker If non-null, set to true when no ready worker can be selected.
+     * @return Status of the call.
+     */
+    virtual Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr,
+                                bool *isNoAvailableWorker = nullptr) = 0;
+
+    /**
+     * @brief Select a same-node worker address only.
+     * @param[out] workerIp
+     * @param[out] workerPort
+     * @return Status of the call.
+     */
+    virtual Status SelectSameNodeWorker(std::string &workerIp, int &workerPort) = 0;
+
+    /**
+     * @brief Return every ready worker ("host:port") visible through the implementation.
+     * @param[out] sameHostAddrs Addresses of workers whose hostId matches the local hostId.
+     * @param[out] otherAddrs    Addresses of all remaining workers.
+     * @return Status of the call.
+     */
+    virtual Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) = 0;
+
+    /**
+     * @brief Get service affinity policy.
+     * @return Service affinity policy.
+     */
+    virtual ServiceAffinityPolicy GetAffinityPolicy() const = 0;
+
+    /**
+     * @brief Whether host locality is active for this discovery implementation.
+     * @return True when the client can meaningfully select same-node workers.
+     */
+    virtual bool HasHostAffinity() const = 0;
+};
+
 struct ServiceDiscoveryOptions {
     std::string etcdAddress;
     std::string clusterName = "";
@@ -62,7 +112,7 @@ struct ServiceDiscoveryOptions {
     ServiceAffinityPolicy affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
 };
 
-class __attribute((visibility("default"))) ServiceDiscovery {
+class __attribute((visibility("default"))) ServiceDiscovery : public IServiceDiscovery {
 public:
     /**
      * @brief Construct ServiceDiscovery. If certificate authentication is enabled for the etcd to be connected, must
@@ -71,13 +121,13 @@ public:
      */
     ServiceDiscovery(const ServiceDiscoveryOptions &opts);
 
-    ~ServiceDiscovery() = default;
+    ~ServiceDiscovery() override = default;
 
     /**
      * @brief Initialize ServiceDiscovery.
      * @return Status of the call.
      */
-    Status Init();
+    Status Init() override;
 
     /**
      * @brief Select a worker address.
@@ -88,7 +138,7 @@ public:
      * @return Status of the call.
      */
     Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr,
-                        bool *isNoAvailableWorker = nullptr);
+                        bool *isNoAvailableWorker = nullptr) override;
 
     /**
      * @brief Select a same-node worker address only.
@@ -96,7 +146,7 @@ public:
      * @param[out] workerPort
      * @return Status of the call.
      */
-    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort);
+    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort) override;
 
     /**
      * @brief Return every ready worker ("host:port") visible via etcd keepalive, split by host
@@ -107,13 +157,13 @@ public:
      * @param[out] otherAddrs    Addresses of all remaining workers.
      * @return Status of the call.
      */
-    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs);
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override;
 
     /**
      * @brief Get service affinity policy.
      * @return Service affinity policy.
      */
-    ServiceAffinityPolicy GetAffinityPolicy() const
+    ServiceAffinityPolicy GetAffinityPolicy() const override
     {
         return affinityPolicy_;
     }
@@ -125,7 +175,7 @@ public:
      *        same-node operations cannot be used.
      * @return True when the client can meaningfully select same-node workers.
      */
-    bool HasHostAffinity() const
+    bool HasHostAffinity() const override
     {
         return affinityPolicy_ != ServiceAffinityPolicy::RANDOM && !hostId_.empty();
     }
@@ -154,6 +204,76 @@ private:
     ServiceAffinityPolicy affinityPolicy_;
     std::shared_ptr<RandomData> randomData_;
     std::shared_ptr<EtcdStore> etcdStore_;
+};
+
+class __attribute((visibility("default"))) ICoordinatorDiscovery {
+public:
+    virtual ~ICoordinatorDiscovery() = default;
+
+    /**
+     * @brief Get the coordinator address. Current SDK coordinator service discovery supports exactly one address.
+     * @param[out] serviceList Coordinator address in "host:port" format.
+     * @return Status of the call.
+     */
+    virtual Status GetCoordinators(std::vector<std::string> &serviceList) = 0;
+};
+
+class __attribute((visibility("default"))) DefaultCoordinatorDiscovery : public ICoordinatorDiscovery {
+public:
+    explicit DefaultCoordinatorDiscovery(std::string serviceAddress);
+    ~DefaultCoordinatorDiscovery() override = default;
+
+    Status GetCoordinators(std::vector<std::string> &serviceList) override;
+
+private:
+    std::string serviceAddress_;
+};
+
+struct CoordinatorServiceDiscoveryOptions {
+    std::string serviceAddress;
+    std::string hostIdEnvName = "";
+    ServiceAffinityPolicy affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr;
+};
+
+class __attribute((visibility("default"))) CoordinatorServiceDiscovery : public IServiceDiscovery {
+public:
+    /**
+     * @brief Construct CoordinatorServiceDiscovery.
+     * @param[in] opts Coordinator-backed service discovery options.
+     */
+    explicit CoordinatorServiceDiscovery(const CoordinatorServiceDiscoveryOptions &opts);
+
+    ~CoordinatorServiceDiscovery() override = default;
+
+    Status Init() override;
+
+    Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr,
+                        bool *isNoAvailableWorker = nullptr) override;
+
+    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort) override;
+
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override;
+
+    ServiceAffinityPolicy GetAffinityPolicy() const override
+    {
+        return affinityPolicy_;
+    }
+
+    bool HasHostAffinity() const override
+    {
+        return affinityPolicy_ != ServiceAffinityPolicy::RANDOM && !hostId_.empty();
+    }
+
+private:
+    Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
+
+    std::string serviceAddress_;
+    std::string hostIdEnvName_;
+    std::string hostId_;
+    ServiceAffinityPolicy affinityPolicy_;
+    std::shared_ptr<RandomData> randomData_;
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_SERVICE_DISCOVERY_H

@@ -1,0 +1,82 @@
+{
+  "service_type": {
+    "value": "coordinator",
+    "description": "Service type. Valid values: coordinator or worker. This field is used by dscli and is not passed to the service process."
+  },
+  "coordinator_address": {
+    "value": "127.0.0.1:31511",
+    "description": "Address of coordinator in 'host:port' format (e.g., \"127.0.0.1:31511\"). The value cannot be empty."
+  },
+  "coordinator_rpc_stub_cache_size": {
+    "value": "2048",
+    "description": "Maximum coordinator RPC stub cache size."
+  },
+  "watch_event_dispatch_thread": {
+    "value": "4",
+    "description": "Number of coordinator watch event dispatch threads."
+  },
+  "rpc_thread_num": {
+    "value": "64",
+    "description": "Config rpc server thread number, must be great equal than 0."
+  },
+  "log_dir": {
+    "value": "./datasystem/logs",
+    "description": "If specified, logfiles are written into this directory instead of the default logging directory."
+  },
+  "log_filename": {
+    "value": "datasystem_coordinator",
+    "description": "Prefix of log filename, default is program invocation short name. Use standard characters only."
+  },
+  "minloglevel": {
+    "value": "0",
+    "description": "Messages below this level are not logged."
+  },
+  "log_async_queue_size": {
+    "value": "2048",
+    "description": "Size of async logger's message queue."
+  },
+  "max_log_size": {
+    "value": "400",
+    "description": "Approx. maximum log file size (in MB). A value of 0 will be silently overridden to 1."
+  },
+  "max_log_file_num": {
+    "value": "25",
+    "description": "Maximum number of log files to retain per severity level. If set to 0, the log num is not limited."
+  },
+  "log_retention_day": {
+    "value": "0",
+    "description": "If greater than 0, log files older than this many days will be removed. If equal 0, log files are not removed by time."
+  },
+  "log_async": {
+    "value": "true",
+    "description": "Enable asynchronous writing to log files."
+  },
+  "log_compress": {
+    "value": "true",
+    "description": "Compress old log files in .gz format when generated log size exceeds max_log_size."
+  },
+  "logbufsecs": {
+    "value": "0",
+    "description": "Buffer log messages for at most this many seconds."
+  },
+  "logfile_mode": {
+    "value": "416",
+    "description": "Log file mode/permissions."
+  },
+  "log_only_write_info_file": {
+    "value": "true",
+    "description": "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR log files."
+  },
+  "request_sample_rate": {
+    "value": "1.0",
+    "description": "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled."
+  },
+  "access_sample_rate": {
+    "value": "1.0",
+    "description": "Sample rate for access logs (0.0-1.0). Default 1.0 means all access logs are sampled."
+  },
+  "diagnostic_sample_rate": {
+    "value": "1.0",
+    "description": "Sample rate for diagnostic logs (0.0-1.0). Default 1.0 means all diagnostic logs are sampled."
+  }
+}

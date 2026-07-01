@@ -74,7 +74,7 @@
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
-| `ServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | ETCD-backed worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env` |
+| `IServiceDiscovery` / `ServiceDiscovery` / `CoordinatorServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | SDK worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; `ServiceDiscovery` reads ETCD cluster-table data directly, while `CoordinatorServiceDiscovery` reads the same worker records through coordinator `Range`; `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env` |
 
 ## Connection And Auth Model
 
@@ -84,7 +84,7 @@
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
   - remote H2D toggle
-  - optional `ServiceDiscovery`
+  - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size
 - Verified in `ObjectClientImpl` constructor:
   - when relevant fields are empty, some connection and auth options are loaded from environment variables such as:
@@ -154,7 +154,7 @@
 ## Review And Bugfix Notes
 
 - Common change risks:
-  - changing `ConnectOptions` can affect multiple language bindings and shared backend initialization at once;
+  - `ConnectOptions` can affect multiple language bindings and shared backend initialization at once; `serviceDiscovery` is intentionally typed as `std::shared_ptr<IServiceDiscovery>` so SDK clients do not depend on the ETCD implementation;
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.

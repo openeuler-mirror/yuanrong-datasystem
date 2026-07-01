@@ -1616,7 +1616,7 @@ private:
     int parallismNum_ = 0;
     uint64_t memcpyParallelThreshold_ = 0;
 
-    std::shared_ptr<ServiceDiscovery> serviceDiscovery_ = nullptr;
+    std::shared_ptr<IServiceDiscovery> serviceDiscovery_ = nullptr;
 };
 }  // namespace object_cache
 }  // namespace datasystem

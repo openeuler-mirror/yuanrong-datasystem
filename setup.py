@@ -16,13 +16,13 @@
 
 """setup_package."""
 
+import fnmatch
 import os
 import shutil
 import stat
 import subprocess
-import fnmatch
-
 from pathlib import Path
+
 from setuptools import find_namespace_packages, setup
 from setuptools.command.build_py import build_py
 from setuptools.command.egg_info import egg_info
@@ -41,12 +41,12 @@ except ImportError:  # pragma: no cover
 
 root_dir = os.path.dirname(os.path.realpath(__file__))
 
-version_path = os.path.join(root_dir, 'yr', 'datasystem', 'VERSION')
-with open(version_path, 'r') as f:
+version_path = os.path.join(root_dir, "yr", "datasystem", "VERSION")
+with open(version_path, "r") as f:
     version = f.read()
 
-readme_path = os.path.join(root_dir, 'yr', 'datasystem', 'README.md')
-with open(readme_path, 'r') as f:
+readme_path = os.path.join(root_dir, "yr", "datasystem", "README.md")
+with open(readme_path, "r") as f:
     readme = f.read()
 readme = "\n".join(readme.split("\n")[1:])
 
@@ -57,7 +57,7 @@ def recursive_package_files(directory):
     """recursive package files"""
     paths = []
     lib_root_dir = os.path.dirname(os.path.abspath(__file__))
-    lib_root_dir = os.path.join(lib_root_dir, 'yr', 'datasystem')
+    lib_root_dir = os.path.join(lib_root_dir, "yr", "datasystem")
     full_dir = os.path.join(lib_root_dir, directory)
     for root, _, files in os.walk(full_dir):
         for file_name in files:
@@ -66,15 +66,29 @@ def recursive_package_files(directory):
     return paths
 
 
+SERVICE_BINARIES = ("datasystem_worker", "datasystem_coordinator")
+
 package_datas = {
-    '': (
-        ['sdk_lib_list', 'datasystem_worker', 'dsbench_cpp', '*.py', '*.so*', 'VERSION', 'README.md', '.commit_id',
-        'worker_config.json', 'cluster_config.json', 'kv.json'] +
-        recursive_package_files('include') +
-        recursive_package_files('helm_chart') +
-        recursive_package_files('lib') +
-        recursive_package_files('cpp_template') +
-        recursive_package_files('docker_entryfile')
+    "": (
+        [
+            "sdk_lib_list",
+            *SERVICE_BINARIES,
+            "dsbench_cpp",
+            "*.py",
+            "*.so*",
+            "VERSION",
+            "README.md",
+            ".commit_id",
+            "worker_config.json",
+            "coordinator_config.json",
+            "cluster_config.json",
+            "kv.json",
+        ]
+        + recursive_package_files("include")
+        + recursive_package_files("helm_chart")
+        + recursive_package_files("lib")
+        + recursive_package_files("cpp_template")
+        + recursive_package_files("docker_entryfile")
     )
 }
 
@@ -84,24 +98,27 @@ requires = []
 
 def build_depends():
     """Generate python file"""
-    commit_file = os.path.join('yr', 'datasystem', '.commit_id')
+    commit_file = os.path.join("yr", "datasystem", ".commit_id")
     os.makedirs(os.path.dirname(commit_file), exist_ok=True)
-    with os.fdopen(os.open(commit_file, os.O_CREAT | os.O_WRONLY, 0o600), 'w') as file:
+    with os.fdopen(os.open(commit_file, os.O_CREAT | os.O_WRONLY, 0o600), "w") as file:
         file.write("__commit_id__ = '{}'\n".format(commit_id))
     os.chmod(commit_file, mode=stat.S_IREAD)
+
+
 build_depends()
 
 
 def _process_single_file(ldd_path, file_path):
     """Process a single file, extract dependencies"""
     dependencies = set()
-    result = subprocess.run([ldd_path, str(file_path)],
-                          capture_output=True, text=True, check=True)
+    result = subprocess.run(
+        [ldd_path, str(file_path)], capture_output=True, text=True, check=True
+    )
     output = result.stdout
     for line in output.splitlines():
         line = line.strip()
-        if '=>' in line:
-            lib_name, lib_path = line.split('=>', 1)
+        if "=>" in line:
+            lib_name, lib_path = line.split("=>", 1)
             lib_name = lib_name.strip()
             lib_path = lib_path.strip().split()[0]
             dependencies.add(lib_name)
@@ -125,7 +142,7 @@ def get_dependencies(file_path):
     if not path.exists():
         raise FileNotFoundError(f"File or directory does not exist: {file_path}")
     if path.is_dir():
-        for so_file in path.rglob('*.so'):
+        for so_file in path.rglob("*.so"):
             try:
                 deps = _process_single_file(ldd_path, so_file)
                 dependencies.update(deps)
@@ -144,19 +161,31 @@ def get_all_dependencies():
     """
     get all dependencies for datasystem
     """
-    all_dependencies = {"libdatasystem.so", "libds_client_py.so", "libacl_plugin.so", "libcuda_plugin.so",
-                        "libp2p_transfer.so"}
-    src = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'lib')
-    worker = os.path.join(os.path.dirname(__file__), 'yr', 'datasystem', 'datasystem_worker')
-    transfer_engine_module_matches = list(Path(os.path.dirname(__file__)).joinpath('yr', 'datasystem').glob('_transfer_engine*.so'))
+    all_dependencies = {
+        "libdatasystem.so",
+        "libds_client_py.so",
+        "libacl_plugin.so",
+        "libcuda_plugin.so",
+        "libp2p_transfer.so",
+    }
+    src = os.path.join(os.path.dirname(__file__), "yr", "datasystem", "lib")
+    service_bin_root = Path(os.path.dirname(__file__)).joinpath("yr", "datasystem")
+    transfer_engine_module_matches = list(
+        Path(os.path.dirname(__file__))
+        .joinpath("yr", "datasystem")
+        .glob("_transfer_engine*.so")
+    )
     src_path = Path(src)
-    bin_path = Path(worker)
-    all_dependencies.update(get_dependencies(bin_path))
+    for service_bin in SERVICE_BINARIES:
+        bin_path = service_bin_root.joinpath(service_bin)
+        all_dependencies.update(get_dependencies(bin_path))
     for module_path in transfer_engine_module_matches:
         all_dependencies.update(get_dependencies(module_path))
-    for item in src_path.rglob('*'):
+    for item in src_path.rglob("*"):
         all_dependencies.update(get_dependencies(item))
     return all_dependencies
+
+
 all_dependencies_for_datasystem = get_all_dependencies()
 
 
@@ -165,7 +194,7 @@ def delete_unuse_so(directory: Path):
     for item in directory.iterdir():
         if item.is_file():
             # skip ucx so
-            if fnmatch.fnmatch(item.name, 'libuc*.so.0'):
+            if fnmatch.fnmatch(item.name, "libuc*.so.0"):
                 continue
             if item.name not in all_dependencies_for_datasystem:
                 item.unlink()
@@ -217,7 +246,8 @@ class EggInfo(egg_info):
 
     def run(self):
         egg_info_dir = os.path.join(
-            os.path.dirname(__file__), 'openyuanrong_datasystem.egg-info')
+            os.path.dirname(__file__), "openyuanrong_datasystem.egg-info"
+        )
         super().run()
         update_permissions(egg_info_dir)
 
@@ -229,11 +259,15 @@ class BuildPy(build_py):
         datasystem_lib_dir = os.path.join(os.path.dirname(__file__), "build")
         super().run()
         update_permissions(datasystem_lib_dir)
-        worker_bin = os.path.join(
-            datasystem_lib_dir, 'lib', 'yr', 'datasystem', 'datasystem_worker')
-        os.chmod(worker_bin, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
-        os.system(f"strip --strip-all {worker_bin}")
-        lib_dir = os.path.join(os.path.dirname(__file__), 'build', 'lib', 'yr', 'datasystem', 'lib')
+        for service_bin in SERVICE_BINARIES:
+            service_bin_path = os.path.join(
+                datasystem_lib_dir, "lib", "yr", "datasystem", service_bin
+            )
+            os.chmod(service_bin_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IEXEC)
+            os.system(f"strip --strip-all {service_bin_path}")
+        lib_dir = os.path.join(
+            os.path.dirname(__file__), "build", "lib", "yr", "datasystem", "lib"
+        )
         lib_path = Path(lib_dir)
         delete_unuse_so(lib_path)
         check_and_refactor_ucx_lib(lib_dir)
@@ -256,7 +290,7 @@ setup(
     long_description=readme,
     long_description_content_type="text/markdown",
     url="https://gitcode.com/openeuler/yuanrong-datasystem",
-    python_requires='>=3.9',
+    python_requires=">=3.9",
     packages=find_namespace_packages(),
     package_data=package_datas,
     include_package_data=True,
@@ -273,20 +307,20 @@ setup(
     },
     install_requires=requires,
     classifiers=[
-        'Development Status :: 5 - Production/Stable',
-        'Intended Audience :: Science/Research',
-        'Intended Audience :: Developers',
-        'License :: OSI Approved :: Apache Software License',
-        'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
-        'Programming Language :: Python :: 3.11',
-        'Programming Language :: C++',
-        'Topic :: Scientific/Engineering',
-        'Topic :: Software Development',
-        'Topic :: Software Development :: Libraries',
-        'Topic :: Software Development :: Libraries :: Python Modules',
+        "Development Status :: 5 - Production/Stable",
+        "Intended Audience :: Science/Research",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 3 :: Only",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: C++",
+        "Topic :: Scientific/Engineering",
+        "Topic :: Software Development",
+        "Topic :: Software Development :: Libraries",
+        "Topic :: Software Development :: Libraries :: Python Modules",
     ],
     license="Apache 2.0",
-    keywords='openyuanrong-datasystem datasystem',
+    keywords="openyuanrong-datasystem datasystem",
 )

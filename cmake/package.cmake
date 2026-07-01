@@ -268,6 +268,8 @@ install_datasystem_target(datasystem_worker_shared)
 install_datasystem_target(common_flags)
 set(datasystem_worker_bin_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
 install_datasystem_target(datasystem_worker_bin)
+set(datasystem_coordinator_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
+install_datasystem_target(datasystem_coordinator)
 
 set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 install_datasystem_target(rpc_option_protos)
