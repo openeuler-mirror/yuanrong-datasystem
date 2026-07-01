@@ -81,6 +81,8 @@ DS_DECLARE_double(access_sample_rate);
 DS_DECLARE_double(diagnostic_sample_rate);
 DS_DECLARE_uint64(slow_log_process_slower_than);
 DS_DECLARE_uint64(slow_log_rpc_slower_than);
+DS_DECLARE_uint64(client_slow_log_process_slower_than);
+DS_DECLARE_uint64(client_slow_log_rpc_slower_than);
 #endif  // DATASYSTEM_COMMON_UTIL_COMMON_GFLAGS_H
 DS_DECLARE_bool(use_brpc);
 DS_DECLARE_int32(brpc_server_num_threads);

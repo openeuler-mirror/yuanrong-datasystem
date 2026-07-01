@@ -62,6 +62,10 @@
 |------|------|--------|----------|-----------|
 | 29 | `urma_failover_success_rate_ratio` | `0.5` | `[0.0, 1.0]` | Client 侧 URMA 数据面成功率阈值。一个完整统计窗口的成功率严格低于该 ratio 时，client 尝试切换 worker；设置为 `0.0` 表示关闭 URMA 故障切换功能，同时清空当前窗口状态。 |
 | 30 | `urma_failover_min_sample_count` | `5` | `> 0` | 每个 `client_dead_timeout_s` 统计窗口内进行故障切换判断前所需的最小 URMA 数据面样本数。样本不足时即使成功率很低也不会触发切换，避免少量请求误触发。 |
+| 31 | `client_slow_log_process_slower_than` | `2000` | `>= 0` | Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。可通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件热更新。 |
+| 32 | `client_slow_log_rpc_slower_than` | `5000` | `>= 0` | Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。可通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件热更新。 |
+
+> **废弃说明**：旧版本通过环境变量 `DATASYSTEM_CLIENT_SLOW_LOG_PROCESS_SLOWER_THAN` 和 `DATASYSTEM_CLIENT_SLOW_LOG_RPC_SLOWER_THAN` 配置客户端慢日志阈值。自本版本起上述环境变量不再生效，请改用 gflag `--client_slow_log_process_slower_than` / `--client_slow_log_rpc_slower_than`，通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 设置。
 
 ## 使用说明
 

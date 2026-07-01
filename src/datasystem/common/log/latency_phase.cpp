@@ -17,7 +17,6 @@
 #include "datasystem/common/log/latency_phase.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -441,47 +440,11 @@ LatencyTraceConfig GetServerLatencyTraceConfig()
     return config;
 }
 
-namespace {
-constexpr uint64_t DEFAULT_CLIENT_PROCESS_SLOWER_THAN_US = 2000;
-constexpr uint64_t DEFAULT_CLIENT_RPC_SLOWER_THAN_US = 5000;
-std::atomic<uint64_t> g_clientProcessSlowerThanUs{DEFAULT_CLIENT_PROCESS_SLOWER_THAN_US};
-std::atomic<uint64_t> g_clientRpcSlowerThanUs{DEFAULT_CLIENT_RPC_SLOWER_THAN_US};
-
-struct ClientLatencyTraceConfigInit {
-    ClientLatencyTraceConfigInit() noexcept
-    {
-        g_clientProcessSlowerThanUs.store(GetUint64FromEnv("DATASYSTEM_CLIENT_SLOW_LOG_PROCESS_SLOWER_THAN",
-                                                           DEFAULT_CLIENT_PROCESS_SLOWER_THAN_US),
-                                          std::memory_order_relaxed);
-        g_clientRpcSlowerThanUs.store(GetUint64FromEnv("DATASYSTEM_CLIENT_SLOW_LOG_RPC_SLOWER_THAN",
-                                                       DEFAULT_CLIENT_RPC_SLOWER_THAN_US),
-                                      std::memory_order_relaxed);
-    }
-};
-
-static ClientLatencyTraceConfigInit g_clientLatencyTraceConfigInit;
-
-bool ValidateSlowLogProcessSlowerThan(const char *, uint64_t value)
-{
-    g_clientProcessSlowerThanUs.store(value, std::memory_order_relaxed);
-    return true;
-}
-
-bool ValidateSlowLogRpcSlowerThan(const char *, uint64_t value)
-{
-    g_clientRpcSlowerThanUs.store(value, std::memory_order_relaxed);
-    return true;
-}
-}  // namespace
-
-DS_DEFINE_validator(slow_log_process_slower_than, ValidateSlowLogProcessSlowerThan);
-DS_DEFINE_validator(slow_log_rpc_slower_than, ValidateSlowLogRpcSlowerThan);
-
 LatencyTraceConfig GetClientLatencyTraceConfig()
 {
     LatencyTraceConfig config;
-    config.processSlowerThanUs = g_clientProcessSlowerThanUs.load(std::memory_order_relaxed);
-    config.rpcSlowerThanUs = g_clientRpcSlowerThanUs.load(std::memory_order_relaxed);
+    config.processSlowerThanUs = FLAGS_client_slow_log_process_slower_than;
+    config.rpcSlowerThanUs = FLAGS_client_slow_log_rpc_slower_than;
     return config;
 }
 

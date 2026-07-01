@@ -380,11 +380,23 @@ TEST_F(LatencyPhaseTest, MergeDecodedPhasesSplitDroppedCount)
     Trace::Instance().ClearDownstreamPhases();
 }
 
-TEST_F(LatencyPhaseTest, GetClientLatencyTraceConfigReadsAtomicCache)
+TEST_F(LatencyPhaseTest, GetClientLatencyTraceConfigReadsDefaults)
 {
     auto config = GetClientLatencyTraceConfig();
     EXPECT_EQ(config.processSlowerThanUs, 2000u);
     EXPECT_EQ(config.rpcSlowerThanUs, 5000u);
+}
+
+TEST_F(LatencyPhaseTest, ClientConfigIndependentOfWorkerGflag)
+{
+    std::string errMsg;
+    SetCommandLineOption("slow_log_process_slower_than", "100", errMsg);
+    SetCommandLineOption("slow_log_rpc_slower_than", "200", errMsg);
+    auto config = GetClientLatencyTraceConfig();
+    EXPECT_EQ(config.processSlowerThanUs, 2000u);
+    EXPECT_EQ(config.rpcSlowerThanUs, 5000u);
+    SetCommandLineOption("slow_log_process_slower_than", "2000", errMsg);
+    SetCommandLineOption("slow_log_rpc_slower_than", "5000", errMsg);
 }
 
 TEST_F(LatencyPhaseTest, ShouldPrintLatencySummaryExactBoundary)

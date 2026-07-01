@@ -35,11 +35,12 @@
     durations are returned as compact numeric data and merged into primary-worker/client summaries.
 - Slow-request gate:
   - The old single `2 ms` gate is not the final control surface.
-  - Worker-side gates use `--slow_log_local_slower_than` and `--slow_log_rpc_slower_than`.
-  - Client-side gates use `DATASYSTEM_CLIENT_SLOW_LOG_LOCAL_SLOWER_THAN` and
-    `DATASYSTEM_CLIENT_SLOW_LOG_RPC_SLOWER_THAN`.
-  - Config values are in microseconds. All four configs default to `0`, meaning segmented slow logging and phase
-    collection are disabled by default.
+  - Worker-side gates use `--slow_log_process_slower_than` and `--slow_log_rpc_slower_than` (dynamic gflags,
+    hot-reloadable via config file or UpdateConfig API).
+  - Client-side gates use `--client_slow_log_process_slower_than` and `--client_slow_log_rpc_slower_than`
+    (dynamic gflags, hot-reloadable via `DATASYSTEM_CLIENT_CONFIG_PATH` config file or UpdateConfig API).
+  - Config values are in microseconds. Worker defaults are `2000`/`5000` (process/rpc); client defaults are
+    `2000`/`5000`. `0` disables the corresponding gate.
   - Threshold semantics: `0` disables the gate; positive values log phases above that microsecond threshold.
   - `LatencyTraceEnabled()` is true only when at least one local/rpc threshold is positive.
   - The same local/rpc thresholds also drive the force condition for request-stage `SLOW_LOG` output; hard-coded
@@ -87,45 +88,45 @@
 
 | Field | Meaning |
 | --- | --- |
-| `client.local.get` | Client-side Get local processing outside the client-to-worker Get RPC. |
+| `client.process.get` | Client-side Get local processing outside the client-to-worker Get RPC. |
 | `client.rpc.get` | Client-to-worker Get RPC duration. |
-| `worker.local.get` | Primary worker Get local processing outside QueryMeta, RemoteGet, and explicitly tracked transport phases. |
+| `worker.process.get` | Primary worker Get local processing outside QueryMeta, RemoteGet, and explicitly tracked transport phases. |
 | `worker.rpc.query_meta` | Primary worker to master QueryMeta RPC phase. |
-| `master.local.query_meta` | Master-side local QueryMeta execution. |
+| `master.process.query_meta` | Master-side local QueryMeta execution. |
 | `worker.rpc.remote_get` | Primary worker to remote-worker RemoteGet phase. |
 | `worker.urma.urma_total` | URMA write plus URMA wait operation time. |
-| `worker.local.remote_get` | Remote data worker local RemoteGet execution. |
-| `client.local.set` | Client-side Set/Put local processing outside tracked Create/Publish RPC and memory copy phases. |
+| `worker.process.remote_get` | Remote data worker local RemoteGet execution. |
+| `client.process.set` | Client-side Set/Put local processing outside tracked Create/Publish RPC and memory copy phases. |
 | `client.rpc.create` | Client-to-worker Create RPC duration, used by Create and by Set paths that allocate a buffer first. |
-| `client.local.memory_copy` | Client local copy into SHM/UB buffer during Set/Put paths when present. |
+| `client.process.memory_copy` | Client local copy into SHM/UB buffer during Set/Put paths when present. |
 | `client.rpc.publish` | Client-to-worker Publish RPC duration during Set/Put or buffer publish. |
-| `client.local.create` | Client-side Create local processing outside the Create RPC. |
-| `client.local.exist` | Client-side Exist local processing outside the Exist RPC. |
+| `client.process.create` | Client-side Create local processing outside the Create RPC. |
+| `client.process.exist` | Client-side Exist local processing outside the Exist RPC. |
 | `client.rpc.exist` | Client-to-worker Exist RPC duration. |
-| `worker.local.create` | Primary worker local Create execution. |
-| `worker.local.publish` | Primary worker local Publish execution outside tracked CreateMeta/UpdateMeta RPC phases. |
+| `worker.process.create` | Primary worker local Create execution. |
+| `worker.process.publish` | Primary worker local Publish execution outside tracked CreateMeta/UpdateMeta RPC phases. |
 | `worker.rpc.create_meta` | Primary worker to master CreateMeta RPC phase during Publish/Set. |
 | `worker.rpc.update_meta` | Primary worker to master UpdateMeta RPC phase during Publish/Set. |
-| `master.local.create_meta` | Master-side local CreateMeta execution. |
-| `master.local.update_meta` | Master-side local UpdateMeta execution. |
-| `worker.local.exist` | Primary worker local Exist execution outside QueryMeta. |
+| `master.process.create_meta` | Master-side local CreateMeta execution. |
+| `master.process.update_meta` | Master-side local UpdateMeta execution. |
+| `worker.process.exist` | Primary worker local Exist execution outside QueryMeta. |
 
 Example client Get request field:
 
 ```text
-{Object_key:[key1,key2],timeout:1000,transportType:TCP,latencySummary:{client.local.get:300,client.rpc.get:900,worker.local.get:260,worker.rpc.query_meta:230,master.local.query_meta:180,worker.rpc.remote_get:610,worker.local.remote_get:420}}
+{Object_key:[key1,key2],timeout:1000,transportType:TCP,latencySummary:{client.process.get:300,client.rpc.get:900,worker.process.get:260,worker.rpc.query_meta:230,master.process.query_meta:180,worker.rpc.remote_get:610,worker.process.remote_get:420}}
 ```
 
 Example client Set request field:
 
 ```text
-{Object_key:key1,transportType:TCP,latencySummary:{client.local.set:320,client.rpc.create:430,client.local.memory_copy:210,client.rpc.publish:850,worker.local.publish:260,worker.rpc.create_meta:410,master.local.create_meta:180}}
+{Object_key:key1,transportType:TCP,latencySummary:{client.process.set:320,client.rpc.create:430,client.process.memory_copy:210,client.rpc.publish:850,worker.process.publish:260,worker.rpc.create_meta:410,master.process.create_meta:180}}
 ```
 
 Example primary worker request field:
 
 ```text
-{Object_key:key1,latencySummary:{worker.local.publish:260,worker.rpc.create_meta:410,master.local.create_meta:180}}
+{Object_key:key1,latencySummary:{worker.process.publish:260,worker.rpc.create_meta:410,master.process.create_meta:180}}
 ```
 
 ## Trace Data Model
@@ -203,7 +204,7 @@ Client Get:
   - `src/datasystem/client/object_cache/object_client_impl.cpp`
 - Planned fields:
   - `client.rpc.get = CLIENT_GET_RPC_END - CLIENT_GET_RPC_START`
-  - `client.local.get = (CLIENT_GET_END - CLIENT_GET_START) - client.rpc.get`
+  - `client.process.get = (CLIENT_GET_END - CLIENT_GET_START) - client.rpc.get`
 
 Primary Worker Get:
 
@@ -217,7 +218,7 @@ Primary Worker Get:
   - `worker.rpc.query_meta`
   - `worker.rpc.remote_get`
   - `worker.urma.urma_total`
-  - `worker.local.get`
+  - `worker.process.get`
 
 Client Set/Create/Exist:
 
@@ -233,9 +234,9 @@ Client Set/Create/Exist:
   - `ObjectClientImpl::ProcessShmPut`
   - `ObjectClientImpl::Exist`
 - Planned fields:
-  - Create: `client.rpc.create`, `client.local.create`
-  - Set/Put: `client.rpc.create`, `client.local.memory_copy`, `client.rpc.publish`, `client.local.set`
-  - Exist: `client.rpc.exist`, `client.local.exist`
+  - Create: `client.rpc.create`, `client.process.create`
+  - Set/Put: `client.rpc.create`, `client.process.memory_copy`, `client.rpc.publish`, `client.process.set`
+  - Exist: `client.rpc.exist`, `client.process.exist`
 
 Primary Worker Set/Create/Exist:
 
@@ -243,20 +244,20 @@ Primary Worker Set/Create/Exist:
   - `src/datasystem/worker/object_cache/service/worker_oc_service_create_impl.cpp`
   - `WorkerOcServiceCreateImpl::Create`
   - `DS_POSIX_CREATE`
-  - field: `worker.local.create`
+  - field: `worker.process.create`
 - Publish/Set:
   - `src/datasystem/worker/object_cache/service/worker_oc_service_publish_impl.cpp`
   - `WorkerOcServicePublishImpl::Publish`
   - `WorkerOcServicePublishImpl::CreateMetadataToMaster`
   - `WorkerOcServicePublishImpl::UpdateMetadataToMaster`
   - `DS_POSIX_PUBLISH`
-  - fields: `worker.local.publish`, `worker.rpc.create_meta`, `worker.rpc.update_meta`
+  - fields: `worker.process.publish`, `worker.rpc.create_meta`, `worker.rpc.update_meta`
 - Exist:
   - `src/datasystem/worker/object_cache/service/worker_oc_service_get_impl.cpp`
   - `WorkerOcServiceGetImpl::Exist`
   - `WorkerOcServiceGetImpl::QueryMetadataFromMaster`
   - `DS_POSIX_EXIST`
-  - fields: `worker.local.exist`, `worker.rpc.query_meta`
+  - fields: `worker.process.exist`, `worker.rpc.query_meta`
 
 Meta Worker:
 
@@ -266,9 +267,9 @@ Meta Worker:
   - `MasterOCServiceImpl::CreateMeta`
   - `MasterOCServiceImpl::UpdateMeta`
 - Planned fields for primary-worker/client summaries:
-  - `master.local.query_meta`
-  - `master.local.create_meta`
-  - `master.local.update_meta`
+  - `master.process.query_meta`
+  - `master.process.create_meta`
+  - `master.process.update_meta`
 
 Data Worker:
 
@@ -277,7 +278,7 @@ Data Worker:
   - `WorkerWorkerOCServiceImpl::GetObjectRemote`
   - `WorkerWorkerOCServiceImpl::BatchGetObjectRemote`
 - Planned field for primary-worker/client summaries:
-  - `worker.local.remote_get`
+  - `worker.process.remote_get`
 
 ## Finalized Implementation Decisions
 
@@ -310,7 +311,8 @@ Data Worker:
 - Access logs do not print raw ticks; they print derived phase durations only.
 - Protobuf responses do not carry raw ticks or formatted summary strings.
 - `MetaPb.latency_ticks` is not reused for business phases.
-- The old fixed `2 ms` value is not a hard-coded final gate; local/rpc defaults are both `0`, meaning disabled.
+- The old fixed `2 ms` value is not a hard-coded final gate; worker defaults are `2000`/`5000` (process/rpc) and
+  client defaults are `2000`/`5000`; `0` disables the corresponding gate.
 - Master/data worker access logs do not print segmented summaries in this plan; their phase data is merged upstream.
 - This file does not keep unresolved open questions as implementation guidance. If new information is missing, align the
   requirement first and then update this formal plan.
@@ -321,7 +323,7 @@ Use this order for the next coding pass:
 
 1. Re-read `request-stage-latency-trace-plan-zh.md`, this file, and the relevant source before editing.
 2. Check `git status` and avoid overwriting unrelated user changes.
-3. Implement shared tick/phase/config/formatter helpers first; use `slow_log_local_slower_than` and
+3. Implement shared tick/phase/config/formatter helpers first; use `slow_log_process_slower_than` and
    `slow_log_rpc_slower_than` names for the effective threshold config.
 4. Rename the current `PLOG` macro surface in `src/datasystem/common/log/log.h` to `SLOW_LOG`, change the printed marker
    to `[SLOW LOG]`, and migrate request-stage call sites from hard-coded `*_SLOW_US` constants to the cached local/rpc
@@ -356,9 +358,10 @@ Implementation-readiness notes:
 - Build-focused checks:
   - build affected logging, client, worker, and master targets.
 - Runtime/manual validation:
-  - default-disabled configuration: local/rpc are both `0`; confirm client and worker access logs contain no
-    `latencySummary`, responses contain no `latency_phase_us`, and representative Get/Set fast paths show no measurable
-    throughput, p99, CPU, lock-contention, or response-size regression.
+  - default-enabled configuration: worker defaults are `2000`/`5000` (process/rpc) and client defaults are
+    `2000`/`5000`; confirm that fast requests below threshold do not produce `latencySummary`, responses contain no
+    `latency_phase_us`, and representative Get/Set fast paths show no measurable throughput, p99, CPU,
+    lock-contention, or response-size regression.
   - explicitly enabled configuration: set positive microsecond local/rpc thresholds; confirm slow client/worker access
     logs include summaries, fast access logs omit summaries, meta/data-worker access logs do not print segmented
     summaries, trace IDs can connect logs across processes, slow responses carry only necessary phase pairs, and fast
