@@ -989,6 +989,12 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &o
     if (entry->stateInfo.IsIncomplete()) {
         return Status::OK();
     }
+    // RH2D keeps remote host info only, without local shm data this worker cannot serve as a future copy provider.
+    if (entry->GetShmUnit() == nullptr) {
+        VLOG(1) << FormatString("[ObjectKey %s] Skip sync copy metadata because local shm data is non-existent.",
+                                objectKV.GetObjKey());
+        return Status::OK();
+    }
     entry->stateInfo.SetNeedToDelete(false);
     const auto &objectKey = objectKV.GetObjKey();
     if (isAsyncBatchGet) {

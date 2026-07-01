@@ -81,6 +81,7 @@ size_t RemoteH2DBatchGetChunkSize()
     const auto parallelMin = FLAGS_oc_worker_worker_parallel_min > 0 ? FLAGS_oc_worker_worker_parallel_min : 0;
     return std::max<size_t>(MAX_REMOTE_H2D_BATCH_GET_OBJECTS, static_cast<size_t>(parallelMin));
 }
+
 }  // namespace
 
 namespace {
@@ -126,6 +127,18 @@ void CleanupWorkerWorkerOcRpcChannel(
     }
 }
 }  // namespace
+
+bool WorkerOcServiceGetImpl::CanUpdateCopyMeta(const std::map<ReadKey, LockedEntity> &entries,
+                                               const std::unordered_set<std::string> &skipKeys,
+                                               const std::string &objectKey)
+{
+    if (skipKeys.find(objectKey) != skipKeys.end()) {
+        return false;
+    }
+    auto entryIt = entries.find(ReadKey(objectKey));
+    return entryIt != entries.end() && entryIt->second.safeObj != nullptr && entryIt->second.safeObj->Get() != nullptr
+           && entryIt->second.safeObj->Get()->GetShmUnit() != nullptr;
+}
 
 Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDataSize, ReadObjectKV &objectKV,
                                                              std::vector<RpcMessage> &payloads, uint64_t &payloadIndex)
@@ -376,11 +389,12 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     const std::string traceID = Trace::Instance().GetTraceID();
     if (successIds.size() == queryMetas.size()) {
         for (auto &queryMeta : queryMetas) {
-            if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
+            const auto &objectKey = queryMeta.meta().object_key();
+            if (!CanUpdateCopyMeta(entries, needSetDeleteObjectKeys, objectKey)) {
                 continue;
             }
             asyncUpdateLocationParams.emplace_back(
-                UpdateLocationParam{ queryMeta.meta().object_key(), queryMeta.meta().version(),
+                UpdateLocationParam{ objectKey, queryMeta.meta().version(),
                                      static_cast<uint32_t>(queryMeta.meta().config().data_format()), traceID });
         }
     } else {
@@ -388,12 +402,10 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
         successIdSet.reserve(successIds.size());
         successIdSet.insert(successIds.begin(), successIds.end());
         for (auto &queryMeta : queryMetas) {
-            if (needSetDeleteObjectKeys.find(queryMeta.meta().object_key()) != needSetDeleteObjectKeys.end()) {
-                continue;
-            }
             const auto &meta = queryMeta.meta();
             const auto &objectKey = meta.object_key();
-            if (successIdSet.find(objectKey) != successIdSet.end()) {
+            if (successIdSet.find(objectKey) != successIdSet.end()
+                && CanUpdateCopyMeta(entries, needSetDeleteObjectKeys, objectKey)) {
                 asyncUpdateLocationParams.emplace_back(UpdateLocationParam{
                     objectKey, meta.version(), static_cast<uint32_t>(meta.config().data_format()), traceID });
             }
@@ -418,7 +430,7 @@ void WorkerOcServiceGetImpl::BatchUpdateLocationHelper(const std::vector<std::st
     // CreateCopyMeta RPC.
     const std::string traceID = Trace::Instance().GetTraceID();
     for (const auto &objectKey : successIds) {
-        if (needSetDeleteObjectKeys.find(objectKey) != needSetDeleteObjectKeys.end()) {
+        if (!CanUpdateCopyMeta(entries, needSetDeleteObjectKeys, objectKey)) {
             continue;
         }
         const auto &meta = queryMetas.at(objectKey);

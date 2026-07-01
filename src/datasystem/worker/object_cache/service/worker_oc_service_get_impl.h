@@ -264,6 +264,9 @@ private:
                                            const std::vector<UpdateLocationParam> &params,
                                            std::vector<UpdateLocationParam> &retryParams);
 
+    static bool CanUpdateCopyMeta(const std::map<ReadKey, LockedEntity> &entries,
+                                  const std::unordered_set<std::string> &skipKeys, const std::string &objectKey);
+
     /**
      * @brief Batch update location helper function.
      * @param[in] successIds The success objectKeys.

@@ -866,6 +866,59 @@ TEST_F(DevObjectHeteroRH2DTest, DISABLED_RemoteH2DTestReliability1)
     RunMGetH2DTest(client1, client2, numObjChoices, blkSzChoices, deviceId_);
 }
 
+TEST_F(DevObjectHeteroRH2DTest, DISABLED_TestSkipCopyMeta)
+{
+    InitAcl(deviceId_);
+
+    constexpr uint32_t ownerWorkerIndex = 0;
+    constexpr uint32_t getWorkerIndex = 1;
+    constexpr size_t numOfObjs = 1;
+    constexpr size_t blksPerObj = 31;
+    constexpr size_t blkSz = 73 * 1024;
+    constexpr int retryTimes = 50;
+    constexpr int waitMs = 100;
+    const std::string copyMetaInject = "CreateCopyMeta.skip";
+    const std::vector<std::string> objectKeys = { GetStringUuid() };
+
+    std::shared_ptr<DsClient> ownerClient;
+    std::shared_ptr<DsClient> getClient;
+    InitTestDsClientForRemoteH2D(ownerWorkerIndex, ownerClient);
+    InitTestDsClientForRemoteH2D(getWorkerIndex, getClient);
+
+    std::vector<DeviceBlobList> setBlobList;
+    std::vector<std::vector<std::string>> verifyList;
+    PrePareRandomData(numOfObjs, blksPerObj, blkSz, deviceId_, setBlobList, verifyList);
+    DS_ASSERT_OK(ownerClient->Hetero()->MSetD2H(objectKeys, setBlobList));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, getWorkerIndex, copyMetaInject, "call()"));
+    uint64_t executeCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, getWorkerIndex, copyMetaInject, executeCount));
+    ASSERT_EQ(executeCount, 0ul);
+
+    std::vector<DeviceBlobList> getBlobListUseless;
+    std::vector<DeviceBlobList> getBlobList;
+    PrePareDevData(numOfObjs, blksPerObj, blkSz, getBlobListUseless, getBlobList, deviceId_);
+    std::vector<std::string> failedList;
+    DS_ASSERT_OK(getClient->Hetero()->MGetH2D(objectKeys, getBlobList, failedList, DEFAULT_GET_TIMEOUT));
+    ASSERT_TRUE(failedList.empty());
+    for (size_t i = 0; i < blksPerObj; i++) {
+        CheckDevPtrContent(getBlobList[0].blobs[i].pointer, getBlobList[0].blobs[i].size, verifyList[0][i]);
+    }
+
+    for (int i = 0; i < retryTimes; i++) {
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, getWorkerIndex, copyMetaInject, executeCount));
+        if (executeCount > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+    }
+    ASSERT_EQ(executeCount, 0ul);
+
+    failedList.clear();
+    DS_ASSERT_OK(ownerClient->Hetero()->Delete(objectKeys, failedList));
+    ASSERT_TRUE(failedList.empty());
+}
+
 TEST_F(DevObjectHeteroRH2DTwoSetWorkersTest, DISABLED_RemoteH2DTestMultiSetWorkers1)
 {
     // Test that MGetH2D works when getting from 2 seperate workers
