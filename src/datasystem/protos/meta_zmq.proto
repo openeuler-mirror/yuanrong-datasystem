@@ -59,7 +59,12 @@ message MetaPb {
     int32 event_type = 8;
     repeated TickPb ticks = 9;
     string trace_id = 10;
-    int64 timeout = 11;
+    // Deadline in microseconds (us). Breaking change from legacy `timeout` (ms) that
+    // previously occupied field 11; unit semantics changed 1000x with the same tag number.
+    // This version does NOT support rolling upgrade / mixed-version deployment with older
+    // binaries that still interpret field 11 as milliseconds.
+    // Deployment of this version requires a full restart of worker + master + client.
+    int64 timeout_us = 11;
     int32 route_fd = 13;  // New version of routing_fd
     LogSampleState log_sample_state = 14;
     // RPC latency metric timestamps. This is separate from ticks because ticks is the GetLapTime perf timeline.

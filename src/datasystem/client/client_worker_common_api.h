@@ -333,6 +333,12 @@ protected:
      */
     static int64_t ClientGetRequestTimeout(int32_t timeout)
     {
+        if (timeout <= 0) {
+            return timeout;
+        }
+        if (timeout <= TimeoutDuration::SMALL_TIMEOUT_ROUND_THRESHOLD_MS) {
+            return timeout;
+        }
         const int64_t CLIENT_TIMEOUT_MINUS_MILLISECOND = 1000;
         const double CLIENT_TIMEOUT_DESCEND_FACTOR = 0.9;
         return std::max(TimeoutDuration::ScaleTimeoutMs(timeout, CLIENT_TIMEOUT_DESCEND_FACTOR),

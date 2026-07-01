@@ -22,6 +22,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/protos/worker_object.stub.rpc.pb.h"
 #include "datasystem/protos/worker_object.brpc.stub.pb.h"
@@ -37,6 +38,12 @@ static constexpr int64_t MASTER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
 static constexpr float MASTER_TIMEOUT_DESCEND_FACTOR = 0.9;
 inline int64_t MasterGetRequestTimeout(int32_t timeout)
 {
+    if (timeout <= 0) {
+        return timeout;
+    }
+    if (timeout <= TimeoutDuration::SMALL_TIMEOUT_ROUND_THRESHOLD_MS) {
+        return timeout;
+    }
     return std::max(int64_t(timeout * MASTER_TIMEOUT_DESCEND_FACTOR), timeout - MASTER_TIMEOUT_MINUS_MILLISECOND);
 }
 

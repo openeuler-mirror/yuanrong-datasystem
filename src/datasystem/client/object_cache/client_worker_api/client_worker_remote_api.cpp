@@ -35,6 +35,7 @@
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -323,8 +324,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
                                      std::shared_ptr<UrmaRemoteAddrPb> &urmaDataInfo, const CacheType &cacheType)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
-    auto config = GetClientLatencyTraceConfig();
-    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     VLOG(1) << AppendSrcDstForLog(
         FormatString("Begin to create object, client id: %s, object key: %s", clientId_, objectKey), "",
         hostPort_.ToString());
@@ -335,18 +335,19 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_cache_type(static_cast<uint32_t>(cacheType));
-    req.set_request_timeout(requestTimeoutMs_);
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when create data.");
 
     CreateRspPb rsp;
     PerfPoint partPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
     Timer rpcTimer;
     auto status = RetryOnError(
-        requestTimeoutMs_,
+        static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
@@ -387,7 +388,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
     int sz = static_cast<int>(createParams.size());
     req.mutable_object_key()->Reserve(sz);
     req.mutable_data_size()->Reserve(sz);
-    req.set_request_timeout(requestTimeoutMs_);
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
         req.add_data_size(param.dataSize);
@@ -397,11 +398,12 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
     PerfPoint point(PerfKey::CLIENT_MULTI_CREATE_IPC);
     MultiCreateRspPb rsp;
     auto status = RetryOnError(
-        requestTimeoutMs_,
+        static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
             return DS_OC_DISPATCH(MultiCreate, opts, req, rsp);
@@ -509,15 +511,14 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     const int64_t &subTimeoutMs = getParam.subTimeoutMs;
-    int64_t requestTimeoutMs = std::max<int64_t>(0, requestTimeoutMs_ - getParam.ubGetObjMetaElapsedMs);
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
-    req.set_request_timeout(std::max<int64_t>(subTimeoutMs, requestTimeoutMs));
+    int64_t requestTimeoutUs =
+        std::max<int64_t>(subTimeoutMs * ONE_THOUSAND, ApiDeadline::Instance().ApiRemainingUs());
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(requestTimeoutUs));
     int64_t rpcTimeout = std::max<int64_t>(subTimeoutMs, rpcTimeoutMs_);
-    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &requestTimeoutMs, &rpcTimeout](int timeout) {
-        requestTimeoutMs = timeout;
+    INJECT_POINT("ClientWorkerApi.Get.retryTimeout", [this, &rpcTimeout](int timeout) {
         rpcTimeout = timeout;
-        requestTimeoutMs_ = timeout;
         return Status::OK();
     });
 #ifdef USE_URMA
@@ -540,11 +541,12 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     Status getStatus;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_GET_OBJECT);
     Status status = RetryOnError(
-        std::max<int32_t>(requestTimeoutMs, subTimeoutMs),
+        static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp, &payloads, &getStatus, &config](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
+            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when get date.");
             VLOG(1) << AppendSrcDstForLog(
@@ -635,12 +637,13 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
     Timer rpcTimer;
     auto status =
         RetryOnError(
-            requestTimeoutMs_,
+            static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
             [this, &req, &rsp, &payloads, &isRetry](int32_t realRpcTimeout) {
                 req.set_is_retry(isRetry);
                 RpcOptions opts;
                 opts.SetTimeout(realRpcTimeout);
-                reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+                reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 VLOG(1) << "Start to send rpc to publish object: " << req.object_key();
                 Status s = DS_OC_DISPATCH(Publish, opts, req, rsp, payloads);
@@ -702,11 +705,12 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
     auto status =
         RetryOnError(
-            requestTimeoutMs_,
+            static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
             [this, &req, &rsp, &payloads](int32_t realRpcTimeout) {
                 RpcOptions opts;
                 opts.SetTimeout(realRpcTimeout);
-                reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+                reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return DS_OC_DISPATCH(MultiPublish, opts, req, rsp, payloads);
             },
@@ -1329,11 +1333,12 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
     GetObjMetaInfoRspPb rsp;
     Timer rpcTimer;
     auto status = RetryOnError(
-        requestTimeoutMs_,
+        static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp, tenantId](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys()) << " of tenant "
                     << tenantId;
@@ -1409,11 +1414,12 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
     Timer rpcTimer;
     auto status = RetryOnError(
-        requestTimeoutMs_,
+        static_cast<int32_t>(std::min<int64_t>(
+            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to check existence";
             return DS_OC_DISPATCH(Exist, opts, req, rsp);

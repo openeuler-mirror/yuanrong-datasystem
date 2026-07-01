@@ -9,7 +9,36 @@ ds_cc_library(
         "timeout_duration.h",
     ],
     deps = [
+        ":network_latency_estimator",
+        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "api_deadline",
+    srcs = [
+        "api_deadline.cpp",
+    ],
+    hdrs = [
+        "api_deadline.h",
+    ],
+    deps = [
+        ":rpc_constants",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread_local",
+    ],
+)
+
+ds_cc_library(
+    name = "network_latency_estimator",
+    srcs = [
+        "network_latency_estimator.cpp",
+    ],
+    hdrs = [
+        "network_latency_estimator.h",
     ],
 )
 

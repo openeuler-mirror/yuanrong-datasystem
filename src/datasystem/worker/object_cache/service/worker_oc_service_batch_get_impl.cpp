@@ -36,6 +36,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
@@ -261,16 +262,15 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
             lastRc = rc;
         }
     };
-    Timer timer;
-    int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED, "RPC deadline exceeded");
+    auto dispatchTime = std::chrono::steady_clock::now();
     for (size_t index = 0; index < tasks.size(); ++index) {
         auto *infos = tasks[index].infos;
         const auto address = *tasks[index].address;
         auto func = [this, address, infos, &request, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
-                     &tempFailedMetas, index, traceContext, realTimeoutMs, &timer] {
-            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            CHECK_FAIL_RETURN_STATUS(realTimeoutMs > elapsed, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+                     &tempFailedMetas, index, traceContext, remainingUs, dispatchTime] {
+            RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext, true);
             return BatchGetObjectFromRemoteOnLock(address, *infos, request, tempSuccessIds[index],
                                                  tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index]);

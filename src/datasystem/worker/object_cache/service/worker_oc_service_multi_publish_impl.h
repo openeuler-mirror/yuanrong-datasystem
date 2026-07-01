@@ -191,9 +191,13 @@ private:
      * @param[out] respRes The response list of create.
      * @return Status of the call.
      */
-    void CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
-                                 std::vector<master::CreateMultiMetaReqPb> &reqs,
-                                 std::vector<CreateMultiMetaResult> &respRes);
+    Status CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+                                   std::vector<master::CreateMultiMetaReqPb> &reqs,
+                                   std::vector<CreateMultiMetaResult> &respRes);
+
+    CreateMultiMetaResult BuildCreateMultiMetaResult(const std::shared_ptr<worker::WorkerMasterOCApi> &api,
+                                                     master::CreateMultiMetaReqPb &req,
+                                                     const MetaAddrInfo &masterAddrInfo);
 
     /**
      * @brief Create multimeta request to master in parallel.

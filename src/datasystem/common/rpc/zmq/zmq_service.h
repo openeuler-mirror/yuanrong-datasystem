@@ -172,9 +172,19 @@ private:
         ~WorkerCB();
 
         /**
-         * Entry function for each thread.
+         * Entry function for each worker thread in the pool.
+         *
+         * Always consumes one message from the inbound queue first (so p is never
+         * orphaned), then checks the admission deadline. If the deadline is already
+         * exceeded, sends a reject reply and returns without further processing.
+         * Otherwise sets up the per-thread timeout durations and dispatches to
+         * WorkerEntryImpl.
+         *
+         * @param timeoutUs  Request timeout in microseconds (from meta.timeout_us()).
+         * @param elapsedUs  Task delay in microseconds (from RouteToRegBackend timer
+         *                   to func execution; may be overridden by inject point).
          */
-        Status WorkerEntry();
+        Status WorkerEntry(int64_t timeoutUs, int64_t elapsedUs);
         Status WorkerEntryWithoutMsgQ(ZmqMetaMsgFrames &inMsg, ZmqMetaMsgFrames &outMsg);
         Status StreamWorkerEntry();
 
@@ -243,6 +253,7 @@ private:
     Status BindTcpIpPort(const std::vector<std::string> &frontendEndPtList);
     Status BindUnixPath();
     Status RouteToRegBackend(ZmqMetaMsgFrames &p);
+    void RejectAndReplyDeadlineExceeded(const MetaPb &meta, int64_t remainingUs, int64_t elapsedUs);
     Status InitEventLoop();
     Status ValidateAndAdjustCfg();
     void CheckHWMRatio();

@@ -31,6 +31,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/rpc/network_latency_estimator.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
 
@@ -125,13 +126,29 @@ inline void HandleRetryTime(int32_t &retryInterval, int32_t &remainTime, uint64_
     std::this_thread::sleep_for(std::chrono::milliseconds(retryInterval));
 }
 
+/**
+ * @brief Update the NetworkLatencyEstimator with the residual RPC budget after a call.
+ * @param[in] rpcTimeoutMs Per-call RPC timeout that was in effect, in milliseconds.
+ * @param[in] start Steady-clock time point when the call started.
+ */
+inline void UpdateNetworkLatencyEstimate(int32_t rpcTimeoutMs, const std::chrono::steady_clock::time_point &start)
+{
+    auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - start)
+                         .count();
+    int64_t residualUs = static_cast<int64_t>(rpcTimeoutMs) * 1000LL - elapsedUs;
+    if (residualUs > 0) {
+        NetworkLatencyEstimator::Instance().Update(residualUs);
+    }
+}
+
 template <class Function, class Handler>
 Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
                     const std::unordered_set<StatusCode> &retryCode, int32_t maxRpcTimeoutMs = MAX_RPC_TIMEOUT_MS,
                     const std::unordered_set<StatusCode> &exceptionCode = {}, bool logError = false,
                     int32_t minOnceRpcTimeoutMs = 10)
 {
-    if (timeoutMs < 0) {
+    if (timeoutMs <= 0) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
     }
     // The retries last for four times, and the interval is continuously extended,
@@ -151,7 +168,9 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         };
         int32_t rpcTimeoutMs = std::min<int32_t>(remainTimeMs, maxRpcTimeoutMs);
         rpcTimeoutMs = std::max<int32_t>(rpcTimeoutMs, 1);
+        auto iterStartTime = std::chrono::steady_clock::now();
         status = f(rpcTimeoutMs);
+        UpdateNetworkLatencyEstimate(rpcTimeoutMs, iterStartTime);
         if (exceptionCode.find(status.GetCode()) != exceptionCode.end()) {
             // If an exception code is received during retry, the retry is considered successful.
             if (retryCount > 0) {

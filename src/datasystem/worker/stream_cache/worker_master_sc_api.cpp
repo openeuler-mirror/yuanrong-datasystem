@@ -25,6 +25,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/gflag/common_gflags.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/utils/optional.h"
@@ -34,22 +35,17 @@ DS_DECLARE_string(unix_domain_socket_dir);
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
-static constexpr int64_t WORKER_TIMEOUT_MINUS_MILLISECOND = 5 * 1000;
-static constexpr float WORKER_TIMEOUT_DESCEND_FACTOR = 0.9;
 
-#define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                               \
-    do {                                                                                       \
-        int64_t remainingTime_ = timeoutDuration_.CalcRemainingTime();                         \
-        CHECK_FAIL_RETURN_STATUS(remainingTime_ > 0, K_RPC_DEADLINE_EXCEEDED,                  \
-                                 FormatString("Request timeout (%lld ms).", -remainingTime_)); \
-        request_.set_timeout(WorkerGetRequestTimeout(remainingTime_));                         \
-        opts_.SetTimeout(remainingTime_);                                                      \
+#define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                              \
+    do {                                                                                      \
+        int64_t remainingUs_ = (timeoutDuration_).CalcRemainingAfterDeductionUs();            \
+        CHECK_FAIL_RETURN_STATUS(remainingUs_ > 0, K_RPC_DEADLINE_EXCEEDED,                   \
+                                 FormatString("Request timeout, remaining %ld us.",           \
+                                              (timeoutDuration_).CalcRealRemainingTimeUs())); \
+        int64_t remainingMs_ = TimeoutDuration::CeilUsToMs(remainingUs_);                     \
+        (request_).set_timeout(TimeoutDuration::WorkerGetRequestTimeout(remainingMs_));       \
+        (opts_).SetTimeout(remainingMs_);                                                     \
     } while (false)
-
-inline int64_t WorkerGetRequestTimeout(int32_t timeout)
-{
-    return std::max(int64_t(timeout * WORKER_TIMEOUT_DESCEND_FACTOR), timeout - WORKER_TIMEOUT_MINUS_MILLISECOND);
-}
 
 // Base class methods
 WorkerMasterSCApi::WorkerMasterSCApi(const HostPort &localWorkerAddress, std::shared_ptr<AkSkManager> akSkManager)

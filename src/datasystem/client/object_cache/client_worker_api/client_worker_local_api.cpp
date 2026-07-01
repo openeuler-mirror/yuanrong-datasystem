@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -66,13 +67,14 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
                             hostPort_.ToString(), objectKey);
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    reqTimeoutDuration.InitUs(remainingUs);
     CreateReqPb req;
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
     req.set_data_size(dataSize);
     req.set_cache_type(static_cast<uint32_t>(cacheType));
-    req.set_request_timeout(requestTimeoutMs_);
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(remainingUs));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
     CreateRspPb rsp;
@@ -91,7 +93,7 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
                                      int existence)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -114,7 +116,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
                                           const std::vector<std::vector<uint64_t>> &blobSizes)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     MultiPublishReqPb req;
     req.set_client_id(clientId_);
     req.set_ttl_second(param.ttlSecond);
@@ -153,7 +155,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
 
 Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     DecreaseReferenceRequest req;
     req.set_client_id(clientId_);
     for (const auto &objectKey : objectKeys) {
@@ -181,15 +183,15 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req), "Fail to generate signature when get date.");
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(req.request_timeout()));
-    int64_t waitTimeoutMs = req.request_timeout();
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     std::promise<std::pair<GetRspPb, Status>> promise;
     auto future = promise.get_future();
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi =
         std::make_shared<LocalServerUnaryWriterReader<GetRspPb, GetReqPb>>(req, std::move(promise));
     RETURN_IF_NOT_OK(api_->WorkerOCGet(workerOCService_, serverApi));
     std::pair<GetRspPb, Status> result;
-    if (future.wait_for(std::chrono::milliseconds(waitTimeoutMs)) == std::future_status::ready) {
+    int64_t waitMs = TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
+    if (future.wait_for(std::chrono::milliseconds(waitMs)) == std::future_status::ready) {
         try {
             result = future.get();
             serverApi->ReceivePayload(payloads);
@@ -198,7 +200,9 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
             result.second = { K_RUNTIME_ERROR, FormatString("Exception when calling future.get(): %s ", e.what()) };
         }
     } else {
-        return Status(K_RUNTIME_ERROR, "get failed");
+        return Status(K_RPC_DEADLINE_EXCEEDED,
+                      FormatString("Local get deadline exceeded, remaining %ld us",
+                                   ApiDeadline::Instance().ApiRemainingUs()));
     }
     RETURN_IF_NOT_OK(result.second);
     version = workerVersion_.load(std::memory_order_relaxed);
@@ -457,7 +461,7 @@ Status ClientWorkerLocalApi::RemoveP2PLocation(const std::string &objectKey, int
 Status ClientWorkerLocalApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
                                             std::vector<ObjMetaInfo> &objMetas)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     GetObjMetaInfoReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_tenantid(tenantId);
@@ -478,14 +482,14 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
                                          uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);
     req.set_client_id(clientId_);
     int sz = static_cast<int>(createParams.size());
     req.mutable_object_key()->Reserve(sz);
     req.mutable_data_size()->Reserve(sz);
-    req.set_request_timeout(requestTimeoutMs_);
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
     for (auto &param : createParams) {
         req.add_object_key(param.objectKey);
         req.add_data_size(param.dataSize);
@@ -558,7 +562,7 @@ Status ClientWorkerLocalApi::Exist(const std::vector<std::string> &keys, std::ve
                                    const bool queryL2Cache, const bool isLocal)
 {
     PerfPoint point(PerfKey::CLIENT_EXIST_LOCAL);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     req.set_client_id(clientId_);

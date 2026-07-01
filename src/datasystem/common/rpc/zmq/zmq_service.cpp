@@ -25,6 +25,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/zmq/zmq_stub_conn.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -707,7 +708,7 @@ Status ZmqService::WorkerCB::WorkerEntryImpl(MetaPb &meta, ZmqMsgFrames &inMsg, 
 /**
  * Entry function for each worker thread in the pool.
  */
-Status ZmqService::WorkerCB::WorkerEntry()
+Status ZmqService::WorkerCB::WorkerEntry(int64_t timeoutUs, int64_t elapsedUs)
 {
     ReadLock rlock(&inUse_);
     ZmqMetaMsgFrames inMsg;
@@ -720,6 +721,23 @@ Status ZmqService::WorkerCB::WorkerEntry()
     }
     PerfPoint::RecordElapsed(PerfKey::ZMQ_FRONTEND_TO_WORKER, GetLapTime(meta, "ZMQ_FRONTEND_TO_WORKER"));
     RecordTick(meta, TICK_SERVER_EXEC_START);
+    // Admission deadline check: done AFTER ReceiveMsg so that p is always consumed
+    // from the queue.  Rejecting here leaves no orphan and avoids draining unrelated
+    // messages that other concurrent funcs may be waiting for.
+    if (timeoutUs > 0) {
+        int64_t serverRemainingUs = timeoutUs - elapsedUs;
+        if (serverRemainingUs <= 0) {
+            impl_->RejectAndReplyDeadlineExceeded(meta, serverRemainingUs, elapsedUs);
+            return Status::OK();
+        }
+        reqTimeoutDuration.InitUs(serverRemainingUs);
+        scTimeoutDuration.InitUs(serverRemainingUs);
+        ApiDeadline::Instance().InitUs(serverRemainingUs);
+    } else {
+        reqTimeoutDuration.Init();
+        scTimeoutDuration.Init();
+        ApiDeadline::Instance().Reset();
+    }
     VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
                                         meta.svc_name(), meta.method_index(), meta.client_id());
     Status rc = WorkerEntryImpl(meta, inMsg.second, replyMsg);
@@ -765,6 +783,7 @@ Status ZmqService::WorkerCB::WorkerEntryWithoutMsgQ(ZmqMetaMsgFrames &inMsg, Zmq
 Status ZmqService::WorkerCB::StreamWorkerEntryImpl()
 {
     Status rc;
+    ApiDeadline::Instance().Reset();
     const std::string workerId = GetWorkerId();
     // Wait on the cv
     std::unique_lock<std::mutex> lock(streamWA_.mux_);
@@ -1035,6 +1054,18 @@ Status ZmqService::BackendToFrontend(std::shared_ptr<ZmqServerMsgMgr> &mgr)
     return Status::OK();
 }
 
+void ZmqService::RejectAndReplyDeadlineExceeded(const MetaPb &meta, int64_t remainingUs, int64_t elapsedUs)
+{
+    LOG(ERROR) << FormatString("RPC deadline exceeded before worker dispatch, remaining %ld us, elapsed %ld us.",
+                               remainingUs, elapsedUs);
+    ApiDeadline::Instance().Reset();
+    ZmqMetaMsgFrames reply;
+    reply.first = meta;
+    reply.second.push_front(StatusToZmqMessage(
+        Status(K_RPC_DEADLINE_EXCEEDED, FormatString("RPC deadline exceeded, remaining %ld us.", remainingUs))));
+    LOG_IF_ERROR(ServiceToClient(reply), "Failed to send deadline-exceeded reply to client");
+}
+
 Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
 {
     CHECK_FAIL_RETURN_STATUS(cfg_.numRegularSockets_ != 0, K_RUNTIME_ERROR,
@@ -1047,31 +1078,26 @@ Status ZmqService::RouteToRegBackend(ZmqMetaMsgFrames &p)
 
     auto traceID = meta.trace_id();
     auto logSampleState = meta.log_sample_state();
-    auto timeout = meta.timeout();
+    auto timeoutUs = meta.timeout_us();
 
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
-    VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeout);
+    VLOG(RPC_LOG_LEVEL) << "Receive message and timeout: " << std::to_string(timeoutUs);
     Timer timer;
     auto func = [=]() mutable {
         const int64_t US_TO_NS = 1000;
-        const int64_t MS_TO_US = 1000;
         int64_t elapsedUs = timer.ElapsedMicroSecond();
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::ZMQ_SERVER_TASK_DELAY))
             .Observe(static_cast<int64_t>(elapsedUs));
         PerfPoint::RecordElapsed(PerfKey::ZMQ_SERVER_TASK_DELAY, elapsedUs * US_TO_NS);
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         ApplyLogSampleState(logSampleState);
-        if (timeout > 0) {
-            int64_t elapsed = elapsedUs / MS_TO_US;
-            INJECT_POINT_NO_RETURN("ZmqService::RouteToRegBackend",
-                                   [&elapsed](int64_t inElapsed) { elapsed = inElapsed; });
-            reqTimeoutDuration.Init(timeout - elapsed);
-            scTimeoutDuration.Init(timeout - elapsed);
-        } else {
-            reqTimeoutDuration.Init();
-            scTimeoutDuration.Init();
+        if (timeoutUs > 0) {
+            INJECT_POINT_NO_RETURN("ZmqService::RouteToRegBackend.elapsedUs",
+                                   [&elapsedUs](int64_t inElapsed) { elapsedUs = inElapsed; });
         }
-        LOG_IF_ERROR(worker->WorkerEntry(), "worker entry failed");
+        // WorkerEntry always consumes p from the queue first, then checks the
+        // deadline internally — so the reject path leaves no orphan in the queue.
+        LOG_IF_ERROR(worker->WorkerEntry(timeoutUs, elapsedUs), "worker entry failed");
         GetWorkerTimeCost().Clear();
         GetMasterTimeCost().Clear();
     };
@@ -1285,17 +1311,31 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
     auto workerId = worker->GetWorkerId();
     meta.set_worker_id(workerId);
 
-    auto timeout = meta.timeout();
+    auto timeoutUs = meta.timeout_us();
 
     Timer timer;
     TraceGuard traceGuard = SetTraceContextFromMeta(meta);
-    if (timeout > 0) {
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        reqTimeoutDuration.Init(timeout - elapsed);
-        scTimeoutDuration.Init(timeout - elapsed);
+    if (timeoutUs > 0) {
+        int64_t elapsedUs = timer.ElapsedMicroSecond();
+        int64_t serverRemainingUs = timeoutUs - elapsedUs;
+        if (serverRemainingUs <= 0) {
+            LOG(ERROR) << FormatString(
+                "RPC deadline exceeded before direct exec, remaining %ld us, elapsed %ld us.",
+                serverRemainingUs, elapsedUs);
+            ApiDeadline::Instance().Reset();
+            outFrames.first = meta;
+            outFrames.second.push_front(StatusToZmqMessage(
+                Status(K_RPC_DEADLINE_EXCEEDED,
+                       FormatString("RPC deadline exceeded, remaining %ld us.", serverRemainingUs))));
+            return Status::OK();
+        }
+        reqTimeoutDuration.InitUs(serverRemainingUs);
+        scTimeoutDuration.InitUs(serverRemainingUs);
+        ApiDeadline::Instance().InitUs(serverRemainingUs);
     } else {
         reqTimeoutDuration.Init();
         scTimeoutDuration.Init();
+        ApiDeadline::Instance().Reset();
     }
     LOG_IF_ERROR(worker->WorkerEntryWithoutMsgQ(inFrames, outFrames), "worker entry failed");
     GetWorkerTimeCost().Clear();

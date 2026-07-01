@@ -795,7 +795,7 @@ TEST_F(OCClientGetTest, GetInvalidTimeoutTest)
 TEST_F(OCClientGetTest, SubTimeoutTest)
 {
     std::shared_ptr<ObjectClient> cliLocal;
-    InitTestClient(0, cliLocal, 5'000);
+    InitTestClient(0, cliLocal, 10'000);
     std::string objKey = NewObjectKey();
 
     std::vector<Optional<Buffer>> dataList;
@@ -896,13 +896,13 @@ TEST_F(OCClientGetTest, ClientGetTimeout)
     std::shared_ptr<ObjectClient> client1;
     std::shared_ptr<ObjectClient> client2;
     InitTestClient(0, client1);
-    InitTestClient(1, client2);
+    InitTestClient(1, client2, 2'000);
 
     std::string objectKey = NewObjectKey();
     std::string data = GenRandomString(SHM_SIZE);
     CreateAndSealObject(client1, objectKey, data);
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "WorkerOCServiceImpl.Get.Timeout", "1*call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 1, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
 
     std::vector<Optional<Buffer>> dataList;
     const int K_2000 = 2000;

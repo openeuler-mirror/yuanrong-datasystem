@@ -27,6 +27,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/util/raii.h"
@@ -150,9 +151,18 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
     (void)resp;
     LOG(INFO) << FormatString("[ObjectKey %s] Publish meta for object", req.meta().object_key());
     auto traceID = Trace::Instance().GetTraceID();
-    ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID] {
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before PublishMeta dispatch, remaining %ld us.", remainingUs));
+    auto dispatchTime = std::chrono::steady_clock::now();
+    ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID, remainingUs, dispatchTime] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        reqTimeoutDuration.InitWithPositiveTime(req.timeout());
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << FormatString("[ObjectKey %s] PublishMeta dropped: %s",
+                                       req.meta().object_key(), initRc.GetMsg());
+            return;
+        }
         Raii outerResetDuration([]() { timeoutDuration.Reset(); });
         Status rc = Status::OK();
         master::QueryMetaInfoPb queryMeta;

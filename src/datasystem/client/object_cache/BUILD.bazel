@@ -31,6 +31,7 @@ ds_cc_library(
         "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline_api",
         "//src/datasystem/common/parallel:common_parallel",
         "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/string_intern:string_ref",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:dlutils",

@@ -20,6 +20,7 @@
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/rpc/api_deadline.h"
 
 #include <cstdint>
 #include <shared_mutex>
@@ -393,7 +394,9 @@ Status ClientWorkerBaseApi::PreGet(const GetParam &getParam, int64_t subTimeoutM
     req.set_sub_timeout(ClientGetRequestTimeout(subTimeoutMs));
     req.set_client_id(clientId_);
     req.set_return_object_index(true);
-    req.set_request_timeout(std::max<int64_t>(subTimeoutMs, requestTimeoutMs_));
+    int64_t requestTimeoutUs =
+        std::max<int64_t>(subTimeoutMs * ONE_THOUSAND, ApiDeadline::Instance().ApiRemainingUs());
+    req.set_request_timeout(TimeoutDuration::CeilUsToMs(requestTimeoutUs));
     // Add and fill the request with client communicator root info, if RH2D is both supported and enabled.
     if (getParam.isRH2DSupported) {
         RETURN_IF_NOT_OK(GetClientCommUuid(*req.mutable_comm_id()));

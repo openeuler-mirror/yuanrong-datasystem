@@ -64,6 +64,7 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
@@ -1008,6 +1009,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     ScopedRequestContext ctx;
     INJECT_POINT("Reconciliation.before");
     reqTimeoutDuration.Init(RPC_TIMEOUT);
+    ApiDeadline::Instance().Reset();
     LOG(INFO) << "Reconciliation called between worker: " << localAddress_.ToString()
               << " and master: " << req.source_address();
     if (req.event_timestamp() <= 0) {
@@ -1221,6 +1223,7 @@ void WorkerOCServiceImpl::AsyncClearClientRef(const ClientKey &clientId, uint64_
         LOG(INFO) << "[Ref] AsyncClearClientRef for client id: " << clientId
                   << ", objects: " << VectorToString(objectKeys);
         reqTimeoutDuration.Init();
+        ApiDeadline::Instance().Reset();
         LOG_IF_ERROR(gRefProc_->GDecreaseRefWithLock(objectKeys, clientId, failedIds), "GDecreaseRef failed.");
         return failedIds.empty();
     };
@@ -1922,6 +1925,7 @@ Status WorkerOCServiceImpl::WarmupUrmaConnectionToPeer(const std::string &peerAd
     CHECK_FAIL_RETURN_STATUS(!peerKey.empty(), K_INVALID, "URMA warmup peer key is empty.");
     CHECK_FAIL_RETURN_STATUS(getProc_ != nullptr, K_NOT_READY, "Object cache get service is not ready.");
     reqTimeoutDuration.Init(URMA_WARMUP_REQUEST_TIMEOUT_MS);
+    ApiDeadline::Instance().Reset();
     return getProc_->WarmupGetObjectFromRemoteWorker(peerAddr, peerKey, URMA_WARMUP_OBJECT_SIZE);
 }
 
@@ -2061,24 +2065,23 @@ Status WorkerOCServiceImpl::GetDeviceObject(
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
 
-    Timer timer;
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
-    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, timer, this, traceID]() mutable {
+    auto dispatchTime = std::chrono::steady_clock::now();
+    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this,
+                          traceID]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
-        auto timeout = std::max<int64_t>(subTimeout, RPC_TIMEOUT);
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "RPC timeout. time elapsed " << elapsed << ", subTimeout:" << subTimeout
-                       << ", get threads Statistics: " << threadPool_->GetStatistics();
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            reqTimeoutDuration.Init(timeout - elapsed);
-            auto newSubTimeout = std::max<int64_t>(subTimeout - elapsed, 0);
-            (void)newSubTimeout;
-            workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
-            LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
         }
+        workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
+        LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
     });
     return Status::OK();
 }
@@ -2122,26 +2125,26 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    Timer timer;
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
-    int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
+    auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes SubscribeReceiveEvent from srcClientId: " << req.src_client_id()
                   << ", src_device_id: " << req.src_device_id()
                   << ", threads Statistics: " << devThreadPool_->GetStatistics();
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "SubscribeReceiveEvent RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout
-                       << ", threads Statistics: " << devThreadPool_->GetStatistics();
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            reqTimeoutDuration.Init(timeout - elapsed);
-            req.set_worker_ip(localAddress_.Host());
-            LOG_IF_ERROR(workerDevOcManager_->ProcessSubscribeReceiveEventRequest(req, serverApi),
-                         "Process SubscribeReceiveEvent failed");
-            LOG(INFO) << "Process SubscribeReceiveEvent done";
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
         }
+        req.set_worker_ip(localAddress_.Host());
+        LOG_IF_ERROR(workerDevOcManager_->ProcessSubscribeReceiveEventRequest(req, serverApi),
+                     "Process SubscribeReceiveEvent failed");
+        LOG(INFO) << "Process SubscribeReceiveEvent done";
     });
     return Status::OK();
 }
@@ -2162,9 +2165,11 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
-    Timer timer;
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
+    auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         std::stringstream allKeys;
@@ -2178,22 +2183,20 @@ Status WorkerOCServiceImpl::GetP2PMeta(
         }
         LOG(INFO) << FormatString("Worker processes GetP2PMeta from client: %s, allKeys: [%s], threads Statistics: %s",
                                   clientId, allKeys.str(), devThreadPool_->GetStatistics());
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "GetP2PMeta RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout
-                       << ", threads Statistics: " << devThreadPool_->GetStatistics();
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            reqTimeoutDuration.Init(timeout - elapsed);
-            for (auto &dev_obj_meta : *req.mutable_dev_obj_meta()) {
-                for (auto &location : *dev_obj_meta.mutable_locations()) {
-                    location.set_worker_ip(localAddress_.Host());
-                }
-            }
-            req.set_worker_address(localAddress_.ToString());
-            LOG_IF_ERROR(workerDevOcManager_->ProcessGetP2PMetaRequest(req, serverApi), "Process GetP2PMeta failed");
-            LOG(INFO) << "Process GetP2PMeta done";
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
         }
+        for (auto &dev_obj_meta : *req.mutable_dev_obj_meta()) {
+            for (auto &location : *dev_obj_meta.mutable_locations()) {
+                location.set_worker_ip(localAddress_.Host());
+            }
+        }
+        req.set_worker_address(localAddress_.ToString());
+        LOG_IF_ERROR(workerDevOcManager_->ProcessGetP2PMetaRequest(req, serverApi), "Process GetP2PMeta failed");
+        LOG(INFO) << "Process GetP2PMeta done";
     });
     return Status::OK();
 }
@@ -2225,25 +2228,25 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    Timer timer;
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
-    int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
+    auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes RecvRootInfo from srcClientId: " << req.src_device_id()
                   << ", src_device_id: " << req.src_device_id()
                   << ", threads Statistics: " << devThreadPool_->GetStatistics();
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "RecvRootInfo RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout
-                       << ", threads Statistics: " << devThreadPool_->GetStatistics();
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            reqTimeoutDuration.Init(timeout - elapsed);
-            LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi),
-                         "Process RecvRootInfo failed");
-            LOG(INFO) << "Process RecvRootInfo done";
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
         }
+        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi),
+                     "Process RecvRootInfo failed");
+        LOG(INFO) << "Process RecvRootInfo done";
     });
     return Status::OK();
 }
@@ -2287,24 +2290,24 @@ Status WorkerOCServiceImpl::GetDataInfo(
     int64_t subTimeout = req.sub_timeout();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
-    Timer timer;
-    int64_t timeout = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+        FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
+    auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes GetDataInfo from object: " << objectKey
                   << ", threads Statistics: " << devThreadPool_->GetStatistics();
-        int64_t elapsed = timer.ElapsedMilliSecond();
-        if (elapsed >= timeout) {
-            LOG(ERROR) << "GetDataInfo RPC timeout. time elapsed " << elapsed << ", subTimeout:" << timeout;
-            LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
-        } else {
-            auto realRpcTimeout = std::max<int64_t>(timeout - elapsed, subTimeout);
-            reqTimeoutDuration.Init(realRpcTimeout);
-            LOG_IF_ERROR(workerDevOcManager_->ProcessGetDataInfoRequest(req, serverApi, subTimeout),
-                         "Process GetDataInfo failed");
-            LOG(INFO) << "Process GetDataInfo done";
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
         }
+        LOG_IF_ERROR(workerDevOcManager_->ProcessGetDataInfoRequest(req, serverApi, subTimeout),
+                     "Process GetDataInfo failed");
+        LOG(INFO) << "Process GetDataInfo done";
     });
     return Status::OK();
 }

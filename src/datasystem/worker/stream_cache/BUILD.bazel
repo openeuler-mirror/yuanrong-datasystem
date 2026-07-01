@@ -149,6 +149,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_auth_key_manager",
         "//src/datasystem/common/rpc:rpc_channel",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/stream_cache:stream_fields",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:strings_util",
