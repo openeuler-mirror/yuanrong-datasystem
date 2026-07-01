@@ -15,9 +15,16 @@
  */
 #include "datasystem/utils/service_discovery.h"
 
+#include <iterator>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+
 #include "datasystem/common/constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/util/file_util.h"
@@ -30,6 +37,8 @@ DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace {
+constexpr int COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE = 100;
+
 std::string PickRandomAddr(const std::vector<std::string> &workers, RandomData *randomData)
 {
     if (workers.empty()) {
@@ -45,6 +54,147 @@ Status ParseWorkerAddr(const std::string &pickedAddr, std::string &workerIp, int
     workerIp = hostPort.Host();
     workerPort = hostPort.Port();
     return Status::OK();
+}
+
+void ResolveHostId(const std::string &hostIdEnvName, std::string &hostId)
+{
+    hostId.clear();
+    if (hostIdEnvName.empty()) {
+        return;
+    }
+    auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
+    auto envHostId = GetStringFromEnv(hostIdEnvName.c_str(), "");
+    // Use the actual env variable name as the persisted file key, same as worker FLAGS_host_id_env_name.
+    hostId = GetStringFromEnvOrFile(hostIdEnvName.c_str(), envFilePath, hostIdEnvName, "");
+    if (!hostId.empty()) {
+        if (envHostId.empty()) {
+            LOG(INFO) << "Host ID is " << hostId << " from persisted SDK env file " << envFilePath;
+        } else {
+            LOG(INFO) << "Host ID is " << hostId << " from env " << hostIdEnvName;
+        }
+    } else {
+        VLOG(1) << FormatString(
+            "hostId not found in env [%s] or file [%s], affinity policy may not work as "
+            "expected",
+            hostIdEnvName, envFilePath);
+    }
+}
+
+std::string ExtractWorkerAddrFromClusterKey(const std::string &key)
+{
+    auto tablePos = key.find(ETCD_CLUSTER_TABLE);
+    if (tablePos == std::string::npos) {
+        return key;
+    }
+    auto begin = tablePos + std::string(ETCD_CLUSTER_TABLE).size();
+    if (begin < key.size() && key[begin] == '/') {
+        ++begin;
+    }
+    return key.substr(begin);
+}
+
+std::string PrefixRangeEnd(const std::string &prefix)
+{
+    constexpr unsigned char maxKeyByte = 0xff;
+    std::string rangeEnd = prefix;
+    for (auto iter = rangeEnd.rbegin(); iter != rangeEnd.rend(); ++iter) {
+        auto byte = static_cast<unsigned char>(*iter);
+        if (byte != maxKeyByte) {
+            *iter = static_cast<char>(byte + 1);
+            rangeEnd.erase(iter.base(), rangeEnd.end());
+            return rangeEnd;
+        }
+    }
+    return "";
+}
+
+void AppendReadyWorker(const std::string &key, const std::string &valueStr, const std::string &hostId,
+                       std::vector<std::string> &sameHost, std::vector<std::string> &other,
+                       std::unordered_map<std::string, uint32_t> &workersStateCount)
+{
+    KeepAliveValue value;
+    auto rc = KeepAliveValue::FromString(valueStr, value);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Failed to parse keep alive value for worker " << key << ": " << rc.ToString();
+        return;
+    }
+    workersStateCount[value.state]++;
+    if (value.state != ETCD_NODE_READY) {
+        return;
+    }
+    auto workerAddr = ExtractWorkerAddrFromClusterKey(key);
+    VLOG(1) << "Worker " << workerAddr << " is ready with hostId: " << value.hostId;
+    if (!hostId.empty() && value.hostId == hostId) {
+        sameHost.emplace_back(std::move(workerAddr));
+    } else {
+        other.emplace_back(std::move(workerAddr));
+    }
+}
+
+Status SelectWorkerFromPartitions(const std::vector<std::string> &sameHost, const std::vector<std::string> &other,
+                                  ServiceAffinityPolicy affinityPolicy, RandomData *randomData, bool hostAffinityActive,
+                                  std::string &workerIp, int &workerPort, bool *isSameNode, bool *isNoAvailableWorker)
+{
+    if (isNoAvailableWorker != nullptr) {
+        *isNoAvailableWorker = false;
+    }
+
+    std::string pickedAddr;
+    bool pickedSameNode = false;
+    if (affinityPolicy == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
+        CHECK_FAIL_RETURN_STATUS(hostAffinityActive, K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+        CHECK_FAIL_RETURN_STATUS(!sameHost.empty(), K_TRY_AGAIN, "No available same-node worker is detected.");
+        pickedAddr = PickRandomAddr(sameHost, randomData);
+        pickedSameNode = true;
+    } else if (affinityPolicy == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !sameHost.empty()) {
+        pickedAddr = PickRandomAddr(sameHost, randomData);
+        pickedSameNode = true;
+    } else {
+        // RANDOM, or PREFERRED_SAME_NODE with no same-host worker: pick uniformly across both partitions.
+        size_t total = sameHost.size() + other.size();
+        if (total == 0) {
+            if (isNoAvailableWorker != nullptr) {
+                *isNoAvailableWorker = true;
+            }
+            RETURN_STATUS(K_TRY_AGAIN, "No available worker is detected.");
+        }
+        size_t idx = randomData->GetRandomIndex(total);
+        if (idx < sameHost.size()) {
+            pickedAddr = sameHost[idx];
+            pickedSameNode = true;
+        } else {
+            pickedAddr = other[idx - sameHost.size()];
+        }
+    }
+
+    if (isSameNode != nullptr) {
+        *isSameNode = pickedSameNode;
+    }
+    return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
+}
+
+Status ApplyGetAllWorkersPolicy(ServiceAffinityPolicy affinityPolicy, bool hostAffinityActive,
+                                std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs)
+{
+    if (affinityPolicy == ServiceAffinityPolicy::RANDOM) {
+        // No host-affinity preference; expose every worker via `otherAddrs`.
+        otherAddrs.insert(otherAddrs.end(), std::make_move_iterator(sameHostAddrs.begin()),
+                          std::make_move_iterator(sameHostAddrs.end()));
+        sameHostAddrs.clear();
+    } else if (affinityPolicy == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
+        CHECK_FAIL_RETURN_STATUS(hostAffinityActive, K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+        otherAddrs.clear();
+    }
+    // PREFERRED_SAME_NODE: keep the snapshot partitioned so callers can prefer same-node entries.
+    return Status::OK();
+}
+
+std::unique_ptr<ICoordinatorServiceProxy> CreateCoordinatorProxy(const HostPort &coordinatorAddr)
+{
+    if (FLAGS_use_brpc) {
+        return std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorAddr);
+    }
+    return std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorAddr);
 }
 }  // namespace
 
@@ -72,27 +222,10 @@ Status ServiceDiscovery::Init()
     CHECK_FAIL_RETURN_STATUS(Validator::ValidateEtcdAddresses("EtcdAddress", etcdAddress_), K_INVALID,
                              FormatString("Invalid etcd address: %s", etcdAddress_));
     etcdStore_ = std::make_shared<EtcdStore>(etcdAddress_, etcdCa_.GetData(), etcdCert_, etcdKey_, etcdDNSName_);
-    auto traceId = Trace::Instance().GetTraceID();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Init(), "Failed to connect to etcd.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->Authenticate(username_, password_, tokenRefreshInterval_),
                                      "Failed to connect to etcd.");
-    if (!hostIdEnvName_.empty()) {
-        auto envFilePath = GetWorkerEnvFilePath(FLAGS_log_dir);
-        auto envHostId = GetStringFromEnv(hostIdEnvName_.c_str(), "");
-        // Use the actual env variable name as the persisted file key, same as worker FLAGS_host_id_env_name.
-        hostId_ = GetStringFromEnvOrFile(hostIdEnvName_.c_str(), envFilePath, hostIdEnvName_, "");
-        if (!hostId_.empty()) {
-            if (envHostId.empty()) {
-                LOG(INFO) << "Host ID is " << hostId_ << " from persisted SDK env file " << envFilePath;
-            } else {
-                LOG(INFO) << "Host ID is " << hostId_ << " from env " << hostIdEnvName_;
-            }
-        } else {
-            VLOG(1) << FormatString("hostId not found in env [%s] or file [%s], affinity policy may not work as "
-                                    "expected",
-                                    hostIdEnvName_, envFilePath);
-        }
-    }
+    ResolveHostId(hostIdEnvName_, hostId_);
 
     std::string etcdTablePrefix = clusterName_.empty() ? "" : "/" + clusterName_;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -116,22 +249,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
     other.clear();
     std::unordered_map<std::string, uint32_t> workersStateCount;
     for (const auto &kv : outKeyValues) {
-        KeepAliveValue value;
-        auto rc = KeepAliveValue::FromString(kv.second, value);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Failed to parse keep alive value for worker " << kv.first << ": " << rc.ToString();
-            continue;
-        }
-        workersStateCount[value.state]++;
-        if (value.state != ETCD_NODE_READY) {
-            continue;
-        }
-        VLOG(1) << "Worker " << kv.first << " is ready with hostId: " << value.hostId;
-        if (!hostId_.empty() && value.hostId == hostId_) {
-            sameHost.emplace_back(kv.first);
-        } else {
-            other.emplace_back(kv.first);
-        }
+        AppendReadyWorker(kv.first, kv.second, hostId_, sameHost, other, workersStateCount);
     }
     LOG(INFO) << "The workers state count is " << MapToString(workersStateCount);
     return Status::OK();
@@ -143,42 +261,8 @@ Status ServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bo
     std::vector<std::string> sameHost;
     std::vector<std::string> other;
     RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
-    if (isNoAvailableWorker != nullptr) {
-        *isNoAvailableWorker = false;
-    }
-
-    std::string pickedAddr;
-    bool pickedSameNode = false;
-    if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
-        CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
-        CHECK_FAIL_RETURN_STATUS(!sameHost.empty(), K_TRY_AGAIN, "No available same-node worker is detected.");
-        pickedAddr = PickRandomAddr(sameHost, randomData_.get());
-        pickedSameNode = true;
-    } else if (affinityPolicy_ == ServiceAffinityPolicy::PREFERRED_SAME_NODE && !sameHost.empty()) {
-        pickedAddr = PickRandomAddr(sameHost, randomData_.get());
-        pickedSameNode = true;
-    } else {
-        // RANDOM, or PREFERRED_SAME_NODE with no same-host worker: pick uniformly across both partitions.
-        size_t total = sameHost.size() + other.size();
-        if (total == 0) {
-            if (isNoAvailableWorker != nullptr) {
-                *isNoAvailableWorker = true;
-            }
-            RETURN_STATUS(K_TRY_AGAIN, "No available worker is detected.");
-        }
-        size_t idx = randomData_->GetRandomIndex(total);
-        if (idx < sameHost.size()) {
-            pickedAddr = sameHost[idx];
-            pickedSameNode = true;
-        } else {
-            pickedAddr = other[idx - sameHost.size()];
-        }
-    }
-
-    if (isSameNode != nullptr) {
-        *isSameNode = pickedSameNode;
-    }
-    return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
+    return SelectWorkerFromPartitions(sameHost, other, affinityPolicy_, randomData_.get(), HasHostAffinity(), workerIp,
+                                      workerPort, isSameNode, isNoAvailableWorker);
 }
 
 Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &workerPort)
@@ -195,16 +279,105 @@ Status ServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &worker
 Status ServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs)
 {
     RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs));
-    if (affinityPolicy_ == ServiceAffinityPolicy::RANDOM) {
-        // No host-affinity preference; expose every worker via `otherAddrs`.
-        otherAddrs.insert(otherAddrs.end(), std::make_move_iterator(sameHostAddrs.begin()),
-                          std::make_move_iterator(sameHostAddrs.end()));
-        sameHostAddrs.clear();
-    } else if (affinityPolicy_ == ServiceAffinityPolicy::REQUIRED_SAME_NODE) {
-        CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
-        otherAddrs.clear();
-    }
-    // PREFERRED_SAME_NODE: keep the snapshot partitioned so callers can prefer same-node entries.
+    return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
+}
+
+DefaultCoordinatorDiscovery::DefaultCoordinatorDiscovery(std::string serviceAddress)
+    : serviceAddress_(std::move(serviceAddress))
+{
+}
+
+Status DefaultCoordinatorDiscovery::GetCoordinators(std::vector<std::string> &serviceList)
+{
+    serviceList = { serviceAddress_ };
     return Status::OK();
+}
+
+CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServiceDiscoveryOptions &opts)
+    : serviceAddress_(opts.serviceAddress),
+      hostIdEnvName_(opts.hostIdEnvName),
+      affinityPolicy_(opts.affinityPolicy),
+      coordinatorDiscovery_(opts.coordinatorDiscovery)
+{
+    if (coordinatorDiscovery_ == nullptr && !serviceAddress_.empty()) {
+        coordinatorDiscovery_ = std::make_shared<DefaultCoordinatorDiscovery>(serviceAddress_);
+    }
+}
+
+Status CoordinatorServiceDiscovery::Init()
+{
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
+    randomData_ = std::make_shared<RandomData>();
+    CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, K_INVALID,
+                             "coordinatorDiscovery should not be null when serviceAddress is empty.");
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE));
+    ResolveHostId(hostIdEnvName_, hostId_);
+    return Status::OK();
+}
+
+Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other)
+{
+    if (randomData_ == nullptr) {
+        RETURN_IF_NOT_OK(Init());
+    }
+
+    std::vector<std::string> coordinatorList;
+    RETURN_IF_NOT_OK(coordinatorDiscovery_->GetCoordinators(coordinatorList));
+    CHECK_FAIL_RETURN_STATUS(!coordinatorList.empty(), K_INVALID, "No coordinator address is detected.");
+    CHECK_FAIL_RETURN_STATUS(coordinatorList.size() == 1, K_INVALID,
+                             "Only one coordinator address is supported by coordinator service discovery.");
+
+    sameHost.clear();
+    other.clear();
+    std::unordered_map<std::string, uint32_t> workersStateCount;
+    const std::string clusterTablePrefix = "/" + std::string(ETCD_CLUSTER_TABLE) + "/";
+    auto rangeEnd = PrefixRangeEnd(clusterTablePrefix);
+    CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_INVALID, "Failed to build coordinator cluster table range.");
+
+    const auto &coordinatorAddrStr = coordinatorList.front();
+    HostPort coordinatorAddr;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(coordinatorAddr.ParseString(coordinatorAddrStr),
+                                     "Invalid coordinator address " + coordinatorAddrStr);
+
+    std::vector<KeyValueEntry> kvs;
+    int64_t revision = 0;
+    auto proxy = CreateCoordinatorProxy(coordinatorAddr);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(proxy->Range(clusterTablePrefix, rangeEnd, kvs, revision),
+                                     "Failed to fetch cluster info from coordinator " + coordinatorAddrStr);
+
+    for (const auto &kv : kvs) {
+        AppendReadyWorker(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
+    }
+    LOG(INFO) << "The workers state count from coordinator " << coordinatorAddrStr << " is "
+              << MapToString(workersStateCount);
+    return Status::OK();
+}
+
+Status CoordinatorServiceDiscovery::SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode,
+                                                 bool *isNoAvailableWorker)
+{
+    std::vector<std::string> sameHost;
+    std::vector<std::string> other;
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
+    return SelectWorkerFromPartitions(sameHost, other, affinityPolicy_, randomData_.get(), HasHostAffinity(), workerIp,
+                                      workerPort, isSameNode, isNoAvailableWorker);
+}
+
+Status CoordinatorServiceDiscovery::SelectSameNodeWorker(std::string &workerIp, int &workerPort)
+{
+    CHECK_FAIL_RETURN_STATUS(!hostId_.empty(), K_INVALID, "Failed to obtain sdk host_id from hostIdEnvName.");
+    std::vector<std::string> sameHost;
+    std::vector<std::string> other;
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHost, other));
+    std::string pickedAddr = PickRandomAddr(sameHost, randomData_.get());
+    CHECK_FAIL_RETURN_STATUS(!pickedAddr.empty(), K_RUNTIME_ERROR, "No available same-node worker is detected.");
+    return ParseWorkerAddr(pickedAddr, workerIp, workerPort);
+}
+
+Status CoordinatorServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs,
+                                                  std::vector<std::string> &otherAddrs)
+{
+    RETURN_IF_NOT_OK(ObtainWorkers(sameHostAddrs, otherAddrs));
+    return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
 }
 }  // namespace datasystem

@@ -758,8 +758,10 @@ function(PACKAGE_DATASYSTEM_WHEEL PACKAGE_NAME)
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/deployment)
   install(DIRECTORY ${CMAKE_SOURCE_DIR}/k8s_deployment/docker/exitpoint/
           DESTINATION ${DATASYSTEM_WHEEL_PATH}/docker_entryfile/deployment)
-  # Copy worker and worker_config to package lib path
-  install(FILES ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_worker ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
+  # Copy service binaries and default service configs to package lib path
+  install(PROGRAMS ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_worker ${CMAKE_INSTALL_PREFIX}/datasystem/service/datasystem_coordinator
+          DESTINATION ${DATASYSTEM_WHEEL_PATH})
+  install(FILES ${CMAKE_SOURCE_DIR}/cli/deploy/conf/worker_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/coordinator_config.json ${CMAKE_SOURCE_DIR}/cli/deploy/conf/cluster_config.json
           DESTINATION ${DATASYSTEM_WHEEL_PATH})
   # Copy dsbench_cpp to package lib path
   install(TARGETS dsbench_cpp DESTINATION ${DATASYSTEM_WHEEL_PATH})

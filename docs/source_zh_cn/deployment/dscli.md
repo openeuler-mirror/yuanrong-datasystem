@@ -554,9 +554,11 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
-|--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待 worker 服务就绪的最大时间（默认：90秒） |
-|--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成 |
-|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
+|--timeout &lt;SECONDS&gt;| -t &lt;SECONDS&gt; | 等待服务就绪的最大时间（默认：90秒） |
+|--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 使用配置文件（JSON格式）启动worker或coordinator，配置文件可通过generate_config命令生成。`--worker_config_path` 保留为兼容别名 |
+|--worker_args &lt;...&gt;        |-w &lt;...&gt; | 使用参数启动数据系统worker, 以 "--<Args>  <Value>"为格式。比如--worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"<br>**注意**：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数|
+|--coordinator_args &lt;...&gt;|无| 使用参数启动coordinator，比如--coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项 |
+|--coordinator_worker_args &lt;...&gt;|无| 先启动coordinator再启动worker，比如--worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"。此选项必须是命令行的最后一个参数选项。参数会按 `coordinator_config.json` 和 `worker_config.json` 分别过滤后传给对应进程 |
 |--datasystem_home_dir |-d &lt;DIR&gt; | 指定基础路径，将配置文件中的相对路径转换为绝对路径。例如当配置中包含 './yr_datasystem/log_dir'，其中的 '.' 将被替换为 `datasystem_home_dir` 的值 |
 |--cpunodebind|-N | numactl选项，仅允许进程在指定 NUMA 节点所属的 CPU 上运行，支持多个节点 |
 |--physcpubind|-C | 按物理 CPU 编号将进程绑定到指定核心 |
@@ -569,7 +571,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > **绑核配置项注意事项**：
 >
 > - 使用绑核功能前请确保机器上已安装numactl命令。
-> - 绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于-w worker参数之前。
+> - 绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 `--worker_args` 或 `--coordinator_worker_args` 参数之前。
 >
 > 例子：
 > ```bash
@@ -580,7 +582,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > **启用ums注意事项**：
 >
 > - 启用ums功能请确保机器已安装ums相关rpm包
-> - 配置项 enable_ums 需要位于-w worker参数之前。
+> - 配置项 enable_ums 需要位于 `--worker_args` 或 `--coordinator_worker_args` 参数之前。
 > ums安装参考
 > ```bash
 > yum install umdk-ums.aarch64
@@ -599,8 +601,9 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
-|--worker_config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用配置文件（JSON格式）停止worker |
+|--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用配置文件（JSON格式）停止worker或coordinator。`--worker_config_path` 保留为兼容别名 |
 |--worker_address <ADDR>    |-w &lt;...&gt; | 通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker |
+|--coordinator_address <ADDR>|无| 通过指定coordinator地址（IP:PORT格式，如127.0.0.1:31511）来停止coordinator。与 `--worker_address` 同时指定时会先停止worker，再停止coordinator |
 
 `dscli stop` 会先向 worker 发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。等待超时时间按以下公式动态计算（单位：秒）：
 
@@ -670,7 +673,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 |选项                         |等效短参数  |说明     |
 |-----------------------------|-----------|--------|
-|--output_path &lt;OUTPUT_PATH&gt; |-o &lt;OUTPUT_PATH&gt; | 指定生成配置文件的存放路径，默认存放路径为当前目录 |
+|--output_path &lt;OUTPUT_PATH&gt; |-o &lt;OUTPUT_PATH&gt; | 指定生成配置文件的存放路径，默认存放路径为当前目录。会生成 `cluster_config.json`、`worker_config.json` 和 `coordinator_config.json` |
 
 ### dscli collect_log
 

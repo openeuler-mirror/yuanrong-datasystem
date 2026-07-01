@@ -16,8 +16,8 @@
 import os
 import shutil
 
-from yr.datasystem.cli.command import BaseCommand
 import yr.datasystem.cli.common.util as util
+from yr.datasystem.cli.command import BaseCommand
 
 
 class Command(BaseCommand):
@@ -26,7 +26,12 @@ class Command(BaseCommand):
     """
 
     name = "generate_config"
-    description = "generate yuanrong datasystem cluster and worker configuration files"
+    description = "generate yuanrong datasystem cluster, worker and coordinator configuration files"
+    _CONFIG_FILES = (
+        "cluster_config.json",
+        "worker_config.json",
+        "coordinator_config.json",
+    )
 
     @staticmethod
     def add_arguments(parser):
@@ -37,9 +42,10 @@ class Command(BaseCommand):
             parser (ArgumentParser): Specify parser to which arguments are added.
         """
         parser.add_argument(
-            "-o", "--output_path",
+            "-o",
+            "--output_path",
             default=os.getcwd(),
-            help="path to save the generated configuration files, default path is the current directory"
+            help="path to save the generated configuration files, default path is the current directory",
         )
 
     def run(self, args):
@@ -60,25 +66,20 @@ class Command(BaseCommand):
                 raise NotADirectoryError(f"Path is not a directory: {output_dir}")
             os.makedirs(output_dir, exist_ok=True)
 
-            cluster_file = "cluster_config.json"
-            src_cluster = os.path.join(self._base_dir, cluster_file)
-            if not os.path.exists(src_cluster):
-                raise FileNotFoundError(f"Source cluster configuration file {src_cluster} does not exist")
-            dest_cluster = os.path.join(output_dir, cluster_file)
-            shutil.copyfile(src_cluster, dest_cluster)
-            self.logger.info(f"Cluster configuration file has been generated to {dest_cluster}")
-
-            worker_file = "worker_config.json"
-            src_worker = os.path.join(self._base_dir, worker_file)
-            if not os.path.exists(src_worker):
-                raise FileNotFoundError(f"Source worker configuration file {src_worker} does not exist")
-            dest_worker = os.path.join(output_dir, worker_file)
-            shutil.copyfile(src_worker, dest_worker)
-            self.logger.info(f"Worker configuration file has been generated to {dest_worker}")
+            for config_file in self._CONFIG_FILES:
+                src_config = os.path.join(self._base_dir, config_file)
+                if not os.path.exists(src_config):
+                    raise FileNotFoundError(
+                        f"Source configuration file {src_config} does not exist"
+                    )
+                dest_config = os.path.join(output_dir, config_file)
+                shutil.copyfile(src_config, dest_config)
+                self.logger.info(
+                    f"Configuration file {config_file} has been generated to {dest_config}"
+                )
 
             self.logger.info("Configuration generation completed successfully")
         except Exception as e:
             self.logger.error(f"Generate failed: {e}")
             return self.FAILURE
         return self.SUCCESS
-    

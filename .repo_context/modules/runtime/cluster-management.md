@@ -48,7 +48,7 @@
   - worker startup selects coordinator-backed cluster coordination when `coordinator_address` is non-empty; otherwise it preserves the ETCD/Metastore path and enforces that at least one of `etcd_address` or `metastore_address` is configured.
   - `cluster_manager` currently builds around `cluster_manager.cpp` plus worker health-check support.
   - hash-ring logic is a separate worker subdomain that coordinates distribution/routing-related state and interacts with the metadata backend.
-  - `dscli` supports both single-node `start` and multi-node `up`, and `up` has explicit handling for Metastore head-node sequencing.
+  - `dscli start/stop` supports worker-only, coordinator-only, and local worker+coordinator lifecycle forms; `dscli up/down` remain the multi-node worker cluster path, and `up` has explicit handling for Metastore head-node sequencing.
 - Pending verification:
   - the full event flow from worker join/leave through all hash-ring and replica side effects;
   - exact separation between "cluster management" and "master metadata placement" for every runtime path.
