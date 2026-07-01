@@ -16,6 +16,88 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/options.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/util.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependency.cmake")
 
+if (TRANSFER_ENGINE_STANDALONE AND TARGET ds_spdlog::spdlog AND TRANSFER_ENGINE_SPDLOG_LIB_PATH)
+    add_custom_target(copy_transfer_engine_spdlog_so ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/lib
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:ds_spdlog::spdlog>
+            ${CMAKE_CURRENT_BINARY_DIR}/lib/$<TARGET_FILE_NAME:ds_spdlog::spdlog>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_SONAME_FILE:ds_spdlog::spdlog>
+            ${CMAKE_CURRENT_BINARY_DIR}/lib/$<TARGET_SONAME_FILE_NAME:ds_spdlog::spdlog>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${TRANSFER_ENGINE_SPDLOG_LIB_PATH}/libds-spdlog.so
+            ${CMAKE_CURRENT_BINARY_DIR}/lib/libds-spdlog.so
+        VERBATIM
+    )
+endif()
+
+function(transfer_engine_add_no_needed_library_test test_name target_name needed_library)
+    if (NOT CMAKE_READELF)
+        return()
+    endif()
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DREADELF_EXECUTABLE=${CMAKE_READELF}
+            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
+            -DNEEDED_LIBRARY=${needed_library}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_no_needed_library.cmake
+    )
+endfunction()
+
+function(transfer_engine_add_no_gnu_unique_test test_name target_name)
+    if (NOT CMAKE_READELF)
+        return()
+    endif()
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DREADELF_EXECUTABLE=${CMAKE_READELF}
+            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_no_gnu_unique_symbols.cmake
+    )
+endfunction()
+
+function(transfer_engine_add_no_dynamic_symbol_test test_name target_name forbidden_symbol)
+    if (NOT CMAKE_READELF)
+        return()
+    endif()
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DREADELF_EXECUTABLE=${CMAKE_READELF}
+            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
+            -DFORBIDDEN_SYMBOL=${forbidden_symbol}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_no_dynamic_symbol.cmake
+    )
+endfunction()
+
+function(transfer_engine_add_no_defined_dynamic_symbol_test test_name target_name forbidden_symbol)
+    if (NOT CMAKE_READELF)
+        return()
+    endif()
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DREADELF_EXECUTABLE=${CMAKE_READELF}
+            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
+            -DFORBIDDEN_SYMBOL=${forbidden_symbol}
+            -DDEFINED_ONLY=ON
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_no_dynamic_symbol.cmake
+    )
+endfunction()
+
+function(transfer_engine_add_forbidden_text_test test_name file_path forbidden_text)
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DFILE_PATH=${file_path}
+            -DFORBIDDEN_TEXT=${forbidden_text}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_forbidden_text.cmake
+    )
+endfunction()
+
 # Datasystem enables PIE globally, but the transfer_engine static/python outputs
 # need plain PIC semantics inside this subproject.
 foreach(_te_flag_var
@@ -52,9 +134,19 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
 endif()
 
 add_library(transfer_engine_obj OBJECT ${TRANSFER_ENGINE_SRCS})
-set_target_properties(transfer_engine_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if (TARGET copy_transfer_engine_spdlog_so)
+    add_dependencies(transfer_engine_obj copy_transfer_engine_spdlog_so)
+endif()
+set_target_properties(transfer_engine_obj PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+)
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(transfer_engine_obj PRIVATE -fPIC)
+endif()
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(transfer_engine_obj PRIVATE -fno-gnu-unique)
 endif()
 
 target_include_directories(transfer_engine_obj
@@ -64,7 +156,7 @@ target_include_directories(transfer_engine_obj
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(transfer_engine_obj PUBLIC glog::glog PRIVATE dl)
+target_link_libraries(transfer_engine_obj PRIVATE ds_spdlog::spdlog dl)
 
 if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
     if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
@@ -91,6 +183,7 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
         set_target_properties(p2p_transfer PROPERTIES
             BUILD_RPATH "$ORIGIN"
             INSTALL_RPATH "$ORIGIN"
+            BUILD_WITH_INSTALL_RPATH ON
         )
         set(CMAKE_SKIP_INSTALL_RULES ${_te_prev_skip_install_rules})
         set(BUILD_SHARED_LIBS ${_te_prev_build_shared_libs} CACHE BOOL "Restore shared library mode" FORCE)
@@ -137,7 +230,7 @@ target_include_directories(transfer_engine
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-target_link_libraries(transfer_engine PUBLIC glog::glog Threads::Threads PRIVATE dl)
+target_link_libraries(transfer_engine PUBLIC Threads::Threads PRIVATE ds_spdlog::spdlog dl)
 if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
     if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
         add_dependencies(transfer_engine p2p_transfer copy_p2p_transfer_so)
@@ -233,6 +326,73 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
         add_dependencies(transfer_engine_core_modules_llt p2p_transfer)
     endif()
     add_test(NAME transfer_engine_core_modules_llt COMMAND transfer_engine_core_modules_llt)
+
+    add_executable(transfer_engine_logging_llt tests/llt/logging_llt_test.cpp)
+    target_include_directories(transfer_engine_logging_llt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(transfer_engine_logging_llt PRIVATE transfer_engine GTest::gtest GTest::gtest_main)
+    add_test(
+        NAME transfer_engine_logging_stderr_llt
+        COMMAND transfer_engine_logging_llt --gtest_filter=TransferEngineLoggingStderrTest.*
+    )
+    set_tests_properties(transfer_engine_logging_stderr_llt PROPERTIES
+        ENVIRONMENT
+            "TRANSFER_ENGINE_LOG_LEVEL=WARNING;TRANSFER_ENGINE_VLOG_LEVEL=0;TRANSFER_ENGINE_LOG_TO_STDERR=1"
+    )
+    add_test(
+        NAME transfer_engine_logging_file_llt
+        COMMAND transfer_engine_logging_llt --gtest_filter=TransferEngineLoggingFileTest.*
+    )
+    set_tests_properties(transfer_engine_logging_file_llt PROPERTIES
+        ENVIRONMENT
+            "TRANSFER_ENGINE_LOG_LEVEL=INFO;TRANSFER_ENGINE_VLOG_LEVEL=0;TRANSFER_ENGINE_VMODULE=logging_llt_test=1;TRANSFER_ENGINE_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/transfer_engine_log_test;TRANSFER_ENGINE_LOG_TO_STDERR=0;TRANSFER_ENGINE_ALSO_LOG_TO_STDERR=0;TRANSFER_ENGINE_LOG_TO_STDOUT=0;TRANSFER_ENGINE_STDERR_THRESHOLD=2;TRANSFER_ENGINE_LOG_BUFFER_LEVEL=0;TRANSFER_ENGINE_LOG_BUFFER_SECONDS=0;TRANSFER_ENGINE_MAX_LOG_SIZE_MB=1800;TRANSFER_ENGINE_LOG_FILE_MODE=0664;TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME=1;TRANSFER_ENGINE_LOG_FILE_HEADER=1;TRANSFER_ENGINE_LOG_PREFIX=1;TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX=1;TRANSFER_ENGINE_LOG_UTC_TIME=0"
+    )
+
+    if (TARGET p2p_transfer)
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_p2p_no_glog_needed p2p_transfer "libglog")
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_p2p_no_brpc_needed p2p_transfer "libbrpc")
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_p2p_no_upstream_spdlog_needed p2p_transfer "libspdlog")
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_p2p_no_ds_spdlog_needed p2p_transfer "libds-spdlog")
+        transfer_engine_add_no_gnu_unique_test(
+            transfer_engine_p2p_no_gnu_unique_symbols p2p_transfer)
+        transfer_engine_add_no_dynamic_symbol_test(
+            transfer_engine_p2p_no_glog_symbols p2p_transfer "google::Log")
+        transfer_engine_add_no_dynamic_symbol_test(
+            transfer_engine_p2p_no_upstream_spdlog_symbols p2p_transfer "(^|[^A-Za-z0-9_])spdlog::")
+        transfer_engine_add_no_defined_dynamic_symbol_test(
+            transfer_engine_p2p_no_fmt_symbols p2p_transfer "(^|[^A-Za-z0-9_])fmt::")
+    endif()
+
+    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py")
+        transfer_engine_add_forbidden_text_test(
+            transfer_engine_integrated_python_no_rtld_global
+            "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py"
+            "RTLD_GLOBAL")
+        transfer_engine_add_forbidden_text_test(
+            transfer_engine_integrated_python_no_ctypes_cdll
+            "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py"
+            "ctypes.CDLL")
+        if (TRANSFER_ENGINE_BUILD_PYTHON)
+            add_test(
+                NAME transfer_engine_integrated_python_parent_import_lazy
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/python/check_parent_import_lazy.py
+            )
+            set_tests_properties(transfer_engine_integrated_python_parent_import_lazy PROPERTIES
+                ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/../python"
+            )
+        endif()
+    endif()
+    transfer_engine_add_forbidden_text_test(
+        transfer_engine_standalone_python_no_rtld_global
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/yr/datasystem/__init__.py"
+        "RTLD_GLOBAL")
+    transfer_engine_add_forbidden_text_test(
+        transfer_engine_standalone_python_no_ctypes_cdll
+        "${CMAKE_CURRENT_SOURCE_DIR}/python/yr/datasystem/__init__.py"
+        "ctypes.CDLL")
 endif()
 
 if (TRANSFER_ENGINE_BUILD_PYTHON)
@@ -248,13 +408,17 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
     set(CMAKE_CXX_FLAGS "${_te_saved_cxx_flags}")
     set(CMAKE_CXX_FLAGS_RELEASE "${_te_saved_cxx_flags_release}")
     set(CMAKE_SHARED_MODULE_LINKER_FLAGS "${_te_saved_shared_module_linker_flags}")
-    set_target_properties(_transfer_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(_transfer_engine PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN YES
+    )
     target_include_directories(_transfer_engine PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     )
     target_sources(_transfer_engine PRIVATE $<TARGET_OBJECTS:transfer_engine_obj>)
-    target_link_libraries(_transfer_engine PRIVATE glog::glog dl)
+    target_link_libraries(_transfer_engine PRIVATE ds_spdlog::spdlog Threads::Threads dl)
     if (TARGET Python3::Module)
         target_link_libraries(_transfer_engine PRIVATE Python3::Module)
     elseif(TARGET Python3::Python)
@@ -266,8 +430,10 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
     endif()
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(_transfer_engine PRIVATE -fPIC)
+        target_link_options(_transfer_engine PRIVATE "LINKER:--exclude-libs,ALL")
     endif()
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(_transfer_engine PRIVATE -fno-gnu-unique)
         target_link_options(_transfer_engine PRIVATE -Wno-error=maybe-uninitialized)
     endif()
     if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
@@ -276,6 +442,7 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
     set_target_properties(_transfer_engine PROPERTIES
         BUILD_RPATH "$ORIGIN;$ORIGIN/lib"
         INSTALL_RPATH "$ORIGIN;$ORIGIN/lib"
+        BUILD_WITH_INSTALL_RPATH ON
     )
     if (TRANSFER_ENGINE_PYTHON_OUTPUT_DIR)
         set_target_properties(_transfer_engine PROPERTIES
@@ -288,13 +455,46 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
     endif()
 
     if (TRANSFER_ENGINE_BUILD_TESTS)
+        set(_te_python_st_library_paths "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        if (SPDLOG_LIB_PATH)
+            list(APPEND _te_python_st_library_paths "${SPDLOG_LIB_PATH}")
+        endif()
+        if (TRANSFER_ENGINE_SPDLOG_LIB_PATH AND NOT TRANSFER_ENGINE_SPDLOG_LIB_PATH STREQUAL SPDLOG_LIB_PATH)
+            list(APPEND _te_python_st_library_paths "${TRANSFER_ENGINE_SPDLOG_LIB_PATH}")
+        endif()
+        list(JOIN _te_python_st_library_paths ":" _te_python_st_ld_library_path)
+        if (DEFINED ENV{LD_LIBRARY_PATH} AND NOT "$ENV{LD_LIBRARY_PATH}" STREQUAL "")
+            string(APPEND _te_python_st_ld_library_path ":$ENV{LD_LIBRARY_PATH}")
+        endif()
+        set(_te_python_st_environment
+            "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/python"
+            "LD_LIBRARY_PATH=${_te_python_st_ld_library_path}"
+        )
+        if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
+            list(APPEND _te_python_st_environment
+                "TRANSFER_ENGINE_P2P_SO_PATH=${CMAKE_CURRENT_BINARY_DIR}/lib/libp2p_transfer.so")
+        endif()
         add_test(
             NAME transfer_engine_python_st
             COMMAND ${Python3_EXECUTABLE} -m unittest tests.python.st.test_python_api_st
         )
         set_tests_properties(transfer_engine_python_st PROPERTIES
-            ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/python"
+            ENVIRONMENT "${_te_python_st_environment}"
         )
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_python_no_glog_needed _transfer_engine "libglog")
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_python_no_brpc_needed _transfer_engine "libbrpc")
+        transfer_engine_add_no_needed_library_test(
+            transfer_engine_python_no_upstream_spdlog_needed _transfer_engine "libspdlog")
+        transfer_engine_add_no_gnu_unique_test(
+            transfer_engine_python_no_gnu_unique_symbols _transfer_engine)
+        transfer_engine_add_no_dynamic_symbol_test(
+            transfer_engine_python_no_glog_symbols _transfer_engine "google::Log")
+        transfer_engine_add_no_dynamic_symbol_test(
+            transfer_engine_python_no_upstream_spdlog_symbols _transfer_engine "(^|[^A-Za-z0-9_])spdlog::")
+        transfer_engine_add_no_defined_dynamic_symbol_test(
+            transfer_engine_python_no_fmt_symbols _transfer_engine "(^|[^A-Za-z0-9_])fmt::")
     endif()
 endif()
 
@@ -314,5 +514,10 @@ if (TRANSFER_ENGINE_STANDALONE)
     if (TARGET _transfer_engine)
         install(TARGETS _transfer_engine
             LIBRARY DESTINATION python/yr/datasystem)
+    endif()
+    if (TRANSFER_ENGINE_SPDLOG_LIB_PATH)
+        install(DIRECTORY "${TRANSFER_ENGINE_SPDLOG_LIB_PATH}/"
+            DESTINATION lib
+            FILES_MATCHING PATTERN "libds-spdlog.so*")
     endif()
 endif()

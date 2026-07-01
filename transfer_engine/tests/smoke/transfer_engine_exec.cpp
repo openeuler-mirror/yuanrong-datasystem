@@ -1,16 +1,13 @@
 #include <cstdlib>
 #include <vector>
 
-#include <glog/logging.h>
-
 #include "internal/backend/mock_data_plane_backend.h"
 #include "internal/log/logging.h"
 #include "datasystem/transfer_engine/transfer_engine.h"
 
 int main()
 {
-    datasystem::internal::EnsureGlogInitialized();
-    // 中文说明：该可执行用例用于在无 gtest 场景下验证 MockDataPlaneBackend 端到端读流程。
+    datasystem::internal::InitializeLogging();
     auto ownerBackend = std::make_shared<datasystem::MockDataPlaneBackend>();
     auto requesterBackend = std::make_shared<datasystem::MockDataPlaneBackend>();
 
@@ -19,13 +16,13 @@ int main()
 
     auto rc = owner.Initialize("127.0.0.1:63051", "ascend", "npu:0");
     if (rc.IsError()) {
-        LOG(ERROR) << "owner initialize failed: " << rc.GetMsg();
+        TE_LOG_ERROR << "owner initialize failed: " << rc.GetMsg();
         return EXIT_FAILURE;
     }
 
     rc = requester.Initialize("127.0.0.1:63052", "ascend", "npu:0");
     if (rc.IsError()) {
-        LOG(ERROR) << "requester initialize failed: " << rc.GetMsg();
+        TE_LOG_ERROR << "requester initialize failed: " << rc.GetMsg();
         return EXIT_FAILURE;
     }
 
@@ -37,7 +34,7 @@ int main()
 
     rc = owner.RegisterMemory(reinterpret_cast<uintptr_t>(src.data()), src.size());
     if (rc.IsError()) {
-        LOG(ERROR) << "register memory failed: " << rc.GetMsg();
+        TE_LOG_ERROR << "register memory failed: " << rc.GetMsg();
         return EXIT_FAILURE;
     }
 
@@ -47,15 +44,15 @@ int main()
         {reinterpret_cast<uintptr_t>(src.data())},
         {dst.size()});
     if (rc.IsError()) {
-        LOG(ERROR) << "transfer_sync_read failed: " << rc.GetMsg();
+        TE_LOG_ERROR << "transfer_sync_read failed: " << rc.GetMsg();
         return EXIT_FAILURE;
     }
 
     if (src != dst) {
-        LOG(ERROR) << "data mismatch after transfer_sync_read";
+        TE_LOG_ERROR << "data mismatch after transfer_sync_read";
         return EXIT_FAILURE;
     }
 
-    LOG(INFO) << "transfer_engine_exec: PASS";
+    TE_LOG_INFO << "transfer_engine_exec: PASS";
     return EXIT_SUCCESS;
 }

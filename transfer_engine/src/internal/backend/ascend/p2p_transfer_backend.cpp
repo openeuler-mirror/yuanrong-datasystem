@@ -7,14 +7,14 @@
 #include <cstdlib>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include <glog/logging.h>
 
 #include "internal/log/environment_dump.h"
 #include "internal/log/logging.h"
@@ -100,6 +100,95 @@ Result ToStatusAcl(aclError rc, const std::string &where)
     return TE_MAKE_STATUS(ErrorCode::kRuntimeError, where + " failed, acl rc=" + std::to_string(static_cast<int>(rc)));
 }
 
+void P2PLogBridge(P2pLogSeverity severity, int vlogLevel, const char *file, int line, const char *message)
+{
+    internal::LogSeverity targetSeverity = internal::LogSeverity::INFO;
+    switch (severity) {
+        case P2P_LOG_WARNING:
+            targetSeverity = internal::LogSeverity::WARNING;
+            break;
+        case P2P_LOG_ERROR:
+            targetSeverity = internal::LogSeverity::ERROR;
+            break;
+        case P2P_LOG_INFO:
+        default:
+            break;
+    }
+
+    if (vlogLevel >= 0) {
+        if (!internal::ShouldVLog(vlogLevel, file)) {
+            return;
+        }
+    } else if (!internal::ShouldLog(targetSeverity)) {
+        return;
+    }
+
+    try {
+        std::string prefixedMessage = "[P2P] ";
+        if (message != nullptr) {
+            prefixedMessage += message;
+        }
+        internal::EmitExternalLog(targetSeverity, vlogLevel, file, line, prefixedMessage);
+    } catch (...) {
+        // Logging callbacks must never throw across the P2P shared-library boundary.
+    }
+}
+
+using P2PSetLogCallbackFn = void (*)(P2pLogCallback);
+using P2PLogCallbackHandle = std::uintptr_t;
+
+std::mutex &P2PLogCallbackMutex()
+{
+    // A detached cleanup worker can own Impl until process shutdown.
+    static auto *mutex = new std::mutex();
+    return *mutex;
+}
+
+std::unordered_map<P2PLogCallbackHandle, size_t> &P2PLogCallbackUsers()
+{
+    static auto *users = new std::unordered_map<P2PLogCallbackHandle, size_t>();
+    return *users;
+}
+
+void AcquireP2PLogCallback(P2PLogCallbackHandle handle, P2PSetLogCallbackFn setLogCallback) noexcept
+{
+    if (handle == 0 || setLogCallback == nullptr) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(P2PLogCallbackMutex());
+        size_t &users = P2PLogCallbackUsers()[handle];
+        if (users == 0) {
+            setLogCallback(&P2PLogBridge);
+        }
+        ++users;
+    } catch (...) {
+        // If refcount tracking allocation fails, keep forwarding P2P logs for diagnosability.
+        setLogCallback(&P2PLogBridge);
+    }
+}
+
+void ReleaseP2PLogCallback(P2PLogCallbackHandle handle, P2PSetLogCallbackFn setLogCallback) noexcept
+{
+    if (handle == 0 || setLogCallback == nullptr) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(P2PLogCallbackMutex());
+        auto &users = P2PLogCallbackUsers();
+        auto iter = users.find(handle);
+        if (iter == users.end()) {
+            return;
+        }
+        if (--iter->second == 0) {
+            setLogCallback(nullptr);
+            users.erase(iter);
+        }
+    } catch (...) {
+        // Destructors cannot report callback cleanup failures; leave process shutdown to reclaim state.
+    }
+}
+
 }  // namespace
 
 struct P2PTransferBackend::Impl {
@@ -109,6 +198,7 @@ struct P2PTransferBackend::Impl {
     using FnSend = HcclResult (*)(void *, uint64_t, HcclDataType, P2PComm, aclrtStream);
     using FnRecv = HcclResult (*)(void *, uint64_t, HcclDataType, P2PComm, aclrtStream);
     using FnGetCommAsyncError = HcclResult (*)(P2PComm, HcclResult *);
+    using FnSetLogCallback = P2PSetLogCallbackFn;
 
     using FnAclCreateStream = aclError (*)(aclrtStream *);
     using FnAclDestroyStream = aclError (*)(aclrtStream);
@@ -140,6 +230,7 @@ struct P2PTransferBackend::Impl {
     FnSend send = nullptr;
     FnRecv recv = nullptr;
     FnGetCommAsyncError getCommAsyncError = nullptr;
+    FnSetLogCallback setLogCallback = nullptr;
 
     FnAclCreateStream aclCreateStream = nullptr;
     FnAclDestroyStream aclDestroyStream = nullptr;
@@ -168,6 +259,7 @@ struct P2PTransferBackend::Impl {
     ~Impl()
     {
         if (p2pLibHandle != nullptr) {
+            ReleaseP2PLogCallback(reinterpret_cast<P2PLogCallbackHandle>(p2pLibHandle), setLogCallback);
             dlclose(p2pLibHandle);
         }
         if (aclLibHandle != nullptr) {
@@ -178,12 +270,12 @@ struct P2PTransferBackend::Impl {
 
 P2PTransferBackend::P2PTransferBackend() : impl_(std::make_shared<Impl>())
 {
-    internal::EnsureGlogInitialized();
-    LOG(INFO) << "p2p backend initialize begin";
+    internal::InitializeLogging();
+    TE_LOG_INFO << "p2p backend initialize begin";
     internal::DumpProcessEnvironment("p2p_backend_ctor_begin");
     const std::vector<std::string> candidates = BuildP2PLoadCandidates();
     for (size_t i = 0; i < candidates.size(); ++i) {
-        LOG(INFO) << "p2p backend dlopen candidate[" << i << "]=" << candidates[i];
+        TE_LOG_INFO << "p2p backend dlopen candidate[" << i << "]=" << candidates[i];
     }
     impl_->p2pLibHandle = TryOpenLib(candidates, &impl_->p2pLoadError);
     impl_->aclLibHandle = dlopen("libascendcl.so", RTLD_NOW | RTLD_LOCAL);
@@ -195,6 +287,8 @@ P2PTransferBackend::P2PTransferBackend() : impl_(std::make_shared<Impl>())
         impl_->send = LoadSymbol<Impl::FnSend>(impl_->p2pLibHandle, "P2PSend");
         impl_->recv = LoadSymbol<Impl::FnRecv>(impl_->p2pLibHandle, "P2PRecv");
         impl_->getCommAsyncError = LoadSymbol<Impl::FnGetCommAsyncError>(impl_->p2pLibHandle, "P2PGetCommAsyncError");
+        impl_->setLogCallback = LoadSymbol<Impl::FnSetLogCallback>(impl_->p2pLibHandle, "P2PSetLogCallback");
+        AcquireP2PLogCallback(reinterpret_cast<P2PLogCallbackHandle>(impl_->p2pLibHandle), impl_->setLogCallback);
 
         if (impl_->getRootInfo == nullptr) {
             impl_->p2pSymbolError += "missing symbol: P2PGetRootInfo; ";
@@ -215,9 +309,9 @@ P2PTransferBackend::P2PTransferBackend() : impl_(std::make_shared<Impl>())
             impl_->p2pSymbolError += "missing symbol: P2PGetCommAsyncError; ";
         }
     }
-    LOG(INFO) << "p2p backend p2p library load result, loaded=" << (impl_->p2pLibHandle != nullptr)
-              << ", symbol_error=" << (impl_->p2pSymbolError.empty() ? "none" : impl_->p2pSymbolError)
-              << ", load_error=" << (impl_->p2pLoadError.empty() ? "none" : impl_->p2pLoadError);
+    TE_LOG_INFO << "p2p backend p2p library load result, loaded=" << (impl_->p2pLibHandle != nullptr) <<
+        ", symbol_error=" << (impl_->p2pSymbolError.empty() ? "none" : impl_->p2pSymbolError) <<
+        ", load_error=" << (impl_->p2pLoadError.empty() ? "none" : impl_->p2pLoadError);
 
     if (impl_->aclLibHandle != nullptr) {
         impl_->aclCreateStream = LoadSymbol<Impl::FnAclCreateStream>(impl_->aclLibHandle, "aclrtCreateStream");
@@ -232,7 +326,7 @@ P2PTransferBackend::P2PTransferBackend() : impl_(std::make_shared<Impl>())
         impl_->aclGetCurrentContext = LoadSymbol<Impl::FnAclGetCurrentContext>(impl_->aclLibHandle, "aclrtGetCurrentContext");
         impl_->aclSetDevice = LoadSymbol<Impl::FnAclSetDevice>(impl_->aclLibHandle, "aclrtSetDevice");
     }
-    LOG(INFO) << "p2p backend acl library load result, loaded=" << (impl_->aclLibHandle != nullptr);
+    TE_LOG_INFO << "p2p backend acl library load result, loaded=" << (impl_->aclLibHandle != nullptr);
 
     std::shared_ptr<Impl> workerImpl = impl_;
     impl_->cleanupThread = std::thread([workerImpl]() {
@@ -297,7 +391,7 @@ P2PTransferBackend::P2PTransferBackend() : impl_(std::make_shared<Impl>())
             }
         }
     });
-    LOG(INFO) << "p2p backend initialize success";
+    TE_LOG_INFO << "p2p backend initialize success";
 }
 
 P2PTransferBackend::~P2PTransferBackend()
@@ -344,7 +438,7 @@ P2PTransferBackend::~P2PTransferBackend()
 
 Result P2PTransferBackend::CreateRootInfo(std::string *rootInfoBytes)
 {
-    LOG(INFO) << "p2p backend create root info begin";
+    TE_LOG_INFO << "p2p backend create root info begin";
     internal::DumpProcessEnvironment("p2p_backend_create_root_info");
     TE_CHECK_PTR_OR_RETURN(rootInfoBytes);
     if (impl_->getRootInfo == nullptr) {
@@ -361,16 +455,15 @@ Result P2PTransferBackend::CreateRootInfo(std::string *rootInfoBytes)
     HcclRootInfo rootInfo;
     TE_RETURN_IF_ERROR(ToStatus(impl_->getRootInfo(&rootInfo), "P2PGetRootInfo"));
     rootInfoBytes->assign(reinterpret_cast<const char *>(&rootInfo), sizeof(HcclRootInfo));
-    LOG(INFO) << "p2p backend create root info success";
+    TE_LOG_INFO << "p2p backend create root info success";
     return Result::OK();
 }
 
 Result P2PTransferBackend::InitRecv(const ConnectionSpec &spec, const std::string &rootInfoBytes)
 {
-    LOG(INFO) << "p2p backend init recv begin, local=" << spec.localHost << ":" << spec.localPort
-              << ", local_device_id=" << spec.localDeviceId
-              << ", peer=" << spec.peerHost << ":" << spec.peerPort
-              << ", peer_device_id=" << spec.peerDeviceId;
+    TE_LOG_INFO << "p2p backend init recv begin, local=" << spec.localHost << ":" << spec.localPort <<
+        ", local_device_id=" << spec.localDeviceId << ", peer=" << spec.peerHost << ":" << spec.peerPort <<
+        ", peer_device_id=" << spec.peerDeviceId;
     internal::DumpProcessEnvironment("p2p_backend_init_recv");
     TE_CHECK_OR_RETURN(rootInfoBytes.size() == sizeof(HcclRootInfo), ErrorCode::kInvalid, "invalid root info size");
     if (impl_->commInit == nullptr) {
@@ -431,16 +524,15 @@ Result P2PTransferBackend::InitRecv(const ConnectionSpec &spec, const std::strin
     slot.recvEvent = recvEvent;
     slot.localDeviceId = spec.localDeviceId;
     slot.recvPostedCount = 0;
-    LOG(INFO) << "p2p backend init recv success, key=" << key;
+    TE_LOG_INFO << "p2p backend init recv success, key=" << key;
     return Result::OK();
 }
 
 Result P2PTransferBackend::InitSend(const ConnectionSpec &spec, const std::string &rootInfoBytes)
 {
-    LOG(INFO) << "p2p backend init send begin, local=" << spec.localHost << ":" << spec.localPort
-              << ", local_device_id=" << spec.localDeviceId
-              << ", peer=" << spec.peerHost << ":" << spec.peerPort
-              << ", peer_device_id=" << spec.peerDeviceId;
+    TE_LOG_INFO << "p2p backend init send begin, local=" << spec.localHost << ":" << spec.localPort <<
+        ", local_device_id=" << spec.localDeviceId << ", peer=" << spec.peerHost << ":" << spec.peerPort <<
+        ", peer_device_id=" << spec.peerDeviceId;
     internal::DumpProcessEnvironment("p2p_backend_init_send");
     TE_CHECK_OR_RETURN(rootInfoBytes.size() == sizeof(HcclRootInfo), ErrorCode::kInvalid, "invalid root info size");
     if (impl_->commInit == nullptr) {
@@ -486,7 +578,7 @@ Result P2PTransferBackend::InitSend(const ConnectionSpec &spec, const std::strin
     slot.sendComm = sendComm;
     slot.sendStream = sendStream;
     slot.localDeviceId = spec.localDeviceId;
-    LOG(INFO) << "p2p backend init send success, key=" << key;
+    TE_LOG_INFO << "p2p backend init send success, key=" << key;
     return Result::OK();
 }
 

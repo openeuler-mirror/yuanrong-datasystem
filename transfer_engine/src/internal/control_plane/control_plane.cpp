@@ -7,11 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include <glog/logging.h>
-
 #include "internal/control_plane/control_plane_codec.h"
 #include "internal/control_plane/socket_rpc_transport.h"
 #include "internal/control_plane/transfer_control_dispatcher.h"
+#include "internal/log/logging.h"
 #include "datasystem/transfer_engine/status_helper.h"
 
 namespace datasystem {
@@ -89,7 +88,7 @@ Result SocketControlServer::Start(const std::string &host, uint16_t port, std::s
         workerThreads_.emplace_back([this]() { WorkerLoop(); });
     }
     acceptThread_ = std::thread([this]() { AcceptLoop(); });
-    LOG(INFO) << "control server started"
+    TE_LOG_INFO << "control server started"
               << ", host=" << host << ", port=" << port
               << ", worker_threads=" << workerThreads;
     return Result::OK();
@@ -127,7 +126,7 @@ void SocketControlServer::Stop()
     }
     workerCount_ = 0;
     service_.reset();
-    LOG(INFO) << "control server stopped";
+    TE_LOG_INFO << "control server stopped";
 }
 
 void SocketControlServer::AcceptLoop()
@@ -141,7 +140,7 @@ void SocketControlServer::AcceptLoop()
                 continue;
             }
             if (running_) {
-                LOG(WARNING) << "accept failed while server running, errno=" << errno;
+                TE_LOG_WARNING << "accept failed while server running, errno=" << errno;
                 continue;
             }
             break;
@@ -149,7 +148,7 @@ void SocketControlServer::AcceptLoop()
         {
             std::lock_guard<std::mutex> lock(queueMutex_);
             if (clientFdQueue_.size() >= kMaxPendingRpcConnections) {
-                LOG(WARNING) << "drop rpc connection due to full queue"
+                TE_LOG_WARNING << "drop rpc connection due to full queue"
                              << ", pending=" << clientFdQueue_.size();
                 ::close(clientFd);
                 continue;
@@ -188,7 +187,7 @@ void SocketControlServer::HandleClient(int clientFd)
     std::vector<uint8_t> reqPayload;
     Result recvRc = RecvFrame(clientFd, &method, &reqPayload);
     if (recvRc.IsError()) {
-        LOG(WARNING) << "recv rpc frame failed, reason=" << recvRc.ToString();
+        TE_LOG_WARNING << "recv rpc frame failed, reason=" << recvRc.ToString();
         std::vector<uint8_t> err;
         (void)MakeServerErrorPayload(recvRc.GetMsg(), &err);
         (void)SendFrame(clientFd, RpcMethod::kReadTrigger, err);

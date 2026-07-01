@@ -39,6 +39,23 @@ typedef enum P2pSegmentPermissions {
     P2P_SEGMENT_WRITE_ONLY,
 } P2pSegmentPermissions;
 
+typedef enum P2pLogSeverity {
+    P2P_LOG_INFO = 0,
+    P2P_LOG_WARNING = 1,
+    P2P_LOG_ERROR = 2,
+} P2pLogSeverity;
+
+typedef void (*P2pLogCallback)(P2pLogSeverity severity, int vlogLevel, const char *file, int line,
+                               const char *message);
+
+/**
+ * @brief Installs an optional process-local logging callback.
+ *
+ * TransferEngine uses this hook to route bundled P2P logs through its private logger.
+ * Passing nullptr restores the standalone stderr fallback.
+ */
+P2P_TRANSFER_EXPORT void P2PSetLogCallback(P2pLogCallback callback);
+
 // Later: Make sure large enough
 const uint32_t P2P_SEGMENT_INFO_BYTES = 48;
 /**

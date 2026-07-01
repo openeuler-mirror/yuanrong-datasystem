@@ -40,7 +40,8 @@
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
-  - Python package `yr.datasystem` also conditionally exposes transfer-engine bindings and lazily exposes `DsTensorClient`.
+  - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
+    bindings so importing `TransferEngine` alone does not eagerly load `libds_client_py` or its `libbrpc` dependency.
 - Pending verification:
   - exact internal ownership split between `listen_worker.cpp`, `client_worker_common_api.cpp`, and `embedded_client_worker_api.cpp` for each API family;
   - whether Java and Go clients follow the same runtime layering closely enough to share one future module document.
@@ -123,7 +124,8 @@
 
 - Python `Context` currently exposes `set_trace_id`, but not `SetTenantId`, even though C++ `Context` has both APIs.
 - Python `KVClient` is backed by a pybind class named `KVClient` whose underlying C++ object is `ObjectClientImpl`.
-- Python package init preloads transfer-engine-related shared libraries when present and exposes transfer-engine bindings only if import succeeds.
+- Python package init only configures the bundled transfer-engine P2P DSO path when present; public SDK classes and
+  transfer-engine bindings are loaded on first attribute access to keep TE-only imports isolated from `libbrpc`.
 - Python wrappers raise exceptions on error instead of returning `Status` objects in the same way the C++ API does.
 
 ## Important Internal Neighbors

@@ -5,8 +5,6 @@
 #include <thread>
 #include <unordered_map>
 
-#include <glog/logging.h>
-
 #include "internal/connection/connection_manager.h"
 #include "internal/control_plane/control_plane.h"
 #include "internal/backend/mock_data_plane_backend.h"
@@ -143,7 +141,7 @@ TransferEngine::~TransferEngine()
 Result TransferEngine::Initialize(const std::string &localHostname, const std::string &protocol,
                                   const std::string &deviceName)
 {
-    internal::EnsureGlogInitialized();
+    internal::InitializeLogging();
     std::string localHost;
     uint16_t localPort = 0;
     int32_t deviceId = -1;
@@ -153,7 +151,7 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
     std::lock_guard<std::mutex> lock(apiMutex_);
     TE_CHECK_OR_RETURN(!initialized_, ErrorCode::kInvalid, "transfer engine already initialized");
     TE_CHECK_OR_RETURN(backend_ != nullptr, ErrorCode::kInvalid, "backend is null");
-    LOG(INFO) << "transfer engine initialize start"
+    TE_LOG_INFO << "transfer engine initialize start"
               << ", local_hostname=" << localHostname << ", protocol=" << protocol
               << ", device_name=" << deviceName << ", local_host=" << localHost << ", local_port=" << localPort
               << ", device_id=" << deviceId
@@ -167,14 +165,14 @@ Result TransferEngine::Initialize(const std::string &localHostname, const std::s
                                                    backend_);
     Result startRc = controlServer_->Start(localHost_, localPort_, controlService_, rpcThreads_);
     if (startRc.IsError()) {
-        LOG(ERROR) << "control server start failed"
+        TE_LOG_ERROR << "control server start failed"
                    << ", local_host=" << localHost_ << ", local_port=" << localPort_
                    << ", device_id=" << deviceId_ << ", reason=" << startRc.ToString();
         return startRc;
     }
 
     initialized_ = true;
-    LOG(INFO) << "transfer engine initialize success"
+    TE_LOG_INFO << "transfer engine initialize success"
               << ", local_host=" << localHost_ << ", local_port=" << localPort_
               << ", device_id=" << deviceId_;
     return Result::OK();
@@ -218,7 +216,7 @@ Result TransferEngine::BatchRegisterMemory(const std::vector<uintptr_t> &bufferA
         addedBaseAddrs.push_back(region.baseAddr);
     }
 
-    LOG(INFO) << "batch register memory success"
+    TE_LOG_INFO << "batch register memory success"
               << ", device_id=" << deviceId_ << ", count=" << bufferAddrs.size();
     return Result::OK();
 }
@@ -238,7 +236,7 @@ Result TransferEngine::BatchUnregisterMemory(const std::vector<uintptr_t> &buffe
         TE_CHECK_OR_RETURN(registeredMemory_->RemoveByBaseAddr(static_cast<uint64_t>(bufferAddrs[i])),
                            ErrorCode::kNotFound, "region is not registered");
     }
-    LOG(INFO) << "batch unregister memory success, count=" << bufferAddrs.size();
+    TE_LOG_INFO << "batch unregister memory success, count=" << bufferAddrs.size();
     return Result::OK();
 }
 
@@ -292,7 +290,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
             }
         });
 
-    LOG(INFO) << "batch sync read begin"
+    TE_LOG_INFO << "batch sync read begin"
               << ", item_count=" << buffers.size() << ", target_hostname=" << targetHostname
               << ", peer=" << peerHost << ":" << peerPort
               << ", request_id_start=" << requestIdStart;
@@ -300,7 +298,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     int32_t ownerDeviceId = -1;
     Result connRc = BuildConnectionIfNeeded(peerHost, peerPort, &ownerDeviceId);
     if (connRc.IsError()) {
-        LOG(ERROR) << "batch sync read build connection failed, reason=" << connRc.ToString();
+        TE_LOG_ERROR << "batch sync read build connection failed, reason=" << connRc.ToString();
         return connRc;
     }
 
@@ -315,7 +313,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     for (size_t i = 0; i < buffers.size(); ++i) {
         Result postRecvRc = backend_->PostRecv(spec, static_cast<uint64_t>(buffers[i]), static_cast<uint64_t>(lengths[i]));
         if (postRecvRc.IsError()) {
-            LOG(ERROR) << "batch sync read post recv failed, item_index=" << i
+            TE_LOG_ERROR << "batch sync read post recv failed, item_index=" << i
                        << ", reason=" << postRecvRc.ToString();
             backend_->AbortConnection(spec);
             ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
@@ -341,7 +339,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     BatchReadTriggerResponse rsp;
     Result triggerRc = controlClient_->BatchReadTrigger(peerHost, peerPort, req, &rsp);
     if (triggerRc.IsError()) {
-        LOG(ERROR) << "batch sync read rpc failed, reason=" << triggerRc.ToString();
+        TE_LOG_ERROR << "batch sync read rpc failed, reason=" << triggerRc.ToString();
         backend_->AbortConnection(spec);
         ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
         connMgr_->MarkStale(key);
@@ -349,7 +347,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     }
     Result rpcStatus = RpcCodeToStatus(rsp.code, rsp.msg);
     if (rpcStatus.IsError()) {
-        LOG(ERROR) << "batch sync read rpc returned error, failed_item_index=" << rsp.failedItemIndex
+        TE_LOG_ERROR << "batch sync read rpc returned error, failed_item_index=" << rsp.failedItemIndex
                    << ", reason=" << rsp.msg;
         backend_->AbortConnection(spec);
         ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
@@ -360,14 +358,14 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
     for (size_t i = 0; i < buffers.size(); ++i) {
         Result waitRc = backend_->WaitRecv(spec, kDefaultRecvWaitTimeoutMs);
         if (waitRc.IsError()) {
-            LOG(ERROR) << "batch sync read wait recv failed, item_index=" << i
+            TE_LOG_ERROR << "batch sync read wait recv failed, item_index=" << i
                        << ", reason=" << waitRc.ToString();
             ConnectionKey key{ deviceIdSnapshot, peerHost, peerPort, ownerDeviceId };
             connMgr_->MarkStale(key);
             return waitRc;
         }
     }
-    LOG(INFO) << "batch sync read success, item_count=" << buffers.size()
+    TE_LOG_INFO << "batch sync read success, item_count=" << buffers.size()
               << ", target_hostname=" << targetHostname;
     return Result::OK();
 }
@@ -379,7 +377,7 @@ Result TransferEngine::Finalize()
         if (!initialized_) {
             return Result::OK();
         }
-        LOG(INFO) << "transfer engine finalize start"
+        TE_LOG_INFO << "transfer engine finalize start"
                   << ", local_host=" << localHost_ << ", local_port=" << localPort_
                   << ", device_id=" << deviceId_ << ", inflight_sync_reads=" << inFlightSyncReads_;
         finalizing_ = true;
@@ -404,10 +402,8 @@ Result TransferEngine::Finalize()
         nextRequestId_ = 1;
         controlService_.reset();
     }
-    LOG(INFO) << "transfer engine finalize success";
-    google::FlushLogFiles(google::GLOG_INFO);
-    google::FlushLogFiles(google::GLOG_WARNING);
-    google::FlushLogFiles(google::GLOG_ERROR);
+    TE_LOG_INFO << "transfer engine finalize success";
+    internal::FlushLogs();
     return Result::OK();
 }
 
@@ -426,7 +422,7 @@ Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint
     if (cachedOwnerDeviceId >= 0) {
         ConnectionKey key{ deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
         if (connMgr_->HasReadyConnection(key)) {
-            LOG(INFO) << "reuse cached connection"
+            TE_LOG_INFO << "reuse cached connection"
                       << ", peer=" << peerHost << ":" << peerPort
                       << ", owner_device_id=" << cachedOwnerDeviceId;
             QueryConnReadyRequest queryReq;
@@ -444,7 +440,7 @@ Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint
                     return Result::OK();
                 }
             }
-            LOG(WARNING) << "cached connection stale, rebuilding"
+            TE_LOG_WARNING << "cached connection stale, rebuilding"
                          << ", peer=" << peerHost << ":" << peerPort
                          << ", owner_device_id=" << cachedOwnerDeviceId;
             connMgr_->MarkStale(key);
@@ -459,14 +455,14 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
 {
     TE_CHECK_PTR_OR_RETURN(ownerDeviceId);
     std::lock_guard<std::mutex> lock(chainMutex_);
-    LOG(INFO) << "build connection start"
+    TE_LOG_INFO << "build connection start"
               << ", peer=" << peerHost << ":" << peerPort << ", device_id=" << deviceId_;
     internal::DumpProcessEnvironment("build_connection_once_start");
 
     std::string rootInfo;
     Result createRootRc = backend_->CreateRootInfo(&rootInfo);
     if (createRootRc.IsError()) {
-        LOG(ERROR) << "build connection create root info failed"
+        TE_LOG_ERROR << "build connection create root info failed"
                    << ", peer=" << peerHost << ":" << peerPort << ", reason=" << createRootRc.ToString();
         return createRootRc;
     }
@@ -481,13 +477,13 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     ExchangeRootInfoResponse exchangeRsp;
     Result exchangeRc = controlClient_->ExchangeRootInfo(peerHost, peerPort, exchangeReq, &exchangeRsp);
     if (exchangeRc.IsError()) {
-        LOG(ERROR) << "build connection exchange root info rpc failed"
+        TE_LOG_ERROR << "build connection exchange root info rpc failed"
                    << ", peer=" << peerHost << ":" << peerPort << ", reason=" << exchangeRc.ToString();
         return exchangeRc;
     }
     Result exchangeRpcStatus = RpcCodeToStatus(exchangeRsp.code, exchangeRsp.msg);
     if (exchangeRpcStatus.IsError()) {
-        LOG(ERROR) << "build connection exchange root info rejected"
+        TE_LOG_ERROR << "build connection exchange root info rejected"
                    << ", peer=" << peerHost << ":" << peerPort << ", rsp_code=" << exchangeRsp.code
                    << ", rsp_msg=" << exchangeRsp.msg;
         return exchangeRpcStatus;
@@ -503,7 +499,7 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     spec.peerDeviceId = exchangeRsp.ownerDeviceId;
     Result initRecvRc = backend_->InitRecv(spec, rootInfo);
     if (initRecvRc.IsError()) {
-        LOG(ERROR) << "build connection init recv failed"
+        TE_LOG_ERROR << "build connection init recv failed"
                    << ", peer=" << peerHost << ":" << peerPort
                    << ", owner_device_id=" << exchangeRsp.ownerDeviceId << ", reason=" << initRecvRc.ToString();
         return initRecvRc;
@@ -535,7 +531,7 @@ Result TransferEngine::BuildConnectionOnce(const std::string &peerHost, uint16_t
     }
 
     connMgr_->MarkStale(key);
-    LOG(WARNING) << "build connection timeout waiting owner ready"
+    TE_LOG_WARNING << "build connection timeout waiting owner ready"
                  << ", peer=" << peerHost << ":" << peerPort
                  << ", owner_device_id=" << exchangeRsp.ownerDeviceId
                  << ", retry_count=" << kConnReadyRetryCount;

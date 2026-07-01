@@ -110,6 +110,7 @@
 | zlib | `1.3.1` | always | Used by gRPC/package libs. |
 | libsodium | `1.0.18` | always through `libzmq.cmake` | Built before ZeroMQ. |
 | ZeroMQ | `4.3.5` | always | Provides main RPC transport library. |
+| brpc | `1.15.0` | always | Built as shared brpc with `WITH_GLOG=OFF` against project gflags, leveldb, protobuf, and OpenSSL; applies `avoid-glog-flag-conflicts.patch` so brpc's built-in logging path registers `brpc_*` verbosity flags instead of glog-owned names. |
 | jemalloc | `5.3.0` | always | Shared jemalloc is linked into `datasystem_worker_bin`; profiling controlled by `SUPPORT_JEPROF`. |
 | RocksDB | `7.10.2` | always | Used by metadata/replica storage code. |
 | SecureC / libboundscheck | `v1.1.16` | always | Also passed into p2p-transfer build. |
@@ -206,6 +207,7 @@ root
 | `acl_plugin` / `cuda_plugin` | shared plugin | external device libs, protobuf, p2p-transfer for Ascend | Hash header generation depends on stripped plugin output. |
 | `common_persistence_api` | static | `common_obs`, `common_sfs_client`, `common_slot_client`, curl | L2 persistence aggregation point. |
 | `dsbench_cpp` | executable | `datasystem`, pthread, `common_util` | Included in wheel payload. |
+| `transfer_engine` / `_transfer_engine` | static library / Python extension | private `ds_spdlog::spdlog`, Threads, `dl`; optional bundled `libp2p_transfer.so` | Must not link or package glog. Standalone builds compile the same patched `libds-spdlog.so`; the private facade owns file/stderr behavior through `TRANSFER_ENGINE_*` configuration, bundled P2P routes logs through an optional callback, and Python/P2P outputs use `$ORIGIN` RPATH plus ELF symbol/dependency guards. |
 
 ### Optional Edges That Matter For Optimization
 
@@ -213,7 +215,7 @@ root
 | --- | --- | --- |
 | `WITH_TESTS` | `tests` subtree, GTest, test-only protos, test-only worker/server sources, CTest registration | `CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
 | `ENABLE_PERF` | perf client source, perf service source, perf proto targets, `perf_client.h` included in SDK headers | `src/datasystem/client/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt`, `cmake/package.cmake` |
-| `BUILD_HETERO_NPU` | Ascend find, p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files |
+| `BUILD_HETERO_NPU` | Ascend find, p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation; TransferEngine links the repository-private `ds_spdlog` target and installs a process-local callback into the bundled P2P DSO | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files, `transfer_engine/CMakeLists.txt` |
 | `BUILD_HETERO_GPU` | CUDA find, `common_cuda_device`, `cuda_plugin`, plugin hash generation | `cmake/dependency.cmake`, device CMake files |
 | `BUILD_PIPLN_H2D` | FATAL unless URMA is on; adds `os_transport_pipeline` and links it into SDK/worker | `cmake/dependency.cmake`, `src/datasystem/common/os_transport_pipeline/CMakeLists.txt` |
 | `BUILD_WITH_RDMA` | UCX source/library and rdma-core header check; installs UCX base and IB libs | `cmake/external_libs/ucx.cmake`, `cmake/package.cmake` |

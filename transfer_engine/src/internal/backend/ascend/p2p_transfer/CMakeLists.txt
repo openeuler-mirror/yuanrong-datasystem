@@ -193,13 +193,14 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wno-error=unused-variable
     )
 endif()
-
-if (TARGET glog::glog)
-    list(APPEND DEPENDS_LIBS glog::glog)
-    target_compile_definitions(p2p_transfer PRIVATE P2P_TRANSFER_USE_GLOG=1)
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(p2p_transfer PRIVATE -fno-gnu-unique)
 endif()
 
-target_link_libraries(p2p_transfer ${DEPENDS_LIBS})
+target_link_libraries(p2p_transfer PRIVATE ${DEPENDS_LIBS})
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_link_options(p2p_transfer PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 
 # ---- Install rules ----
 

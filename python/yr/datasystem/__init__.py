@@ -15,7 +15,8 @@
 Python module init.
 """
 
-import ctypes
+import importlib.machinery
+from importlib import import_module
 import os
 from pathlib import Path
 
@@ -43,17 +44,85 @@ __all__ = [
     "ServiceAffinityPolicy",
 ]
 
-from yr.datasystem.object_client import Buffer, ConsistencyType
-from yr.datasystem.object_client import ObjectClient, WriteMode
-from yr.datasystem.lib import libds_client_py as _ds
-from yr.datasystem.lib.libds_client_py import FutureTimeoutException
-from yr.datasystem.stream_client import SubconfigType, StreamClient
-from yr.datasystem.ds_client import DsClient
-from yr.datasystem.kv_client import KVClient
-from yr.datasystem.hetero_client import HeteroClient, Blob, DeviceBlobList, MetaInfo, Future
-from yr.datasystem.util import Status, Context, Validator as validator
-from yr.datasystem.service_discovery import ServiceDiscovery, ServiceDiscoveryOptions, ServiceAffinityPolicy
-if hasattr(_ds, "PerfClient"):
+
+def _configure_transfer_engine_runtime(pkg_dir: Path) -> None:
+    candidate_dirs = [pkg_dir, pkg_dir / "lib"]
+
+    p2p_candidates = [
+        path / "libp2p_transfer.so"
+        for path in candidate_dirs
+    ]
+    for p2p_so in p2p_candidates:
+        if p2p_so.exists():
+            os.environ.setdefault("TRANSFER_ENGINE_P2P_SO_PATH", str(p2p_so))
+            break
+
+_PKG_DIR = Path(__file__).resolve().parent
+_configure_transfer_engine_runtime(_PKG_DIR)
+if any((_PKG_DIR / ("_transfer_engine" + suffix)).exists() for suffix in importlib.machinery.EXTENSION_SUFFIXES):
+    __all__.extend(["TransferEngine", "Result", "ErrorCode"])
+
+# Keep public SDK symbols lazy so importing TransferEngine alone does not load
+# libds_client_py/libbrpc before other native logging runtimes enter the process.
+_LAZY_EXPORTS = {
+    "Buffer": ("yr.datasystem.object_client", "Buffer"),
+    "ConsistencyType": ("yr.datasystem.object_client", "ConsistencyType"),
+    "ObjectClient": ("yr.datasystem.object_client", "ObjectClient"),
+    "WriteMode": ("yr.datasystem.object_client", "WriteMode"),
+    "FutureTimeoutException": ("yr.datasystem.lib.libds_client_py", "FutureTimeoutException"),
+    "SubconfigType": ("yr.datasystem.stream_client", "SubconfigType"),
+    "StreamClient": ("yr.datasystem.stream_client", "StreamClient"),
+    "DsClient": ("yr.datasystem.ds_client", "DsClient"),
+    "KVClient": ("yr.datasystem.kv_client", "KVClient"),
+    "HeteroClient": ("yr.datasystem.hetero_client", "HeteroClient"),
+    "Blob": ("yr.datasystem.hetero_client", "Blob"),
+    "DeviceBlobList": ("yr.datasystem.hetero_client", "DeviceBlobList"),
+    "MetaInfo": ("yr.datasystem.hetero_client", "MetaInfo"),
+    "Future": ("yr.datasystem.hetero_client", "Future"),
+    "Status": ("yr.datasystem.util", "Status"),
+    "Context": ("yr.datasystem.util", "Context"),
+    "ServiceDiscovery": ("yr.datasystem.service_discovery", "ServiceDiscovery"),
+    "ServiceDiscoveryOptions": ("yr.datasystem.service_discovery", "ServiceDiscoveryOptions"),
+    "ServiceAffinityPolicy": ("yr.datasystem.service_discovery", "ServiceAffinityPolicy"),
+    "DsTensorClient": ("yr.datasystem.ds_tensor_client", "DsTensorClient"),
+    "CopyRange": ("yr.datasystem.ds_tensor_client", "CopyRange"),
+}
+
+_TRANSFER_ENGINE_EXPORTS = {
+    "TransferEngine": "TransferEngine",
+    "Result": "Result",
+    "ErrorCode": "ErrorCode",
+}
+
+
+def _load_lazy_export(name):
+    module_name, attr_name = _LAZY_EXPORTS[name]
+    module = import_module(module_name)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def _load_transfer_engine_export(name):
+    try:
+        module = import_module("yr.datasystem._transfer_engine")
+    except ImportError as exc:
+        raise AttributeError(
+            f"module {__name__} has no attribute {name}; "
+            f"optional transfer engine bindings failed to import: {exc}"
+        ) from exc
+    value = getattr(module, _TRANSFER_ENGINE_EXPORTS[name])
+    globals()[name] = value
+    return value
+
+
+def _load_perf_client():
+    from yr.datasystem.lib import libds_client_py as _ds
+    from yr.datasystem.util import Validator as validator
+
+    if not hasattr(_ds, "PerfClient"):
+        raise AttributeError(f"module {__name__} has no attribute PerfClient")
+
     class PerfClient:
         """Data system perf client for resetting and fetching perf logs.
 
@@ -95,81 +164,15 @@ if hasattr(_ds, "PerfClient"):
                 raise RuntimeError(status.to_string())
             return perf_log
 
-    __all__.append("PerfClient")
+    globals()["PerfClient"] = PerfClient
+    return PerfClient
 
 
-def _preload_transfer_engine_runtime_shared_libs(pkg_dir: Path) -> None:
-    candidate_dirs = [pkg_dir, pkg_dir / "lib"]
-
-    p2p_candidates = [
-        path / "libp2p_transfer.so"
-        for path in candidate_dirs
-    ]
-    for p2p_so in p2p_candidates:
-        if p2p_so.exists():
-            os.environ.setdefault("TRANSFER_ENGINE_P2P_SO_PATH", str(p2p_so))
-            break
-
-    rtld_global = getattr(ctypes, "RTLD_GLOBAL", 0)
-    for base_dir in candidate_dirs:
-        if not base_dir.exists():
-            continue
-        for pattern in ("libglog.so*", "libprotobuf.so*", "libabsl*.so*"):
-            for so_path in sorted(base_dir.glob(pattern)):
-                try:
-                    ctypes.CDLL(str(so_path), mode=rtld_global)
-                except OSError:
-                    pass
-
-
-_PKG_DIR = Path(__file__).resolve().parent
-_preload_transfer_engine_runtime_shared_libs(_PKG_DIR)
-
-try:
-    from yr.datasystem._transfer_engine import ErrorCode as _TransferEngineErrorCode
-    from yr.datasystem._transfer_engine import Result as _TransferEngineResult
-    from yr.datasystem._transfer_engine import TransferEngine as _TransferEngine
-except ImportError as exc:
-    _TransferEngineErrorCode = None
-    _TransferEngineResult = None
-    _TransferEngine = None
-    _TRANSFER_ENGINE_IMPORT_ERROR = exc
-else:
-    _TRANSFER_ENGINE_IMPORT_ERROR = None
-    __all__.extend(["TransferEngine", "Result", "ErrorCode"])
-
-
-# Dynamically load DsTensorClient
-# Delay dependency checking until the class is actually used to avoid forcing dependency on torch
 def __getattr__(name):
-    if name == "TransferEngine":
-        if _TransferEngine is not None:
-            return _TransferEngine
-        if _TRANSFER_ENGINE_IMPORT_ERROR is not None:
-            raise AttributeError(
-                f"module {__name__} has no attribute {name}; "
-                f"optional transfer engine bindings failed to import: {_TRANSFER_ENGINE_IMPORT_ERROR}"
-            ) from _TRANSFER_ENGINE_IMPORT_ERROR
-    if name == "Result":
-        if _TransferEngineResult is not None:
-            return _TransferEngineResult
-        if _TRANSFER_ENGINE_IMPORT_ERROR is not None:
-            raise AttributeError(
-                f"module {__name__} has no attribute {name}; "
-                f"optional transfer engine bindings failed to import: {_TRANSFER_ENGINE_IMPORT_ERROR}"
-            ) from _TRANSFER_ENGINE_IMPORT_ERROR
-    if name == "ErrorCode":
-        if _TransferEngineErrorCode is not None:
-            return _TransferEngineErrorCode
-        if _TRANSFER_ENGINE_IMPORT_ERROR is not None:
-            raise AttributeError(
-                f"module {__name__} has no attribute {name}; "
-                f"optional transfer engine bindings failed to import: {_TRANSFER_ENGINE_IMPORT_ERROR}"
-            ) from _TRANSFER_ENGINE_IMPORT_ERROR
-    if name == "DsTensorClient":
-        from yr.datasystem.ds_tensor_client import DsTensorClient
-        return DsTensorClient
-    if name == "CopyRange":
-        from yr.datasystem.ds_tensor_client import CopyRange
-        return CopyRange
+    if name in _TRANSFER_ENGINE_EXPORTS:
+        return _load_transfer_engine_export(name)
+    if name in _LAZY_EXPORTS:
+        return _load_lazy_export(name)
+    if name == "PerfClient":
+        return _load_perf_client()
     raise AttributeError(f"module {__name__} has no attribute {name}")

@@ -132,12 +132,13 @@
 
 - Current implementation or baseline behavior:
   - the module wraps a local `ds_spdlog` backend for ordinary logs, uses a singleton `Logging` lifecycle, and delegates access or resource log flushing to `HardDiskExporter`.
+  - embedded `transfer_engine` code uses a separate private facade over unregistered synchronous `ds_spdlog::logger` instances; it preserves the established severity-file and stderr routing through `TRANSFER_ENGINE_*` configuration without initializing or shutting down the datasystem `Logging` singleton, spdlog registry, async pool, or process-global logging state.
 - Relevant constraints from current release or deployment:
   - the design is local-process and filesystem-based, not a replicated logging service;
   - clients can override many logging behaviors from environment variables;
   - log rolling and compression are managed by `LogManager`, not by spdlog's built-in file-retention policy.
 - Similar upstream, industry, or historical approaches considered:
-  - the current codebase keeps a macro surface similar to glog-style logging while using spdlog under a wrapper layer;
+  - the current codebase keeps a repository-owned stream-style macro surface while using spdlog under a wrapper layer;
   - crash handling uses absl failure-signal support rather than a fully custom signal handler stack.
 - Selected approach and why:
   - the repository keeps a narrow repository-owned API surface while reusing mature OSS pieces for file logging, regex validation, and failure-signal symbolization.
@@ -366,6 +367,7 @@ Failure-sensitive steps:
   - exporter map keyed by `AccessKeyType` inside `AccessRecorderManager`;
   - `LogManager` thread state and timer loop;
   - spdlog global thread pool and logger registration inside the `ds_spdlog` wrapper.
+  - no-destroy private file/stderr logger state in `transfer_engine/src/internal/log/logging.cpp`; bundled P2P registers an optional callback so its integrated logs use the same TransferEngine destinations, while standalone P2P retains its stderr fallback. These states are intentionally outside the normal datasystem logging lifecycle.
 - Important on-disk or external state:
   - ordinary severity log files under `FLAGS_log_dir`;
   - `access.log`, `request_out.log`, `ds_client_access*.log`, and `resource*.log` families;
@@ -417,9 +419,11 @@ Failure-sensitive steps:
 
 | Dependency | Purpose in this module | Why selected | Alternatives considered | License | Version / upgrade strategy | Security / maintenance notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| `spdlog` via `ds_spdlog` | ordinary file and stderr logging, async logger support, rotating sink support | mature logging backend with async and sink abstractions while preserving a repository-owned macro surface | keep a fully custom logger, or expose raw glog-like implementation details | `MIT` | pinned to `spdlog-1.12.0` in `bazel/ds_deps.bzl`; upgrade through wrapper and patch review | repository applies namespace and rotating-sink patches under `third_party/patches/spdlog/*`; retention remains externally managed by `LogManager` |
+| `spdlog` via `ds_spdlog` | ordinary file and stderr logging, async logger support, rotating sink support | mature logging backend with async and sink abstractions while preserving a repository-owned macro surface | keep a fully custom logger, or expose backend implementation details directly | `MIT` | pinned to `spdlog-1.12.0` in `bazel/ds_deps.bzl`; upgrade through wrapper and patch review | repository applies namespace and rotating-sink patches under `third_party/patches/spdlog/*`; retention remains externally managed by `LogManager` |
 | `abseil-cpp` | failure-signal handling and symbolization for crash-path output | reduces custom signal-handler code and keeps crash output integrated with stack symbolization | custom signal handling only | `Apache-2.0` | pinned to `abseil-cpp-20250127.1` in `bazel/ds_deps.bzl`; upgrade with crash-path regression checks | signal-handler behavior is high risk; verify `container.log` output and handler install paths after upgrades |
 | `RE2` | log-name validation in `Logging::ValidateLogName(...)` | safe and predictable regex engine for user-controlled environment input | manual validation logic | `BSD-3-Clause` | pinned to `re2-2024-07-02` in `bazel/ds_deps.bzl`; upgrade with validation tests | repository carries an absl-related patch for Bazel integration |
+
+TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its file and console loggers directly without registering them globally. The private facade owns severity files, stderr thresholds, verbosity controls, flush intervals, rotation size, and default `/tmp`-style directory selection under the `TRANSFER_ENGINE_*` namespace. This boundary is required because `_transfer_engine.so` can coexist with other native Python modules that bring independent logging runtimes.
 
 ## Configuration Model
 
@@ -437,6 +441,23 @@ Failure-sensitive steps:
 | `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` | environment | client-only override validated by RE2 | changes client access-log base name | can break downstream file discovery assumptions |
 | `DATASYSTEM_LOG_MONITOR_ENABLE` | environment | client-only override | enables or disables client monitor logging | may create client and server observability mismatch |
 | `log_only_write_info_file` / `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE` | gflag or client-only env override | default `true` | INFO files always receive all severities; `true` suppresses additional WARNING/ERROR files, while `false` restores dedicated WARNING/ERROR files and severity fanout | changes file discovery assumptions and disk usage |
+| `TRANSFER_ENGINE_LOG_DIR` | environment | unset; then `TEST_TMPDIR`, `TMPDIR`, `TMP`, `/tmp`, `.` | changes TransferEngine severity-log destination | invalid or unwritable paths fall through to stderr fallback and reduce persisted diagnostics |
+| `TRANSFER_ENGINE_LOG_LEVEL` | environment | `INFO`; accepts `DEBUG`, `INFO`, `WARNING`, `ERROR`, `FATAL`, `OFF` | filters TransferEngine severity logs | raising the threshold can hide initialization and transfer diagnostics |
+| `TRANSFER_ENGINE_VLOG_LEVEL` | environment | `0` | enables TransferEngine verbose logs globally | high verbosity increases formatting, lock, and filesystem IO cost |
+| `TRANSFER_ENGINE_VMODULE` | environment | unset; comma-separated `module=level` rules | overrides verbose level by source module | broad patterns can unexpectedly enable high-volume logs |
+| `TRANSFER_ENGINE_LOG_TO_STDERR` | environment | `false` | routes all enabled logs only to stderr instead of files | disables persisted severity files |
+| `TRANSFER_ENGINE_ALSO_LOG_TO_STDERR` | environment | `false` | mirrors file-routed logs to stderr | increases console volume and duplicate ingestion risk |
+| `TRANSFER_ENGINE_LOG_TO_STDOUT` | environment | `false` | routes logs below the stderr threshold to stdout and higher levels to stderr | changes container collector stream assumptions |
+| `TRANSFER_ENGINE_STDERR_THRESHOLD` | environment | `2` (`ERROR`) | mirrors this severity rank and above to stderr during file logging | a low value can flood stderr |
+| `TRANSFER_ENGINE_LOG_BUFFER_LEVEL` | environment | `0` (`INFO`) | forces severities above this rank to flush immediately | lower buffering increases foreground IO |
+| `TRANSFER_ENGINE_LOG_BUFFER_SECONDS` | environment | `30` | bounds buffered file-log duration | larger values increase crash-time loss exposure |
+| `TRANSFER_ENGINE_MAX_LOG_SIZE_MB` | environment | `1800` | rotates each active severity file at the configured size | large values consume disk; small values increase rotation overhead |
+| `TRANSFER_ENGINE_LOG_FILE_MODE` | environment | `0664` | sets created severity-file permissions | overly broad permissions expose diagnostics |
+| `TRANSFER_ENGINE_TIMESTAMP_IN_LOG_FILE_NAME` | environment | `true` | includes startup timestamp and PID in severity filenames | disabling it increases collision and overwrite risk |
+| `TRANSFER_ENGINE_LOG_FILE_HEADER` | environment | `true` | writes process and format metadata when opening a file | disabling it removes useful incident context |
+| `TRANSFER_ENGINE_LOG_PREFIX` | environment | `true` | emits severity, timestamp, PID/TID, source file, and line prefix | disabling it reduces diagnosability |
+| `TRANSFER_ENGINE_LOG_YEAR_IN_PREFIX` | environment | `true` | includes the year in each log-line timestamp | disabling it can complicate long-retention parsing |
+| `TRANSFER_ENGINE_LOG_UTC_TIME` | environment | `false` | uses UTC instead of local time for file names, headers, and prefixes | changes correlation assumptions with local-time logs |
 
 ## Examples And Migration Notes
 

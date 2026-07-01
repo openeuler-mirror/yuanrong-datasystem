@@ -6,8 +6,11 @@
 
 #include <string>
 
+#include "p2p.h"
+
 namespace p2p {
 
+void SetLogCallback(P2pLogCallback callback);
 void LogInfo(const std::string &message);
 void LogWarning(const std::string &message);
 void LogError(const std::string &message);

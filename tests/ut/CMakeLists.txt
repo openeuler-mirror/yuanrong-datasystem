@@ -153,10 +153,10 @@ target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
 target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 else()
-    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
+    set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}"
         CACHE STRING "")
 endif()
 
@@ -195,7 +195,13 @@ target_link_libraries(flags_ut
         nlohmann_json::nlohmann_json
         ${SECUREC_LIBRARY}
         GTest::gtest
-        GTest::gmock)
+        GTest::gmock
+        -Wl,--whole-archive
+        common_etcd
+        common_shared_memory
+        worker_object_cache
+        datasystem_worker_static
+        -Wl,--no-whole-archive)
 add_datasystem_test(flags_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 add_executable(util_flags_ut
