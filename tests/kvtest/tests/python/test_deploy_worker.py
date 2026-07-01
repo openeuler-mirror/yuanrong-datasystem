@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,9 +13,11 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from deploy_worker import (
-    find_default_whl,
-    do_for_all_pods,
+    _resolve_procmon_dir,
     check_worker,
+    cmd_restart,
+    do_for_all_pods,
+    find_default_whl,
     kill_worker,
     upload_procmon,
 )
@@ -157,6 +160,91 @@ class TestUploadProcmon(unittest.TestCase):
         pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
         result = upload_procmon(pod, 'default', '/tmp')
         self.assertFalse(result)
+
+
+class TestResolveProcmonDir(unittest.TestCase):
+    """Test the real _resolve_procmon_dir helper extracted from cmd_start."""
+
+    def test_from_log_dir_dict(self):
+        cfg = {'log_dir': {'value': '/var/log/datasystem'}}
+        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/var/log/datasystem')
+
+    def test_from_log_dir_string(self):
+        cfg = {'log_dir': '/data/logs'}
+        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/data/logs')
+
+    def test_fallback_to_remote_config_dir(self):
+        cfg = {}
+        self.assertEqual(_resolve_procmon_dir(cfg, '/data/workers/worker.config'), '/data/workers')
+
+    def test_empty_log_dir_falls_back(self):
+        cfg = {'log_dir': ''}
+        self.assertEqual(_resolve_procmon_dir(cfg, '/opt/worker.config'), '/opt')
+
+    def test_log_dir_dict_empty_value(self):
+        cfg = {'log_dir': {'value': ''}}
+        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/tmp')
+
+
+class TestCmdRestart(unittest.TestCase):
+    """Test cmd_restart in-place restart orchestration (leaf funcs mocked)."""
+
+    def _args(self, **overrides):
+        defaults = dict(namespace='default', remote_config='/tmp/worker.config',
+                        port=31501, timeout=10)
+        defaults.update(overrides)
+        return SimpleNamespace(**defaults)
+
+    @patch('deploy_worker.start_procmon', return_value=99)
+    @patch('deploy_worker.upload_procmon', return_value=True)
+    @patch('deploy_worker.find_worker_pid', return_value='1234')
+    @patch('deploy_worker.kubectl_exec')
+    def test_starts_worker_and_procmon_per_pod(self, mock_exec, mock_findpid,
+                                               mock_upload, mock_startproc):
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}, {'name': 'p2', 'ip': '10.0.0.2'}]
+        cat = MagicMock(stdout=json.dumps({'log_dir': {'value': '/var/log/ds'}}),
+                        returncode=0)
+        start = MagicMock(stdout='', returncode=0)
+        mock_exec.side_effect = [cat, start, start]
+        result = cmd_restart(self._args(), pods)
+        self.assertEqual(result, 0)
+        self.assertEqual(mock_exec.call_count, 3)
+        mock_findpid.assert_any_call(pods[0], 'default', 31501, timeout=10)
+        mock_upload.assert_any_call(pods[0], 'default', '/var/log/ds', timeout=10)
+        mock_startproc.assert_any_call(pods[0], 'default', '1234', '/var/log/ds', timeout=10)
+
+    @patch('deploy_worker.start_procmon')
+    @patch('deploy_worker.upload_procmon')
+    @patch('deploy_worker.find_worker_pid', return_value=None)
+    @patch('deploy_worker.kubectl_exec')
+    def test_no_pid_skips_procmon(self, mock_exec, mock_findpid,
+                                  mock_upload, mock_startproc):
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+        mock_exec.return_value = MagicMock(stdout=json.dumps({}), returncode=0)
+        result = cmd_restart(self._args(), pods)
+        self.assertEqual(result, 0)
+        mock_upload.assert_not_called()
+        mock_startproc.assert_not_called()
+
+    @patch('deploy_worker.start_procmon', return_value=99)
+    @patch('deploy_worker.upload_procmon', return_value=True)
+    @patch('deploy_worker.find_worker_pid', return_value='1234')
+    @patch('deploy_worker.kubectl_exec')
+    def test_cat_fail_falls_back_to_remote_config_dir(self, mock_exec, mock_findpid,
+                                                      mock_upload, mock_startproc):
+        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
+
+        def exec_side_effect(*a, **kw):
+            cmd = a[2]
+            if cmd.startswith('cat '):
+                raise subprocess.CalledProcessError(1, 'cat')
+            return MagicMock(stdout='', returncode=0)
+
+        mock_exec.side_effect = exec_side_effect
+        result = cmd_restart(self._args(), pods)
+        self.assertEqual(result, 0)
+        mock_upload.assert_any_call(pods[0], 'default', '/tmp', timeout=10)
+        mock_startproc.assert_any_call(pods[0], 'default', '1234', '/tmp', timeout=10)
 
 
 if __name__ == '__main__':

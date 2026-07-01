@@ -140,21 +140,62 @@ Reader 每次读取后等待指定毫秒数，模拟推理计算间隔。
 
 ---
 
-## 6. 测试验证清单
+## 6. Get 数据校验
 
-### 6.1 cacheGetOrCreate 测试
+`cacheGetOrCreate` 命中分支会在 Get 返回后校验缓存内容。校验行为由 `verify` 配置块控制，**默认 `size` 级别**（仅比对大小，不使操作失败，与历史一致）。
+
+> **行为变更提示：** 此前命中分支不做任何校验；启用默认 `size` 后会开始检查大小并在不匹配时打印 `SLOG_WARN` + `verify_fail` 计数。命中率统计不变（key 存在即计为 hit）。
+
+| `verify.level` | 校验内容 | 适用场景 |
+|----------------|---------|---------|
+| `off` | 不校验 | 纯命中率/吞吐压测 |
+| `size`（默认） | `buf.GetSize() == expected` | 默认基线 |
+| `sample` | size + 首尾/中间采样内容比对 | 大对象生产级正确性巡检（1MB 对象默认扫描 ~3 段共 12KB） |
+| `full` | size + 全量逐字节比对 | 小对象端到端验收 |
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `verify.sample_bytes` | `"4KB"` | `level=sample` 时每段长度 |
+| `verify.sample_step` | `"1MB"` | `level=sample` 时采样段间隔 |
+| `verify.fail_op` | false | true=校验失败让操作计入 Fail；false=仅 `verify_fail` +1 + 日志 |
+
+**采样级正确性巡检示例：**
+```json
+{
+  "key_pool_size": 100,
+  "data_sizes": ["1MB"],
+  "verify": {"level": "sample", "sample_bytes": "4KB", "sample_step": "1MB", "fail_op": true}
+}
+```
+
+校验失败时日志形如：
+```
+[WARN] cacheGetOrFill content mismatch on hit: key=cache_pool_0_42 level=2 senderId=0
+```
+对应 `stats` JSON 的 `verify_fail` 字段会递增。完整参数说明见 [user-guide.md 公共参数表](user-guide.md)。
+
+---
+
+## 7. 测试验证清单
+
+### 7.1 cacheGetOrCreate 测试
 - [ ] 预热阶段完成，所有 key 写入成功
 - [ ] 稳态阶段命中率 > 0
 - [ ] 子操作指标（getBuffer/createBuffer/memoryCopy/setBuffer）正确记录
 - [ ] cache_summary 行的 hit_rate 与实际一致
 
-### 6.2 target_hit_rate 动态调整测试
+### 7.2 target_hit_rate 动态调整测试
 - [ ] 设置 `target_hit_rate=0.8` 后，Pool Size 自动调整
 - [ ] 命中率在 target ± 0.05 范围内波动
 - [ ] Pool Size 不低于 `max(10, key_pool_size / 10)`，不超过 `key_pool_size × 20`
 
-### 6.3 跨实例缓存测试
+### 7.3 跨实例缓存测试
 - [ ] Writer 预热完成后通知 Reader
 - [ ] Reader 收到通知后开始读取
 - [ ] 跨节点 getBuffer 指标反映远端读取
 - [ ] 无操作失败（Fail = 0）
+
+### 7.4 数据校验测试
+- [ ] `verify.level=full` + `fail_op=true` 下，命中率正常且 `verify_fail=0`
+- [ ] 人为篡改 key 内容后 `verify_fail` 递增、日志出现 `content mismatch`
+- [ ] `verify.level=off` 下 `verify_fail` 恒为 0

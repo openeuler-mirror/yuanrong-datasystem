@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/config.h"
+#include "data_pattern.h"
 #include "metrics/metrics.h"
 #include <datasystem/kv_client.h>
 #include <atomic>
@@ -35,6 +36,7 @@ private:
     Config cfg_;
     std::shared_ptr<datasystem::KVClient> client_;
     MetricsCollector &metrics_;
+    VerifyConfig verifyCfg_;
 
     // Key pool: read-heavy, shared_mutex
     mutable std::shared_mutex keyPoolMutex_;

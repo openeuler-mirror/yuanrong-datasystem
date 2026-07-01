@@ -106,6 +106,10 @@ cd tests/kvtest
 | `numa_node` | int | -1 | NUMA 节点绑定，-1=禁用，非负=绑定到指定 node。需链接 libnuma，未编译时自动回退到 `cpu_affinity` |
 | `nodes` | NodeInfo[] | [] | 集群节点列表（自动生成 peers） |
 | `peers` | string[] | [] | Peer 地址列表，如 `["http://host:port"]` |
+| `verify.level` | string | "size" | Get 数据校验级别：`"off"`（不校验）/ `"size"`（仅大小）/ `"sample"`（大小 + 采样内容）/ `"full"`（大小 + 全量内容）。Pipeline/Cache 模式生效 |
+| `verify.sample_bytes` | string/int | "4KB" | `level=sample` 时每个采样段长度，支持 KB/MB 后缀 |
+| `verify.sample_step` | string/int | "1MB" | `level=sample` 时采样段起始间隔，支持 KB/MB 后缀 |
+| `verify.fail_op` | bool | false | 校验失败是否让操作计为失败（true=计入 Fail，false=仅记 verify_fail + 日志） |
 
 #### Pipeline 模式参数
 
@@ -200,6 +204,12 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem -w 1 \
   --mode cache --pipeline cacheGetOrCreate --key-pool-size 100 \
   --target-hit-rate 0.8 --inference-delay 10
 
+# Cache 模式 + 采样级数据校验（fail_op 让损坏计入 Fail）
+python3 deploy_client.py gen-config -p ds-worker -n datasystem -w 1 \
+  --mode cache --pipeline cacheGetOrCreate --key-pool-size 100 \
+  --verify-level sample --verify-sample-bytes 4KB --verify-sample-step 1MB \
+  --verify-fail-op
+
 # Benchmark 模式：单节点 Set 性能测试（不需要 Pod 发现）
 python3 deploy_client.py gen-config -p ds-worker -n datasystem \
   --mode benchmark --test-mode set_local --worker-memory-mb 4096 \
@@ -226,6 +236,10 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem \
 | `--ttl` | 全部 | TTL 秒数（默认 0，永不过期） |
 | `--data-sizes` | 全部 | 数据大小，逗号分隔（默认 `1MB`） |
 | `--num-threads` | 全部 | 工作线程数（默认 16） |
+| `--verify-level` | Pipeline/Cache | Get 数据校验级别 `off`/`size`/`sample`/`full`（默认 `size`，仅传非默认值时写入 `verify` 块） |
+| `--verify-sample-bytes` | Pipeline/Cache | `level=sample` 时每段长度（默认 `4KB`，支持 KB/MB/GB） |
+| `--verify-sample-step` | Pipeline/Cache | `level=sample` 时采样段间隔（默认 `1MB`，支持 KB/MB/GB） |
+| `--verify-fail-op` | Pipeline/Cache | 校验失败让操作计入 Fail（默认关，仅 `verify_fail`+1 + 告警） |
 
 ### 3.4 收集结果
 

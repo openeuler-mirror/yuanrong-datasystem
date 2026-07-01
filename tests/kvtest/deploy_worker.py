@@ -126,6 +126,22 @@ def start_procmon(pod, namespace, worker_pid, remote_dir='/tmp',
         return None
 
 
+def _resolve_procmon_dir(config_template, remote_config):
+    """Resolve procmon output dir from worker config log_dir, fallback to remote_config dir.
+
+    log_dir may be a {"value": ...} dict (dscli config style) or a plain string;
+    empty/missing falls back to the directory holding remote_config.
+    """
+    log_dir_entry = config_template.get('log_dir', {})
+    if isinstance(log_dir_entry, dict):
+        procmon_dir = log_dir_entry.get('value', None)
+    else:
+        procmon_dir = log_dir_entry or None
+    if not procmon_dir:
+        procmon_dir = os.path.dirname(remote_config)
+    return procmon_dir
+
+
 def find_worker_pid(pod, namespace, port, timeout=DEFAULT_TIMEOUT):
     """Find worker PID by listening port."""
     result = kubectl_exec(pod['name'], namespace,
@@ -275,13 +291,7 @@ def cmd_start(args, pods):
 
     # Default procmon dir to log_dir from worker config, fallback to --remote-config dir
     if args.procmon_dir is None:
-        log_dir_entry = config_template.get('log_dir', {})
-        if isinstance(log_dir_entry, dict):
-            args.procmon_dir = log_dir_entry.get('value', None)
-        else:
-            args.procmon_dir = log_dir_entry or None
-        if not args.procmon_dir:
-            args.procmon_dir = os.path.dirname(args.remote_config)
+        args.procmon_dir = _resolve_procmon_dir(config_template, args.remote_config)
 
     # Apply config overrides from --set
     if args.set:
@@ -343,6 +353,64 @@ def cmd_kill(args, pods):
         return kill_worker(pod, args.namespace, args.process, args.timeout)
 
     return do_for_all_pods(pods, do_op, 'Killing workers')
+
+
+def cmd_restart(args, pods):
+    """Restart workers in-place using each pod's existing remote config.
+
+    Unlike ``start``, this does not re-push a config template: it reuses the
+    remote_config already present in each pod, runs ``dscli start`` against it,
+    then re-attaches procmon so resource_monitor.log keeps appending. Intended
+    for kill/restart scaling tests where the pod stays Running and only the
+    worker process was stopped/killed.
+    """
+    remote_config = args.remote_config
+    port = args.port
+    # All pods share the same log_dir; read it from the first pod's remote
+    # config (same approach as cmd_clean) so procmon writes to the same dir
+    # as the original start.
+    procmon_dir = None
+    if pods:
+        try:
+            result = kubectl_exec(pods[0]['name'], args.namespace,
+                                  f'cat {remote_config}', check=True, timeout=args.timeout)
+            config = json.loads(result.stdout)
+            procmon_dir = _resolve_procmon_dir(config, remote_config)
+        except Exception as e:
+            print(f'WARNING: Failed to read remote config from pod: {e}', file=sys.stderr)
+    if not procmon_dir:
+        procmon_dir = os.path.dirname(remote_config)
+
+    def do_op(pod):
+        pod_name = pod['name']
+        pod_ip = pod['ip']
+        try:
+            kubectl_exec(pod_name, args.namespace,
+                         f'dscli start -f {remote_config}', timeout=args.timeout)
+            pid = find_worker_pid(pod, args.namespace, port, timeout=args.timeout)
+            if not pid:
+                print(f'  {pod_name} ({pod_ip}) -> started, procmon skipped: worker pid not found')
+                return True
+            if upload_procmon(pod, args.namespace, procmon_dir, timeout=args.timeout):
+                procmon_pid = start_procmon(pod, args.namespace, pid, procmon_dir, timeout=args.timeout)
+                if procmon_pid:
+                    print(f'  {pod_name} ({pod_ip}) -> restarted (worker pid={pid}, procmon pid={procmon_pid})')
+                else:
+                    print(f'  {pod_name} ({pod_ip}) -> started, procmon start failed')
+            else:
+                print(f'  {pod_name} ({pod_ip}) -> started, procmon upload failed')
+            return True
+        except subprocess.TimeoutExpired:
+            print(f'  {pod_name} ({pod_ip}) -> FAILED: timeout')
+            return False
+        except subprocess.CalledProcessError as e:
+            print(f'  {pod_name} ({pod_ip}) -> FAILED: {e.stderr.strip() if e.stderr else e}')
+            return False
+        except Exception as e:
+            print(f'  {pod_name} ({pod_ip}) -> FAILED: {e}')
+            return False
+
+    return do_for_all_pods(pods, do_op, 'Restarting workers')
 
 
 def clean_pod(pod, namespace, log_dir, remote_config_dir, timeout=DEFAULT_TIMEOUT):
@@ -621,6 +689,14 @@ def main():
     parser_kill.add_argument('--process', default='datasystem_worker',
                              help='Process name to kill (default: datasystem_worker)')
 
+    # Restart subcommand (in-place restart using existing remote config + procmon)
+    parser_restart = subparsers.add_parser('restart', parents=[parent_parser],
+                                           help='Restart workers in-place using existing remote config')
+    parser_restart.add_argument('--port', type=int, default=31501,
+                                help='Worker port to locate PID (default: 31501)')
+    parser_restart.add_argument('--remote-config', default='/tmp/worker.config',
+                                help='Config path inside pod (default: /tmp/worker.config)')
+
     # Check subcommand
     parser_check = subparsers.add_parser('check', parents=[parent_parser],
                                          help='Check worker status')
@@ -678,6 +754,8 @@ def main():
         return cmd_stop(args, pods)
     elif args.action == 'kill':
         return cmd_kill(args, pods)
+    elif args.action == 'restart':
+        return cmd_restart(args, pods)
     elif args.action == 'check':
         return cmd_check(args, pods)
     elif args.action == 'install':

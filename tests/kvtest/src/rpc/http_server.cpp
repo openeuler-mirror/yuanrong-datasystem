@@ -127,6 +127,8 @@ void HttpServer::HandleNotify(const std::string &body) {
             ctx.param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
             ctx.param.ttlSecond = cfg_.ttlSeconds;
             ctx.verifyFailCount = &metrics_.VerifyFailCounter();
+            ctx.verifyCfg = BuildVerifyConfig(cfg_.verifyLevel, cfg_.verifySampleBytes,
+                                              cfg_.verifySampleStepBytes, cfg_.verifyFailOp);
 
             ExecutePipeline(notifyOps_, ctx, metrics_,
                             metrics_.VerifyFailCounter());

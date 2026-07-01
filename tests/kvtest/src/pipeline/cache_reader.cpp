@@ -12,6 +12,8 @@ CacheReader::CacheReader(const Config &cfg,
                          std::shared_ptr<KVClient> client,
                          MetricsCollector &metrics)
     : cfg_(cfg), client_(client), metrics_(metrics),
+      verifyCfg_(BuildVerifyConfig(cfg.verifyLevel, cfg.verifySampleBytes,
+                                   cfg.verifySampleStepBytes, cfg.verifyFailOp)),
       maxKeyPoolSize_(static_cast<size_t>(cfg.maxKeyPoolSize)) {
     // Pre-generate data for all sizes (read-only after constructor)
     for (auto size : cfg_.dataSizes) {
@@ -179,13 +181,27 @@ bool CacheReader::CacheGetOrFill(const std::string &key, uint64_t size) {
     }, getLatency);
 
     if (hit && optBuf) {
-        if (static_cast<uint64_t>(optBuf->GetSize()) != size) {
-            SLOG_WARN("cacheGetOrFill size mismatch: key=" << key
-                      << " expected=" << size << " got=" << optBuf->GetSize());
+        // Verify the cached payload. A corrupted hit still counts as a cache
+        // hit (key was present); failOp governs op success only.
+        VerifyFailReason reason = VerifyFailReason::NONE;
+        bool vok = VerifyBuffer(optBuf->ImmutableData(),
+                                static_cast<uint64_t>(optBuf->GetSize()),
+                                size, cfg_.instanceId, verifyCfg_, &reason);
+        if (!vok) {
+            if (reason == VerifyFailReason::SIZE) {
+                SLOG_WARN("cacheGetOrFill size mismatch on hit: key=" << key
+                          << " expected=" << size
+                          << " got=" << optBuf->GetSize());
+            } else {
+                SLOG_WARN("cacheGetOrFill content mismatch on hit: key=" << key
+                          << " level=" << static_cast<int>(verifyCfg_.level)
+                          << " senderId=" << cfg_.instanceId);
+            }
             metrics_.RecordVerifyFail();
         }
         metrics_.Record(kOpCacheGetOrFillHit, getLatency, true, size);
         metrics_.RecordCacheHit();
+        if (!vok && verifyCfg_.failOp) return false;
         return true;
     }
 

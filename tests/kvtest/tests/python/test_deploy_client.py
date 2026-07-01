@@ -331,6 +331,85 @@ class TestGenConfig(unittest.TestCase):
         self.assertEqual(deploy['nodes'][0]['role'], 'writer')
         self.assertEqual(deploy['nodes'][1]['role'], 'reader')
 
+    # --- Data verification (verify block) ---
+
+    def test_verify_default_omitted(self):
+        """Default verify args must NOT emit a verify block (legacy baseline)."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertNotIn('verify', config)
+
+    def test_verify_level_full_emitted(self):
+        """--verify-level full emits verify.level (and only that key)."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--verify-level', 'full',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config['verify'], {'level': 'full'})
+
+    def test_verify_sample_with_fail_op(self):
+        """--verify-level sample + --verify-fail-op emits both keys."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--verify-level', 'sample',
+            '--verify-fail-op',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config['verify']['level'], 'sample')
+        self.assertTrue(config['verify']['fail_op'])
+
+    def test_verify_sample_sizes_emitted(self):
+        """Custom sample_bytes/sample_step are emitted; defaults are omitted."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--verify-level', 'sample',
+            '--verify-sample-bytes', '8KB',
+            '--verify-sample-step', '512KB',
+        ])
+        self.assertIsNotNone(config)
+        v = config['verify']
+        self.assertEqual(v['level'], 'sample')
+        self.assertEqual(v['sample_bytes'], '8KB')
+        self.assertEqual(v['sample_step'], '512KB')
+        self.assertNotIn('fail_op', v)
+
+    def test_verify_off_emitted(self):
+        """--verify-level off is explicitly emitted (differs from default size)."""
+        deploy, config = self._run_gen_config([
+            '-m', 'cache',
+            '--nodes', '127.0.0.1:9000',
+            '--key-pool-size', '50',
+            '--verify-level', 'off',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config['verify'], {'level': 'off'})
+
+    def test_verify_fail_op_alone_emitted(self):
+        """--verify-fail-op alone emits only fail_op (level stays default size)."""
+        deploy, config = self._run_gen_config([
+            '-m', 'pipeline',
+            '--nodes', '127.0.0.1:9000',
+            '--verify-fail-op',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config['verify'], {'fail_op': True})
+
+    def test_verify_invalid_level_rejected(self):
+        """argparse choices must reject an unknown verify level."""
+        import argparse
+        from deploy_client import _add_gen_config_args
+        parser = argparse.ArgumentParser()
+        _add_gen_config_args(parser)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--verify-level', 'strict'])
+
 
 if __name__ == '__main__':
     unittest.main()

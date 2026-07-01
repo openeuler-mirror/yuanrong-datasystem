@@ -248,6 +248,23 @@ bool LoadConfig(const std::string &path, Config &cfg) {
                 cfg.ttlSeconds = sp["ttl_second"];
             }
         }
+        if (j.contains("verify") && j["verify"].is_object()) {
+            const auto &v = j["verify"];
+            if (v.contains("level")) {
+                cfg.verifyLevel = v["level"].get<std::string>();
+            }
+            if (v.contains("sample_bytes")) {
+                const auto &sb = v["sample_bytes"];
+                cfg.verifySampleBytes = sb.is_string() ? ParseSize(sb.get<std::string>()) : sb.get<uint64_t>();
+            }
+            if (v.contains("sample_step")) {
+                const auto &ss = v["sample_step"];
+                cfg.verifySampleStepBytes = ss.is_string() ? ParseSize(ss.get<std::string>()) : ss.get<uint64_t>();
+            }
+            if (v.contains("fail_op")) {
+                cfg.verifyFailOp = v["fail_op"].get<bool>();
+            }
+        }
         if (j.contains("set_ratio")) {
             cfg.setRatio = j["set_ratio"].get<double>();
         }
@@ -376,6 +393,20 @@ bool LoadConfig(const std::string &path, Config &cfg) {
     if (cfg.ttlSeconds == 0 && cfg.keyPoolSize == 0) {
         SLOG_INFO("TTL is 0, data will not expire");
     }
+    if (cfg.verifyLevel != "off" && cfg.verifyLevel != "size"
+        && cfg.verifyLevel != "sample" && cfg.verifyLevel != "full") {
+        SLOG_ERROR("verify.level must be one of off/size/sample/full, got '"
+                  << cfg.verifyLevel << "'");
+        return false;
+    }
+    if (cfg.verifySampleBytes == 0) {
+        SLOG_ERROR("verify.sample_bytes must be > 0");
+        return false;
+    }
+    if (cfg.verifySampleStepBytes == 0) {
+        SLOG_ERROR("verify.sample_step must be > 0");
+        return false;
+    }
     if (cfg.maxKeyPoolSize > 0 && cfg.maxKeyPoolSize < static_cast<uint64_t>(cfg.keyPoolSize)) {
         SLOG_ERROR("max_key_pool_size (" << cfg.maxKeyPoolSize
                   << ") must be >= key_pool_size (" << cfg.keyPoolSize << ")");
@@ -498,6 +529,10 @@ bool LoadConfig(const std::string &path, Config &cfg) {
     }
     log << ", data_sizes_count=" << cfg.dataSizes.size()
         << ", output_dir=" << cfg.outputDir;
+    log << ", verify=" << cfg.verifyLevel
+        << (cfg.verifyFailOp ? "+fail" : "")
+        << ", sample_bytes=" << cfg.verifySampleBytes
+        << ", sample_step=" << cfg.verifySampleStepBytes;
     SLOG_INFO(log.str());
     return true;
 }
