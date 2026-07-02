@@ -88,6 +88,19 @@ function(transfer_engine_add_no_defined_dynamic_symbol_test test_name target_nam
     )
 endfunction()
 
+function(transfer_engine_add_origin_rpath_test test_name target_name)
+    if (NOT CMAKE_READELF)
+        return()
+    endif()
+    add_test(
+        NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND}
+            -DREADELF_EXECUTABLE=${CMAKE_READELF}
+            -DLIBRARY_PATH=$<TARGET_FILE:${target_name}>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/check_origin_rpath.cmake
+    )
+endfunction()
+
 function(transfer_engine_add_forbidden_text_test test_name file_path forbidden_text)
     add_test(
         NAME ${test_name}
@@ -185,6 +198,11 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
             INSTALL_RPATH "$ORIGIN"
             BUILD_WITH_INSTALL_RPATH ON
         )
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            # p2p_transfer is dlopen-ed directly from the wheel. Its package-local protobuf dependency
+            # must also resolve package-local Abseil without relying on process-global preloads.
+            target_link_options(p2p_transfer PRIVATE "LINKER:--disable-new-dtags")
+        endif()
         set(CMAKE_SKIP_INSTALL_RULES ${_te_prev_skip_install_rules})
         set(BUILD_SHARED_LIBS ${_te_prev_build_shared_libs} CACHE BOOL "Restore shared library mode" FORCE)
         add_dependencies(transfer_engine_obj p2p_transfer)
@@ -364,6 +382,8 @@ if (TRANSFER_ENGINE_BUILD_TESTS)
             transfer_engine_p2p_no_upstream_spdlog_symbols p2p_transfer "(^|[^A-Za-z0-9_])spdlog::")
         transfer_engine_add_no_defined_dynamic_symbol_test(
             transfer_engine_p2p_no_fmt_symbols p2p_transfer "(^|[^A-Za-z0-9_])fmt::")
+        transfer_engine_add_origin_rpath_test(
+            transfer_engine_p2p_origin_rpath p2p_transfer)
     endif()
 
     if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../python/yr/datasystem/__init__.py")

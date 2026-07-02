@@ -58,7 +58,7 @@ Result EnsureAclSetDeviceForCurrentThread(int32_t deviceId)
     }
 
     const char *visible = std::getenv("ASCEND_RT_VISIBLE_DEVICES");
-    TE_LOG_INFO << "EnsureAclSetDeviceForCurrentThread"
+    TE_LOG_DEBUG << "EnsureAclSetDeviceForCurrentThread"
               << ", device_id=" << deviceId
               << ", ASCEND_RT_VISIBLE_DEVICES=" << (visible == nullptr ? "<unset>" : visible);
 

@@ -290,7 +290,7 @@ Result TransferEngine::BatchTransferSyncRead(const std::string &targetHostname, 
             }
         });
 
-    TE_LOG_INFO << "batch sync read begin"
+    TE_LOG_DEBUG << "batch sync read begin"
               << ", item_count=" << buffers.size() << ", target_hostname=" << targetHostname
               << ", peer=" << peerHost << ":" << peerPort
               << ", request_id_start=" << requestIdStart;
@@ -422,7 +422,7 @@ Result TransferEngine::BuildConnectionIfNeeded(const std::string &peerHost, uint
     if (cachedOwnerDeviceId >= 0) {
         ConnectionKey key{ deviceId_, peerHost, peerPort, cachedOwnerDeviceId };
         if (connMgr_->HasReadyConnection(key)) {
-            TE_LOG_INFO << "reuse cached connection"
+            TE_LOG_DEBUG << "reuse cached connection"
                       << ", peer=" << peerHost << ":" << peerPort
                       << ", owner_device_id=" << cachedOwnerDeviceId;
             QueryConnReadyRequest queryReq;

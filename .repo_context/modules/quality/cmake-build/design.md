@@ -207,7 +207,7 @@ root
 | `acl_plugin` / `cuda_plugin` | shared plugin | external device libs, protobuf, p2p-transfer for Ascend | Hash header generation depends on stripped plugin output. |
 | `common_persistence_api` | static | `common_obs`, `common_sfs_client`, `common_slot_client`, curl | L2 persistence aggregation point. |
 | `dsbench_cpp` | executable | `datasystem`, pthread, `common_util` | Included in wheel payload. |
-| `transfer_engine` / `_transfer_engine` | static library / Python extension | private `ds_spdlog::spdlog`, Threads, `dl`; optional bundled `libp2p_transfer.so` | Must not link or package glog. Standalone builds compile the same patched `libds-spdlog.so`; the private facade owns file/stderr behavior through `TRANSFER_ENGINE_*` configuration, bundled P2P routes logs through an optional callback, and Python/P2P outputs use `$ORIGIN` RPATH plus ELF symbol/dependency guards. |
+| `transfer_engine` / `_transfer_engine` | static library / Python extension | private `ds_spdlog::spdlog`, Threads, `dl`; optional bundled `libp2p_transfer.so` | Must not link or package glog. Standalone builds compile the same patched `libds-spdlog.so`; the private facade owns file/stderr behavior through `TRANSFER_ENGINE_*` configuration, bundled P2P routes logs through an optional callback, and Python/P2P outputs use `$ORIGIN` RPATH plus ELF symbol/dependency guards. `libp2p_transfer.so` intentionally uses inherited `DT_RPATH=$ORIGIN` instead of non-transitive `DT_RUNPATH` so its package-local protobuf dependency can resolve package-local Abseil after lazy TransferEngine import. |
 
 ### Optional Edges That Matter For Optimization
 
