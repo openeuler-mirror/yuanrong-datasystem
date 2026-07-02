@@ -19,10 +19,11 @@ if (BUILD_PIPLN_H2D)
         )
     endif()
     target_link_libraries(os_transport_pipeline PRIVATE 
+        common_log
+        common_perf
         dl
     )
     add_dependencies(os_transport_pipeline
         worker_object_cache
     )
 endif()
-

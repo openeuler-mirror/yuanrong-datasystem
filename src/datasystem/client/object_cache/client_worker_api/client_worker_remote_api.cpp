@@ -903,7 +903,8 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
 
     // send and wait
     int64_t rpcTimeout = std::max<int64_t>(piplnRh2dParam.subTimeoutMs, rpcTimeoutMs_);
-    PerfPoint perfPoint(PerfKey::RPC_CLIENT_PIPELINE_H2D);
+    PerfPoint perfPoint(PerfKey::PIPLN_RH2D_CLIENT_RPC);
+    Timer rpcTimer;
     Status status = RetryOnError(
         std::max<int32_t>(requestTimeoutMs_, piplnRh2dParam.subTimeoutMs),
         [this, &req, &rsp, &piplnRh2dParam](int32_t realRpcTimeout) {
@@ -918,6 +919,12 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
     perfPoint.Record();
+    const auto elapsedUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
+    auto rpcThresholdUs = GetClientLatencyTraceConfig().rpcSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && elapsedUs >= rpcThresholdUs, 1,
+                        "[PIPLN RH2D] client rpc done, objectCount: " << req.object_keys_size()
+                        << ", reqIdCount: " << req.pipeline_rh2d_reqids_size() << ", timeoutMs: " << rpcTimeout
+                        << ", costUs: " << elapsedUs << ", status: " << status.ToString());
     piplnRh2dParam.version = workerVersion_.load(std::memory_order_relaxed);
 
     return WithRpcDiag(status, "Get", hostPort_);

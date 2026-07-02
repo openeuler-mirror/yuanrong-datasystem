@@ -2825,10 +2825,13 @@ std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPip
 Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam,
                                           GetRspPb &rsp)
 {
+    PerfPoint postPoint(PerfKey::PIPLN_RH2D_CLIENT_POST_PROCESS);
+    Timer postTimer;
     std::vector<std::string> failedKeys;
     auto &objectKeys = piplnRh2dParam.objectKeys;
     std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
     uint32_t version = piplnRh2dParam.version;
+    auto config = GetClientLatencyTraceConfig();
 
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
 
@@ -2838,13 +2841,26 @@ Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, Pi
 
     if (rsp.objects_size() == 0) {
         chunkManager->CancelAll();
+        const auto postUs = static_cast<uint64_t>(postTimer.ElapsedMicroSecond());
+        SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && postUs >= config.processSlowerThanUs, 1,
+                            "[PIPLN RH2D] client post process done without object, objectCount: "
+                            << objectKeys.size() << ", costUs: " << postUs << ", status: " << recvRc.ToString());
         promise.set_value({ recvRc, objectKeys });
         return recvRc;
     }
 
     std::vector<std::shared_ptr<Buffer>> buffers(rsp.objects_size(), nullptr);
     auto needWaitKeysIds = PostProcessPipelineKeys(objectKeys, rsp, piplnRh2dParam, version, buffers, failedKeys);
-    chunkManager->WaitAll();
+    {
+        PerfPoint waitPoint(PerfKey::PIPLN_RH2D_CLIENT_WAIT_DONE);
+        Timer waitTimer;
+        Status waitRc = chunkManager->WaitAll();
+        const auto waitUs = static_cast<uint64_t>(waitTimer.ElapsedMicroSecond());
+        SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && waitUs >= config.processSlowerThanUs, 1,
+                            "[PIPLN RH2D] client wait done, objectCount: " << objectKeys.size()
+                            << ", waitKeyCount: " << needWaitKeysIds.size() << ", costUs: " << waitUs
+                            << ", status: " << waitRc.ToString());
+    }
     for (auto keyIdPair : needWaitKeysIds) {
         if (!chunkManager->CheckIsRequestSuccess(keyIdPair.second)) {
             failedKeys.emplace_back(*keyIdPair.first);
@@ -2853,6 +2869,11 @@ Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, Pi
     if (recvRc.IsOk() && failedKeys.size()) {
         recvRc = Status(K_RUNTIME_ERROR, std::to_string(failedKeys.size()) + " keys failed");
     }
+    const auto postUs = static_cast<uint64_t>(postTimer.ElapsedMicroSecond());
+    SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && postUs >= config.processSlowerThanUs, 1,
+                        "[PIPLN RH2D] client post process done, objectCount: " << objectKeys.size()
+                        << ", rspObjectCount: " << rsp.objects_size() << ", failedCount: " << failedKeys.size()
+                        << ", costUs: " << postUs << ", status: " << recvRc.ToString());
     promise.set_value({ recvRc, failedKeys });
     return recvRc;
 }
@@ -2905,7 +2926,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
 
 #ifdef BUILD_PIPLN_H2D
-    PerfPoint perfPoint(PerfKey::CLIENT_GET_WITH_OS_XPRT_PIPLINE);
+    PerfPoint perfPoint(PerfKey::PIPLN_RH2D_CLIENT_SUBMIT);
 
     // check status
     std::shared_ptr<IClientWorkerApi> workerApi;

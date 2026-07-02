@@ -20,12 +20,16 @@
 #include <set>
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
+#include "datasystem/common/log/latency_phase.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/timer.h"
 
 namespace OsXprtPipln {
 
@@ -128,7 +132,15 @@ Status WaitPipelineRH2DDone(H2DChunkManager &mgr)
 
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
-    return mgr.WaitAll();
+    PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_WAIT_DONE);
+    Timer timer;
+    Status rc = mgr.WaitAll();
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    auto rpcThresholdUs = GetServerLatencyTraceConfig().rpcSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && elapsedUs >= rpcThresholdUs, 1,
+                        "[PIPLN RH2D] worker wait done, keyCount: " << mgr.KeyNum() << ", costUs: " << elapsedUs
+                        << ", status: " << rc.ToString());
+    return rc;
 }
 #undef ADD_FAILED_KEY
 #undef UPDATE_LAST_STATUS
@@ -142,11 +154,19 @@ Status TriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &objectK
 
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
+    PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_TRIGGER_LOCAL);
+    Timer timer;
     uint32_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(objectKey, reqId));
     PIPLN_DEBUG_LOG_DATA("TriggerLocalPipelineRH2D", objectKey, reqId, shmUnit, dataOffset, dataSize);
-    RETURN_IF_NOT_OK(mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
-                                                        shmUnit->GetOffset() + dataOffset, dataSize));
+    Status rc = mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
+                                                   shmUnit->GetOffset() + dataOffset, dataSize);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && elapsedUs >= processThresholdUs, 1,
+                        "[PIPLN RH2D] worker trigger local done, reqId: " << reqId << ", dataSize: " << dataSize
+                        << ", costUs: " << elapsedUs << ", status: " << rc.ToString());
+    RETURN_IF_NOT_OK(rc);
 
     return Status::OK();
 }
@@ -160,6 +180,7 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     }
 
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
+    PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_TRIGGER_REMOTE);
     uint32_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(key, reqId));
 
@@ -178,10 +199,20 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
 
     PIPLN_DEBUG_LOG_DATA("Before StartReceiver", key, reqId, shmUnit, dataOffset, size);
     // start Receiver
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        mgr.DoPiplnStep1_StartReceiver(reqId, dataSrc, size, targetSeg, targetJfr, targetJetty, shmUnit->GetFd(),
-                                       shmUnit->GetMmapSize(), totalOffset),
-        "failed to start receiver");
+    Timer receiverTimer;
+    Status receiverRc = Status::OK();
+    {
+        PerfPoint receiverPoint(PerfKey::PIPLN_RH2D_START_RECEIVER);
+        receiverRc = mgr.DoPiplnStep1_StartReceiver(reqId, dataSrc, size, targetSeg, targetJfr, targetJetty,
+                                                    shmUnit->GetFd(), shmUnit->GetMmapSize(), totalOffset);
+    }
+    const auto receiverUs = static_cast<uint64_t>(receiverTimer.ElapsedMicroSecond());
+    auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && receiverUs >= processThresholdUs, 1,
+                        "[PIPLN RH2D] worker start receiver done, reqId: " << reqId << ", dataSize: " << size
+                        << ", remoteAddress: " << remoteAddress << ", costUs: " << receiverUs
+                        << ", status: " << receiverRc.ToString());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(receiverRc, "failed to start receiver");
 
     // set field to trigger sender
     subReq.mutable_urma_info()->set_pipeline_rh2d_req_id(reqId);
@@ -225,6 +256,7 @@ Status DoPiplnStep1_StartSender(PiplnSndArgs &args)
 {
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
+    PerfPoint point(PerfKey::PIPLN_RH2D_START_SENDER);
     ChunkManager mgr{ false /* isClient */ };
     DevShmInfo dev{
         .devType = TargetDeviceType::CUDA,
@@ -235,7 +267,15 @@ Status DoPiplnStep1_StartSender(PiplnSndArgs &args)
     mgr.AddKey("", args.clientKey, dev);
     PIPLN_DEBUG_LOG_DATA_RAW("Before StartSender", "unkwon", args.clientKey, args.localAddr, args.len);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.DoPiplnStep1_StartSender(args), "failed to start sender");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.WaitAll(), "failed to wait send done");
+    point.RecordAndReset(PerfKey::PIPLN_RH2D_SENDER_WAIT_DONE);
+    Timer waitTimer;
+    Status waitRc = mgr.WaitAll();
+    const auto waitUs = static_cast<uint64_t>(waitTimer.ElapsedMicroSecond());
+    auto rpcThresholdUs = GetServerLatencyTraceConfig().rpcSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && waitUs >= rpcThresholdUs, 1,
+                        "[PIPLN RH2D] sender wait done, clientReqId: " << args.clientKey << ", dataSize: "
+                        << args.len << ", costUs: " << waitUs << ", status: " << waitRc.ToString());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(waitRc, "failed to wait send done");
     return Status::OK();
 }
 
@@ -292,10 +332,19 @@ Status MaybeTriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &ke
         return Status::OK();
 
     // switch remote pipeline to local pipeline
+    PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_MAYBE_TRIGGER_LOCAL);
+    Timer timer;
     mgr.MarkCancelOrDone(reqId, false /* isDone */);
     PIPLN_DEBUG_LOG_DATA("MaybeTriggerLocalPipelineRH2D", key, reqId, shmUnit, dataOffset, dataSize);
-    RETURN_IF_NOT_OK(mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
-                                                        shmUnit->GetOffset() + dataOffset, dataSize));
+    Status rc = mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
+                                                   shmUnit->GetOffset() + dataOffset, dataSize);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
+    SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && elapsedUs >= processThresholdUs, 1,
+                        "[PIPLN RH2D] worker maybe trigger local done, reqId: " << reqId
+                        << ", dataSize: " << dataSize << ", costUs: " << elapsedUs
+                        << ", status: " << rc.ToString());
+    RETURN_IF_NOT_OK(rc);
 
     return Status::OK();
 }

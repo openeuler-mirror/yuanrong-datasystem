@@ -251,7 +251,6 @@ Status KVClient::MGetH2D(const std::vector<std::string> &keys,
                          const std::vector<std::pair<void *, size_t>> &devShmChunk,
                          std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs)
 {
-    PerfPoint point(PerfKey::KV_CLIENT_MGET_H2D);
     std::shared_future<AsyncResult> future = AsyncMGetH2D(keys, devShmChunk, subTimeoutMs);
     auto result = future.get();
     outFailedKeys = std::move(result.failedList);
