@@ -3104,9 +3104,25 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
 
 #ifdef USE_URMA
+    // Happy path: use pre-configured data size to skip GetObjMetaInfo RPC.
+    constexpr int BASE_DECIMAL = 10;
+    uint64_t configuredUbSize = 0;
+    {
+        const char *envUbGetSize = std::getenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES");
+        if (envUbGetSize != nullptr && envUbGetSize[0] != '\0') {
+            configuredUbSize = std::strtoull(envUbGetSize, nullptr, BASE_DECIMAL);
+        }
+    }
+    if (configuredUbSize > 0) {
+        getParam.ubTotalSize = configuredUbSize;
+        getParam.ubMetaResolved = true;
+        getParam.ubGetObjMetaElapsedMs = 0;
+        getParam.actualTransportKind = &actualTransportKind;
+    }
+
     // For UB mode, pre-fetch object sizes via GetObjMetaInfo and split into batches if needed.
     if (IsUrmaEnabled() && workerApi != nullptr && !workerApi->IsShmEnable()
-        && !(getParam.isRH2DSupported && IsRemoteH2DEnabled())) {
+        && !(getParam.isRH2DSupported && IsRemoteH2DEnabled()) && configuredUbSize == 0) {
         shouldRecordTransport = true;
         std::vector<ObjMetaInfo> objMetas;
         std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
@@ -3116,8 +3132,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         getParam.ubMetaResolved = true;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metaRc, "GetObjMetaInfo failed before UB get");
         if (objMetas.size() != objectsNeedToGet.size()) {
-            LOG(WARNING) << "GetObjMetaInfo object count mismatch: expected " << objectsNeedToGet.size() << " but got "
-                         << objMetas.size() << ", fallback to TCP/IP payload before get.";
+            LOG(WARNING) << "GetObjMetaInfo size mismatch, expected " << objectsNeedToGet.size()
+                         << " but got " << objMetas.size() << ", fallback to TCP/IP payload before get.";
             actualTransportKind = AccessTransportKind::TCP;
         } else {
             uint64_t ubMaxGetSize = UrmaManager::Instance().GetUBMaxGetDataSize();
@@ -3126,11 +3142,11 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
                 totalSize += meta.objSize;
             }
             if (totalSize <= ubMaxGetSize) {
-                // common case: everything fits in one buffer. Pass total batch size and perform a single Get.
+                // common case: everything fits in one buffer.
                 getParam.ubTotalSize = totalSize;
                 getParam.actualTransportKind = &actualTransportKind;
             } else {
-                // batch special case: total size exceeds buffer limit. Split into sub-batches.
+                // batch special case: total size exceeds buffer limit.
                 Status batchRc = GetBuffersFromWorkerBatched(workerApi, getParam, buffers, objMetas, ubMaxGetSize,
                                                              &actualTransportKind);
                 AccessTransportTracker::Record(actualTransportKind);
