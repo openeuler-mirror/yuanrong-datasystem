@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Client环境变量" href="client_env_guide.html"><link rel="prev" title="附录" href="index.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>openYuanrong datasystem 日志 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
@@ -584,6 +585,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>资源日志</strong>：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>）。</p></li>
 <li><p><strong>流缓存指标日志（sc_metrics）</strong>：流缓存运行数据（需开启 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>）。</p></li>
 <li><p><strong>容器/进程相关日志</strong>：容器运行日志，管理和监控worker进程的生命周期。</p></li>
+<li><p><strong>操作审计日志（operation）</strong>：记录进程启动/停止、配置初始化及运行时动态配置变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 或 <code class="docutils literal notranslate"><span class="pre">monitor_config_file</span></code> 热更新），便于运维追溯配置操作历史。</p></li>
+<li><p><strong>资源快照日志（kv_resource）</strong>：<code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，<code class="docutils literal notranslate"><span class="pre">metrics</span></code> 为按 <code class="docutils literal notranslate"><span class="pre">resource_json_schema</span></code> 配置的 metric 组及子字段（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code>；与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 复用同一采集线程和周期，写入由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 独立控制）。</p></li>
+<li><p><strong>指标摘要日志（kv_metrics）</strong>：<code class="docutils literal notranslate"><span class="pre">datasystem_worker.INFO.log</span></code> 中 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 <code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，body 与 INFO.log 逐字一致（需 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code>；INFO.log 原 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 仍由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制）。</p></li>
 </ol>
 <p>日志目录一般为配置项 <code class="docutils literal notranslate"><span class="pre">log_dir</span></code>（如部署下的 <code class="docutils literal notranslate"><span class="pre">yr_datasystem/logs</span></code>）；下文 <code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs</span></code> 表示该目录。</p>
 <section id="id2">
@@ -629,11 +633,31 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p>容器运行日志，管理和监控worker进程的生命周期</p></td>
 </tr>
 <tr class="row-even"><td><p>7</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/{log_filename}_operation.log</span></code></p></td>
+<td><p>操作审计日志；记录 Init/Shutdown、配置初始化快照及运行时 flag 变更（<code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 或配置文件热更新）</p></td>
+</tr>
+<tr class="row-odd"><td><p>8</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/kv_resource.log</span></code></p></td>
+<td><p>资源快照 JSON-Lines；<code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 同源字段的纯 JSON 输出，顶层 <code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>，<code class="docutils literal notranslate"><span class="pre">metrics</span></code> 按 schema 输出已配置的 metric 组；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 且 <code class="docutils literal notranslate"><span class="pre">log_monitor_exporter=harddisk</span></code> 控制</p></td>
+</tr>
+<tr class="row-even"><td><p>9</p></td>
+<td><p>datasystem_worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/yr_datasystem/logs/kv_metrics.log</span></code></p></td>
+<td><p>指标摘要 JSON-Lines；INFO.log 中 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 的并行输出，body 逐字一致，额外前置 <code class="docutils literal notranslate"><span class="pre">pod_name</span></code>/<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>；由 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 控制（INFO.log 原输出仍由 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 控制）</p></td>
+</tr>
+<tr class="row-odd"><td><p>10</p></td>
 <td><p>Client</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client.INFO.log</span></code>（及 <code class="docutils literal notranslate"><span class="pre">.WARNING</span></code>、<code class="docutils literal notranslate"><span class="pre">.ERROR</span></code> 等；关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_{pid}.INFO.log</span></code>）</p></td>
 <td><p>SDK 运行日志；基名可由启动参数与环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_NAME</span></code> 覆盖</p></td>
 </tr>
-<tr class="row-odd"><td><p>8</p></td>
+<tr class="row-even"><td><p>11</p></td>
+<td><p>Client</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_operation.log</span></code>（关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_{pid}_operation.log</span></code>）</p></td>
+<td><p>Client 操作审计日志；记录 Init/Shutdown 及 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> 动态配置变更</p></td>
+</tr>
+<tr class="row-odd"><td><p>12</p></td>
 <td><p>Client</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access.log</span></code>（关闭 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_LOG_WITHOUT_PID</span></code> 后恢复为 <code class="docutils literal notranslate"><span class="pre">/path/client/ds_client_access_{pid}.log</span></code>）</p></td>
 <td><p>SDK 接口访问日志；基名可由 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_ACCESS_LOG_NAME</span></code> 覆盖</p></td>
@@ -680,6 +704,18 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p>6</p></td>
 <td><p>容器运行日志</p></td>
 <td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | message</p></td>
+</tr>
+<tr class="row-even"><td><p>7</p></td>
+<td><p>操作审计日志</p></td>
+<td><p>Time | level | filename | pod_name | pid:tid | trace_id | cluster_name | operation message</p></td>
+</tr>
+<tr class="row-odd"><td><p>8</p></td>
+<td><p>资源快照日志（kv_resource）</p></td>
+<td><p>纯 JSON 单行：<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>、<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>、<code class="docutils literal notranslate"><span class="pre">event</span></code>、<code class="docutils literal notranslate"><span class="pre">version</span></code>、<code class="docutils literal notranslate"><span class="pre">metrics</span></code>（无文本前缀）</p></td>
+</tr>
+<tr class="row-even"><td><p>9</p></td>
+<td><p>指标摘要日志（kv_metrics）</p></td>
+<td><p>纯 JSON 单行：<code class="docutils literal notranslate"><span class="pre">pod_name</span></code>、<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>、<code class="docutils literal notranslate"><span class="pre">event</span></code>、<code class="docutils literal notranslate"><span class="pre">version</span></code>、<code class="docutils literal notranslate"><span class="pre">cycle</span></code>、<code class="docutils literal notranslate"><span class="pre">interval_ms</span></code>、<code class="docutils literal notranslate"><span class="pre">part_index</span></code>、<code class="docutils literal notranslate"><span class="pre">part_count</span></code>、<code class="docutils literal notranslate"><span class="pre">metrics</span></code>（无文本前缀）</p></td>
 </tr>
 </tbody>
 </table>
@@ -932,13 +968,341 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 </section>
+<section id="id7">
+<h3>操作审计日志消息类型<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<p>操作审计日志与运行日志共用 spdlog 文本前缀（见「格式总览」第 7 行），<code class="docutils literal notranslate"><span class="pre">operation</span> <span class="pre">message</span></code> 为审计正文。Worker 与 Client 在 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 成功时自动创建 <code class="docutils literal notranslate"><span class="pre">{log_filename}_operation.log</span></code> / <code class="docutils literal notranslate"><span class="pre">ds_client_operation.log</span></code>，无需额外开关。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>消息前缀</p></th>
+<th class="head"><p>触发时机</p></th>
+<th class="head"><p>正文格式与说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">OPERATION_START</span></code></p></td>
+<td><p>进程 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 成功</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">OPERATION_START:</span> <span class="pre">role={worker|client}</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">OPERATION_STOP</span></code></p></td>
+<td><p>进程 <code class="docutils literal notranslate"><span class="pre">Shutdown</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">OPERATION_STOP:</span> <span class="pre">role={worker|client}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_INIT</span></code></p></td>
+<td><p>配置初始化完成</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_INIT:</span></code> 后接多行 gflags 快照（<code class="docutils literal notranslate"><span class="pre">--flag=value</span></code> 每行一项）；敏感项见下表，值替换为 <code class="docutils literal notranslate"><span class="pre">xxx</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_INIT_FAILED</span></code></p></td>
+<td><p>配置初始化失败</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_INIT_FAILED:</span> <span class="pre">{detail}</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_CHANGED</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 或 <code class="docutils literal notranslate"><span class="pre">monitor_config_file</span></code> 热更新成功</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_CHANGED:</span> <span class="pre">{name}={old}</span> <span class="pre">--&gt;</span> <span class="pre">{new}</span></code>；敏感 flag 的 old/new 均为 <code class="docutils literal notranslate"><span class="pre">xxx</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_FAILED</span></code></p></td>
+<td><p>动态配置变更失败</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CONFIG_FAILED:</span> <span class="pre">flag</span> <span class="pre">'{name}'</span> <span class="pre">{reason}</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>敏感 flag（审计日志中值一律脱敏为 <code class="docutils literal notranslate"><span class="pre">xxx</span></code>）</strong>：<code class="docutils literal notranslate"><span class="pre">system_access_key</span></code>、<code class="docutils literal notranslate"><span class="pre">system_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">system_data_key</span></code>、<code class="docutils literal notranslate"><span class="pre">sc_encrypt_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">tenant_access_key</span></code>、<code class="docutils literal notranslate"><span class="pre">tenant_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_access_key</span></code>、<code class="docutils literal notranslate"><span class="pre">obs_secret_key</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_password</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_key</span></code>、<code class="docutils literal notranslate"><span class="pre">yuanrong_iam_passphrase</span></code>、<code class="docutils literal notranslate"><span class="pre">yuanrong_iam_key</span></code>。</p>
+</section>
+<section id="kv-resource-log">
+<h3>资源快照日志（kv_resource.log）字段<a class="headerlink" href="#kv-resource-log" title="Link to this heading">¶</a></h3>
+<p>每行一个完整 JSON 对象，<strong>不含</strong> time / level / file / pid:tid / trace_id 等文本前缀；采集周期与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 相同（<code class="docutils literal notranslate"><span class="pre">log_monitor_interval_ms</span></code>，默认 10s）。与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 共用同一次 handler 调用，避免区间计数器被重复清零。</p>
+<p><strong>行结构（顶层字段）</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">pod_name</span></code></p></td>
+<td><p>string</p></td>
+<td><p>当前 Worker Pod 标识（<code class="docutils literal notranslate"><span class="pre">GetPodIdentifier()</span></code>）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">cluster_name</span></code></p></td>
+<td><p>string</p></td>
+<td><p>集群名（<code class="docutils literal notranslate"><span class="pre">FLAGS_cluster_name</span></code>）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">event</span></code></p></td>
+<td><p>string</p></td>
+<td><p>固定为 <code class="docutils literal notranslate"><span class="pre">resource_snapshot</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">version</span></code></p></td>
+<td><p>string</p></td>
+<td><p>schema 版本，当前为 <code class="docutils literal notranslate"><span class="pre">v0</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">metrics</span></code></p></td>
+<td><p>object</p></td>
+<td><p>资源 metric 组，键为 snake_case 组名，值为对象或标量</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong><code class="docutils literal notranslate"><span class="pre">metrics</span></code> 内已输出的 metric 组</strong>（与 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 管道字段同源；未列出的组仅出现在文本 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 中，JSON 行内省略整组）：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>JSON 组名</p></th>
+<th class="head"><p>子字段（snake_case）</p></th>
+<th class="head"><p>对应 resource.log 语义</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">shared_memory</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">memory_usage</span></code>、<code class="docutils literal notranslate"><span class="pre">physical_memory_usage</span></code>、<code class="docutils literal notranslate"><span class="pre">total_limit</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_share_memory_usage</span></code></p></td>
+<td><p>共享内存使用（Byte / %）；不含 <code class="docutils literal notranslate"><span class="pre">sc_memory_usage</span></code> / <code class="docutils literal notranslate"><span class="pre">sc_memory_limit</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">spill_hard_disk</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">space_usage</span></code>、<code class="docutils literal notranslate"><span class="pre">physical_space_usage</span></code>、<code class="docutils literal notranslate"><span class="pre">total_limit</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_spill_hard_disk_usage</span></code></p></td>
+<td><p>Spill 磁盘使用</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">active_client_count</span></code></p></td>
+<td><p>（标量）</p></td>
+<td><p>已连接 Client 数</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">object_count</span></code></p></td>
+<td><p>（标量）</p></td>
+<td><p>缓存对象数</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">object_size</span></code></p></td>
+<td><p>（标量）</p></td>
+<td><p>缓存对象总大小（Byte）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker_oc_service_thread_pool</span></code> 等 4 个 OC 线程池组</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">idle_num</span></code>、<code class="docutils literal notranslate"><span class="pre">current_total_num</span></code>、<code class="docutils literal notranslate"><span class="pre">max_thread_num</span></code>、<code class="docutils literal notranslate"><span class="pre">waiting_task_num</span></code>、<code class="docutils literal notranslate"><span class="pre">thread_pool_usage</span></code></p></td>
+<td><p>线程池状态；语义与「日志字段」表中 threadpool 五元组一致</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">etcd_queue</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">current_size</span></code>、<code class="docutils literal notranslate"><span class="pre">total_limit</span></code>、<code class="docutils literal notranslate"><span class="pre">etcd_queue_usage</span></code></p></td>
+<td><p>ETCD 写队列</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">etcd_request_success_rate</span></code></p></td>
+<td><p>（标量）</p></td>
+<td><p>ETCD 请求成功率（%）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">master_async_tasks_thread_pool</span></code></p></td>
+<td><p>同线程池五元组</p></td>
+<td><p>Master 异步任务线程池</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">oc_hit_num</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">mem_hit_num</span></code>、<code class="docutils literal notranslate"><span class="pre">disk_hit_num</span></code>、<code class="docutils literal notranslate"><span class="pre">l2_hit_num</span></code>、<code class="docutils literal notranslate"><span class="pre">remote_hit_num</span></code>、<code class="docutils literal notranslate"><span class="pre">miss_num</span></code></p></td>
+<td><p>缓存命中统计</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>运维约定</strong></p>
+<ul class="simple">
+<li><p>handler 返回空串、未注册或 token 数与 schema 不符时，该组输出<strong>全 0 结构</strong>（单字段组为 <code class="docutils literal notranslate"><span class="pre">0</span></code>），保证每行 group key 稳定；成功率类字段为 0 常表示「本周期无样本」而非必然失败。</p></li>
+<li><p>字段映射真源：<code class="docutils literal notranslate"><span class="pre">resource_json_schema</span></code>（与 <code class="docutils literal notranslate"><span class="pre">res_metrics.def</span></code> 对齐）。</p></li>
+</ul>
+<p><strong>行样例</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">	</span><span class="nt">&quot;pod_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ds-worker-hs5qm&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;cluster_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;recs&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;resource_snapshot&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v0&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;metrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">		</span><span class="nt">&quot;shared_memory&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nt">&quot;memory_usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">73814</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;physical_memory_usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">80000</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;total_limit&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1073741824</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;worker_share_memory_usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.069</span>
+<span class="w">		</span><span class="p">},</span>
+<span class="w">		</span><span class="nt">&quot;active_client_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;worker_oc_service_thread_pool&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nt">&quot;idle_num&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;current_total_num&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;max_thread_num&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;waiting_task_num&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;thread_pool_usage&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.030</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="kv-metrics-log">
+<h3>指标摘要日志（kv_metrics.log）字段<a class="headerlink" href="#kv-metrics-log" title="Link to this heading">¶</a></h3>
+<p>每行一个完整 JSON 对象，body 与 <code class="docutils literal notranslate"><span class="pre">datasystem_worker.INFO.log</span></code> 中同周期 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> <strong>逐字一致</strong>，仅在行首额外插入 JSON 转义后的 <code class="docutils literal notranslate"><span class="pre">pod_name</span></code>、<code class="docutils literal notranslate"><span class="pre">cluster_name</span></code>。摘要由 <code class="docutils literal notranslate"><span class="pre">metrics::Tick</span></code> 按 <code class="docutils literal notranslate"><span class="pre">log_monitor_interval_ms</span></code> 周期输出，关停时另有一次 <code class="docutils literal notranslate"><span class="pre">PrintSummary</span></code>。</p>
+<p><strong>行结构（顶层字段）</strong></p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">pod_name</span></code></p></td>
+<td><p>string</p></td>
+<td><p>当前 Worker Pod 标识</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">cluster_name</span></code></p></td>
+<td><p>string</p></td>
+<td><p>集群名</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">event</span></code></p></td>
+<td><p>string</p></td>
+<td><p>固定为 <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">version</span></code></p></td>
+<td><p>string</p></td>
+<td><p>当前为 <code class="docutils literal notranslate"><span class="pre">v0</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cycle</span></code></p></td>
+<td><p>uint64</p></td>
+<td><p>摘要周期序号，单调递增</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">interval_ms</span></code></p></td>
+<td><p>int</p></td>
+<td><p>本摘要覆盖的采集间隔（毫秒），与 <code class="docutils literal notranslate"><span class="pre">log_monitor_interval_ms</span></code> 一致</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">part_index</span></code></p></td>
+<td><p>int</p></td>
+<td><p>分片序号（从 1 起）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">part_count</span></code></p></td>
+<td><p>int</p></td>
+<td><p>本分周期总分片数</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">metrics</span></code></p></td>
+<td><p>array</p></td>
+<td><p>本行包含的 metric 条目列表</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong><code class="docutils literal notranslate"><span class="pre">metrics[]</span></code> 元素结构</strong>（按 metric 类型区分）：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>类型</p></th>
+<th class="head"><p>字段</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>COUNTER / GAUGE</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">name</span></code>、<code class="docutils literal notranslate"><span class="pre">total</span></code>、<code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">total</span></code> 为进程启动以来累计值；<code class="docutils literal notranslate"><span class="pre">delta</span></code> 为本周期增量</p></td>
+</tr>
+<tr class="row-odd"><td><p>HISTOGRAM</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">name</span></code>、<code class="docutils literal notranslate"><span class="pre">total</span></code>、<code class="docutils literal notranslate"><span class="pre">delta</span></code></p></td>
+<td><p>二者均为对象：<code class="docutils literal notranslate"><span class="pre">count</span></code>（样本数）、<code class="docutils literal notranslate"><span class="pre">avg_us</span></code>（平均耗时，微秒）、<code class="docutils literal notranslate"><span class="pre">max_us</span></code>、<code class="docutils literal notranslate"><span class="pre">p50</span></code>、<code class="docutils literal notranslate"><span class="pre">p90</span></code>、<code class="docutils literal notranslate"><span class="pre">p99</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>本周期无样本的 metric 不出现在 <code class="docutils literal notranslate"><span class="pre">metrics</span></code> 数组中。单行 JSON 超过 <code class="docutils literal notranslate"><span class="pre">MAX_METRICS_LOG_BYTES</span></code> 时按数组拆分为多行，各行 <code class="docutils literal notranslate"><span class="pre">part_index</span></code> / <code class="docutils literal notranslate"><span class="pre">part_count</span></code> 不同，<code class="docutils literal notranslate"><span class="pre">cycle</span></code> 相同。</p>
+<p><strong>metric 名称示例</strong>（完整列表见 <code class="docutils literal notranslate"><span class="pre">kv_metrics.cpp</span></code> 中 <code class="docutils literal notranslate"><span class="pre">KV_METRIC_DESCS</span></code>）：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>类别</p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">name</span></code> 示例</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Client 请求</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client_put_request_total</span></code>、<code class="docutils literal notranslate"><span class="pre">client_get_request_total</span></code>、<code class="docutils literal notranslate"><span class="pre">client_put_error_total</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Client RPC 时延</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client_rpc_create_latency</span></code>、<code class="docutils literal notranslate"><span class="pre">client_rpc_publish_latency</span></code>、<code class="docutils literal notranslate"><span class="pre">client_rpc_get_latency</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>Worker 处理 / RPC</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_process_get_latency</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_rpc_query_meta_latency</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_rpc_create_meta_latency</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>ZMQ / URMA</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">zmq_rpc_e2e_latency</span></code>、<code class="docutils literal notranslate"><span class="pre">zmq_send_failure_total</span></code>、<code class="docutils literal notranslate"><span class="pre">urma_import_jfr</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>资源 Gauge</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_object_count</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_allocated_memory_size</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>行样例</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">	</span><span class="nt">&quot;pod_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ds-worker-hs5qm&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;cluster_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;recs&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;event&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;metrics_summary&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;v0&quot;</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;cycle&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;interval_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10000</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;part_index&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;part_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span>
+<span class="w">	</span><span class="nt">&quot;metrics&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span>
+<span class="w">		</span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;worker_rpc_create_meta_latency&quot;</span><span class="p">,</span>
+<span class="w">		</span><span class="nt">&quot;total&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;avg_us&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">171</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;max_us&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p50&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p90&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p99&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span>
+<span class="w">		</span><span class="p">},</span>
+<span class="w">		</span><span class="nt">&quot;delta&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">			</span><span class="nt">&quot;count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;avg_us&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">171</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;max_us&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p50&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p90&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span><span class="p">,</span>
+<span class="w">			</span><span class="nt">&quot;p99&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">249</span>
+<span class="w">		</span><span class="p">}</span>
+<span class="w">	</span><span class="p">}]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="id8">
+<h3>观测日志开关<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 与 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 独立控制文本观测日志与 JSON Lines 观测日志，可任意组合：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">log_monitor</span></code></p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code></p></th>
+<th class="head"><p>输出效果</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>on</p></td>
+<td><p>on</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">resource.log</span></code> + INFO <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> + <code class="docutils literal notranslate"><span class="pre">kv_resource.log</span></code> + <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>on</p></td>
+<td><p>off</p></td>
+<td><p>仅 <code class="docutils literal notranslate"><span class="pre">resource.log</span></code> 与 INFO <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p>off</p></td>
+<td><p>on</p></td>
+<td><p>仅 <code class="docutils literal notranslate"><span class="pre">kv_resource.log</span></code>、<code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>off</p></td>
+<td><p>off</p></td>
+<td><p>上述观测日志均不写入（采集循环不运行）</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>相关配置项：<code class="docutils literal notranslate"><span class="pre">log_monitor</span></code>、<code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code>、<code class="docutils literal notranslate"><span class="pre">log_monitor_exporter</span></code>（须为 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code>）、<code class="docutils literal notranslate"><span class="pre">log_monitor_interval_ms</span></code>；详见 <a class="reference internal" href="../deployment/dscli.html"><span class="std std-doc">dscli 配置说明</span></a>。</p>
+</section>
 </section>
 <hr class="docutils" />
-<section id="id7">
-<h2>日志采样<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<section id="id9">
+<h2>日志采样<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
 <p>LogSampler 提供统一随机哈希阈值采样，替代旧的 <code class="docutils literal notranslate"><span class="pre">log_rate_limit</span></code> first-N 限速机制。</p>
-<section id="id8">
-<h3>工作原理<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<section id="id10">
+<h3>工作原理<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>三类独立采样率：<code class="docutils literal notranslate"><span class="pre">request_sample_rate</span></code>、<code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code>、<code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code>（各 0.0–1.0，默认 1.0=全量保留）</p></li>
 <li><p>采样粒度是”请求（traceId）“，不是”单条日志”</p></li>
@@ -958,8 +1322,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 <p><strong>示例：</strong> 仅设置 <code class="docutils literal notranslate"><span class="pre">request_sample_rate=0.2</span></code> → effective <code class="docutils literal notranslate"><span class="pre">access=0.6</span></code>, <code class="docutils literal notranslate"><span class="pre">diagnostic=0.8</span></code></p>
 </section>
-<section id="id9">
-<h3>显式 1.0 阻止派生<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<section id="id11">
+<h3>显式 1.0 阻止派生<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
 <p>即使 <code class="docutils literal notranslate"><span class="pre">access_sample_rate=1.0</span></code> 与默认值相同，显式设置也意味着”用户明确要求全量保留 access 日志”，<strong>阻止自动派生</strong>。这与”未设置时默认 1.0”有本质区别：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -996,8 +1360,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p>再次更新 <code class="docutils literal notranslate"><span class="pre">request=0.1</span></code> → access 仍为 0.3（不会被派生覆盖为 0.3×3=0.3，而是保持显式值）</p></li>
 </ol>
 </section>
-<section id="id10">
-<h3>配置方式<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<section id="id12">
+<h3>配置方式<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -1043,6 +1407,194 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 <p>默认值均为 <code class="docutils literal notranslate"><span class="pre">1.0</span></code>（全量保留），完全向后兼容。</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="latencysummary">
+<h2>慢日志与 latencySummary<a class="headerlink" href="#latencysummary" title="Link to this heading">¶</a></h2>
+<p>当请求的处理或 RPC 阶段时延超过配置阈值时，access log 中会额外输出 <code class="docutils literal notranslate"><span class="pre">latencySummary</span></code> 字段，包含各阶段耗时明细，便于快速定位慢请求瓶颈。</p>
+<section id="id13">
+<h3>配置参数<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>格式与示例</p></th>
+<th class="head"><p>描述</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slow_log_process_slower_than</span></code></p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2000</span></code></p></td>
+<td><p>正整数，单位微秒；例如 <code class="docutils literal notranslate"><span class="pre">1000</span></code> 表示 1ms 阶段</p></td>
+<td><p>处理阶段时延阈值（微秒）。默认2000μs(2ms)；设为0可禁用；启用后，当处理阶段的耗时（不含跨进程 RPC）超过此阈值时输出 latencySummary。<code class="docutils literal notranslate"><span class="pre">process</span></code> 指处理耗时，等于总耗时减去子 RPC 耗时。支持热更新。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">slow_log_rpc_slower_than</span></code></p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5000</span></code></p></td>
+<td><p>正整数，单位微秒；例如 <code class="docutils literal notranslate"><span class="pre">2000</span></code> 表示 2ms 阶段</p></td>
+<td><p>跨进程 RPC 阶段时延阈值（微秒）。默认5000μs(5ms)；设为0可禁用；启用后，当 RPC 子阶段耗时超过此阈值时输出 latencySummary。支持热更新。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client_slow_log_process_slower_than</span></code></p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2000</span></code></p></td>
+<td><p>正整数，单位微秒</p></td>
+<td><p>Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件或 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 热更新。详见 <a class="reference internal" href="client_env_guide.html"><span class="std std-doc">Client环境变量</span></a>。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client_slow_log_rpc_slower_than</span></code></p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5000</span></code></p></td>
+<td><p>正整数，单位微秒</p></td>
+<td><p>Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件或 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 热更新。详见 <a class="reference internal" href="client_env_guide.html"><span class="std std-doc">Client环境变量</span></a>。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<div><p><strong>“process”含义说明</strong>：<code class="docutils literal notranslate"><span class="pre">process</span></code> 阶段 = 总耗时 - 子 RPC 耗时，代表处理与等待时间，而非端到端整链路耗时。例如 <code class="docutils literal notranslate"><span class="pre">client.process.get</span></code> = 客户端从发起 Get 到收到响应的总耗时 - <code class="docutils literal notranslate"><span class="pre">client.rpc.get</span></code>（客户端→worker RPC耗时），即客户端排队、序列化、反序列化等处理耗时。</p>
+</div></blockquote>
+</section>
+<section id="id14">
+<h3>latencySummary 格式<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<p>latencySummary 字段以预计算字符串形式写入 access log 的 request param 区域，格式示例：</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">latencySummary</span><span class="p">:{</span><span class="n">client</span><span class="o">.</span><span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">200</span><span class="p">,</span><span class="n">client</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">896</span><span class="p">,</span><span class="n">worker</span><span class="o">.</span><span class="n">process</span><span class="o">.</span><span class="n">get</span><span class="p">:</span><span class="mi">768</span><span class="p">,</span><span class="n">worker</span><span class="o">.</span><span class="n">rpc</span><span class="o">.</span><span class="n">query_meta</span><span class="p">:</span><span class="mi">512</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>各阶段耗时以 <code class="docutils literal notranslate"><span class="pre">{phase:duration}</span></code> 形式输出，多个阶段用 <code class="docutils literal notranslate"><span class="pre">,</span></code> 分隔，<code class="docutils literal notranslate"><span class="pre">phase</span></code> 与 <code class="docutils literal notranslate"><span class="pre">duration</span></code> 之间用 <code class="docutils literal notranslate"><span class="pre">:</span></code> 分隔，整体用 <code class="docutils literal notranslate"><span class="pre">{}</span></code> 包裹，单位为微秒。如有 tick 因 buffer 溢出被丢弃，尾部附加 <code class="docutils literal notranslate"><span class="pre">tick_dropped:N</span></code>；如有 phase 因数组溢出被丢弃，尾部附加 <code class="docutils literal notranslate"><span class="pre">phase_dropped:N</span></code>。</p>
+<p>可选 phase 名称如下：</p>
+<blockquote>
+<div><p><strong>命名规则</strong>：<code class="docutils literal notranslate"><span class="pre">process</span></code> = 处理耗时（扣除子 RPC/跨进程调用），非 IP 地址；<code class="docutils literal notranslate"><span class="pre">rpc</span></code> = 跨进程 RPC 耗时；<code class="docutils literal notranslate"><span class="pre">urma</span></code>/<code class="docutils literal notranslate"><span class="pre">ub</span></code> = 用户态 RDMA（Urma-based）相关传输耗时。</p>
+</div></blockquote>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>phase 名称</p></th>
+<th class="head"><p>含义</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client.process.get</span></code></p></td>
+<td><p>客户端 Get 处理耗时（总耗时扣除 RPC）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client.rpc.get</span></code></p></td>
+<td><p>客户端→worker Get RPC 耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client.process.set</span></code></p></td>
+<td><p>客户端 Set/Put 处理耗时（总耗时扣除子 RPC）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client.rpc.create</span></code></p></td>
+<td><p>客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client.process.memory_copy</span></code></p></td>
+<td><p>客户端 Set/Put 数据拷贝到共享内存耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client.rpc.publish</span></code></p></td>
+<td><p>客户端→worker Publish RPC 耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client.urma.ub_transfer</span></code></p></td>
+<td><p>客户端 UB（Urma-based 用户态 RDMA）数据传输耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client.process.create</span></code></p></td>
+<td><p>客户端 Create 处理耗时（总耗时扣除 RPC）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">client.process.exist</span></code></p></td>
+<td><p>客户端 Exist 处理耗时（总耗时扣除 RPC）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client.rpc.exist</span></code></p></td>
+<td><p>客户端→worker Exist RPC 耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.get</span></code></p></td>
+<td><p>worker Get 处理耗时（总耗时扣除子 RPC，与 worker IP 无关）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.rpc.query_meta</span></code></p></td>
+<td><p>worker→master QueryMeta RPC 耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker.rpc.remote_get</span></code></p></td>
+<td><p>worker→远端 worker RemoteGet RPC 耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.urma.urma_total</span></code></p></td>
+<td><p>worker URMA 协议栈总耗时（含 RDMA 数据搬运、远端响应等）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.l2cache_read</span></code></p></td>
+<td><p>worker L2 缓存读取耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.create</span></code></p></td>
+<td><p>worker Create 处理耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.publish</span></code></p></td>
+<td><p>worker Publish 处理耗时（总耗时扣除子 RPC）</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.rpc.create_meta</span></code></p></td>
+<td><p>worker→master CreateMeta RPC 耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker.rpc.update_meta</span></code></p></td>
+<td><p>worker→master UpdateMeta RPC 耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.exist</span></code></p></td>
+<td><p>worker Exist 处理耗时（总耗时扣除 QueryMeta RPC）</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">master.process.query_meta</span></code></p></td>
+<td><p>master QueryMeta 处理耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">master.process.create_meta</span></code></p></td>
+<td><p>master CreateMeta 处理耗时</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">master.process.update_meta</span></code></p></td>
+<td><p>master UpdateMeta 处理耗时</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">worker.process.remote_get</span></code></p></td>
+<td><p>远端数据 worker RemoteGet 处理耗时</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id15">
+<h3>配置方式<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>场景</p></th>
+<th class="head"><p>配置方式</p></th>
+<th class="head"><p>示例</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Worker 命令行</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--slow_log_process_slower_than=1000</span> <span class="pre">--slow_log_rpc_slower_than=2000</span></code></p></td>
+<td><p>处理&gt;1ms或RPC&gt;2ms时输出</p></td>
+</tr>
+<tr class="row-odd"><td><p>K8s Helm</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">values.yaml</span></code> 中设置 <code class="docutils literal notranslate"><span class="pre">slowLogProcessSlowerThan:</span> <span class="pre">1000</span></code></p></td>
+<td><p>同上</p></td>
+</tr>
+<tr class="row-even"><td><p>dscli</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dscli</span> <span class="pre">start</span> <span class="pre">--slow_log_process_slower_than</span> <span class="pre">1000</span></code></p></td>
+<td><p>同上</p></td>
+</tr>
+<tr class="row-odd"><td><p>Embedded Worker</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)</span></code></p></td>
+<td><p>同上</p></td>
+</tr>
+<tr class="row-even"><td><p>Client 配置文件</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 指定文件中设置 <code class="docutils literal notranslate"><span class="pre">--client_slow_log_process_slower_than=1000</span></code></p></td>
+<td><p>Client 侧处理&gt;1ms时输出</p></td>
+</tr>
+<tr class="row-odd"><td><p>Client API</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">UpdateConfig(R&quot;({&quot;client_slow_log_process_slower_than&quot;:&quot;1000&quot;})&quot;)</span></code></p></td>
+<td><p>运行时动态修改 Client 侧门限</p></td>
+</tr>
+<tr class="row-even"><td><p>运行时动态修改</p></td>
+<td><p>修改 <code class="docutils literal notranslate"><span class="pre">datasystem.config</span></code> 中对应参数</p></td>
+<td><p>—</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>默认值为 <code class="docutils literal notranslate"><span class="pre">2000</span></code>/<code class="docutils literal notranslate"><span class="pre">5000</span></code>（进程内2ms/RPC 5ms），完全向后兼容，零开销。</p>
 </section>
 </section>
 </section>
@@ -1112,14 +1664,24 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#id5">日志字段</a></li>
 <li><a class="reference internal" href="#sdk-worker">SDK 与 Worker 访问日志关键请求参数</a></li>
 <li><a class="reference internal" href="#id6">访问第三方日志关键请求参数</a></li>
+<li><a class="reference internal" href="#id7">操作审计日志消息类型</a></li>
+<li><a class="reference internal" href="#kv-resource-log">资源快照日志（kv_resource.log）字段</a></li>
+<li><a class="reference internal" href="#kv-metrics-log">指标摘要日志（kv_metrics.log）字段</a></li>
+<li><a class="reference internal" href="#id8">观测日志开关</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id7">日志采样</a><ul>
-<li><a class="reference internal" href="#id8">工作原理</a></li>
+<li><a class="reference internal" href="#id9">日志采样</a><ul>
+<li><a class="reference internal" href="#id10">工作原理</a></li>
 <li><a class="reference internal" href="#request-only-derivation">派生规则（request-only derivation）</a></li>
-<li><a class="reference internal" href="#id9">显式 1.0 阻止派生</a></li>
+<li><a class="reference internal" href="#id11">显式 1.0 阻止派生</a></li>
 <li><a class="reference internal" href="#sticky-explicit">Sticky Explicit 行为</a></li>
-<li><a class="reference internal" href="#id10">配置方式</a></li>
+<li><a class="reference internal" href="#id12">配置方式</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#latencysummary">慢日志与 latencySummary</a><ul>
+<li><a class="reference internal" href="#id13">配置参数</a></li>
+<li><a class="reference internal" href="#id14">latencySummary 格式</a></li>
+<li><a class="reference internal" href="#id15">配置方式</a></li>
 </ul>
 </li>
 </ul>
@@ -1134,15 +1696,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>

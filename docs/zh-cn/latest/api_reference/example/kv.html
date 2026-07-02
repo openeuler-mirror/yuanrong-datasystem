@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../genindex.html"><link rel="search" title="Search" href="../../search.html"><link rel="next" title="ObjectClient编程示例" href="object.html"><link rel="prev" title="HeteroClient编程示例" href="hetero.html">
         <link rel="prefetch" href="../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>KVClient编程示例 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=33406c05" />
@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api/cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api/cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api/cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api/cpp/ObjectClient.html">ObjectClient</a></li>
@@ -713,14 +714,22 @@ C++</label><div class="sd-tab-content docutils">
 <span class="nt">spillFileOpenLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
 <span class="c1"># Disable readahead can mitigate the read amplification problem for offset read, default is true</span>
 <span class="nt">spillEnableReadahead</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="c1"># It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.</span>
-<span class="c1"># When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers&#39; shared memory. If no worker has available memory, objects spill to disk.</span>
-<span class="nt">spillToRemoteWorker</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 </pre></div>
 </div>
 </section>
 <section id="id7">
-<h3>数据可靠性<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<h3>内存均衡<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">memoryRebalance</span></code> 用于开启由 master 调度的内存均衡能力。开启后，master 会根据各 worker 上报的共享内存使用情况，选择内存使用率较高的 worker 作为 source，选择内存使用率较低且仍有可用共享内存的 worker 作为 target，并下发对象迁移任务，将部分 KV/Object 缓存对象迁移到 target worker，以降低单个 worker 的共享内存压力。</p>
+<p>该能力默认关闭。Kubernetes Helm 部署时可通过如下配置开启：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">memoryRebalance</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+<p>当 <code class="docutils literal notranslate"><span class="pre">enabled</span></code> 为 <code class="docutils literal notranslate"><span class="pre">false</span></code> 时，master 不会调度内存均衡任务，worker 在本地共享内存不足时仍按既有驱逐、Spill 和二级缓存策略处理。开启该能力后，如果集群中没有满足条件的低使用率 worker，数据仍会继续走本地驱逐、Spill 或二级缓存流程，因此该配置不能替代 Spill 或二级缓存可靠性配置。</p>
+</section>
+<section id="id8">
+<h3>数据可靠性<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p>数据系统 KV 接口提供可靠性语义，在数据写入时，通过 <strong>writeMode</strong> 参数配置数据可靠性级别。仅当 <strong>writeMode</strong> 配置为 <em><strong>WRITE_THROUGH_L2_CACHE</strong></em> 或 <em><strong>WRITE_BACK_L2_CACHE</strong></em> 时才保证数据可靠性，否则当出现故障或空间不足时，数据可能丢失。<br />
 数据系统通过对接外部存储组件作为二级缓存实现数据可靠性。当前支持的二级缓存组件有：
 distributed_disk / OBS / SFS。
@@ -874,7 +883,8 @@ sfs</label><div class="sd-tab-content docutils">
 <li><a class="reference internal" href="#id4">数据一致性</a></li>
 <li><a class="reference internal" href="#id5">服务发现</a></li>
 <li><a class="reference internal" href="#id6">数据溢出到磁盘</a></li>
-<li><a class="reference internal" href="#id7">数据可靠性</a></li>
+<li><a class="reference internal" href="#id7">内存均衡</a></li>
+<li><a class="reference internal" href="#id8">数据可靠性</a></li>
 </ul>
 </li>
 </ul>
@@ -889,15 +899,15 @@ sfs</label><div class="sd-tab-content docutils">
     </aside>
   </div>
 </div><script src="../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../_static/custom.js?v=f6e2bf52"></script>

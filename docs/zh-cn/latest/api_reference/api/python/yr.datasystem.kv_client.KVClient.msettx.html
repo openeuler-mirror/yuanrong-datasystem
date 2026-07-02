@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="yr.datasystem.kv_client.KVClient.get_read_only_buffers" href="yr.datasystem.kv_client.KVClient.get_read_only_buffers.html"><link rel="prev" title="yr.datasystem.kv_client.KVClient.get_buffers" href="yr.datasystem.kv_client.KVClient.mget_buffer.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>yr.datasystem.kv_client.KVClient.msettx - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=33406c05" />
@@ -233,7 +233,7 @@
           <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
         </button>
       </div>
-      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
         <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
       </label>
     </div>
@@ -476,6 +476,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l3 has-children"><a class="reference internal" href="../cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/KVClientConfig.html">KVClientConfig</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/StreamClient.html">StreamClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/HeteroClient.html">HeteroClient</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/ObjectClient.html">ObjectClient</a></li>
@@ -567,7 +568,7 @@ document.addEventListener('DOMContentLoaded', function() {
               <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
             </button>
           </div>
-          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
             <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
           </label>
         </div>
@@ -575,20 +576,24 @@ document.addEventListener('DOMContentLoaded', function() {
           <section id="yr-datasystem-kv-client-kvclient-msettx">
 <h1>yr.datasystem.kv_client.KVClient.msettx<a class="headerlink" href="#yr-datasystem-kv-client-kvclient-msettx" title="Link to this heading">¶</a></h1>
 <dl class="py method">
-<dt class="sig sig-object py" id="yr.datasystem.kv_client.KVClient.msettx">
-<span class="sig-prename descclassname"><span class="pre">yr.datasystem.kv_client.KVClient.</span></span><span class="sig-name descname"><span class="pre">msettx</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">keys</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vals</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">WriteMode.NONE_L2_CACHE</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ttl_second</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">existence_opt</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">ExistenceOpt.NONE</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#yr.datasystem.kv_client.KVClient.msettx" title="Link to this definition">¶</a></dt>
-<dd><p>批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。</p>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">yr.datasystem.kv_client.KVClient.msettx(keys,</span> <span class="pre">vals,</span> <span class="pre">write_mode=WriteMode.NONE_L2_CACHE,</span></span></dt>
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">ttl_second=0,</span> <span class="pre">existence_opt=ExistenceOpt.NONE)</span></span></dt>
+<dd><p>已废弃 API。该接口仅为保持 SDK API 兼容而保留，调用时固定返回包含
+<code class="docutils literal notranslate"><span class="pre">deprecated</span> <span class="pre">API</span></code> 字样的 <code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code>。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
-<li><p><strong>keys</strong> (list) - 键列表。约束：传入的key的数量不能超过8。</p></li>
+<li><p><strong>keys</strong> (list) - 键列表。</p></li>
 <li><p><strong>vals</strong> (list) - 值列表。</p></li>
-<li><p><strong>write_mode</strong> (<a class="reference internal" href="yr.datasystem.object_client.WriteMode.html#yr.datasystem.object_client.WriteMode" title="yr.datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.WriteMode</span></code></a>) - 控制数据是否写入二级缓存以增强数据可靠性。默认值：<code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code>。</p></li>
-<li><p><strong>ttl_second</strong> (int) - 控制数据的过期时间，超时会自动删除，单位为秒。0表示不会自动过期，需要通过调用 <a class="reference internal" href="yr.datasystem.kv_client.KVClient.delete.html#yr.datasystem.kv_client.KVClient.delete" title="yr.datasystem.kv_client.KVClient.delete"><code class="xref py py-func docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.delete()</span></code></a> 接口删除 <code class="docutils literal notranslate"><span class="pre">keys</span></code> 才能退出生命周期。默认值：<code class="docutils literal notranslate"><span class="pre">0</span></code>。</p></li>
-<li><p><strong>existence_opt</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.ExistenceOpt</span></code>) - 控制key存在时能否设置。</p></li>
+<li><p><strong>write_mode</strong> (<a class="reference internal" href="yr.datasystem.object_client.WriteMode.html#yr.datasystem.object_client.WriteMode" title="yr.datasystem.object_client.WriteMode"><code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.WriteMode</span></code></a>) - 控制数据是否写入二级缓存以增强数据可靠性。
+默认值：<code class="docutils literal notranslate"><span class="pre">WriteMode.NONE_L2_CACHE</span></code>。</p></li>
+<li><p><strong>ttl_second</strong> (int) - 控制数据的过期时间，单位为秒。默认值：<code class="docutils literal notranslate"><span class="pre">0</span></code>。</p></li>
+<li><p><strong>existence_opt</strong> (<code class="xref py py-class docutils literal notranslate"><span class="pre">yr.datasystem.object_client.ExistenceOpt</span></code>) - 控制 key 存在时能否设置。</p></li>
 </ul>
 </dd>
 <dt>异常：</dt><dd><ul class="simple">
-<li><p><strong>RuntimeError</strong> - 任意一个键设置失败。</p></li>
+<li><p><strong>RuntimeError</strong> - 固定抛出，表示该接口为废弃 API。</p></li>
 <li><p><strong>TypeError</strong> - 输入参数校验失败，存在非法值。</p></li>
 </ul>
 </dd>
@@ -640,41 +645,22 @@ document.addEventListener('DOMContentLoaded', function() {
         
       </footer>
     </div>
-    <aside class="toc-drawer">
+    <aside class="toc-drawer no-toc">
       
-      
-      <div class="toc-sticky toc-scroll">
-        <div class="toc-title-container">
-          <span class="toc-title">
-            On this page
-          </span>
-        </div>
-        <div class="toc-tree-container">
-          <div class="toc-tree">
-            <ul>
-<li><a class="reference internal" href="#">yr.datasystem.kv_client.KVClient.msettx</a><ul>
-<li><a class="reference internal" href="#yr.datasystem.kv_client.KVClient.msettx"><code class="docutils literal notranslate"><span class="pre">yr.datasystem.kv_client.KVClient.msettx()</span></code></a></li>
-</ul>
-</li>
-</ul>
-
-          </div>
-        </div>
-      </div>
       
       
     </aside>
   </div>
 </div><script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>

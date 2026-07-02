@@ -11,6 +11,7 @@
     - [IPC/RPC相关配置](#ipcrpc相关配置)
     - [ETCD相关配置](#etcd相关配置)
     - [Spill相关配置](#spill相关配置)
+    - [Memory Rebalance相关配置](#memory-rebalance相关配置)
     - [日志与可观测相关配置](#日志与可观测相关配置)
     - [二级缓存相关配置](#二级缓存相关配置)
     - [元数据相关配置](#元数据相关配置)
@@ -216,7 +217,6 @@ global:
 | global.spill.evictionLowWatermarkRatio | float | `0.8` | 内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 evictionHighWatermarkRatio |
 | global.spill.spillHighWatermarkRatio | float | `0.8` | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spillLowWatermarkRatio |
 | global.spill.spillLowWatermarkRatio | float | `0.6` | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spillHighWatermarkRatio |
-| global.spill.spillToRemoteWorker | bool | `false` | 表示当节点资源不够的时候，支持将内存spill到其他节点的内存。当设置为true后，当本节点内存达到高水位线时，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。 |
 
 - **样例1**：
 
@@ -254,21 +254,23 @@ global:
       mountPath: "/opt/spill/yr_datasystem_spill"
     ```
 
-- **样例3**：
+### Memory Rebalance相关配置
 
-    Spill目录为 "/opt/spill/yr_datasystem_spill"，大小为10GB。当spillToRemoteWorker为true时，如果本节点内存不足，会尝试将对象迁移到其他worker的共享内存。如果所有worker都没有可用内存，则尝试将对象spill到本地磁盘。
+Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享内存。开启后，master 根据各 worker 上报的资源使用情况，选择内存使用率较高的 worker 作为 source，选择内存使用率较低且仍有可用共享内存的 worker 作为 target，并向 source worker 下发对象迁移任务，从而降低单个 worker 的共享内存压力。
 
-    ```yaml
-    global:
-      spill:
-        spillDirectory: "/opt/spill/yr_datasystem_spill"
-        spillSizeLimit: "10737418240"
-        spillThreadNum: 8
-        spillFileMaxSizeMb: 200
-        spillFileOpenLimit: 512
-        spillEnableReadahead: true
-        spillToRemoteWorker: true
-    ```
+该能力默认关闭。当集群中没有满足迁移条件的 target worker 时，Memory Rebalance 不会产生迁移任务，worker 会继续按照既有驱逐、Spill 和二级缓存策略处理内存压力。因此，Memory Rebalance 适合用于多 worker 集群内存使用不均衡的场景，但不能替代 Spill 或二级缓存可靠性配置。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.memoryRebalance.enabled | bool | `false` | 是否开启由 master 调度的内存均衡能力。设置为 `true` 后，master 会尝试将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+
+**样例**：
+
+```yaml
+global:
+  memoryRebalance:
+    enabled: true
+```
 
 ### 日志与可观测相关配置
 
@@ -290,6 +292,8 @@ global:
 | global.log.minLogLevel | int | `0` | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | global.log.enableUcxLog | bool | `false` | 是否开启UCX RDMA日志，保存在`${logDir}/worker/ucx.log`当中 |
 | global.log.ucxLogLevel | string | `ERROR` | 设置UCX日志级别，可选值包括`FATAL`、`ERROR`、`WARN`、`INFO`、`DEBUG`、`TRACE`。建议生产环境使用 `ERROR` 或 `WARN`，调试时使用 `DEBUG`或`TRACE` |
+| global.log.slowLogProcessSlowerThan | uint64 | `2000` | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
+| global.log.slowLogRpcSlowerThan | uint64 | `5000` | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
 **样例**：
 ```yaml
@@ -379,13 +383,14 @@ global:
 | global.metadata.rocksdbMaxOpenFile | int | `128` | RocksDB可使用的最大打开文件个数 |
 | global.metadata.rocksdbWriteMode | string | `async` | 配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为`async`。可选值包括：'none'（不写）、'sync'（同步）、'async'（异步） |
 | global.metadata.enableMetadataRecovery | bool | `false` | 是否在 worker 重启清理阶段将本地元数据回补到 master |
+| global.metadata.enableDataReplication | bool | `true` | 实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性 |
 
 
 ### 可靠性相关配置
 
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
-| global.reliability.clientReconnectWaitS | int | `5` | 客户端断链重连最大等待时间（单位为秒） |
+| global.reliability.clientReconnectWaitS | int | `10` | 客户端断链重连最大等待时间（单位为秒） |
 | global.reliability.clientDeadTimeoutS | int | `120` | 客户端存活检测最大时间间隔（单位为秒） |
 | global.reliability.heartbeatIntervalMs | int | `1000` | 服务端与ETCD的心跳间隔时间（单位为毫秒） |
 | global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
@@ -429,6 +434,8 @@ global:
 | global.performance.urmaRegisterWholeArena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | global.performance.urmaConnectionSize | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
+| global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
+| global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true |
 | global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |
@@ -440,6 +447,7 @@ global:
 | global.performance.ocWorkerAggregateSingleMax | int | `65536` | 批量处理worker最大单个项目大小，默认为64KB |
 | global.performance.ocWorkerWorkerParallelMin | int | `100` | 并行工作线程批处理响应的最小数据计数，默认值为100 |
 | global.performance.ocWorkerWorkerParallelNums | int | `16` | worker并行数量，0表示无限制 |
+| global.performance.enableOcMetadataHeader | bool | `true` | 是否开启对象缓存元数据头，设置为false将不能使用shm latch/可见性 |
 
 ### AK/SK相关配置
 
@@ -566,5 +574,4 @@ global:
 | global.annotations | object | `{}` | Kubernetes 元注解 |
 | global.enableNonPreemptive | bool | `false` | 配置priorityClass。如果该值为false，则默认priorityClass为system-cluster-key。如果为true，则会创建一个preemptionPolicy Never的priorityClass |
 | global.fsGid | string | `"1002"` | fsGroup配置。容器的所有进程也是附加组ID的一部分 |
-| global.rollingUpdateTimeoutS | int | `1800` | 滚动升级的最大持续时间，默认值为1800秒 |
 | global.security.scEncryptSecretKey | string | `1800` | 流缓存的加密密钥，密钥长度最多为1024字节，解密后必须为32字节 |

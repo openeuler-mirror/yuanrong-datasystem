@@ -10,6 +10,9 @@ openYuanrong datasystem 的日志分为以下类型：
 4. **资源日志**：定时输出 Worker 运行时关键资源信息，包括共享内存、Spill 磁盘、线程池、队列、流缓存相关统计等（需 `log_monitor` 且 `log_monitor_exporter=harddisk`）。
 5. **流缓存指标日志（sc_metrics）**：流缓存运行数据（需开启 `log_monitor`）。
 6. **容器/进程相关日志**：容器运行日志，管理和监控worker进程的生命周期。
+7. **操作审计日志（operation）**：记录进程启动/停止、配置初始化及运行时动态配置变更（`UpdateConfig` API 或 `monitor_config_file` 热更新），便于运维追溯配置操作历史。
+8. **资源快照日志（kv_resource）**：`resource.log` 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 `pod_name`/`cluster_name`，`metrics` 为按 `resource_json_schema` 配置的 metric 组及子字段（需 `json_log_monitor` 且 `log_monitor_exporter=harddisk`；与 `resource.log` 复用同一采集线程和周期，写入由 `json_log_monitor` 独立控制）。
+9. **指标摘要日志（kv_metrics）**：`datasystem_worker.INFO.log` 中 `metrics_summary` 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 `pod_name`/`cluster_name`，body 与 INFO.log 逐字一致（需 `json_log_monitor`；INFO.log 原 `metrics_summary` 仍由 `log_monitor` 控制）。
 
 日志目录一般为配置项 `log_dir`（如部署下的 `yr_datasystem/logs`）；下文 `/path/yr_datasystem/logs` 表示该目录。
 
@@ -23,8 +26,12 @@ openYuanrong datasystem 的日志分为以下类型：
 | 4 | datasystem_worker | `/path/yr_datasystem/logs/request_out.log` | 访问第三方（当前主要为 ETCD）接口日志 |
 | 5 | datasystem_worker | `/path/yr_datasystem/logs/sc_metrics.log` | 流缓存运行数据；由 `log_monitor` 控制是否开启 |
 | 6 | datasystem_worker | `/path/yr_datasystem/logs/container.log` | 容器运行日志，管理和监控worker进程的生命周期 |
-| 7 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
-| 8 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
+| 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
+| 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `pod_name`/`cluster_name`，`metrics` 按 schema 输出已配置的 metric 组；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
+| 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；INFO.log 中 `metrics_summary` 的并行输出，body 逐字一致，额外前置 `pod_name`/`cluster_name`；由 `json_log_monitor` 控制（INFO.log 原输出仍由 `log_monitor` 控制） |
+| 10 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
+| 11 | Client | `/path/client/ds_client_operation.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
+| 12 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
 
 ---
 
@@ -40,6 +47,9 @@ openYuanrong datasystem 的日志分为以下类型：
 | 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| shared disk info \| scLocalCache info \| Cache Hit Info |
 | 5 | 流缓存数据日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| sc_metric |
 | 6 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
+| 7 | 操作审计日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| operation message |
+| 8 | 资源快照日志（kv_resource） | 纯 JSON 单行：`pod_name`、`cluster_name`、`event`、`version`、`metrics`（无文本前缀） |
+| 9 | 指标摘要日志（kv_metrics） | 纯 JSON 单行：`pod_name`、`cluster_name`、`event`、`version`、`cycle`、`interval_ms`、`part_index`、`part_count`、`metrics`（无文本前缀） |
 
 ### 日志字段
 
@@ -106,6 +116,166 @@ openYuanrong datasystem 的日志分为以下类型：
 |------|--------|----------|------|
 | ETCD | GRPC | key | 将Key字段获取并打印。|
 
+### 操作审计日志消息类型
+
+操作审计日志与运行日志共用 spdlog 文本前缀（见「格式总览」第 7 行），`operation message` 为审计正文。Worker 与 Client 在 `Init` 成功时自动创建 `{log_filename}_operation.log` / `ds_client_operation.log`，无需额外开关。
+
+| 消息前缀 | 触发时机 | 正文格式与说明 |
+|---------|---------|---------------|
+| `OPERATION_START` | 进程 `Init` 成功 | `OPERATION_START: role={worker\|client}` |
+| `OPERATION_STOP` | 进程 `Shutdown` | `OPERATION_STOP: role={worker\|client}` |
+| `CONFIG_INIT` | 配置初始化完成 | `CONFIG_INIT:` 后接多行 gflags 快照（`--flag=value` 每行一项）；敏感项见下表，值替换为 `xxx` |
+| `CONFIG_INIT_FAILED` | 配置初始化失败 | `CONFIG_INIT_FAILED: {detail}` |
+| `CONFIG_CHANGED` | `UpdateConfig` API 或 `monitor_config_file` 热更新成功 | `CONFIG_CHANGED: {name}={old} --> {new}`；敏感 flag 的 old/new 均为 `xxx` |
+| `CONFIG_FAILED` | 动态配置变更失败 | `CONFIG_FAILED: flag '{name}' {reason}` |
+
+**敏感 flag（审计日志中值一律脱敏为 `xxx`）**：`system_access_key`、`system_secret_key`、`system_data_key`、`sc_encrypt_secret_key`、`tenant_access_key`、`tenant_secret_key`、`obs_access_key`、`obs_secret_key`、`etcd_password`、`etcd_key`、`yuanrong_iam_passphrase`、`yuanrong_iam_key`。
+
+### 资源快照日志（kv_resource.log）字段
+
+每行一个完整 JSON 对象，**不含** time / level / file / pid:tid / trace_id 等文本前缀；采集周期与 `resource.log` 相同（`log_monitor_interval_ms`，默认 10s）。与 `resource.log` 共用同一次 handler 调用，避免区间计数器被重复清零。
+
+**行结构（顶层字段）**
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `pod_name` | string | 当前 Worker Pod 标识（`GetPodIdentifier()`） |
+| `cluster_name` | string | 集群名（`FLAGS_cluster_name`） |
+| `event` | string | 固定为 `resource_snapshot` |
+| `version` | string | schema 版本，当前为 `v0` |
+| `metrics` | object | 资源 metric 组，键为 snake_case 组名，值为对象或标量 |
+
+**`metrics` 内已输出的 metric 组**（与 `resource.log` 管道字段同源；未列出的组仅出现在文本 `resource.log` 中，JSON 行内省略整组）：
+
+| JSON 组名 | 子字段（snake_case） | 对应 resource.log 语义 |
+|-----------|---------------------|------------------------|
+| `shared_memory` | `memory_usage`、`physical_memory_usage`、`total_limit`、`worker_share_memory_usage` | 共享内存使用（Byte / %）；不含 `sc_memory_usage` / `sc_memory_limit` |
+| `spill_hard_disk` | `space_usage`、`physical_space_usage`、`total_limit`、`worker_spill_hard_disk_usage` | Spill 磁盘使用 |
+| `active_client_count` | （标量） | 已连接 Client 数 |
+| `object_count` | （标量） | 缓存对象数 |
+| `object_size` | （标量） | 缓存对象总大小（Byte） |
+| `worker_oc_service_thread_pool` 等 4 个 OC 线程池组 | `idle_num`、`current_total_num`、`max_thread_num`、`waiting_task_num`、`thread_pool_usage` | 线程池状态；语义与「日志字段」表中 threadpool 五元组一致 |
+| `etcd_queue` | `current_size`、`total_limit`、`etcd_queue_usage` | ETCD 写队列 |
+| `etcd_request_success_rate` | （标量） | ETCD 请求成功率（%） |
+| `master_async_tasks_thread_pool` | 同线程池五元组 | Master 异步任务线程池 |
+| `oc_hit_num` | `mem_hit_num`、`disk_hit_num`、`l2_hit_num`、`remote_hit_num`、`miss_num` | 缓存命中统计 |
+
+**运维约定**
+
+- handler 返回空串、未注册或 token 数与 schema 不符时，该组输出**全 0 结构**（单字段组为 `0`），保证每行 group key 稳定；成功率类字段为 0 常表示「本周期无样本」而非必然失败。
+- 字段映射真源：`resource_json_schema`（与 `res_metrics.def` 对齐）。
+
+**行样例**
+
+```json
+{
+	"pod_name": "ds-worker-hs5qm",
+	"cluster_name": "recs",
+	"event": "resource_snapshot",
+	"version": "v0",
+	"metrics": {
+		"shared_memory": {
+			"memory_usage": 73814,
+			"physical_memory_usage": 80000,
+			"total_limit": 1073741824,
+			"worker_share_memory_usage": 0.069
+		},
+		"active_client_count": 3,
+		"worker_oc_service_thread_pool": {
+			"idle_num": 3,
+			"current_total_num": 4,
+			"max_thread_num": 8,
+			"waiting_task_num": 0,
+			"thread_pool_usage": 0.030
+		}
+	}
+}
+```
+
+### 指标摘要日志（kv_metrics.log）字段
+
+每行一个完整 JSON 对象，body 与 `datasystem_worker.INFO.log` 中同周期 `metrics_summary` **逐字一致**，仅在行首额外插入 JSON 转义后的 `pod_name`、`cluster_name`。摘要由 `metrics::Tick` 按 `log_monitor_interval_ms` 周期输出，关停时另有一次 `PrintSummary`。
+
+**行结构（顶层字段）**
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `pod_name` | string | 当前 Worker Pod 标识 |
+| `cluster_name` | string | 集群名 |
+| `event` | string | 固定为 `metrics_summary` |
+| `version` | string | 当前为 `v0` |
+| `cycle` | uint64 | 摘要周期序号，单调递增 |
+| `interval_ms` | int | 本摘要覆盖的采集间隔（毫秒），与 `log_monitor_interval_ms` 一致 |
+| `part_index` | int | 分片序号（从 1 起） |
+| `part_count` | int | 本分周期总分片数 |
+| `metrics` | array | 本行包含的 metric 条目列表 |
+
+**`metrics[]` 元素结构**（按 metric 类型区分）：
+
+| 类型 | 字段 | 描述 |
+|------|------|------|
+| COUNTER / GAUGE | `name`、`total`、`delta` | `total` 为进程启动以来累计值；`delta` 为本周期增量 |
+| HISTOGRAM | `name`、`total`、`delta` | 二者均为对象：`count`（样本数）、`avg_us`（平均耗时，微秒）、`max_us`、`p50`、`p90`、`p99` |
+
+本周期无样本的 metric 不出现在 `metrics` 数组中。单行 JSON 超过 `MAX_METRICS_LOG_BYTES` 时按数组拆分为多行，各行 `part_index` / `part_count` 不同，`cycle` 相同。
+
+**metric 名称示例**（完整列表见 `kv_metrics.cpp` 中 `KV_METRIC_DESCS`）：
+
+| 类别 | `name` 示例 |
+|------|------------|
+| Client 请求 | `client_put_request_total`、`client_get_request_total`、`client_put_error_total` |
+| Client RPC 时延 | `client_rpc_create_latency`、`client_rpc_publish_latency`、`client_rpc_get_latency` |
+| Worker 处理 / RPC | `worker_process_get_latency`、`worker_rpc_query_meta_latency`、`worker_rpc_create_meta_latency` |
+| ZMQ / URMA | `zmq_rpc_e2e_latency`、`zmq_send_failure_total`、`urma_import_jfr` |
+| 资源 Gauge | `worker_object_count`、`worker_allocated_memory_size` |
+
+**行样例**
+
+```json
+{
+	"pod_name": "ds-worker-hs5qm",
+	"cluster_name": "recs",
+	"event": "metrics_summary",
+	"version": "v0",
+	"cycle": 1,
+	"interval_ms": 10000,
+	"part_index": 1,
+	"part_count": 1,
+	"metrics": [{
+		"name": "worker_rpc_create_meta_latency",
+		"total": {
+			"count": 3,
+			"avg_us": 171,
+			"max_us": 249,
+			"p50": 249,
+			"p90": 249,
+			"p99": 249
+		},
+		"delta": {
+			"count": 3,
+			"avg_us": 171,
+			"max_us": 249,
+			"p50": 249,
+			"p90": 249,
+			"p99": 249
+		}
+	}]
+}
+```
+
+### 观测日志开关
+
+`log_monitor` 与 `json_log_monitor` 独立控制文本观测日志与 JSON Lines 观测日志，可任意组合：
+
+| `log_monitor` | `json_log_monitor` | 输出效果 |
+|---------------|-------------------|---------|
+| on | on | `resource.log` + INFO `metrics_summary` + `kv_resource.log` + `kv_metrics.log` |
+| on | off | 仅 `resource.log` 与 INFO `metrics_summary` |
+| off | on | 仅 `kv_resource.log`、`kv_metrics.log` |
+| off | off | 上述观测日志均不写入（采集循环不运行） |
+
+相关配置项：`log_monitor`、`json_log_monitor`、`log_monitor_exporter`（须为 `harddisk`）、`log_monitor_interval_ms`；详见 [dscli 配置说明](../deployment/dscli.md)。
+
 ---
 
 ## 日志采样
@@ -164,3 +334,75 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 | 运行时动态修改 | 修改 `datasystem.config` 中 `request_sample_rate` 等 | — |
 
 默认值均为 `1.0`（全量保留），完全向后兼容。
+
+---
+
+## 慢日志与 latencySummary
+
+当请求的处理或 RPC 阶段时延超过配置阈值时，access log 中会额外输出 `latencySummary` 字段，包含各阶段耗时明细，便于快速定位慢请求瓶颈。
+
+### 配置参数
+
+| 参数 | 类型 | 默认值 | 格式与示例 | 描述 |
+|------|------|--------|------------|------|
+| `slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒；例如 `1000` 表示 1ms 阶段 | 处理阶段时延阈值（微秒）。默认2000μs(2ms)；设为0可禁用；启用后，当处理阶段的耗时（不含跨进程 RPC）超过此阈值时输出 latencySummary。`process` 指处理耗时，等于总耗时减去子 RPC 耗时。支持热更新。 |
+| `slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒；例如 `2000` 表示 2ms 阶段 | 跨进程 RPC 阶段时延阈值（微秒）。默认5000μs(5ms)；设为0可禁用；启用后，当 RPC 子阶段耗时超过此阈值时输出 latencySummary。支持热更新。 |
+| `client_slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒 | Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
+| `client_slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒 | Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
+
+> **"process"含义说明**：`process` 阶段 = 总耗时 - 子 RPC 耗时，代表处理与等待时间，而非端到端整链路耗时。例如 `client.process.get` = 客户端从发起 Get 到收到响应的总耗时 - `client.rpc.get`（客户端→worker RPC耗时），即客户端排队、序列化、反序列化等处理耗时。
+
+### latencySummary 格式
+
+latencySummary 字段以预计算字符串形式写入 access log 的 request param 区域，格式示例：
+
+```
+latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768,worker.rpc.query_meta:512}
+```
+
+各阶段耗时以 `{phase:duration}` 形式输出，多个阶段用 `,` 分隔，`phase` 与 `duration` 之间用 `:` 分隔，整体用 `{}` 包裹，单位为微秒。如有 tick 因 buffer 溢出被丢弃，尾部附加 `tick_dropped:N`；如有 phase 因数组溢出被丢弃，尾部附加 `phase_dropped:N`。
+
+可选 phase 名称如下：
+
+> **命名规则**：`process` = 处理耗时（扣除子 RPC/跨进程调用），非 IP 地址；`rpc` = 跨进程 RPC 耗时；`urma`/`ub` = 用户态 RDMA（Urma-based）相关传输耗时。
+
+| phase 名称 | 含义 |
+|------------|------|
+| `client.process.get` | 客户端 Get 处理耗时（总耗时扣除 RPC） |
+| `client.rpc.get` | 客户端→worker Get RPC 耗时 |
+| `client.process.set` | 客户端 Set/Put 处理耗时（总耗时扣除子 RPC） |
+| `client.rpc.create` | 客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段） |
+| `client.process.memory_copy` | 客户端 Set/Put 数据拷贝到共享内存耗时 |
+| `client.rpc.publish` | 客户端→worker Publish RPC 耗时 |
+| `client.urma.ub_transfer` | 客户端 UB（Urma-based 用户态 RDMA）数据传输耗时 |
+| `client.process.create` | 客户端 Create 处理耗时（总耗时扣除 RPC） |
+| `client.process.exist` | 客户端 Exist 处理耗时（总耗时扣除 RPC） |
+| `client.rpc.exist` | 客户端→worker Exist RPC 耗时 |
+| `worker.process.get` | worker Get 处理耗时（总耗时扣除子 RPC，与 worker IP 无关） |
+| `worker.rpc.query_meta` | worker→master QueryMeta RPC 耗时 |
+| `worker.rpc.remote_get` | worker→远端 worker RemoteGet RPC 耗时 |
+| `worker.urma.urma_total` | worker URMA 协议栈总耗时（含 RDMA 数据搬运、远端响应等） |
+| `worker.process.l2cache_read` | worker L2 缓存读取耗时 |
+| `worker.process.create` | worker Create 处理耗时 |
+| `worker.process.publish` | worker Publish 处理耗时（总耗时扣除子 RPC） |
+| `worker.rpc.create_meta` | worker→master CreateMeta RPC 耗时 |
+| `worker.rpc.update_meta` | worker→master UpdateMeta RPC 耗时 |
+| `worker.process.exist` | worker Exist 处理耗时（总耗时扣除 QueryMeta RPC） |
+| `master.process.query_meta` | master QueryMeta 处理耗时 |
+| `master.process.create_meta` | master CreateMeta 处理耗时 |
+| `master.process.update_meta` | master UpdateMeta 处理耗时 |
+| `worker.process.remote_get` | 远端数据 worker RemoteGet 处理耗时 |
+
+### 配置方式
+
+| 场景 | 配置方式 | 示例 |
+|------|----------|------|
+| Worker 命令行 | `--slow_log_process_slower_than=1000 --slow_log_rpc_slower_than=2000` | 处理>1ms或RPC>2ms时输出 |
+| K8s Helm | `values.yaml` 中设置 `slowLogProcessSlowerThan: 1000` | 同上 |
+| dscli | `dscli start --slow_log_process_slower_than 1000` | 同上 |
+| Embedded Worker | `config.SlowLogProcessSlowerThan(1000).SlowLogRpcSlowerThan(2000)` | 同上 |
+| Client 配置文件 | `DATASYSTEM_CLIENT_CONFIG_PATH` 指定文件中设置 `--client_slow_log_process_slower_than=1000` | Client 侧处理>1ms时输出 |
+| Client API | `UpdateConfig(R"({"client_slow_log_process_slower_than":"1000"})")` | 运行时动态修改 Client 侧门限 |
+| 运行时动态修改 | 修改 `datasystem.config` 中对应参数 | — |
+
+默认值为 `2000`/`5000`（进程内2ms/RPC 5ms），完全向后兼容，零开销。

@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="kubernetes部署配置项" href="k8s_configuration.html"><link rel="prev" title="部署指南" href="deploy.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>dscli命令行工具 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -1130,15 +1130,23 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <tbody>
 <tr class="row-even"><td><p>–timeout &lt;SECONDS&gt;</p></td>
 <td><p>-t &lt;SECONDS&gt;</p></td>
-<td><p>等待 worker 服务就绪的最大时间（默认：90秒）</p></td>
+<td><p>等待服务就绪的最大时间（默认：90秒）</p></td>
 </tr>
-<tr class="row-odd"><td><p>–worker_config_path &lt;FILE&gt;</p></td>
+<tr class="row-odd"><td><p>–config_path &lt;FILE&gt;</p></td>
 <td><p>-f &lt;FILE&gt;</p></td>
-<td><p>使用配置文件（JSON格式）启动worker，配置文件可通过generate_config命令生成</p></td>
+<td><p>使用配置文件（JSON格式）启动worker或coordinator，配置文件可通过generate_config命令生成。<code class="docutils literal notranslate"><span class="pre">--worker_config_path</span></code> 保留为兼容别名</p></td>
 </tr>
 <tr class="row-even"><td><p>–worker_args &lt;…&gt;</p></td>
 <td><p>-w &lt;…&gt;</p></td>
-<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –etcd_address “127.0.0.1:2379”<br><strong>注意</strong>：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数</p></td>
+<td><p>使用参数启动数据系统worker, 以 “–<Args>  <Value>”为格式。比如–worker_address “127.0.0.1:31501” –coordinator_address “127.0.0.1:31511”<br><strong>注意</strong>：此选项必须是命令行的最后一个参数选项，其后的所有内容都会被解析为 worker 参数</p></td>
+</tr>
+<tr class="row-odd"><td><p>–coordinator_args &lt;…&gt;</p></td>
+<td><p>无</p></td>
+<td><p>使用参数启动coordinator，比如–coordinator_address “127.0.0.1:31511”。此选项必须是命令行的最后一个参数选项</p></td>
+</tr>
+<tr class="row-even"><td><p>–coordinator_worker_args &lt;…&gt;</p></td>
+<td><p>无</p></td>
+<td><p>先启动coordinator再启动worker，比如–worker_address “127.0.0.1:31501” –coordinator_address “127.0.0.1:31511”。此选项必须是命令行的最后一个参数选项。参数会按 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 分别过滤后传给对应进程</p></td>
 </tr>
 <tr class="row-odd"><td><p>–datasystem_home_dir</p></td>
 <td><p>-d &lt;DIR&gt;</p></td>
@@ -1179,7 +1187,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>-d<span class="w"> </s
 <div><p><strong>绑核配置项注意事项</strong>：</p>
 <ul class="simple">
 <li><p>使用绑核功能前请确保机器上已安装numactl命令。</p></li>
-<li><p>绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于-w worker参数之前。</p></li>
+<li><p>绑核配置项（cpunodebind，physcpubind，interleave，preferred，membind，localalloc）需要位于 <code class="docutils literal notranslate"><span class="pre">--worker_args</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--coordinator_worker_args</span></code> 参数之前。</p></li>
 </ul>
 <p>例子：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 绑定到 NUMA 节点 0 的 CPU，并优先在 NUMA 节点 1 分配内存</span>
@@ -1189,7 +1197,7 @@ dscli<span class="w"> </span>start<span class="w"> </span>--cpunodebind<span cla
 <p><strong>启用ums注意事项</strong>：</p>
 <ul class="simple">
 <li><p>启用ums功能请确保机器已安装ums相关rpm包</p></li>
-<li><p>配置项 enable_ums 需要位于-w worker参数之前。
+<li><p>配置项 enable_ums 需要位于 <code class="docutils literal notranslate"><span class="pre">--worker_args</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--coordinator_worker_args</span></code> 参数之前。
 ums安装参考</p></li>
 </ul>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>yum<span class="w"> </span>install<span class="w"> </span>umdk-ums.aarch64
@@ -1214,13 +1222,17 @@ modprobe<span class="w"> </span>ums
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>–worker_config_path &lt;FILE&gt;</p></td>
+<tr class="row-even"><td><p>–config_path &lt;FILE&gt;</p></td>
 <td><p>-f &lt;FILE&gt;</p></td>
-<td><p>通过使用配置文件（JSON格式）停止worker</p></td>
+<td><p>通过使用配置文件（JSON格式）停止worker或coordinator。<code class="docutils literal notranslate"><span class="pre">--worker_config_path</span></code> 保留为兼容别名</p></td>
 </tr>
 <tr class="row-odd"><td><p>–worker_address <ADDR></p></td>
 <td><p>-w &lt;…&gt;</p></td>
 <td><p>通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker</p></td>
+</tr>
+<tr class="row-even"><td><p>–coordinator_address <ADDR></p></td>
+<td><p>无</p></td>
+<td><p>通过指定coordinator地址（IP:PORT格式，如127.0.0.1:31511）来停止coordinator。与 <code class="docutils literal notranslate"><span class="pre">--worker_address</span></code> 同时指定时会先停止worker，再停止coordinator</p></td>
 </tr>
 </tbody>
 </table>
@@ -1395,7 +1407,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tbody>
 <tr class="row-even"><td><p>–output_path &lt;OUTPUT_PATH&gt;</p></td>
 <td><p>-o &lt;OUTPUT_PATH&gt;</p></td>
-<td><p>指定生成配置文件的存放路径，默认存放路径为当前目录</p></td>
+<td><p>指定生成配置文件的存放路径，默认存放路径为当前目录。会生成 <code class="docutils literal notranslate"><span class="pre">cluster_config.json</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_config.json</span></code> 和 <code class="docutils literal notranslate"><span class="pre">coordinator_config.json</span></code></p></td>
 </tr>
 </tbody>
 </table>
@@ -1440,6 +1452,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1447,26 +1460,31 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>ssh_auth.ssh_private_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;~/.ssh/id_rsa&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>用于免密登录远程服务器的私钥文件</p></td>
 </tr>
 <tr class="row-odd"><td><p>ssh_auth.ssh_user_name</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;root&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>SSH登录时的远程用户名</p></td>
 </tr>
 <tr class="row-even"><td><p>worker_config_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./worker_config.json&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem_worker配置项路径</p></td>
 </tr>
 <tr class="row-odd"><td><p>worker_nodes</p></td>
 <td><p>list</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;127.0.0.1&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>部署openYuanrong datasystem的节点</p></td>
 </tr>
 <tr class="row-even"><td><p>worker_port</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">31501</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem_worker占用的端口号</p></td>
 </tr>
 </tbody>
@@ -1488,6 +1506,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1495,11 +1514,13 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>max_client_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+<td><p>否</p></td>
 <td><p>openYuanrong datasystem单个DaemonSet可同时接入的共享内存客户端数量上限；仅对走共享内存（SHM）路径的客户端生效</p></td>
 </tr>
 <tr class="row-odd"><td><p>shared_memory_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1024</span></code></p></td>
+<td><p>否</p></td>
 <td><p>openYuanrong datasystem单个DaemonSet可使用的共享内存资源大小（以MB为单位）</p></td>
 </tr>
 </tbody>
@@ -1514,6 +1535,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1521,96 +1543,115 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>ipc_through_shared_memory</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem-worker共享内存启用开关</p></td>
 </tr>
 <tr class="row-odd"><td><p>shared_memory_worker_port</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>否</p></td>
 <td><p>指定用于共享内存 FD 传输的 SCMTCP 监听端口；当值为非 0 时，datasystem-worker 会在该端口监听连接 ，要求内核支持 SCMTCP 且端口未被占用，否则 worker 启动失败。客户端与 worker 在同一节点时，客户端会使用该通道传递共享内存描述符。</p></td>
 </tr>
 <tr class="row-even"><td><p>unix_domain_socket_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/uds&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限</p></td>
 </tr>
 <tr class="row-odd"><td><p>worker_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;127.0.0.1:31501&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501</p></td>
 </tr>
 <tr class="row-even"><td><p>enable_curve_zmq</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否开启服务端组件间认证鉴权功能</p></td>
 </tr>
 <tr class="row-odd"><td><p>curve_key_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径</p></td>
 </tr>
 <tr class="row-even"><td><p>oc_worker_worker_direct_port</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>否</p></td>
 <td><p>对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延</p></td>
 </tr>
 <tr class="row-odd"><td><p>oc_worker_worker_pool_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">3</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem-worker间用于数据传输的并行连接数，用于提升节点间数据传输的吞吐量，只有当 <code class="docutils literal notranslate"><span class="pre">ocWorkerWorkerDirectPort</span></code> 指定为非0值时该配置才生效</p></td>
 </tr>
 <tr class="row-even"><td><p>payload_nocopy_threshold</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;104857600&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem-worker间数据传输时免数据拷贝的阈值（以字节为单位）</p></td>
 </tr>
 <tr class="row-odd"><td><p>rpc_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置服务端的RPC线程数，必须为大于0的数</p></td>
 </tr>
 <tr class="row-even"><td><p>oc_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">32</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置服务端用于处理对象/KV缓存的业务线程数</p></td>
 </tr>
 <tr class="row-odd"><td><p>zmq_server_io_context</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
 <tr class="row-even"><td><p>zmq_client_io_context</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
 <tr class="row-odd"><td><p>zmq_client_io_thread</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32]</p></td>
 </tr>
 <tr class="row-even"><td><p>io_thread_nice</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">-15</span></code></p></td>
+<td><p>否</p></td>
 <td><p>指定部分 IO 线程的 nice 值，并通过 <code class="docutils literal notranslate"><span class="pre">setpriority</span></code> 生效，取值范围：[-20, 19]。值越小表示调度优先级越高，设置负值通常需要额外权限</p></td>
 </tr>
 <tr class="row-odd"><td><p>zmq_chunk_sz</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1048576</span></code></p></td>
+<td><p>否</p></td>
 <td><p>并行负载分块大小配置（以字节为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>max_rpc_session_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p>否</p></td>
 <td><p>单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000]</p></td>
 </tr>
 <tr class="row-odd"><td><p>remote_send_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置服务端用于将元素发送到远程工作线程的线程数量</p></td>
 </tr>
 <tr class="row-even"><td><p>stream_idle_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置流的空闲时间。默认值为300秒（5分钟）</p></td>
 </tr>
 </tbody>
@@ -1625,6 +1666,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1632,66 +1674,79 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>etcd_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ETCD 服务端访问地址，格式为：ip:port, 例如：127.0.0.1:23456</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_etcd_auth</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用 ETCD 认证</p></td>
 </tr>
 <tr class="row-even"><td><p>etcd_ca</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>CA明文证书，使用Base64编码</p></td>
 </tr>
 <tr class="row-odd"><td><p>etcd_cert</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>客户端明文证书，使用Base64转码</p></td>
 </tr>
 <tr class="row-even"><td><p>etcd_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>客户端私钥。需进行Base64转码，是否加密取决于是否设置了密码短语</p></td>
 </tr>
 <tr class="row-odd"><td><p>etcd_username</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ETCD鉴权用户名。仅在ETCD开启用户名/密码鉴权时需要配置</p></td>
 </tr>
 <tr class="row-even"><td><p>etcd_password</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ETCD鉴权密码。仅在ETCD开启用户名/密码鉴权时需要配置</p></td>
 </tr>
 <tr class="row-odd"><td><p>etcd_passphrase_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>密码短语的值，需加密并进行Base64转码</p></td>
 </tr>
 <tr class="row-even"><td><p>etcd_meta_pool_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>否</p></td>
 <td><p>ETCD元数据异步队列大小，用于将KV接口 <code class="docutils literal notranslate"><span class="pre">WRITE_BACK_L2_CACHE</span></code> 可靠性配置的key的元数据异步写入ETCD持久化</p></td>
 </tr>
 <tr class="row-odd"><td><p>etcd_target_name_override</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>设置用于SSL主机名校验的ETCD目标名称覆盖。该配置值应与TLS证书的Subject Alternate Names（主题备用名称）中的DNS内容保持一致</p></td>
 </tr>
 <tr class="row-even"><td><p>host_id_env_name</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>用于读取当前节点 <code class="docutils literal notranslate"><span class="pre">host_id</span></code> 的环境变量名。配置后，worker 在注册到 ETCD 时会同时上报 <code class="docutils literal notranslate"><span class="pre">host_id</span></code>，供客户端按同节点策略优先选择 worker</p></td>
 </tr>
 <tr class="row-odd"><td><p>start_metastore_service</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用 Metastore 代替ETCD，若需要启用，仅需主节点worker设为<code class="docutils literal notranslate"><span class="pre">true</span></code>，从节点worker设为<code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>metastore_address</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>主节点worker的Metastore Service访问地址，与<code class="docutils literal notranslate"><span class="pre">start_metastore_service</span></code>搭配一起使用，主从节点均需填写，格式为：ip:port, 例如：127.0.0.1:23456</p></td>
 </tr>
 </tbody>
@@ -1706,6 +1761,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1713,56 +1769,67 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>spill_directory</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置缓存溢出功能的本地磁盘路径，为空表示禁用缓存溢出功能。当配置该路径后，溢出的缓存数据将保存在该路径下的 <code class="docutils literal notranslate"><span class="pre">datasystem_spill_data</span></code> 目录下</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill_size_limit</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>是</p></td>
 <td><p>配置缓存溢出的最大容量（以字节为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>spill_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>否</p></td>
 <td><p>表示溢出数据写文件的最大并行度，线程数越多会消耗越多的CPU和I/O资源</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill_file_max_size_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+<td><p>是</p></td>
 <td><p>单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件</p></td>
 </tr>
 <tr class="row-even"><td><p>spill_file_open_limit</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">512</span></code></p></td>
+<td><p>是</p></td>
 <td><p>溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill_enable_readahead</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 <code class="docutils literal notranslate"><span class="pre">Read</span></code> 接口偏移读取导致的读放大问题</p></td>
 </tr>
 <tr class="row-even"><td><p>eviction_reserve_mem_threshold_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10240</span></code></p></td>
+<td><p>否</p></td>
 <td><p>内存预留阈值（MB），实际取值 min(shared_memory_size_mb × 0.1, eviction_reserve_mem_threshold_mb)；与 eviction_high_watermark_ratio 共同决定驱逐触发线。有效范围 100-102400</p></td>
 </tr>
 <tr class="row-odd"><td><p>eviction_high_watermark_ratio</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.9</span></code></p></td>
+<td><p>否</p></td>
 <td><p>内存占用率高水位（比例 0.0-1.0，相对可用共享内存）。当占用内存达到 max(比例 × 共享内存, 共享内存 - eviction_reserve_mem_threshold_mb) 时触发驱逐。有效范围 0.02-1.0，须大于 eviction_low_watermark_ratio</p></td>
 </tr>
 <tr class="row-even"><td><p>eviction_low_watermark_ratio</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>否</p></td>
 <td><p>内存占用率低水位（比例 0.0-1.0），后台驱逐运行直至占用率降至该比例及以下。有效范围 0.01-0.99，须小于 eviction_high_watermark_ratio</p></td>
 </tr>
 <tr class="row-odd"><td><p>spill_high_watermark_ratio</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.8</span></code></p></td>
+<td><p>否</p></td>
 <td><p>Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spill_low_watermark_ratio</p></td>
 </tr>
 <tr class="row-even"><td><p>spill_low_watermark_ratio</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0.6</span></code></p></td>
+<td><p>否</p></td>
 <td><p>Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spill_high_watermark_ratio</p></td>
 </tr>
 </tbody>
@@ -1777,6 +1844,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1784,67 +1852,92 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>log_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/logs&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>日志目录，服务端产生的日志将保存到此目录中，该路径会被自动挂载到宿主机同名路径下</p></td>
 </tr>
 <tr class="row-odd"><td><p>v</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>是</p></td>
 <td><p>冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3]</p></td>
 </tr>
 <tr class="row-even"><td><p>log_async</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否开启异步刷新日志功能</p></td>
 </tr>
 <tr class="row-odd"><td><p>log_async_queue_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">65536</span></code></p></td>
+<td><p>否</p></td>
 <td><p>异步日志的消息队列最大容量（消息条数）</p></td>
 </tr>
 <tr class="row-even"><td><p>log_compress</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是</p></td>
 <td><p>控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储</p></td>
 </tr>
 <tr class="row-odd"><td><p>logbufsecs</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10</span></code></p></td>
+<td><p>否</p></td>
 <td><p>日志消息最多缓冲时长（以秒为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>log_filename</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>日志前缀名，当值为空时前缀名为 <code class="docutils literal notranslate"><span class="pre">datasystem_worker</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>log_retention_day</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>否</p></td>
 <td><p>日志保留天数，当该值大于0时，最后修改时间早于 <code class="docutils literal notranslate"><span class="pre">logRetentionDay</span></code> 的日志文件将会被删除；当该值为0时表示禁用该功能</p></td>
 </tr>
 <tr class="row-even"><td><p>max_log_file_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p>是</p></td>
 <td><p>最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值</p></td>
 </tr>
 <tr class="row-odd"><td><p>max_log_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">400</span></code></p></td>
+<td><p>否</p></td>
 <td><p>单个日志文件最大大小（以MB为单位）</p></td>
 </tr>
 <tr class="row-even"><td><p>request_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
+<td><p>是</p></td>
 <td><p>请求日志采样率（0.0–1.0）。1.0=全量保留；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/PLOG 由 diagnostic_sample_rate 控制</p></td>
 </tr>
 <tr class="row-odd"><td><p>access_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code> (未显式设置时支持派生)</p></td>
+<td><p>是</p></td>
 <td><p>接口日志采样率（0.0–1.0）。1.0=全量保留</p></td>
 </tr>
 <tr class="row-even"><td><p>diagnostic_sample_rate</p></td>
 <td><p>double</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code> (未显式设置时支持派生)</p></td>
+<td><p>是</p></td>
 <td><p>诊断日志采样率（0.0–1.0）。控制请求级 ERROR/WARNING/PLOG 的补充采样（请求未 sampled-in 时）；1.0=全量保留；FATAL/CHECK 无条件保留不受此参数影响</p></td>
+</tr>
+<tr class="row-odd"><td><p>slow_log_process_slower_than</p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2000</span></code></p></td>
+<td><p>是</p></td>
+<td><p>处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 <code class="docutils literal notranslate"><span class="pre">1000</span></code> 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary</p></td>
+</tr>
+<tr class="row-even"><td><p>slow_log_rpc_slower_than</p></td>
+<td><p>uint64</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5000</span></code></p></td>
+<td><p>是</p></td>
+<td><p>跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 <code class="docutils literal notranslate"><span class="pre">2000</span></code> 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary</p></td>
 </tr>
 </tbody>
 </table>
@@ -1855,14 +1948,15 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <li><p><code class="docutils literal notranslate"><span class="pre">access_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">3)</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span> <span class="pre">=</span> <span class="pre">min(1.0,</span> <span class="pre">request_sample_rate</span> <span class="pre">×</span> <span class="pre">4)</span></code>
 一旦 <code class="docutils literal notranslate"><span class="pre">access_sample_rate</span></code> 或 <code class="docutils literal notranslate"><span class="pre">diagnostic_sample_rate</span></code> 被显式设置，派生规则即失效，此后使用各自独立的值。显式设置 <code class="docutils literal notranslate"><span class="pre">1.0</span></code> 与默认 <code class="docutils literal notranslate"><span class="pre">1.0</span></code> 具有不同语义：前者阻止派生，后者允许派生。
-| log_only_write_info_file | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
-| log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是否开启接口性能与资源观测日志 |
-| monitor_config_file | string | <code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code> | 配置worker监控配置文件的路径 |
-| log_monitor_exporter | string | <code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code> | 指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下 |
-| log_monitor_interval_ms | int | <code class="docutils literal notranslate"><span class="pre">10000</span></code> | 观测日志收集导出的间隔时间（以毫秒为单位） |
-| minloglevel | int | <code class="docutils literal notranslate"><span class="pre">0</span></code> | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
-| logfile_mode | int | <code class="docutils literal notranslate"><span class="pre">416</span></code> | 设置日志文件模式/权限，值为八进制数 |
-| enable_perf_trace_log | bool | <code class="docutils literal notranslate"><span class="pre">false</span></code> | 是否打开性能trace日志 |</p></li>
+| log_only_write_info_file | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 否 | INFO日志文件始终写入所有级别日志。该值为<code class="docutils literal notranslate"><span class="pre">true</span></code>时不额外生成WARNING/ERROR日志文件；为<code class="docutils literal notranslate"><span class="pre">false</span></code>时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
+| log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是 | 是否开启接口性能与资源观测日志（<code class="docutils literal notranslate"><span class="pre">resource.log</span></code>、INFO <code class="docutils literal notranslate"><span class="pre">metrics_summary</span></code> 等）；与 <code class="docutils literal notranslate"><span class="pre">json_log_monitor</span></code> 独立，详见 <a class="reference internal" href="../appendix/log_guide.html"><span class="std std-doc">日志指南</span></a> |
+| json_log_monitor | bool | <code class="docutils literal notranslate"><span class="pre">true</span></code> | 是 | 是否开启 <code class="docutils literal notranslate"><span class="pre">kv_resource.log</span></code> 与 <code class="docutils literal notranslate"><span class="pre">kv_metrics.log</span></code> JSON-Lines 观测日志；与 <code class="docutils literal notranslate"><span class="pre">log_monitor</span></code> 独立，字段格式见 <a class="reference internal" href="../appendix/log_guide.html"><span class="std std-doc">日志指南</span></a> |
+| monitor_config_file | string | <code class="docutils literal notranslate"><span class="pre">./datasystem/config/datasystem.config</span></code> | 否 | 配置worker监控配置文件的路径 |
+| log_monitor_exporter | string | <code class="docutils literal notranslate"><span class="pre">&quot;harddisk&quot;</span></code> | 否 | 指定观测日志导出类型，当前仅支持按 <code class="docutils literal notranslate"><span class="pre">harddisk</span></code> 类型导出观测数据，即将观测数据保存到 <code class="docutils literal notranslate"><span class="pre">logDir</span></code> 路径下 |
+| log_monitor_interval_ms | int | <code class="docutils literal notranslate"><span class="pre">10000</span></code> | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |
+| minloglevel | int | <code class="docutils literal notranslate"><span class="pre">0</span></code> | 是 | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
+| logfile_mode | int | <code class="docutils literal notranslate"><span class="pre">416</span></code> | 否 | 设置日志文件模式/权限，值为八进制数 |
+| enable_perf_trace_log | bool | <code class="docutils literal notranslate"><span class="pre">false</span></code> | 否 | 是否打开性能trace日志 |</p></li>
 </ul>
 </div></blockquote>
 </section>
@@ -1874,6 +1968,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1881,81 +1976,97 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>l2_cache_type</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;none&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置二级缓存类型，<code class="docutils literal notranslate"><span class="pre">none</span></code> 表示不配置二级缓存，可选择二级缓存类型：[<code class="docutils literal notranslate"><span class="pre">obs</span></code>, <code class="docutils literal notranslate"><span class="pre">sfs</span></code>, <code class="docutils literal notranslate"><span class="pre">distributed_disk</span></code>]</p></td>
 </tr>
 <tr class="row-odd"><td><p>l2_cache_delete_thread_num</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">32</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置二级缓存异步删除线程池大小，增大该值可以提升二级缓存删除并行度，同时也会提升worker的CPU消耗</p></td>
 </tr>
 <tr class="row-even"><td><p>l2_cache_async_write_queue_size</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">10000</span></code></p></td>
+<td><p>否</p></td>
 <td><p>用于写入二级缓存的每线程异步队列大小。共有 8 个线程，支持的最大总容量为 8 * l2_cache_async_write_queue_size 个待写入的键值对</p></td>
 </tr>
 <tr class="row-odd"><td><p>l2_cache_async_write_rate_limit_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">200</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置写入二级缓存异步任务速率(以MB/s为单位)</p></td>
 </tr>
 <tr class="row-even"><td><p>obs_access_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>对象存储服务(OBS) AK/SK认证的访问密钥(Access Key)</p></td>
 </tr>
 <tr class="row-odd"><td><p>obs_secret_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>对象存储服务(OBS) AK/SK认证的密钥(Secret Key)</p></td>
 </tr>
 <tr class="row-even"><td><p>obs_endpoint</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>对象存储服务(OBS) 访问域名</p></td>
 </tr>
 <tr class="row-odd"><td><p>obs_bucket</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>对象存储服务(OBS) 桶的名称</p></td>
 </tr>
 <tr class="row-even"><td><p>obs_https_enabled</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用HTTPS连接对象存储服务（OBS），默认为HTTP</p></td>
 </tr>
 <tr class="row-odd"><td><p>sfs_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>挂载的SFS路径</p></td>
 </tr>
 <tr class="row-even"><td><p>distributed_disk_path</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>distributed_disk 模式下的根路径。当 <code class="docutils literal notranslate"><span class="pre">l2_cache_type=distributed_disk</span></code> 时，slot root path 基于该路径构建，不再使用 <code class="docutils literal notranslate"><span class="pre">sfs_path</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>distributed_disk_max_data_file_size_mb</p></td>
 <td><p>uint32</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1024</span></code></p></td>
+<td><p>否</p></td>
 <td><p>单个 distributed_disk data 文件的最大大小，单位 MB</p></td>
 </tr>
 <tr class="row-even"><td><p>distributed_disk_sync_interval_ms</p></td>
 <td><p>uint32</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1000</span></code></p></td>
+<td><p>否</p></td>
 <td><p>distributed_disk group commit 的最长刷盘间隔，单位毫秒</p></td>
 </tr>
 <tr class="row-odd"><td><p>distributed_disk_sync_batch_bytes</p></td>
 <td><p>uint64</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">33554432</span></code></p></td>
+<td><p>否</p></td>
 <td><p>distributed_disk group commit 的批量刷盘阈值，单位字节</p></td>
 </tr>
 <tr class="row-even"><td><p>distributed_disk_compact_interval_s</p></td>
 <td><p>uint32</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">3600</span></code></p></td>
+<td><p>否</p></td>
 <td><p>distributed_disk 后台 compact 的固定执行周期，单位秒；生产构建最小值为 60，测试构建在 <code class="docutils literal notranslate"><span class="pre">WITH_TESTS</span></code> 下最小值为 1</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_cloud_service_token_rotation</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>启用OBS客户端使用临时令牌访问OBS，令牌过期后，获取新的令牌并重新连接OBS</p></td>
 </tr>
 </tbody>
@@ -1970,6 +2081,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -1977,32 +2089,44 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>rocksdb_store_dir</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;./datasystem/rocksdb&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置元数据持久化目录，元数据通过RocksDB持久化在磁盘中</p></td>
 </tr>
 <tr class="row-odd"><td><p>rocksdb_background_threads</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
+<td><p>否</p></td>
 <td><p>RocksDB的后台线程数，用于元数据的刷盘和压缩</p></td>
 </tr>
 <tr class="row-even"><td><p>rocksdb_max_open_file</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">128</span></code></p></td>
+<td><p>否</p></td>
 <td><p>RocksDB可使用的最大打开文件个数</p></td>
 </tr>
 <tr class="row-odd"><td><p>rocksdb_write_mode</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">async</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置元数据写入RocksDB的方式，支持不写、同步和异步写入，默认值为<code class="docutils literal notranslate"><span class="pre">async</span></code>。可选值包括：‘none’（不写）、‘sync’（同步）、‘async’（异步）</p></td>
 </tr>
 <tr class="row-even"><td><p>enable_meta_replica</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>已废弃的兼容参数，当前配置值会被忽略</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_metadata_recovery</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否在 worker 重启清理阶段将本地元数据回补到 master</p></td>
+</tr>
+<tr class="row-even"><td><p>enable_data_replication</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
+<td><p>实验性参数。是否允许跨 worker 读取到的数据在本 worker 缓存为本地热副本，并向 master 注册副本位置；关闭后 remote get 获取的数据通常仅服务当前请求，不作为普通本地副本保留。该参数仅用于热副本性能优化，不作为数据可靠性机制，不保障数据可靠性或可用性</p></td>
 </tr>
 </tbody>
 </table>
@@ -2016,58 +2140,69 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>client_reconnect_wait_s</p></td>
 <td><p>int</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">5</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">10</span></code></p></td>
+<td><p>是</p></td>
 <td><p>客户端断链重连最大等待时间（单位为秒）</p></td>
 </tr>
 <tr class="row-odd"><td><p>client_dead_timeout_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">120</span></code></p></td>
+<td><p>否</p></td>
 <td><p>客户端存活检测最大时间间隔（单位为秒）, client_dead_timeout_s &gt;= 3</p></td>
 </tr>
 <tr class="row-even"><td><p>heartbeat_interval_ms</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1000</span></code></p></td>
+<td><p>是</p></td>
 <td><p>服务端与ETCD的心跳间隔时间（单位为毫秒）</p></td>
 </tr>
 <tr class="row-odd"><td><p>node_timeout_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>否</p></td>
 <td><p>服务端节点超时最大时间间隔（单位为秒）, node_timeout_s &gt;= 1</p></td>
 </tr>
 <tr class="row-even"><td><p>node_dead_timeout_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>是</p></td>
 <td><p>服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 <code class="docutils literal notranslate"><span class="pre">node_timeout_s</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_reconciliation</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
 <td><p>当节点重启时是否启用对账功能</p></td>
 </tr>
 <tr class="row-even"><td><p>enable_hash_ring_self_healing</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用哈希环自愈功能，如果该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，当哈希环状态异常时会启用自愈修复哈希环</p></td>
 </tr>
 <tr class="row-odd"><td><p>add_node_wait_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">60</span></code></p></td>
+<td><p>是</p></td>
 <td><p>新节点加入哈希环的等待超时时间</p></td>
 </tr>
 <tr class="row-even"><td><p>auto_del_dead_node</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是</p></td>
 <td><p>是否启用死亡节点自动清理功能，当该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，会将死亡节点剔除出集群管理，并触发被动缩容</p></td>
 </tr>
 <tr class="row-odd"><td><p>enable_distributed_master</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>否</p></td>
 <td><p>是否启用分布式主节点，默认值为true</p></td>
 </tr>
 </tbody>
@@ -2082,6 +2217,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -2089,21 +2225,25 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>enable_lossless_data_exit_mode</p></td>
 <td><p>bool</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td><p>是</p></td>
 <td><p>是否启用无损数据退出模式，当该值为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时，在节点退出时则会以优雅退出的方式，迁移数据和元数据，保证数据和元数据不丢失</p></td>
 </tr>
 <tr class="row-odd"><td><p>check_async_queue_empty_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td><p>否</p></td>
 <td><p>datasystem-worker检测异步队列为空的时间，单位为秒</p></td>
 </tr>
 <tr class="row-even"><td><p>data_migrate_rate_limit_mb</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">40</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置优雅退出数据迁移的流控（以MB/s为单位）</p></td>
 </tr>
 <tr class="row-odd"><td><p>data_migrate_urma_transport_mode</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">write</span></code></p></td>
+<td><p>否</p></td>
 <td><p>配置后台迁移启用 URMA 时的数据迁移传输模式。可选值：<code class="docutils literal notranslate"><span class="pre">write</span></code> 表示使用 URMA write 路径，<code class="docutils literal notranslate"><span class="pre">read</span></code> 表示使用 URMA read 路径。仅在 <code class="docutils literal notranslate"><span class="pre">enable_urma=true</span></code> 时生效</p></td>
 </tr>
 </tbody>
@@ -2242,6 +2382,11 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <td><p><code class="docutils literal notranslate"><span class="pre">64</span></code></p></td>
 <td><p>jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。</p></td>
 </tr>
+<tr class="row-even"><td><p>oc_metadata_header</p></td>
+<td><p>bool</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>是否为对象缓存共享内存分配元数据头，如果设置为<code class="docutils literal notranslate"><span class="pre">false</span></code>则关闭此功能（此时shm latch/可见性将不可用）</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -2260,6 +2405,7 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-odd"><th class="head"><p>配置项</p></th>
 <th class="head"><p>类型</p></th>
 <th class="head"><p>默认值</p></th>
+<th class="head"><p>是否支持动态修改</p></th>
 <th class="head"><p>描述</p></th>
 </tr>
 </thead>
@@ -2267,26 +2413,31 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
 <tr class="row-even"><td><p>system_access_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>系统访问密钥</p></td>
 </tr>
 <tr class="row-odd"><td><p>system_secret_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>系统密钥</p></td>
 </tr>
 <tr class="row-even"><td><p>tenant_access_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>租户访问密钥</p></td>
 </tr>
 <tr class="row-odd"><td><p>tenant_secret_key</p></td>
 <td><p>string</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code></p></td>
+<td><p>否</p></td>
 <td><p>租户密钥</p></td>
 </tr>
 <tr class="row-even"><td><p>request_expire_time_s</p></td>
 <td><p>int</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">300</span></code></p></td>
+<td><p>否</p></td>
 <td><p>请求过期时间，单位为秒，最大值为300</p></td>
 </tr>
 </tbody>
@@ -2422,15 +2573,15 @@ dscli<span class="w"> </span>up<span class="w"> </span>--cpunodebind<span class=
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>

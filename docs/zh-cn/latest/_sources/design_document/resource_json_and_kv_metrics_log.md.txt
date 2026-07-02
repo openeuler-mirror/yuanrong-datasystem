@@ -1,0 +1,247 @@
+# kv_resource.log 与 kv_metrics.log 日志设计
+
+
+
+## 概述
+
+本设计新增两份 **JSON Lines** 结构化日志，供 Grafana / Loki / Vector 等下游采集：
+
+- **`kv_resource.log`**：与 `resource.log` **同源、同周期**采集的资源指标快照，按需要采集字段输出命名字段，每行一个 JSON 对象。
+- **`kv_metrics.log`**：与 `datasystem_worker.INFO.log` 中 `metrics_summary` **同 body** 的指标摘要，独立落盘，每行一个 JSON 对象，顶层额外带 `pod_name` / `cluster_name`。
+
+两份日志均走 `JsonLinesExporter`（裸 JSON 行、无 `ConstructLogPrefix` 文本前缀），由 **`json_log_monitor`** 独立门控；原有 `resource.log` 与 INFO.log 的 `metrics_summary` 保留，分别仍由 **`log_monitor`** 控制。
+
+### 现状回顾（实现前）
+
+| 项 | resource.log | metrics 摘要 |
+|---|---|---|
+| 落盘机制 | `HardDiskExporter`（裸 fd，不走 spdlog） | `LOG(INFO)` → spdlog → `datasystem_worker.INFO.log` |
+| 创建点 | `ResMetricCollector::Init` | `metrics::LogSummary` |
+| 采集触发 | `CollectMetrics` 独立线程，`log_monitor_interval_ms` | `metrics::Tick` + 关停时 `PrintSummary` |
+| 行前缀 | `ConstructLogPrefix`（时间\|级别\|文件:行\|pod\|pid:tid\|trace\|cluster） | spdlog 自动前缀 |
+| 指标拼装 | handler 串以 `" \| "` 连接 | `RenderJsonSummary` 产出 JSON |
+
+实现后在各自链路上**并行**增加 JSON 输出，不替换原链路（thread-pool `ToString` 语义修正为有意变更，见下文）。
+
+## 设计目标
+
+1. 新增 `kv_resource.log`，JSON 格式记录需要采集的 resource 字段，采集逻辑与 `resource.log` 一致。
+2. 新增 `kv_metrics.log`，将 INFO.log 中的 `metrics_summary` 并行输出到独立文件，body 与分片逻辑不变。
+3. 两份日志均为纯 JSON Lines，顶层仅保留  `pod_name`、`cluster_name` 标签字段。
+4. 新增 `json_log_monitor` 开关，可与 `log_monitor` **独立**启停 JSON 日志。
+5. 对 `resource.log` 文本格式与 INFO.log `metrics_summary` body **零回归**（thread-pool 三列语义修正除外）。
+
+## 整体方案
+
+系统里有**两条独立采集链路**（资源指标、KV 指标摘要），共用采集周期 `log_monitor_interval_ms`，但落哪些文件由两个开关分别决定：
+
+| 开关 | 控制的输出 |
+|---|---|
+| `log_monitor` | `resource.log`、INFO.log 里的 `metrics_summary` |
+| `json_log_monitor` | `kv_resource.log`、`kv_metrics.log` |
+
+任一为 `true` 时对应链路才会跑；两者可任意组合（见文末「开关组合」表）。
+
+![image-20260629201652199](/home/guoyang/snap/typora/112/.config/Typora/typora-user-images/image-20260629201652199.png)
+
+**读图说明**
+
+- **上下两条子图互不串联**：左边管资源快照，右边管 KV 请求路径指标摘要；不是「一个开关分叉成四个文件」。
+- **菱形判断实为门控**：`log_monitor` / `json_log_monitor` 只决定**写不写**该文件，不改变采集与拼装逻辑。
+- **链路 A 的关键约束**：文本与 JSON 共用**同一次** handler 调用结果，避免 `GetAndResetIntervalStats` 等带清零副作用的 handler 被调两次。
+- **链路 B 的关键约束**：`kv_metrics.log` 复用 `BuildSummary` 已有 JSON；INFO 与 kv_metrics 是同一 `summaries[]` 的两路写出，body 内容一致（kv 侧多顶层 label）。
+
+**格式约定**
+
+- `resource.log` / INFO.log：保留原有文本或 spdlog 前缀。
+- `kv_resource.log` / `kv_metrics.log`：每行一个完整 JSON，**不写** time / level / file / pid:tid / trace_id；仅顶层带 `pod_name`、`cluster_name`（及各自 event 字段）。
+
+## 设计决策
+
+| 决策项 | 选择 | 理由 |
+|---|---|---|
+| 资源 JSON 文件名 | `kv_resource.log`（非 `resource.json`） | 与 `resource.log`、`kv_metrics.log` 统一 `.log` 后缀及 LogManager 治理 |
+| 字段采集方式 | 复用文本 handler，collector 层切分 + `resource_json_schema` 白名单 | 不改业务 handler，回归面小 |
+| 线程池采集 | 修正 `ToString` 位置 1/3/4 语义 | 与 `res_metrics.def` 字段名一致 |
+| 落盘基础设施 | `JsonLinesExporter`，文件管理上移 `MetricsExporter` 基类 | 纯 JSON 无需文本前缀，共用双缓冲/轮转 |
+| 前缀 / 标签 | 顶层 `pod_name`、`cluster_name`（`WrapJsonWithPodCluster`） | 按需 |
+| kv_metrics 兼容 | INFO 保留 + kv_metrics 新增 | 下游可渐进迁移 |
+| INFO body | INFO.log 打原始 summary；kv_metrics 仅包装 label | INFO 零回归 |
+| 字段名风格 | `res_metrics.def` 子字段名转 snake_case | 与定义一一对应 |
+| `MAX_THREAD_NUM` | 取 `maxThreadNum_`（线程上限） | 按字段名语义 |
+| 空串组 | 输出全 0 结构 | 每行 group key 稳定；语义约定见「运维约定」 |
+| LogManager 轮转 | 纳入 `kv_resource.*[0-9].log`、`kv_metrics.*[0-9].log` | 与 `resource.log` 同套压缩/裁剪 |
+| 启用开关 | **`json_log_monitor`**（默认 `true`），与 `log_monitor` 独立 | 可只开 JSON、关文本，或反之 |
+
+## 线程池采集修正
+
+### 问题
+
+`ThreadPoolUsage::ToString` 原输出顺序与 `res_metrics.def` 子字段名语义错位（位置 1 实为区间峰值运行数、位置 3 为完成数、位置 4 为区间峰值等待）。
+
+### 修正后
+
+| 位置 | 字段名 | 取值 | 口径 |
+|---|---|---|---|
+| 1 | IDLE_NUM | `currentTotalNum - runningTasksNum` | 瞬时 |
+| 2 | CURRENT_TOTAL_NUM | `currentTotalNum` | 瞬时 |
+| 3 | MAX_THREAD_NUM | `maxThreadNum_` | 配置上限 |
+| 4 | WAITING_TASK_NUM | `waitingTaskNum` | 瞬时队列 |
+| 5 | THREAD_POOL_USAGE | `totalWorkTimeNs / (currentTotalNum × intervalNs)` | 区间 |
+
+**对外影响**：`resource.log` 与 `kv_resource.log` 中线程池相关三列语义变更；依赖旧语义的告警/看板需同步。
+
+空池（`currentTotalNum == 0`）仍返回空串；JSON 路径对该组输出全 0 结构。
+
+## kv_resource.log 设计
+
+### 文件与常量
+
+```cpp
+static const std::string KV_RESOURCE_LOG_NAME = "kv_resource";  // → kv_resource.log
+static const std::string KV_METRICS_LOG_NAME = "kv_metrics";      // → kv_metrics.log
+```
+
+轮转副本：`kv_resource.<时间戳>.log`、`kv_metrics.<时间戳>.log`。
+
+### 字段映射
+
+真源：`resource_json_schema.h` / `resource_json_schema.cpp`（`GetResourceFieldDesc`、`SplitResourceFields`）。
+
+- 组名、子字段名：enum / def 名转 snake_case。
+- 单字段组（`active_client_count` 等）扁平为标量。
+- 不需要采集的整组不出现（如 `shared_disk`、`stream_count`、SC 线程池族等）。
+
+### JSON 行结构
+
+```json
+{"pod_name":"worker_0","cluster_name":"recs","event":"resource_snapshot","version":"v0","metrics":{"shared_memory":{"memory_usage":73814,"physical_memory_usage":80000,"total_limit":1073741824,"worker_share_memory_usage":0.069},"active_client_count":3,"worker_oc_service_thread_pool":{"idle_num":3,"current_total_num":4,"max_thread_num":8,"waiting_task_num":0,"thread_pool_usage":0.030}}}
+```
+
+- `pod_name`：`GetPodIdentifier()`；`cluster_name`：`FLAGS_cluster_name`；由 `WrapJsonWithPodCluster` 插入行首。
+- 采集周期：与 `resource.log` 相同（`log_monitor_interval_ms`，默认 10s）。
+
+### 空串 / 未注册处理
+
+handler 空串、未注册、token 数与 schema 不符时：该组输出**全 0 结构**（或单字段 `0`），并 `LOG_FIRST_N(WARNING,1)` 记 malformed 一次。语义与运维约定见下文「空值全 0」。
+
+## kv_metrics.log 设计
+
+### 输出逻辑
+
+```cpp
+for (const auto &summary : summaries) {
+  if (FLAGS_log_monitor) {
+    LOG(INFO) << summary;  // INFO.log：原始 body，逐字不变
+  }
+  if (FLAGS_json_log_monitor && exporter != nullptr) {
+    exporter->WriteJsonLine(WrapJsonWithPodCluster(summary, pod, cluster));
+  }
+}
+```
+
+- `g_kvMetricsExporter` 在 `metrics::Init` 时按 `json_log_monitor` 创建；`PrintSummary` / `Tick` 在 `log_monitor || json_log_monitor` 时任一满足即触发摘要。
+- 分片：`MAX_METRICS_LOG_BYTES` 不变；每条分片行均带 `pod_name` / `cluster_name`。
+
+### 行样例
+
+```json
+{"pod_name":"worker_0","cluster_name":"recs","event":"metrics_summary","version":"v0","cycle":1,"interval_ms":10000,"part_index":1,"part_count":1,"metrics":[{"name":"worker_rpc_create_meta_latency","total":{"count":3,"avg_us":171,"max_us":249,"p50":249,"p90":249,"p99":249},"delta":{"count":3,"avg_us":171,"max_us":249,"p50":249,"p90":249,"p99":249}}]}
+```
+
+## 落盘基础设施
+
+- **`JsonLinesExporter`**：`WriteJsonLine` → `WriteMessage` + `SubmitWriteMessage`，无文本前缀；`FlushThread` 委托基类 `FlushBufferedMessages()`。
+- **`MetricsExporter` 基类**：文件创建、轮转、`fileSuffix_`（默认 `.log`）、`PruneOldLogFiles` 上移；`HardDiskExporter` 仅保留带前缀的 `Send`。
+- **`LogManager`**：扫描 `kv_resource.*[0-9].log`、`kv_metrics.*[0-9].log`，与 `resource.*[0-9].log` 同套压缩与裁剪。
+
+## 配置与开关
+
+| 配置项 | 作用 | 默认 |
+|---|---|---|
+| `json_log_monitor` | 控制 `kv_resource.log`、`kv_metrics.log` | `true` |
+| `log_monitor` | 控制 `resource.log`、INFO `metrics_summary` 等原文本/INFO 输出 | `true` |
+| `log_monitor_exporter` | 须为 `harddisk`（`log_monitor` 或 `json_log_monitor` 为 true 时） | `harddisk` |
+| `log_monitor_interval_ms` | 采集与摘要周期 | `10000` |
+| `log_dir` | 输出目录 | `~/.datasystem/logs` |
+| `max_log_size` / `max_log_file_num` / `logfile_mode` | 轮转、裁剪、权限（三文件共用） | 现有 |
+
+### 开关组合
+
+| `log_monitor` | `json_log_monitor` | 效果 |
+|---|---|---|
+| on | on | `resource.log` + INFO `metrics_summary` + 两条 JSON 日志 |
+| on | off | 仅原文本 / INFO 监控输出 |
+| off | on | 仅 `kv_resource.log`、`kv_metrics.log` |
+| off | off | 监控日志均不输出（采集循环不跑） |
+
+## 验证
+
+| 层级 | 测试 / 检查 |
+|---|---|
+| schema | `tests/ut/common/metrics/resource_json_schema_test.cpp` |
+| 线程池 ToString | `tests/ut/common/util/thread_pool_test.cpp`（`ThreadPoolUsageToStringFieldOrder` 等） |
+| exporter / collector | `tests/ut/common/log/hard_disk_exporter_test.cpp`（kv_resource 落盘、双开关共享采集、kv_metrics 包装行） |
+| metrics 摘要 | `tests/ut/common/metrics/metrics_test.cpp`（`wrap_with_pod_cluster_prepends_labels`、`kv_metrics_print_summary_respects_json_log_monitor_independently` 等） |
+
+集成：启用 `json_log_monitor` 起 worker，确认两文件存在、每行可 `json` 解析、排除组不出现。
+
+## 风险与回滚
+
+| 风险 | 回滚要点 |
+|---|---|
+| 线程池三列语义变更 | 恢复 `ToString` 旧实现（但与 def 名再次错位） |
+| CollectMetrics 缓存 handler | 删除 JSON 路径、恢复原循环 |
+| 基类文件管理上移 | 回退 `metrics_exporter` 改动，回归 `resource.log` 轮转 |
+| 双份 metrics 输出 IO | 关闭 `json_log_monitor` 或去掉 `WriteJsonLine` |
+
+## 已知限制与运维约定（原「待后续闭环」项，v0 已确认）
+
+以下四项在评审阶段记为遗留；**随本特性落地一并闭环**：不在 Worker 侧改实现，由本文约定下游用法；若后续有强需求再开独立增强项。
+
+### 1. 采集管道（原 L1）
+
+**结论**：管道选型（Promtail / Vector / Fluent Bit 等）属**部署侧**职责；v0 交付物为 **标准 JSON Lines 文件**，不绑定单一采集器。
+
+**运维约定**：
+
+- 采集路径：`{log_dir}/kv_resource.log`、`{log_dir}/kv_metrics.log`（建议按 pod 挂载 log 目录 tail）。
+- 解析：整行 `json` 解析；将 `pod_name`、`cluster_name` 提升为 Loki label（或等价维度）。
+- 嵌套 `metrics` 在查询侧用 LogQL `| json`、Grafana JSON 面板或 Vector `remap` 提取，**无需** Worker 预 flatten。
+
+### 2. 时间戳字段（原 L2）
+
+**结论**：按 ods 白名单，**v0 不在 JSON 行内写 `time` / `timestamp`**。
+
+**运维约定**：
+
+- 实时采集：以采集器写入时刻作为时序时间（tail 场景误差通常小于一个采集间隔）。
+- 需要与 Worker 产生时刻对齐：同周期对照 `resource.log` 行首 ISO8601 时间戳（同源 `CollectMetrics`）。
+- 若未来必须行内时间戳：可作为独立增强加顶层 `timestamp`（与 resource.log 前缀同源），**非本版范围**。
+
+### 3. 嵌套字段结构（原 L3）
+
+**结论**：v0 保持 `metrics.{组名}.{字段}` **两层嵌套**，不在 Worker 侧扁平化为 `shared_memory_memory_usage` 等形式。
+
+**运维约定**：采集端一次 JSON 解析即可；面板查询示例：
+
+- 资源：`metrics.shared_memory.memory_usage`（或采集器 flatten 后的等价路径）。
+- 指标摘要：`metrics[].name` + `metrics[].total.avg_us` 等既有结构。
+
+### 4. 空值全 0 语义（原 L4）
+
+**结论**：空池 / 未注册 / 无样本 / malformed 时输出**全 0 结构**，保证每行 group key 集合稳定。
+
+**运维约定**（避免误读）：
+
+| 现象 | 常见含义 | 建议 |
+|---|---|---|
+| `etcd_request_success_rate: 0` | 常为「本周期无样本」，非必然「成功率 0%」 | 成功率类告警看连续多周期或对照 `resource.log` 文本段 |
+| 线程池组全 0 | 常为「该节点未启对应服务 / 空池」 | 勿单独用 `max_thread_num: 0` 判断容量 |
+| 与 `resource.log` 空段 | 文本为空段时 JSON 为全 0 组 | 排障以文本列 + 部署角色（是否 master）为准 |
+
+若线上面板已出现稳定误读，再评估改为「整组省略」或 `null`（需改 schema 与采集规则，单独立项）。
+
+---
+
+**实施说明**：原建议分四个 PR 递进；实际以单 PR（!1172）合入，上述组件均已实现。thread-pool 修正与 JSON 输出同批交付。

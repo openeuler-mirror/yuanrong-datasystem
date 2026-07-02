@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="大页内存配置指南" href="hugepage_guide.html"><link rel="prev" title="openYuanrong datasystem 日志" href="log_guide.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>Client环境变量 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
@@ -817,9 +817,24 @@ document.addEventListener('DOMContentLoaded', function() {
 <td><p><code class="docutils literal notranslate"><span class="pre">&gt;</span> <span class="pre">0</span></code></p></td>
 <td><p>每个 <code class="docutils literal notranslate"><span class="pre">client_dead_timeout_s</span></code> 统计窗口内进行故障切换判断前所需的最小 URMA 数据面样本数。样本不足时即使成功率很低也不会触发切换，避免少量请求误触发。</p></td>
 </tr>
+<tr class="row-even"><td><p>31</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client_slow_log_process_slower_than</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2000</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&gt;=</span> <span class="pre">0</span></code></p></td>
+<td><p>Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。可通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件热更新。</p></td>
+</tr>
+<tr class="row-odd"><td><p>32</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">client_slow_log_rpc_slower_than</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">5000</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&gt;=</span> <span class="pre">0</span></code></p></td>
+<td><p>Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。可通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件热更新。</p></td>
+</tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<div><p><strong>废弃说明</strong>：旧版本通过环境变量 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_SLOW_LOG_PROCESS_SLOWER_THAN</span></code> 和 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_SLOW_LOG_RPC_SLOWER_THAN</span></code> 配置客户端慢日志阈值。自本版本起上述环境变量不再生效，请改用 gflag <code class="docutils literal notranslate"><span class="pre">--client_slow_log_process_slower_than</span></code> / <code class="docutils literal notranslate"><span class="pre">--client_slow_log_rpc_slower_than</span></code>，通过 <code class="docutils literal notranslate"><span class="pre">DATASYSTEM_CLIENT_CONFIG_PATH</span></code> 配置文件或 <code class="docutils literal notranslate"><span class="pre">UpdateConfig</span></code> API 设置。</p>
+</div></blockquote>
 </section>
 <section id="id7">
 <h2>使用说明<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
@@ -911,15 +926,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../_static/custom.js?v=f6e2bf52"></script>
