@@ -28,6 +28,9 @@
 #include <memory>
 #include <ostream>
 #include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -90,6 +93,119 @@ constexpr char ENV_RECOVERY_HOST_ID_ENV0[] = "host_id_env0";
 constexpr char ENV_RECOVERY_HOST_ID_VALUE0[] = "host_id0";
 constexpr char ENV_RECOVERY_CLIENT_LOG_MESSAGE[] = "env_recovery_client_pod_ip_log";
 constexpr char ENV_RECOVERY_LOCK_FILE_SUFFIX[] = ".lock";
+constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
+constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
+constexpr int MMAP_SWITCH_WAIT_MS = 30'000;
+constexpr int MMAP_SWITCH_POLL_MS = 100;
+constexpr int MMAP_SWITCH_CONNECT_TIMEOUT_MS = 60'000;
+constexpr size_t MMAP_SWITCH_VALUE_SIZE = 1024UL * 1024UL;
+constexpr char DATASYSTEM_MEMFD_MAP_NAME[] = "memfd:datasystem";
+constexpr char MMAP_SWITCH_WORKER_GFLAGS[] =
+    "-shared_memory_size_mb=25 -v=1 -log_monitor=true -max_client_num=2000 "
+    "-node_timeout_s=1 -node_dead_timeout_s=2 -heartbeat_interval_ms=500 -client_reconnect_wait_s=1 "
+    "-enable_lossless_data_exit_mode=true";
+constexpr char MMAP_SWITCH_HOST_ID_ENV_PREFIX[] = "mmap_switch_host_id_env";
+constexpr char MMAP_SWITCH_HOST_ID_VALUE_PREFIX[] = "mmap_switch_host_id";
+
+std::set<std::string> GetDatasystemMemfdMappingRanges()
+{
+    std::ifstream maps("/proc/self/maps");
+    std::set<std::string> mappingRanges;
+    std::string line;
+    while (std::getline(maps, line)) {
+        if (line.find(DATASYSTEM_MEMFD_MAP_NAME) == std::string::npos) {
+            continue;
+        }
+        auto rangeEnd = line.find(' ');
+        if (rangeEnd != std::string::npos) {
+            mappingRanges.emplace(line.substr(0, rangeEnd));
+        }
+    }
+    return mappingRanges;
+}
+
+size_t CountDatasystemMemfdMappings()
+{
+    return GetDatasystemMemfdMappingRanges().size();
+}
+
+std::set<std::string> DifferenceMappings(const std::set<std::string> &lhs, const std::set<std::string> &rhs)
+{
+    std::set<std::string> diff;
+    std::set_difference(lhs.begin(), lhs.end(), rhs.begin(), rhs.end(), std::inserter(diff, diff.end()));
+    return diff;
+}
+
+bool HasAnyMapping(const std::set<std::string> &expectedMappings)
+{
+    auto currentMappings = GetDatasystemMemfdMappingRanges();
+    return std::any_of(expectedMappings.begin(), expectedMappings.end(), [&currentMappings](const std::string &mapping) {
+        return currentMappings.find(mapping) != currentMappings.end();
+    });
+}
+
+template <typename Predicate>
+bool WaitUntil(Predicate &&predicate, int timeoutMs = MMAP_SWITCH_WAIT_MS)
+{
+    Timer timer;
+    while (timer.ElapsedMilliSecond() < timeoutMs) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(MMAP_SWITCH_POLL_MS));
+    }
+    return predicate();
+}
+
+Status SetSwitchWorkerExpected(size_t slot, const HostPort &workerAddress)
+{
+    std::string expectedPoint = FormatString("client.switch_worker_expected_%zu", slot);
+    std::string matchedPoint = FormatString("client.switch_worker_expected_%zu.matched", slot);
+    RETURN_IF_NOT_OK(datasystem::inject::Set(expectedPoint, "call(" + workerAddress.ToString() + ")"));
+    return datasystem::inject::Set(matchedPoint, "call()");
+}
+
+void ClearSwitchWorkerExpectedInjects()
+{
+    datasystem::inject::Clear("client.switch_worker_expected_1");
+    datasystem::inject::Clear("client.switch_worker_expected_1.matched");
+    datasystem::inject::Clear("client.switch_worker_expected_2");
+    datasystem::inject::Clear("client.switch_worker_expected_2.matched");
+    datasystem::inject::Clear("client.standby_worker");
+    datasystem::inject::Clear("ListenWorker.CheckHeartbeat.interval");
+    datasystem::inject::Clear("ListenWorker.CheckHeartbeat.heartbeat_interval_ms");
+    datasystem::inject::Clear("ClientWorkerCommonApi.SendHeartbeat.timeoutMs");
+}
+
+uint64_t GetSwitchWorkerMatchedCount(size_t slot)
+{
+    return datasystem::inject::GetExecuteCount(FormatString("client.switch_worker_expected_%zu.matched", slot));
+}
+
+void AssertFileContainsEventually(const std::string &filePath, const std::vector<std::string> &expected)
+{
+    Timer timer;
+    Status rc;
+    std::string content;
+    while (timer.ElapsedMilliSecond() < ENV_RECOVERY_LOG_WAIT_MS) {
+        Provider::Instance().FlushLogs();
+        rc = ReadWholeFile(filePath, content);
+        if (rc.IsOk() && std::all_of(expected.begin(), expected.end(), [&content](const std::string &item) {
+                return content.find(item) != std::string::npos;
+            })) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(ENV_RECOVERY_LOG_POLL_MS));
+    }
+
+    Provider::Instance().FlushLogs();
+    rc = ReadWholeFile(filePath, content);
+    DS_ASSERT_OK(rc);
+    for (const auto &item : expected) {
+        ASSERT_NE(content.find(item), std::string::npos) << "Missing log content: " << item;
+    }
+}
+
 class KVCacheClientTest : public OCClientCommon {
 public:
     std::vector<std::string> workerAddress_;
@@ -141,6 +257,104 @@ public:
     std::shared_ptr<KVClient> client3_;
     std::shared_ptr<KVClient> client4_;
 };
+
+class KVCacheClientMmapSwitchTest : public OCClientCommon, public CommonDistributedExt {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numOBS = 1;
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        std::string hostIp = "127.0.0.1";
+        for (size_t i = 0; i < opts.numWorkers; ++i) {
+            HostPort hostPort(hostIp, GetFreePort());
+            opts.workerConfigs.emplace_back(hostPort);
+            workerAddress_.emplace_back(hostPort);
+            std::string envName = std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + std::to_string(i);
+            std::string envValue = std::string(MMAP_SWITCH_HOST_ID_VALUE_PREFIX) + std::to_string(i);
+            ASSERT_EQ(setenv(envName.c_str(), envValue.c_str(), 1), 0);
+            opts.workerSpecifyGflagParams[i] = FormatString("-host_id_env_name=%s", envName);
+        }
+        opts.workerGflagParams = MMAP_SWITCH_WORKER_GFLAGS;
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
+        datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
+        datasystem::inject::Set("ClientWorkerCommonApi.SendHeartbeat.timeoutMs", "call(500)");
+    }
+
+    void SetUp() override
+    {
+        ExternalClusterTest::SetUp();
+        CommonDistributedExt::InitTestEtcdInstance();
+    }
+
+    void TearDown() override
+    {
+        ClearSwitchWorkerExpectedInjects();
+        client_.reset();
+        etcd_.reset();
+        for (size_t i = 0; i < workerAddress_.size(); ++i) {
+            (void)unsetenv((std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + std::to_string(i)).c_str());
+        }
+        ExternalClusterTest::TearDown();
+    }
+
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
+    void InitSwitchableClient()
+    {
+        ServiceDiscoveryOptions sdOpts;
+        sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.hostIdEnvName = std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + "0";
+        sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+        auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+        DS_ASSERT_OK(serviceDiscovery->Init());
+
+        ConnectOptions connectOptions;
+        connectOptions.connectTimeoutMs = MMAP_SWITCH_CONNECT_TIMEOUT_MS;
+        connectOptions.accessKey = "QTWAOYTTINDUT2QVKYUC";
+        connectOptions.secretKey = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
+        connectOptions.enableCrossNodeConnection = true;
+        connectOptions.serviceDiscovery = serviceDiscovery;
+        client_ = std::make_shared<KVClient>(connectOptions);
+        DS_ASSERT_OK(client_->Init());
+    }
+
+    std::vector<HostPort> workerAddress_;
+    std::shared_ptr<KVClient> client_;
+};
+
+TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch)
+{
+    InitSwitchableClient();
+    HostPort worker1Address;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
+    DS_ASSERT_OK(SetSwitchWorkerExpected(1, worker1Address));
+    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
+
+    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
+    std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
+    std::string keyOnWorker0 = client_->Set(value);
+    ASSERT_FALSE(keyOnWorker0.empty());
+    ASSERT_TRUE(WaitUntil([&]() { return CountDatasystemMemfdMappings() > baselineMappings.size(); }))
+        << "client did not mmap worker0 shared memory";
+    const auto worker0Mappings = DifferenceMappings(GetDatasystemMemfdMappingRanges(), baselineMappings);
+    ASSERT_FALSE(worker0Mappings.empty());
+
+    VoluntaryScaleDownInject(0);
+    ASSERT_TRUE(WaitUntil([]() { return GetSwitchWorkerMatchedCount(1) > 0; }))
+        << "client did not switch to worker1";
+
+    std::string keyOnWorker1 = client_->Set(value);
+    ASSERT_FALSE(keyOnWorker1.empty());
+
+    ASSERT_TRUE(WaitUntil([&]() { return !HasAnyMapping(worker0Mappings); }))
+        << "old worker0 shared memory is still mapped after switching to worker1, old mappings: "
+        << worker0Mappings.size() << ", current mappings: " << CountDatasystemMemfdMappings();
+}
 
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)
 {
