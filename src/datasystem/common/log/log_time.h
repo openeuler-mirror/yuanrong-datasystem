@@ -22,6 +22,8 @@
 
 #include <chrono>
 #include <iomanip>
+#include <sstream>
+#include <string>
 
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -58,16 +60,28 @@ struct LogTime {
     int getUsec() const { return usec; }
 };
 
+/**
+ * @brief Format the ISO8601 timestamp used as the first field of the standard log prefix.
+ * @param[in] tmTime Broken-down local time.
+ * @param[in] usec Microsecond fraction (0-999999).
+ * @return Timestamp string, e.g. "2023-06-02T14:58:32.081156".
+ */
+inline std::string FormatLogTimestamp(const std::tm *tmTime, int32_t usec)
+{
+    std::ostringstream s;
+    s << std::setw(4) << 1900 + tmTime->tm_year << "-" << std::setw(2) << std::setfill('0') << 1 + tmTime->tm_mon
+      << "-" << std::setw(2) << tmTime->tm_mday << "T" << std::setw(2) << tmTime->tm_hour << ':' << std::setw(2)
+      << tmTime->tm_min << ':' << std::setw(2) << tmTime->tm_sec << "." << std::setw(6) << usec;
+    return s.str();
+}
+
 inline void ConstructLogPrefix(std::ostream &s, const struct ::tm *tm_time, int32_t usc, const char *baseFilename,
                                int line, const char *podName, const char severity, const std::string azName)
 {
     static auto pid = getpid();
     pid_t tid = syscall(__NR_gettid);
-    s << std::setw(4) << 1900 + tm_time->tm_year << "-" << std::setw(2) << std::setfill('0') << 1 + tm_time->tm_mon
-      << "-" << std::setw(2) << tm_time->tm_mday << "T" << std::setw(2) << tm_time->tm_hour << ':' << std::setw(2)
-      << tm_time->tm_min << ':' << std::setw(2) << tm_time->tm_sec << "." << std::setw(6) << usc << " | " << severity
-      << " | " << baseFilename << ':' << line << " | " << podName << " | " << pid << ":" << tid << " | "
-      << Trace::Instance().GetTraceID() << " | " << azName << " | ";
+    s << FormatLogTimestamp(tm_time, usc) << " | " << severity << " | " << baseFilename << ':' << line << " | "
+      << podName << " | " << pid << ":" << tid << " | " << Trace::Instance().GetTraceID() << " | " << azName << " | ";
 }
 
 }  // namespace datasystem

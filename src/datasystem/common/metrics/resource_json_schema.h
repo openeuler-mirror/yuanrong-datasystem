@@ -45,7 +45,7 @@ struct ResourceFieldDesc {
     std::vector<const char *> fieldNames;
     std::vector<bool> recordMask;
     char sep = '/';
-    bool recordGroup = true;
+    bool recordGroup = false;
     const char *groupName = "";
 };
 

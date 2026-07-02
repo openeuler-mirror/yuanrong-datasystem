@@ -80,7 +80,7 @@
   - `WriteJsonLine(json)` writes one complete JSON object per line with **no text prefix** (unlike `HardDiskExporter::Send`, it does not call `ConstructLogPrefix`); `Send` exists only as a pure-virtual contract stub and should not be used by new callers.
   - `PodName()`/`ClusterName()` expose the cached labels (with `[[nodiscard]]`/`noexcept`) for JSON top-level fields.
   - rotation and pruning reuse the hoisted base-class machinery; rotated files use the `.<ts>.log` suffix.
-  - `WrapJsonWithPodCluster(body, pod, cluster)` is the single shared helper that JSON-escapes both labels and splices them after the leading `{` of a body; used by both `kv_resource.log` (collector) and `kv_metrics.log` (metrics::LogSummary) so the two outputs share one escaping + prefixing path.
+  - `WrapJsonWithPodCluster(body, pod, cluster, time)` is the single shared helper that JSON-escapes time/pod/cluster labels and splices them after the leading `{` of a body; used by both `kv_resource.log` (collector) and `kv_metrics.log` (metrics::LogSummary) so the two outputs share one escaping + prefixing path.
 
 ## LogManager Rotation Coupling
 

@@ -127,5 +127,23 @@ TEST_F(ResourceJsonSchemaTest, OcHitNumFields)
         EXPECT_TRUE(recorded);
     }
 }
+
+TEST_F(ResourceJsonSchemaTest, BrpcStreamLeakCountGroup)
+{
+    const auto &desc = GetResourceFieldDesc(ResMetricName::BRPC_STREAM_LEAK_COUNT);
+    EXPECT_EQ(desc.groupName, std::string("brpc_stream_leak_count"));
+    ASSERT_EQ(desc.fieldNames.size(), static_cast<size_t>(1));
+    EXPECT_EQ(desc.fieldNames[0], std::string("leak_count"));
+    EXPECT_TRUE(desc.recordGroup);
+}
+
+TEST_F(ResourceJsonSchemaTest, DeferredCleanupQueueSizeGroup)
+{
+    const auto &desc = GetResourceFieldDesc(ResMetricName::DEFERRED_CLEANUP_QUEUE_SIZE);
+    EXPECT_EQ(desc.groupName, std::string("deferred_cleanup_queue_size"));
+    ASSERT_EQ(desc.fieldNames.size(), static_cast<size_t>(1));
+    EXPECT_EQ(desc.fieldNames[0], std::string("queue_size"));
+    EXPECT_TRUE(desc.recordGroup);
+}
 }  // namespace ut
 }  // namespace datasystem

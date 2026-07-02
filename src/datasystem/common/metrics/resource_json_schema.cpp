@@ -71,6 +71,8 @@ const std::array<ResourceFieldDesc, DESC_COUNT> DESC_TABLE = {
     ResourceFieldDesc{ {}, {}, '/', false, "sc_local_cache" },
     ResourceFieldDesc{ { "mem_hit_num", "disk_hit_num", "l2_hit_num", "remote_hit_num", "miss_num" },
         { true, true, true, true, true }, '/', true, "oc_hit_num" },
+    ResourceFieldDesc{ { "leak_count" }, { true }, '/', true, "brpc_stream_leak_count" },
+    ResourceFieldDesc{ { "queue_size" }, { true }, '/', true, "deferred_cleanup_queue_size" },
 };
 
 const ResourceFieldDesc NULL_DESC{ {}, {}, '\0', false, "" };

@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/pod_identifier.h"
 #include "datasystem/common/util/file_util.h"
 
@@ -65,14 +66,19 @@ void JsonLinesExporter::FlushThread()
 }
 
 std::string WrapJsonWithPodCluster(const std::string &body, const std::string &podName,
-                                   const std::string &clusterName)
+                                   const std::string &clusterName, const std::string &time)
 {
     if (body.empty() || body.front() != '{') {
         return body;
     }
+    std::string timeStr = time;
+    if (timeStr.empty()) {
+        LogTime logTime;
+        timeStr = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
+    }
     std::ostringstream out;
-    out << "{\"pod_name\":" << JsonStringLiteral(podName) << ",\"cluster_name\":" <<
-        JsonStringLiteral(clusterName) << ',' << body.substr(1);
+    out << "{\"time\":" << JsonStringLiteral(timeStr) << ",\"pod_name\":" << JsonStringLiteral(podName) <<
+        ",\"cluster_name\":" << JsonStringLiteral(clusterName) << ',' << body.substr(1);
     return out.str();
 }
 }  // namespace datasystem

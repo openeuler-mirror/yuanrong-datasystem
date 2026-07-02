@@ -1242,16 +1242,19 @@ TEST_F(MetricsTest, kv_metrics_print_summary_respects_json_log_monitor_independe
 TEST_F(MetricsTest, wrap_with_pod_cluster_prepends_labels)
 {
     const std::string body = R"({"event":"metrics_summary","cycle":1})";
-    const auto wrapped = WrapJsonWithPodCluster(body, "worker_0", "recs");
-    EXPECT_EQ(wrapped, R"({"pod_name":"worker_0","cluster_name":"recs",)" + body.substr(1));
-    EXPECT_TRUE(wrapped.find("{\"pod_name\":\"worker_0\",\"cluster_name\":\"recs\",\"event\":") == 0);
+    const std::string timestamp = "2023-06-02T14:58:32.081156";
+    const auto wrapped = WrapJsonWithPodCluster(body, "worker_0", "recs", timestamp);
+    EXPECT_EQ(wrapped, R"({"time":"2023-06-02T14:58:32.081156","pod_name":"worker_0","cluster_name":"recs",)" +
+                      body.substr(1));
+    EXPECT_TRUE(wrapped.find("{\"time\":\"2023-06-02T14:58:32.081156\",\"pod_name\":\"worker_0\",\"cluster_name\":") ==
+                0);
     // Non-JSON input is returned unchanged.
-    EXPECT_EQ(WrapJsonWithPodCluster("not json", "p", "c"), "not json");
-    EXPECT_EQ(WrapJsonWithPodCluster("", "p", "c"), "");
+    EXPECT_EQ(WrapJsonWithPodCluster("not json", "p", "c", timestamp), "not json");
+    EXPECT_EQ(WrapJsonWithPodCluster("", "p", "c", timestamp), "");
     // Labels are JSON-escaped by the JSON library, including all control characters.
     const auto escaped = WrapJsonWithPodCluster(body, std::string(R"(a"b\c)") + '\b' + '\f' +
-                                                '\x01' + '\0', "recs\ncluster");
-    EXPECT_EQ(escaped, R"({"pod_name":"a\"b\\c\b\f\u0001\u0000",)"
+                                                '\x01' + '\0', "recs\ncluster", timestamp);
+    EXPECT_EQ(escaped, R"({"time":"2023-06-02T14:58:32.081156","pod_name":"a\"b\\c\b\f\u0001\u0000",)"
                        R"("cluster_name":"recs\ncluster",)" + body.substr(1));
 }
 }  // namespace ut

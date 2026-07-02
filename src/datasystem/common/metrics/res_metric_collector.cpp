@@ -28,6 +28,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.h"
 #include "datasystem/common/metrics/resource_json_schema.h"
@@ -58,7 +59,7 @@ namespace {
 bool AppendGroupJson(std::ostringstream &os, const ResourceFieldDesc &desc, const std::string &raw,
                      bool firstGroup)
 {
-    if (!desc.recordGroup) {
+    if (!desc.recordGroup || desc.groupName[0] == '\0' || desc.fieldNames.empty()) {
         return false;
     }
     if (!firstGroup) {
@@ -175,12 +176,14 @@ void ResMetricCollector::CollectMetrics()
                     metricString.pop_back();
                 }
                 Uri uri(__FILE__);
+                LogTime logTime;
+                const std::string timestamp = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
                 if (FLAGS_log_monitor && exporter_ != nullptr) {
                     exporter_->Send(metricString, uri, __LINE__);
                     exporter_->SubmitWriteMessage();
                 }
                 if (FLAGS_json_log_monitor && jsonExporter_ != nullptr) {
-                    std::string jsonLine = BuildResourceJson(handlerResults);
+                    std::string jsonLine = BuildResourceJson(handlerResults, timestamp);
                     jsonExporter_->WriteJsonLine(jsonLine);
                 }
             }
@@ -197,7 +200,8 @@ void ResMetricCollector::CollectMetrics()
     collectorThread_->set_name("CollectMetrics");
 }
 
-std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string> &handlerResults)
+std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string> &handlerResults,
+                                                  const std::string &timestamp)
 {
     std::ostringstream os;
     os << "{\"event\":\"resource_snapshot\",\"version\":\"v0\",\"metrics\":{";
@@ -212,8 +216,8 @@ std::string ResMetricCollector::BuildResourceJson(const std::vector<std::string>
         }
     }
     os << "}}";
-    // Wrap with the single shared pod/cluster-label path (escaped), same as kv_metrics.log.
-    return WrapJsonWithPodCluster(os.str(), jsonExporter_->PodName(), jsonExporter_->ClusterName());
+    // Wrap with the single shared pod/cluster/time label path (escaped), same as kv_metrics.log.
+    return WrapJsonWithPodCluster(os.str(), jsonExporter_->PodName(), jsonExporter_->ClusterName(), timestamp);
 }
 
 void ResMetricCollector::RegisterCollectHandler(ResMetricName metricName, std::function<std::string()> collectHandler)

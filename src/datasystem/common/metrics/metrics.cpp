@@ -29,6 +29,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/json_lines_exporter.h"
@@ -325,13 +326,16 @@ void LogSummary(int intervalMs)
     auto savedCtx = Trace::Instance().GetContext();
     // Hold a live copy so an atomic swap in ClearAll/Init cannot destroy the exporter mid-call.
     auto exporter = std::atomic_load(&g_kvMetricsExporter);
+    LogTime logTime;
+    const std::string timestamp = FormatLogTimestamp(logTime.getTm(), logTime.getUsec());
     for (const auto &summary : summaries) {
         auto guard = Trace::Instance().SetTraceNewID(metricsTraceID);
         if (FLAGS_log_monitor) {
             LOG(INFO) << summary;
         }
         if (FLAGS_json_log_monitor && exporter != nullptr) {
-            exporter->WriteJsonLine(WrapJsonWithPodCluster(summary, exporter->PodName(), exporter->ClusterName()));
+            exporter->WriteJsonLine(
+                WrapJsonWithPodCluster(summary, exporter->PodName(), exporter->ClusterName(), timestamp));
         }
     }
     auto restoreGuard = Trace::Instance().SetTraceContext(savedCtx);

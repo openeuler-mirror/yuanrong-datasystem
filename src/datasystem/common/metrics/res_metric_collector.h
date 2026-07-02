@@ -92,9 +92,10 @@ private:
     /**
      * @brief Build the kv_resource.log JSON line from cached handler results.
      * @param[in] handlerResults Per-metric handler return strings, indexed by ResMetricName.
+     * @param[in] timestamp ISO8601 timestamp for the top-level time field.
      * @return One complete JSON object string (no text prefix).
      */
-    std::string BuildResourceJson(const std::vector<std::string> &handlerResults);
+    std::string BuildResourceJson(const std::vector<std::string> &handlerResults, const std::string &timestamp);
 
     int msInterval_;   //
     std::atomic<bool> exitFlag_{ false };
