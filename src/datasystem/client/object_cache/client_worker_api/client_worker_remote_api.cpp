@@ -912,8 +912,7 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when sending H2D request.");
             VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
-            auto ds_oc_session = std::atomic_load(&brpcSession_);
-            RETURN_IF_NOT_OK(ds_oc_session->stub->Get(opts, req, rsp, piplnRh2dParam.payloads));
+            RETURN_IF_NOT_OK(DS_OC_DISPATCH(Get, opts, req, rsp, piplnRh2dParam.payloads));
             return Status::OK();
         },
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeout);
