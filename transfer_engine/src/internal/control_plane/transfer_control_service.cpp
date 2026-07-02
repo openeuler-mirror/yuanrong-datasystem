@@ -84,7 +84,7 @@ public:
             }
             ownerInitQueue_.push_back(std::move(task));
         }
-        TE_LOG_INFO << "exchange root info accepted"
+        TE_LOG_DEBUG << "exchange root info accepted"
                   << ", requester=" << req.requesterHost << ":" << req.requesterPort
                   << ", requester_device_id=" << req.requesterDeviceId
                   << ", owner_device_id=" << localDeviceId_;
@@ -158,7 +158,7 @@ public:
 
         rsp->code = kRpcOkCode;
         rsp->msg = "accepted";
-        TE_LOG_INFO << "read trigger accepted"
+        TE_LOG_DEBUG << "read trigger accepted"
                   << ", request_id=" << req.requestId
                   << ", requester=" << req.requesterHost << ":" << req.requesterPort
                   << ", requester_device_id=" << req.requesterDeviceId
@@ -241,7 +241,7 @@ private:
             }
             if (rc.IsOk()) {
                 connMgr_->MarkOwnerSendReady(task.key);
-                TE_LOG_INFO << "owner init done"
+                TE_LOG_DEBUG << "owner init done"
                           << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
                           << ", peer_device_id=" << task.spec.peerDeviceId
                           << ", owner_device_id=" << localDeviceId_;
