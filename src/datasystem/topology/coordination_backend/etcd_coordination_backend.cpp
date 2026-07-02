@@ -114,7 +114,7 @@ Status EtcdCoordinationBackend::InitKeepAlive(const std::string &tableName, cons
     return etcdStore_->InitKeepAlive(tableName, key, isRestart, isStoreAvailableWhenStart);
 }
 
-Status EtcdCoordinationBackend::UpdateNodeState(const std::string &state)
+Status EtcdCoordinationBackend::UpdateNodeState(WorkerServiceState state)
 {
     CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
     return etcdStore_->UpdateNodeState(state);

@@ -48,7 +48,7 @@ public:
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override;
-    Status UpdateNodeState(const std::string &state) override;
+    Status UpdateNodeState(WorkerServiceState state) override;
     Status GetStorePrefix(const std::string &tableName, std::string &prefix) override;
     Status InformReconciliationDone(const HostPort &workerAddr) override;
     bool IsKeepAliveTimeout() override;

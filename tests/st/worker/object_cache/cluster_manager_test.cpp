@@ -480,11 +480,10 @@ TEST_F(CoordinatorClusterManagerTest, InitKeepAliveWritesNodeStateWithTimestamp)
 
     std::string valueStr;
     DS_ASSERT_OK(store.Get(CLUSTER_TABLE, workerAddr, valueStr));
-    KeepAliveValue value;
-    DS_ASSERT_OK(KeepAliveValue::FromString(valueStr, value));
-    ASSERT_EQ(value.state, "start");
-    ASSERT_FALSE(value.timestamp.empty());
-    ASSERT_NE(value.timestamp, "_");
+    topology::WorkerServiceInfo value;
+    DS_ASSERT_OK(topology::WorkerServiceInfo::FromProto(valueStr, value));
+    ASSERT_EQ(value.state, topology::WorkerServiceState::START);
+    ASSERT_GT(value.timestamp, 0);
 }
 
 TEST_F(CoordinatorClusterManagerTest, KeepAliveFailureEmitsLocalFakeDeleteWhenCoordinatorReachable)

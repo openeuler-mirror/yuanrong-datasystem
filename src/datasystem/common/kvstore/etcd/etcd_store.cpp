@@ -63,36 +63,6 @@ DS_DEFINE_uint32(etcd_token_refresh_interval_s, 30, "etcd authentication token r
 
 namespace datasystem {
 
-std::string KeepAliveValue::ToString() const
-{
-    std::stringstream ss;
-    ss << timestamp;
-    ss << ";" << state;
-    if (!hostId.empty()) {
-        ss << ";" << hostId;
-    }
-    return ss.str();
-}
-
-Status KeepAliveValue::FromString(const std::string &str, KeepAliveValue &value)
-{
-    value = {};
-    auto firstPos = str.find(';');
-    if (firstPos == std::string::npos) {
-        RETURN_STATUS(K_INVALID,
-                      FormatString("Invalid keep alive value: %s, must have at least two fields split by ';'", str));
-    }
-    auto secondPos = str.find(';', firstPos + 1);
-    value.timestamp = str.substr(0, firstPos);
-    if (secondPos == std::string::npos) {
-        value.state = str.substr(firstPos + 1);
-        return Status::OK();
-    }
-    value.state = str.substr(firstPos + 1, secondPos - firstPos - 1);
-    value.hostId = str.substr(secondPos + 1);
-    return Status::OK();
-}
-
 static std::string GetBackendAddress()
 {
     if (!FLAGS_metastore_address.empty()) {
@@ -477,14 +447,16 @@ Status EtcdStore::AutoCreate()
     LOG(INFO) << "Sending cluster node to etcd and establish lease.";
     // set timestamp before each put
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
-    keepAliveValue_.timestamp = std::to_string(timeStamp);
-    CHECK_FAIL_RETURN_STATUS(!keepAliveValue_.state.empty(), K_INVALID, "Node state should not be empty.");
-    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, keepAliveValue_.ToString(), leaseId_));
+    keepAliveValue_.timestamp = timeStamp;
+    std::string valueStr = keepAliveValue_.ToString();
+    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
+    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
     // Only use "start" and "restart" tag the first time doing Put()
     // After that remove the tag and append "recover", because the next time using it should be something
     // like network recovery.
-    if (keepAliveValue_.state == "start" || keepAliveValue_.state == "restart") {
-        keepAliveValue_.state = "recover";
+    if (keepAliveValue_.state == topology::WorkerServiceState::START
+        || keepAliveValue_.state == topology::WorkerServiceState::RESTART) {
+        keepAliveValue_.state = topology::WorkerServiceState::RECOVER;
     }
     return Status::OK();
 }
@@ -509,23 +481,23 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
         }
     }
     // "_" is a placeholder, it will be replaced by timestamp later when a connection to etcd is built.
-    keepAliveValue_.timestamp = "_";
+    keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
     if (!isEtcdAvailableWhenStart) {
-        keepAliveValue_.state = "d_rst";
+        keepAliveValue_.state = topology::WorkerServiceState::DOWNGRADE_RESTART;
     } else if (isRestart) {
-        keepAliveValue_.state = "restart";
+        keepAliveValue_.state = topology::WorkerServiceState::RESTART;
     } else {
-        keepAliveValue_.state = "start";
+        keepAliveValue_.state = topology::WorkerServiceState::START;
     }
     return LaunchKeepAliveThreads();
 }
 
-Status EtcdStore::UpdateNodeState(const std::string &state)
+Status EtcdStore::UpdateNodeState(topology::WorkerServiceState state)
 {
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
-    KeepAliveValue value = keepAliveValue_;
+    topology::WorkerServiceInfo value = keepAliveValue_;
     value.state = state;
     RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, value.ToString(), leaseId_));
     return Status::OK();
@@ -1087,11 +1059,11 @@ Status EtcdStore::InformEtcdReconciliationDone(const HostPort &workerAddr)
                              "The key written to the cluster table must be bound to a lease");
     std::string valueStr;
     RETURN_IF_NOT_OK(Get(ETCD_CLUSTER_TABLE, workerAddr.ToString(), valueStr));
-    KeepAliveValue value;
-    RETURN_IF_NOT_OK(KeepAliveValue::FromString(valueStr, value));
+    topology::WorkerServiceInfo value;
+    RETURN_IF_NOT_OK(topology::WorkerServiceInfo::FromString(valueStr, value));
     INJECT_POINT("recover.toReady.delay");
-    if (value.state == "restart" || value.state == "recover") {
-        value.state = ETCD_NODE_READY;
+    if (value.state == topology::WorkerServiceState::RESTART || value.state == topology::WorkerServiceState::RECOVER) {
+        value.state = topology::WorkerServiceState::READY;
         RETURN_IF_NOT_OK(PutWithLeaseId(ETCD_CLUSTER_TABLE, workerAddr.ToString(), value.ToString(), CheckLeaseId()));
     }
     return Status::OK();

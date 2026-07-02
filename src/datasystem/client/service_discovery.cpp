@@ -21,7 +21,6 @@
 #include <utility>
 
 #include "datasystem/common/constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -32,6 +31,9 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
+#include "datasystem/topology/membership/worker_node_info.h"
+
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 
 DS_DECLARE_string(log_dir);
 
@@ -82,11 +84,11 @@ void ResolveHostId(const std::string &hostIdEnvName, std::string &hostId)
 
 std::string ExtractWorkerAddrFromClusterKey(const std::string &key)
 {
-    auto tablePos = key.find(ETCD_CLUSTER_TABLE);
+    auto tablePos = key.find(CLUSTER_TABLE);
     if (tablePos == std::string::npos) {
         return key;
     }
-    auto begin = tablePos + std::string(ETCD_CLUSTER_TABLE).size();
+    auto begin = tablePos + std::string(CLUSTER_TABLE).size();
     if (begin < key.size() && key[begin] == '/') {
         ++begin;
     }
@@ -112,14 +114,49 @@ void AppendReadyWorker(const std::string &key, const std::string &valueStr, cons
                        std::vector<std::string> &sameHost, std::vector<std::string> &other,
                        std::unordered_map<std::string, uint32_t> &workersStateCount)
 {
-    KeepAliveValue value;
-    auto rc = KeepAliveValue::FromString(valueStr, value);
+    topology::WorkerServiceInfo value;
+    auto rc = topology::WorkerServiceInfo::FromString(valueStr, value);
     if (rc.IsError()) {
         LOG(WARNING) << "Failed to parse keep alive value for worker " << key << ": " << rc.ToString();
         return;
     }
-    workersStateCount[value.state]++;
-    if (value.state != ETCD_NODE_READY) {
+    std::string stateStr;
+    rc = topology::WorkerServiceStateToString(value.state, stateStr);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Failed to parse worker service state for worker " << key << ": " << rc.ToString();
+        return;
+    }
+    workersStateCount[stateStr]++;
+    if (value.state != topology::WorkerServiceState::READY) {
+        return;
+    }
+    auto workerAddr = ExtractWorkerAddrFromClusterKey(key);
+    VLOG(1) << "Worker " << workerAddr << " is ready with hostId: " << value.hostId;
+    if (!hostId.empty() && value.hostId == hostId) {
+        sameHost.emplace_back(std::move(workerAddr));
+    } else {
+        other.emplace_back(std::move(workerAddr));
+    }
+}
+
+void AppendReadyWorkerFromProto(const std::string &key, const std::string &valueStr, const std::string &hostId,
+                                std::vector<std::string> &sameHost, std::vector<std::string> &other,
+                                std::unordered_map<std::string, uint32_t> &workersStateCount)
+{
+    topology::WorkerServiceInfo value;
+    auto rc = topology::WorkerServiceInfo::FromProto(valueStr, value);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Failed to parse worker service info proto for worker " << key << ": " << rc.ToString();
+        return;
+    }
+    std::string stateStr;
+    rc = topology::WorkerServiceStateToString(value.state, stateStr);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Failed to parse worker service state for worker " << key << ": " << rc.ToString();
+        return;
+    }
+    workersStateCount[stateStr]++;
+    if (value.state != topology::WorkerServiceState::READY) {
         return;
     }
     auto workerAddr = ExtractWorkerAddrFromClusterKey(key);
@@ -229,8 +266,8 @@ Status ServiceDiscovery::Init()
 
     std::string etcdTablePrefix = clusterName_.empty() ? "" : "/" + clusterName_;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        etcdStore_->CreateTable(ETCD_CLUSTER_TABLE, etcdTablePrefix + "/" + std::string(ETCD_CLUSTER_TABLE)),
-        "The table already exists. tableName: " + std::string(ETCD_CLUSTER_TABLE));
+        etcdStore_->CreateTable(CLUSTER_TABLE, etcdTablePrefix + "/" + std::string(CLUSTER_TABLE)),
+        "The table already exists. tableName: " + std::string(CLUSTER_TABLE));
     return Status::OK();
 }
 
@@ -242,7 +279,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
 
     int64_t nodeRevision;
     std::vector<std::pair<std::string, std::string>> outKeyValues;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(ETCD_CLUSTER_TABLE, outKeyValues, nodeRevision),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(CLUSTER_TABLE, outKeyValues, nodeRevision),
                                      "Failed to fetch cluster info from etcd, ensure etcd service is healthy.");
 
     sameHost.clear();
@@ -330,7 +367,7 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     sameHost.clear();
     other.clear();
     std::unordered_map<std::string, uint32_t> workersStateCount;
-    const std::string clusterTablePrefix = "/" + std::string(ETCD_CLUSTER_TABLE) + "/";
+    const std::string clusterTablePrefix = "/" + std::string(CLUSTER_TABLE) + "/";
     auto rangeEnd = PrefixRangeEnd(clusterTablePrefix);
     CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_INVALID, "Failed to build coordinator cluster table range.");
 
@@ -346,7 +383,7 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
                                      "Failed to fetch cluster info from coordinator " + coordinatorAddrStr);
 
     for (const auto &kv : kvs) {
-        AppendReadyWorker(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
+        AppendReadyWorkerFromProto(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
     }
     LOG(INFO) << "The workers state count from coordinator " << coordinatorAddrStr << " is "
               << MapToString(workersStateCount);

@@ -2561,9 +2561,8 @@ public:
         opts.enableDistributedMaster = "false";
         opts.numEtcd = 1;
         opts.masterIdx = ENV_RECOVERY_MASTER_IDX;
-        opts.workerGflagParams =
-            FormatString("-shared_memory_size_mb=%d -v=1 -log_monitor=true -max_client_num=%d",
-                         ENV_RECOVERY_SHARED_MEMORY_SIZE_MB, ENV_RECOVERY_MAX_CLIENT_NUM);
+        opts.workerGflagParams = FormatString("-shared_memory_size_mb=%d -v=1 -log_monitor=true -max_client_num=%d",
+                                              ENV_RECOVERY_SHARED_MEMORY_SIZE_MB, ENV_RECOVERY_MAX_CLIENT_NUM);
 
         std::string hostIp = "127.0.0.1";
         for (size_t i = 0; i < opts.numWorkers; i++) {
@@ -2656,8 +2655,8 @@ protected:
 
 std::string GetWorkerEnvFileForSt(BaseCluster *cluster, int workerIndex)
 {
-    return GetWorkerEnvFilePath(JoinPath(JoinPath(cluster->GetRootDir(), FormatString("worker%d", workerIndex)),
-                                         "log"));
+    return GetWorkerEnvFilePath(
+        JoinPath(JoinPath(cluster->GetRootDir(), FormatString("worker%d", workerIndex)), "log"));
 }
 
 std::string GetWorkerEnvLockFileForSt(BaseCluster *cluster, int workerIndex)
@@ -2676,8 +2675,8 @@ Status GetWorkerHostIdFromEtcd(BaseCluster *cluster, int workerIndex, std::strin
     RETURN_IF_NOT_OK(cluster->GetWorkerAddr(workerIndex, workerAddress));
     std::string valueStr;
     RETURN_IF_NOT_OK(etcdStore.Get(ETCD_CLUSTER_TABLE, workerAddress.ToString(), valueStr));
-    KeepAliveValue value;
-    RETURN_IF_NOT_OK(KeepAliveValue::FromString(valueStr, value));
+    topology::WorkerServiceInfo value;
+    RETURN_IF_NOT_OK(topology::WorkerServiceInfo::FromString(valueStr, value));
     hostId = value.hostId;
     return Status::OK();
 }
@@ -2950,9 +2949,9 @@ public:
         int workerPort;
         RETURN_IF_NOT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));
         HostPort selected(workerIp, workerPort);
-        CHECK_FAIL_RETURN_STATUS(selected != workerAddress_[0], K_NOT_READY,
-                                 FormatString("ServiceDiscovery still selects local worker %s.",
-                                              workerAddress_[0].ToString()));
+        CHECK_FAIL_RETURN_STATUS(
+            selected != workerAddress_[0], K_NOT_READY,
+            FormatString("ServiceDiscovery still selects local worker %s.", workerAddress_[0].ToString()));
         return Status::OK();
     }
 
@@ -3003,8 +3002,7 @@ public:
         uint64_t worker1MatchedCount = GetSwitchWorkerMatchedCount(1);
         uint64_t worker2MatchedCount = GetSwitchWorkerMatchedCount(2);
         bool allClientsSwitched = worker1MatchedCount + worker2MatchedCount >= expectedClientNum;
-        CHECK_FAIL_RETURN_STATUS(worker1MatchedCount > 0 && worker2MatchedCount > 0 && allClientsSwitched,
-                                 K_NOT_READY,
+        CHECK_FAIL_RETURN_STATUS(worker1MatchedCount > 0 && worker2MatchedCount > 0 && allClientsSwitched, K_NOT_READY,
                                  FormatString("Switch counts are worker1=%zu, worker2=%zu, expected clients=%zu.",
                                               worker1MatchedCount, worker2MatchedCount, expectedClientNum));
         return Status::OK();
@@ -3041,8 +3039,8 @@ TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
 
     // The client should actively recover to the local worker while normal KV traffic keeps succeeding.
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
-        [this]() { return CheckClientSwitchToExpectedWorker(client_, 1, 1); }, 8, K_OK));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckClientSwitchToExpectedWorker(client_, 1, 1); },
+                                                 8, K_OK));
 }
 
 TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcrossRemainingWorkers)
@@ -3092,7 +3090,7 @@ public:
         ExternalClusterTest::TearDown();
     }
 
-std::vector<HostPort> workerAddress_;
+    std::vector<HostPort> workerAddress_;
 };
 
 TEST_F(KVCacheClientL2FallBackTest, TestL2CacheFallBack)

@@ -93,6 +93,7 @@ ds_cc_library(
         "//third_party/protos/etcd:rpc_cc_grpc",
         "//third_party/protos/etcd:rpc_cc_proto",
         "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/topology:worker_node_info",
     ],
 )
 

@@ -13,6 +13,7 @@ set(CLUSTER_MANAGER_DEPEND_LIBS
         worker_object_protos
         worker_hash_ring
         topology
+        worker_node_info
         worker_update_flag_check
         common_signal
         coordination_backend

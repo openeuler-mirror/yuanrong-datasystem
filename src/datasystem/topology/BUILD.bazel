@@ -3,6 +3,22 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "worker_node_info",
+    srcs = ["membership/worker_node_info.cpp"],
+    hdrs = [
+        "membership/membership_types.h",
+        "membership/worker_node_info.h",
+        "model/topology_types.h",
+    ],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "topology",
     srcs = [
         "algorithm/algorithm_registry.cpp",
@@ -29,6 +45,7 @@ ds_cc_library(
         "membership/cluster_membership.h",
         "membership/cluster_registry.h",
         "membership/membership_types.h",
+        "membership/worker_node_info.h",
         "model/topology_types.h",
         "routing/placement_directory.h",
         "routing/redirect_policy.h",
@@ -53,7 +70,9 @@ ds_cc_library(
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/master:meta_addr_info",
+        "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/protos:hash_ring_cc_proto",
+        ":worker_node_info",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
     ],
 )

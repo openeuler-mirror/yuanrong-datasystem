@@ -23,6 +23,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "tests/ut/common.h"
 #include "tests/ut/topology/fake_coordination_backend.h"
 
@@ -46,19 +47,19 @@ public:
     Status nextStatus;
 };
 
-std::string MakeKeepAliveValue(const std::string &state)
+std::string MakeWorkerServiceInfoValue(const std::string &state)
 {
-    KeepAliveValue value;
-    value.timestamp = "100";
-    value.state = state;
+    WorkerServiceInfo value;
+    value.timestamp = 100;
     value.hostId = "host-a";
-    return value.ToString();
+    auto rc = StringToWorkerServiceState(state, value.state);
+    return rc.IsOk() ? value.ToString() : "100;" + state + ";host-a";
 }
 
 TEST(TopologyChangeHandlerTest, SubmitsScaleInForReadyLocalWorker)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -75,7 +76,7 @@ TEST(TopologyChangeHandlerTest, SubmitsScaleInForReadyLocalWorker)
 TEST(TopologyChangeHandlerTest, DoesNotSubmitWhenMembershipRejects)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue("start")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("start")));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -89,7 +90,7 @@ TEST(TopologyChangeHandlerTest, DoesNotSubmitWhenMembershipRejects)
 TEST(TopologyChangeHandlerTest, PropagatesRequesterBackpressure)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());

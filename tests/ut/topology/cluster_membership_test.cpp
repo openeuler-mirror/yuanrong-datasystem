@@ -74,13 +74,13 @@ public:
     }
 };
 
-std::string MakeKeepAliveValue(const std::string &state)
+std::string MakeWorkerServiceInfoValue(const std::string &state)
 {
-    KeepAliveValue value;
-    value.timestamp = "100";
-    value.state = state;
+    WorkerServiceInfo value;
+    value.timestamp = 100;
     value.hostId = "host-a";
-    return value.ToString();
+    auto rc = StringToWorkerServiceState(state, value.state);
+    return rc.IsOk() ? value.ToString() : "100;" + state + ";host-a";
 }
 
 CoordinationEvent MakeEvent(CoordinationEventType type, const std::string &workerId, const std::string &value,
@@ -92,7 +92,7 @@ CoordinationEvent MakeEvent(CoordinationEventType type, const std::string &worke
 TEST(ClusterMembershipTest, RebuildPublishesSnapshotAndValidatesScaleIn)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
 
@@ -112,13 +112,13 @@ TEST(ClusterMembershipTest, RebuildPublishesSnapshotAndValidatesScaleIn)
 TEST(ClusterMembershipTest, AppliesExternalStorePutAndDeleteEvents)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
 
     DS_ASSERT_OK(membership.HandleStoreEvent(
-        MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7002", MakeKeepAliveValue("start"), 3)));
+        MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7002", MakeWorkerServiceInfoValue("start"), 3)));
     std::shared_ptr<const MembershipSnapshot> snapshot;
     DS_ASSERT_OK(membership.GetSnapshot(snapshot));
     EXPECT_EQ(snapshot->workers.size(), 2ul);
@@ -139,8 +139,8 @@ TEST(ClusterMembershipTest, NotReadyBeforeRebuildAndStoppedAfterStop)
     std::shared_ptr<const MembershipSnapshot> snapshot;
     EXPECT_EQ(membership.GetSnapshot(snapshot).GetCode(), K_NOT_READY);
     EXPECT_EQ(membership
-                  .HandleStoreEvent(
-                      MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY), 1))
+                  .HandleStoreEvent(MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7001",
+                                              MakeWorkerServiceInfoValue(ETCD_NODE_READY), 1))
                   .GetCode(),
               K_NOT_READY);
 
@@ -176,7 +176,7 @@ TEST(ClusterMembershipTest, StopDuringRebuildKeepsStoppedState)
 TEST(ClusterMembershipTest, DestructorStopsMembership)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     auto membership = std::make_unique<ClusterMembership>(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership->Rebuild());
@@ -187,7 +187,7 @@ TEST(ClusterMembershipTest, DestructorStopsMembership)
 TEST(ClusterMembershipTest, ScaleInRequiresReadyLocalWorker)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeKeepAliveValue("start")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("start")));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -203,7 +203,7 @@ TEST(ClusterMembershipTest, ScaleInRequiresReadyLocalWorker)
 TEST(ClusterMembershipTest, ScaleInRequiresLocalWorkerInSnapshot)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeKeepAliveValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());

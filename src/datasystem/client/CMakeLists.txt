@@ -66,6 +66,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_rdma
         common_parallel
         common_coordinator_store
+        coordinator_protos_client
         dl
         client_mmap_static
         gRPC::grpc++

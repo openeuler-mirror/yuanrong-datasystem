@@ -136,8 +136,8 @@ Use this file as the cross-module map. Use the detailed package for source-level
   - `ClusterManager::SetWorkerReady()` releases the internal worker-ready wait post; master-side utility work calls
     `WaitWorkerReadyIfNeed()` before processing node utility events
 - Verified from `ServiceDiscovery`:
-  - `ServiceDiscovery::GetAllWorkers()` obtains worker entries from `ETCD_CLUSTER_TABLE`, parses `KeepAliveValue`, and
-    returns only workers whose keepalive state is `ETCD_NODE_READY`
+  - `ServiceDiscovery::GetAllWorkers()` obtains worker entries from `ETCD_CLUSTER_TABLE`, parses `WorkerServiceInfo`, and
+    returns only workers whose service state is `WorkerServiceState::READY`
   - host affinity is optional: `PREFERRED_SAME_NODE` partitions workers into same-host and other-host lists,
     `REQUIRED_SAME_NODE` returns only same-host workers, and `RANDOM` returns all workers through `otherAddrs`
 - Verified from remote-get transport:

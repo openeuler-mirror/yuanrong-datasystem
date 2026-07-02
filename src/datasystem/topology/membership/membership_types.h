@@ -32,6 +32,7 @@ namespace datasystem {
 namespace topology {
 
 enum class WorkerServiceState {
+    UNSPECIFIED = 0,
     START,
     RESTART,
     RECOVER,

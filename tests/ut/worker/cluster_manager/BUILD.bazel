@@ -8,7 +8,9 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
+        "//src/datasystem/worker/cluster_manager:cluster_constants",
         "//third_party/protos/etcd:kv_cc_proto",
         "//tests/ut:ut_common",
     ],

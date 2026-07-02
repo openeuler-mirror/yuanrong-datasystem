@@ -34,8 +34,9 @@
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/kvstore/kv_store.h"
-#include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/timer.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
@@ -52,15 +53,6 @@ struct WatchElement {
     std::string tableName;
     std::string key;
     int64_t startRevision;
-};
-
-struct KeepAliveValue {
-    std::string timestamp;
-    std::string state;
-    std::string hostId;
-
-    std::string ToString() const;
-    static Status FromString(const std::string &str, KeepAliveValue &value);
 };
 
 class EtcdStore : public KvStore {
@@ -394,7 +386,7 @@ public:
      * @param[in] state worker state.
      * @return status of the call.
      */
-    Status UpdateNodeState(const std::string &state);
+    Status UpdateNodeState(topology::WorkerServiceState state);
 
     /**
      * @brief Get real etcd key prefix by tableName.
@@ -446,7 +438,7 @@ public:
 
     bool IsFirstKeepAliveSent()
     {
-        return keepAliveValue_.state == "recover";
+        return keepAliveValue_.state == topology::WorkerServiceState::RECOVER;
     }
 
     /**
@@ -573,11 +565,11 @@ private:
     Status PerformAuthRequest();
     // Background loop that refreshes the token
     void TokenRefreshLoop();
-    std::string address_;             // etcd address
-    std::string keepAliveTableName_;  // The table on etcd for the leased kv's
-    std::string keepAliveKey_;        // The key that is associated with the lease
-    KeepAliveValue keepAliveValue_;   // The value that is associated with the lease
-    std::atomic<int64_t> leaseId_;    // The lease id for the keep alive.
+    std::string address_;                         // etcd address
+    std::string keepAliveTableName_;              // The table on etcd for the leased kv's
+    std::string keepAliveKey_;                    // The key that is associated with the lease
+    topology::WorkerServiceInfo keepAliveValue_;  // The value that is associated with the lease
+    std::atomic<int64_t> leaseId_;                // The lease id for the keep alive.
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
     mutable std::shared_timed_mutex mutex_;
     TableMap tableMap_;

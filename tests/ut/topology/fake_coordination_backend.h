@@ -28,6 +28,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 
 namespace datasystem {
 namespace topology {
@@ -171,13 +172,19 @@ public:
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override
     {
-        KeepAliveValue value;
-        value.timestamp = "1";
-        value.state = isStoreAvailableWhenStart ? (isRestart ? "restart" : "start") : ETCD_NODE_DOWNGRADE_RESTART;
+        WorkerServiceInfo value;
+        value.timestamp = 1;
+        if (!isStoreAvailableWhenStart) {
+            value.state = WorkerServiceState::DOWNGRADE_RESTART;
+        } else if (isRestart) {
+            value.state = WorkerServiceState::RESTART;
+        } else {
+            value.state = WorkerServiceState::START;
+        }
         return PutForTest(tableName, key, value.ToString());
     }
 
-    Status UpdateNodeState(const std::string &state) override
+    Status UpdateNodeState(WorkerServiceState state) override
     {
         nodeState_ = state;
         return Status::OK();
@@ -261,7 +268,7 @@ private:
     EventHandler eventHandler_;
     std::function<bool()> checkStoreStateHandler_;
     std::vector<WatchKey> watchKeys_;
-    std::string nodeState_;
+    WorkerServiceState nodeState_{ WorkerServiceState::UNSPECIFIED };
     uint32_t casConflictCount_{ 0 };
 };
 
