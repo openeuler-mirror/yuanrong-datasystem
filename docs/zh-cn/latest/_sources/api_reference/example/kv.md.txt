@@ -144,10 +144,21 @@ spillFileMaxSizeMb: 200
 spillFileOpenLimit: 512
 # Disable readahead can mitigate the read amplification problem for offset read, default is true
 spillEnableReadahead: true
-# It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.
-# When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk.
-spillToRemoteWorker: false
 ```
+
+### 内存均衡
+
+`memoryRebalance` 用于开启由 master 调度的内存均衡能力。开启后，master 会根据各 worker 上报的共享内存使用情况，选择内存使用率较高的 worker 作为 source，选择内存使用率较低且仍有可用共享内存的 worker 作为 target，并下发对象迁移任务，将部分 KV/Object 缓存对象迁移到 target worker，以降低单个 worker 的共享内存压力。
+
+该能力默认关闭。Kubernetes Helm 部署时可通过如下配置开启：
+
+```yaml
+global:
+  memoryRebalance:
+    enabled: true
+```
+
+当 `enabled` 为 `false` 时，master 不会调度内存均衡任务，worker 在本地共享内存不足时仍按既有驱逐、Spill 和二级缓存策略处理。开启该能力后，如果集群中没有满足条件的低使用率 worker，数据仍会继续走本地驱逐、Spill 或二级缓存流程，因此该配置不能替代 Spill 或二级缓存可靠性配置。
 
 ### 数据可靠性
 

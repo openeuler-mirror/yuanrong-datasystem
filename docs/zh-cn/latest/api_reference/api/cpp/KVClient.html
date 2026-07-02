@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="KVClientConfig" href="KVClientConfig.html"><link rel="prev" title="C++" href="index.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>KVClient - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=33406c05" />
@@ -613,7 +613,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <span id="_CPPv3N8KVClient4InitEv"></span><span id="_CPPv2N8KVClient4InitEv"></span><span id="KVClient::Init"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient4InitEv" title="Link to this definition">¶</a><br /></dt>
 <dd><p>建立与数据系统 Worker 之间的连接并完成初始化。
 语义上等价于传入未通过 Builder 设置任何字段的空 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a>，
-并调用 <a class="reference internal" href="#_CPPv4N8KVClient4InitEv" title="KVClient::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">Init(const</span> <span class="pre">KVClientConfig</span> <span class="pre">&amp;clientConfig)</span></code></a>。
+并调用 <a class="reference internal" href="#kvclient-initwithconfig"><span class="std std-ref">Init(const KVClientConfig &amp;clientConfig)</span></a>。
 进程内首次 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 会固化该空配置快照；若此后再以显式配置调用 <code class="docutils literal notranslate"><span class="pre">Init</span></code>，
 新配置不会覆盖已生效设置。配置优先级与后续 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 行为详见
 <a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClientConfig</span></code></a> 章节。</p>
@@ -623,7 +623,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </dl>
 </dd></dl>
 
-<dl class="cpp function">
+<dl class="cpp function" id="kvclient-initwithconfig">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient4InitERK14KVClientConfig">
 <span id="_CPPv3N8KVClient4InitERK14KVClientConfig"></span><span id="_CPPv2N8KVClient4InitERK14KVClientConfig"></span><span id="KVClient::Init__KVClientConfigCR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Init</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="KVClientConfig.html#_CPPv414KVClientConfig" title="KVClientConfig"><span class="n"><span class="pre">KVClientConfig</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">clientConfig</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient4InitERK14KVClientConfig" title="Link to this definition">¶</a><br /></dt>
 <dd><p>使用显式客户端配置建立与数据系统 Worker 之间的连接并完成初始化。
@@ -647,6 +647,27 @@ document.addEventListener('DOMContentLoaded', function() {
 <dd><p>断开与数据系统 Worker 之间的连接。</p>
 <dl class="simple">
 <dt>返回:</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示断链成功，否则返回其他错误码。</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient12UpdateConfigERKNSt6stringE">
+<span id="_CPPv3N8KVClient12UpdateConfigERKNSt6stringE"></span><span id="_CPPv2N8KVClient12UpdateConfigERKNSt6stringE"></span><span id="KVClient::UpdateConfig__ssCR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">UpdateConfig</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">configJson</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient12UpdateConfigERKNSt6stringE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>运行时动态更新客户端可修改的配置项（gflag）。</p>
+<p>参数 <code class="docutils literal notranslate"><span class="pre">configJson</span></code> 为 JSON 对象，键为 flag 名称，值必须为字符串，例如
+<code class="docutils literal notranslate"><span class="pre">{&quot;v&quot;:&quot;1&quot;,&quot;minloglevel&quot;:&quot;0&quot;}</span></code>。全部校验通过后一次性生效；任一项失败则整批拒绝。</p>
+<p>与配置文件监控互斥：进程首次 <code class="docutils literal notranslate"><span class="pre">Init</span></code> 时若 <code class="docutils literal notranslate"><span class="pre">MonitorConfigPath</span></code> 非空，或文件监控
+线程已启用，则返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code>。</p>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>configJson</strong> - JSON 格式的 flag 名称与字符串值映射。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示更新成功（空 JSON 对象亦视为成功）。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示 JSON 非法、flag 不可修改、值非法，或与文件监控冲突。</p></li>
+</ul>
 </dd>
 </dl>
 </dd></dl>
@@ -764,9 +785,12 @@ document.addEventListener('DOMContentLoaded', function() {
 </dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam">
-<span id="_CPPv3N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam"></span><span id="_CPPv2N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam"></span><span id="KVClient::MSetTx__std::vector:ss:CR.std::vector:StringView:CR.MSetParamCR"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">MSetTx</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="StringView.html#_CPPv410StringView" title="StringView"><span class="n"><span class="pre">StringView</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">vals</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="struct-MSetParam.html#_CPPv49MSetParam" title="MSetParam"><span class="n"><span class="pre">MSetParam</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">param</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam" title="Link to this definition">¶</a><br /></dt>
-<dd><p>事务性批量设置键值对接口。保证所有键要么全部创建成功，要么全部不创建。键的数量范围应为 1 到 8。</p>
+<dt class="sig sig-object cpp">
+<span class="sig-name descname"><span class="pre">Status</span> <span class="pre">MSetTx(const</span> <span class="pre">std::vector&lt;std::string&gt;</span> <span class="pre">&amp;keys,</span> <span class="pre">const</span> <span class="pre">std::vector&lt;StringView&gt;</span> <span class="pre">&amp;vals,</span></span></dt>
+<dt class="sig sig-object cpp">
+<span class="sig-name descname"><span class="pre">const</span> <span class="pre">MSetParam</span> <span class="pre">&amp;param)</span></span></dt>
+<dd><p>已废弃 API。该接口仅为保持 SDK API 兼容而保留，调用时固定返回
+<code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code>，错误信息包含 <code class="docutils literal notranslate"><span class="pre">deprecated</span> <span class="pre">API</span></code> 字样。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>keys</strong> - 需要设置的一组key.</p></li>
@@ -774,7 +798,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p><strong>param</strong> - 设置参数，详见 <a class="reference internal" href="struct-MSetParam.html#_CPPv49MSetParam" title="MSetParam"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">MSetParam</span></code></a> 章节。</p></li>
 </ul>
 </dd>
-<dt>返回：</dt><dd><p>返回值状态码为 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 时表示设置成功，否则返回其他错误码。</p>
+<dt>返回：</dt><dd><p>固定返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code>。</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1038,7 +1062,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE">
 <span id="_CPPv3N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE"></span><span id="_CPPv2N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE"></span><span id="KVClient::QuerySize__std::vector:ss:CR.std::vector:uint64_t:R"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">QuerySize</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">objectKeys</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">uint64_t</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">outSizes</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE" title="Link to this definition">¶</a><br /></dt>
-<dd><p>查询对象键的大小（包括其他 AZ 的objectKeys）。</p>
+<dd><p>查询对象键的大小。</p>
 <dl class="simple">
 <dt>参数：</dt><dd><ul class="simple">
 <li><p><strong>objectKeys</strong> - 需要查询大小的对象键列表。</p></li>
@@ -1177,6 +1201,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N8KVClient4InitEv"><code class="docutils literal notranslate"><span class="pre">KVClient::Init()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient4InitERK14KVClientConfig"><code class="docutils literal notranslate"><span class="pre">KVClient::Init()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient8ShutDownEv"><code class="docutils literal notranslate"><span class="pre">KVClient::ShutDown()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N8KVClient12UpdateConfigERKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">KVClient::UpdateConfig()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient6CreateERKNSt6stringE8uint64_tRK8SetParamRNSt10shared_ptrI6BufferEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Create()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3SetERKNSt10shared_ptrI6BufferEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Set()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3SetERKNSt6stringERK10StringViewRK8SetParam"><code class="docutils literal notranslate"><span class="pre">KVClient::Set()</span></code></a></li>
@@ -1184,7 +1209,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N8KVClient7MCreateERKNSt6vectorINSt6stringEEERKNSt6vectorI8uint64_tEERK8SetParamRNSt6vectorINSt10shared_ptrI6BufferEEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::MCreate()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient4MSetERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERNSt6vectorINSt6stringEEERK9MSetParam"><code class="docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></li>
-<li><a class="reference internal" href="#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam"><code class="docutils literal notranslate"><span class="pre">KVClient::MSetTx()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient7MGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEERNSt9vectorstd6stringE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::MGetH2D()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient12AsyncMGetH2DERKNSt9vectorstd6stringERKNSt6vectorINSt4pairIPv6size_tEEEE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::AsyncMGetH2D()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></li>
@@ -1216,15 +1240,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>

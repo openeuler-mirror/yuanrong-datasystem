@@ -28,13 +28,15 @@ KVClient
  
        建立与数据系统 Worker 之间的连接并完成初始化。
        语义上等价于传入未通过 Builder 设置任何字段的空 :cpp:class:`KVClientConfig`，
-       并调用 :cpp:func:`Init(const KVClientConfig &clientConfig) <Init>`。
+       并调用 :ref:`Init(const KVClientConfig &clientConfig) <KVClient_InitWithConfig>`。
        进程内首次 ``Init`` 会固化该空配置快照；若此后再以显式配置调用 ``Init``，
        新配置不会覆盖已生效设置。配置优先级与后续 ``Init`` 行为详见
        :cpp:class:`KVClientConfig` 章节。
  
        返回：
            返回值状态码为 ``StatusCode::K_OK`` 时表示初始化成功，否则返回其他错误码。
+
+    .. _KVClient_InitWithConfig:
 
     .. cpp:function:: Status Init(const KVClientConfig &clientConfig)
  
@@ -57,6 +59,22 @@ KVClient
         返回:
             返回值状态码为 ``StatusCode::K_OK`` 时表示断链成功，否则返回其他错误码。
 
+    .. cpp:function:: Status UpdateConfig(const std::string &configJson)
+
+        运行时动态更新客户端可修改的配置项（gflag）。
+
+        参数 ``configJson`` 为 JSON 对象，键为 flag 名称，值必须为字符串，例如
+        ``{"v":"1","minloglevel":"0"}``。全部校验通过后一次性生效；任一项失败则整批拒绝。
+
+        与配置文件监控互斥：进程首次 ``Init`` 时若 ``MonitorConfigPath`` 非空，或文件监控
+        线程已启用，则返回 ``StatusCode::K_INVALID``。
+
+        参数：
+            - **configJson** - JSON 格式的 flag 名称与字符串值映射。
+
+        返回：
+            - ``StatusCode::K_OK`` 表示更新成功（空 JSON 对象亦视为成功）。
+            - ``StatusCode::K_INVALID`` 表示 JSON 非法、flag 不可修改、值非法，或与文件监控冲突。
 
     .. cpp:function:: Status Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 
@@ -142,9 +160,11 @@ KVClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
-    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param)
+    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
+        const MSetParam &param)
 
-        事务性批量设置键值对接口。保证所有键要么全部创建成功，要么全部不创建。键的数量范围应为 1 到 8。
+        已废弃 API。该接口仅为保持 SDK API 兼容而保留，调用时固定返回
+        ``StatusCode::K_RUNTIME_ERROR``，错误信息包含 ``deprecated API`` 字样。
 
         参数：
             - **keys** - 需要设置的一组key.
@@ -152,7 +172,7 @@ KVClient
             - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
 
         返回：
-            返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
+            固定返回 ``StatusCode::K_RUNTIME_ERROR``。
 
     .. cpp:function:: Status MGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, std::vectorstd::string &outFailedKeys, int32_t subTimeoutMs)
 
@@ -342,7 +362,7 @@ KVClient
 
     .. cpp:function:: Status QuerySize(const std::vector<std::string> &objectKeys, std::vector<uint64_t> &outSizes)
 
-        查询对象键的大小（包括其他 AZ 的objectKeys）。
+        查询对象键的大小。
 
         参数：
             - **objectKeys** - 需要查询大小的对象键列表。

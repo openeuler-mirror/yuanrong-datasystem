@@ -155,7 +155,7 @@ KV接口
    * - :doc:`yr.datasystem.kv_client.KVClient.mget_buffer <yr.datasystem.kv_client.KVClient.mget_buffer>`
      - 获取键对应的只读共享内存 Buffer 。
    * - :doc:`yr.datasystem.kv_client.KVClient.msettx <yr.datasystem.kv_client.KVClient.msettx>`
-     - 批量设置键值对（事务操作），它保证所有的键要么都成功设置，要么都失败。
+     - 已废弃 API，仅为兼容保留，调用固定抛出 ``RuntimeError``。
    * - :doc:`yr.datasystem.kv_client.KVClient.get_read_only_buffers <yr.datasystem.kv_client.KVClient.get_read_only_buffers>`
      - 获取所有给定键的值。
    * - :doc:`yr.datasystem.kv_client.KVClient.get <yr.datasystem.kv_client.KVClient.get>`

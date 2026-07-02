@@ -6,12 +6,12 @@
 <link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="KVClient" href="KVClient.html"><link rel="prev" title="yr.datasystem.stream_client.SubconfigType" href="../python/yr.datasystem.stream_client.SubconfigType.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>C++ - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=13237357" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/togglebutton.css?v=9c3e77be" />
     <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
     <link rel="stylesheet" type="text/css" href="../../../_static/custom.css?v=33406c05" />
@@ -595,7 +595,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient4InitEv" title="KVClient::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Init()</span></code></a></p></td>
 <td><p>建立与数据系统 Worker 之间的连接并完成初始化。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Init(const</span> <span class="pre">KVClientConfig</span> <span class="pre">&amp;clientConfig)</span></code></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#kvclient-initwithconfig"><span class="std std-ref">KVClient::Init(const KVClientConfig &amp;clientConfig)</span></a></p></td>
 <td><p>使用显式客户端配置完成初始化。</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient8ShutDownEv" title="KVClient::ShutDown"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::ShutDown()</span></code></a></p></td>
@@ -613,8 +613,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient4MSetERKNSt6vectorINSt10shared_ptrI6BufferEEEE" title="KVClient::MSet"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::MSet()</span></code></a></p></td>
 <td><p>键值对批量设置接口。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient6MSetTxERKNSt6vectorINSt6stringEEERKNSt6vectorI10StringViewEERK9MSetParam" title="KVClient::MSetTx"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::MSetTx()</span></code></a></p></td>
-<td><p>事务性批量设置键值对接口。</p></td>
+<tr class="row-even"><td><p><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::MSetTx()</span></code></p></td>
+<td><p>已废弃 API，仅为兼容保留，调用固定返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_RUNTIME_ERROR</span></code>。</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="KVClient.html#_CPPv4N8KVClient3GetERKNSt6stringERNSt6stringE7int32_t" title="KVClient::Get"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">KVClient::Get()</span></code></a></p></td>
 <td><p>获取键对应的数据。</p></td>
@@ -945,15 +945,15 @@ document.addEventListener('DOMContentLoaded', function() {
     </aside>
   </div>
 </div><script src="../../../_static/documentation_options.js?v=5929fcd5"></script>
-    <script src="../../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../../_static/copybutton.js?v=6dbb43f8"></script>
     <script>let toggleHintShow = 'Click to show';</script>
     <script>let toggleHintHide = 'Click to hide';</script>
     <script>let toggleOpenOnPrint = 'true';</script>
-    <script src="../../../_static/togglebutton.js?v=4a39c7ea"></script>
+    <script src="../../../_static/togglebutton.js?v=b8b12719"></script>
     <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
     <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
     <script src="../../../_static/custom.js?v=f6e2bf52"></script>
