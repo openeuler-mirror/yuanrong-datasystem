@@ -1142,7 +1142,8 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK(ConstructClusterInfo(clusterInfo));
     LOG(INFO) << "The msg in cluster info: " << clusterInfo.ToString();
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo), "etcd cluster manager init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo, false),
+                                     "etcd cluster manager init failed");
     LOG(INFO) << "etcd cluster management initialized.";
     if (masterAddr_.Empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterAddr_.ParseString(FLAGS_master_address),
@@ -1156,16 +1157,19 @@ Status WorkerOCServer::Init()
     // after setting ETCD cluster manager, it time to initialize all services
     RETURN_IF_NOT_OK(InitializeAllServices(clusterInfo));
 
-    // Start brpc server now that all brpc adapter services have been registered
-    // via AddBrpcService() in InitializeAllServices().
-    // BuildAndStart() in CommonServer::Init() skips brpc start because services
-    // are added later via AddBrpcService() calls. See the comment in
-    // rpc_server.cpp BuildAndStart() for details.
+    // Start brpc server now that all brpc adapter services have been
+    // registered via AddBrpcService() in InitializeAllServices().
+    // BuildAndStart() in CommonServer::Init() skips brpc start because
+    // services are added later via AddBrpcService() calls.
     if (FLAGS_use_brpc && rpcServer_) {
         int brpcPort = bindHostPort_.Port() + kBrpcPortOffset;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rpcServer_->StartBrpcServer(bindHostPort_.Host(), brpcPort),
                                          "Failed to start brpc server");
     }
+    // Publish keepalive to etcd only after brpc is listening so peers can
+    // reach us immediately when they see the etcd event.
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->StartKeepAlive(),
+                                     "Failed to start cluster keepalive");
     RETURN_IF_NOT_OK(InitSlotRecovery());
 
     HashRingEvent::DataMigrationReady::GetInstance().AddSubscriber(WORKER_OC_SERVER, [this]() {
