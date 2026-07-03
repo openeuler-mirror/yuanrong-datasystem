@@ -7,6 +7,8 @@
 namespace datasystem {
 namespace {
 
+constexpr size_t K_BATCH_READ_ITEM_WIRE_BYTES = sizeof(uint64_t) * 3;
+
 uint64_t HostToBe64(uint64_t value)
 {
     const uint32_t hi = htonl(static_cast<uint32_t>(value >> 32));
@@ -119,6 +121,8 @@ std::vector<uint8_t> EncodeExchangeReq(const ExchangeRootInfoRequest &req)
     AppendI32(&out, req.requesterDeviceId);
     AppendI32(&out, req.ownerDeviceId);
     AppendString(&out, req.rootInfo);
+    AppendString(&out, req.backendKind);
+    AppendString(&out, req.hixlRoutePolicy);
     return out;
 }
 
@@ -127,7 +131,8 @@ bool DecodeExchangeReq(const std::vector<uint8_t> &in, ExchangeRootInfoRequest *
     size_t off = 0;
     return ReadString(in, &off, &req->requesterHost) && ReadU32(in, &off, &req->requesterPort) &&
            ReadI32(in, &off, &req->requesterDeviceId) && ReadI32(in, &off, &req->ownerDeviceId) &&
-           ReadString(in, &off, &req->rootInfo) && off == in.size();
+           ReadString(in, &off, &req->rootInfo) && ReadString(in, &off, &req->backendKind) &&
+           ReadString(in, &off, &req->hixlRoutePolicy) && off == in.size();
 }
 
 std::vector<uint8_t> EncodeExchangeRsp(const ExchangeRootInfoResponse &rsp)
@@ -136,6 +141,10 @@ std::vector<uint8_t> EncodeExchangeRsp(const ExchangeRootInfoResponse &rsp)
     AppendI32(&out, rsp.code);
     AppendString(&out, rsp.msg);
     AppendI32(&out, rsp.ownerDeviceId);
+    AppendString(&out, rsp.requesterInitRootInfo);
+    AppendString(&out, rsp.backendKind);
+    AppendString(&out, rsp.hixlRoutePolicy);
+    AppendU64(&out, rsp.ownerMemGeneration);
     return out;
 }
 
@@ -143,7 +152,9 @@ bool DecodeExchangeRsp(const std::vector<uint8_t> &in, ExchangeRootInfoResponse 
 {
     size_t off = 0;
     return ReadI32(in, &off, &rsp->code) && ReadString(in, &off, &rsp->msg) &&
-           ReadI32(in, &off, &rsp->ownerDeviceId) && off == in.size();
+           ReadI32(in, &off, &rsp->ownerDeviceId) && ReadString(in, &off, &rsp->requesterInitRootInfo) &&
+           ReadString(in, &off, &rsp->backendKind) && ReadString(in, &off, &rsp->hixlRoutePolicy) &&
+           ReadU64(in, &off, &rsp->ownerMemGeneration) && off == in.size();
 }
 
 std::vector<uint8_t> EncodeQueryReq(const QueryConnReadyRequest &req)
@@ -169,6 +180,7 @@ std::vector<uint8_t> EncodeQueryRsp(const QueryConnReadyResponse &rsp)
     AppendI32(&out, rsp.code);
     AppendString(&out, rsp.msg);
     AppendBool(&out, rsp.ready);
+    AppendU64(&out, rsp.ownerMemGeneration);
     return out;
 }
 
@@ -176,7 +188,7 @@ bool DecodeQueryRsp(const std::vector<uint8_t> &in, QueryConnReadyResponse *rsp)
 {
     size_t off = 0;
     return ReadI32(in, &off, &rsp->code) && ReadString(in, &off, &rsp->msg) && ReadBool(in, &off, &rsp->ready) &&
-           off == in.size();
+           ReadU64(in, &off, &rsp->ownerMemGeneration) && off == in.size();
 }
 
 std::vector<uint8_t> EncodeReadReq(const ReadTriggerRequest &req)
@@ -240,6 +252,10 @@ bool DecodeBatchReadReq(const std::vector<uint8_t> &in, BatchReadTriggerRequest 
           ReadU32(in, &off, &itemCount))) {
         return false;
     }
+    const size_t remaining = in.size() - off;
+    if (itemCount > remaining / K_BATCH_READ_ITEM_WIRE_BYTES) {
+        return false;
+    }
     req->items.clear();
     req->items.reserve(itemCount);
     for (uint32_t i = 0; i < itemCount; ++i) {
@@ -259,6 +275,8 @@ std::vector<uint8_t> EncodeBatchReadRsp(const BatchReadTriggerResponse &rsp)
     AppendI32(&out, rsp.code);
     AppendString(&out, rsp.msg);
     AppendI32(&out, rsp.failedItemIndex);
+    AppendU64(&out, rsp.readLeaseId);
+    AppendU64(&out, rsp.ownerMemGeneration);
     return out;
 }
 
@@ -266,7 +284,39 @@ bool DecodeBatchReadRsp(const std::vector<uint8_t> &in, BatchReadTriggerResponse
 {
     size_t off = 0;
     return ReadI32(in, &off, &rsp->code) && ReadString(in, &off, &rsp->msg) &&
-           ReadI32(in, &off, &rsp->failedItemIndex) && off == in.size();
+           ReadI32(in, &off, &rsp->failedItemIndex) && ReadU64(in, &off, &rsp->readLeaseId) &&
+           ReadU64(in, &off, &rsp->ownerMemGeneration) && off == in.size();
+}
+
+std::vector<uint8_t> EncodeReleaseReadLeaseReq(const ReleaseReadLeaseRequest &req)
+{
+    std::vector<uint8_t> out;
+    AppendU64(&out, req.readLeaseId);
+    AppendString(&out, req.requesterHost);
+    AppendU32(&out, req.requesterPort);
+    AppendI32(&out, req.requesterDeviceId);
+    return out;
+}
+
+bool DecodeReleaseReadLeaseReq(const std::vector<uint8_t> &in, ReleaseReadLeaseRequest *req)
+{
+    size_t off = 0;
+    return ReadU64(in, &off, &req->readLeaseId) && ReadString(in, &off, &req->requesterHost) &&
+           ReadU32(in, &off, &req->requesterPort) && ReadI32(in, &off, &req->requesterDeviceId) && off == in.size();
+}
+
+std::vector<uint8_t> EncodeReleaseReadLeaseRsp(const ReleaseReadLeaseResponse &rsp)
+{
+    std::vector<uint8_t> out;
+    AppendI32(&out, rsp.code);
+    AppendString(&out, rsp.msg);
+    return out;
+}
+
+bool DecodeReleaseReadLeaseRsp(const std::vector<uint8_t> &in, ReleaseReadLeaseResponse *rsp)
+{
+    size_t off = 0;
+    return ReadI32(in, &off, &rsp->code) && ReadString(in, &off, &rsp->msg) && off == in.size();
 }
 
 Result MakeServerErrorPayload(const std::string &msg, std::vector<uint8_t> *payload)

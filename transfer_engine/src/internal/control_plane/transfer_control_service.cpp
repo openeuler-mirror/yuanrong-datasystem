@@ -1,7 +1,9 @@
 #include "internal/control_plane/transfer_control_service.h"
 
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -19,6 +21,32 @@ namespace {
 
 constexpr int32_t kRpcOkCode = 0;
 constexpr size_t kMaxOwnerInitQueueSize = 1024;
+constexpr uint64_t K_DEFAULT_READ_LEASE_TTL_MS = 30000;
+constexpr uint64_t K_DECIMAL_BASE = 10;
+
+std::string NormalizeBackendKind(const std::string &backendKind)
+{
+    return backendKind.empty() ? "p2p" : backendKind;
+}
+
+uint64_t GetReadLeaseTtlMs()
+{
+    const char *env = std::getenv("TRANSFER_ENGINE_HIXL_READ_LEASE_TTL_MS");
+    if (env == nullptr || env[0] == '\0') {
+        return K_DEFAULT_READ_LEASE_TTL_MS;
+    }
+    uint64_t value = 0;
+    for (const char *p = env; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') {
+            return K_DEFAULT_READ_LEASE_TTL_MS;
+        }
+        value = value * K_DECIMAL_BASE + static_cast<uint64_t>(*p - '0');
+        if (value > static_cast<uint64_t>(std::numeric_limits<int32_t>::max())) {
+            return K_DEFAULT_READ_LEASE_TTL_MS;
+        }
+    }
+    return value == 0 ? K_DEFAULT_READ_LEASE_TTL_MS : value;
+}
 
 class TransferControlServiceImpl final : public ITransferControlService {
 public:
@@ -57,39 +85,19 @@ public:
         TE_CHECK_OR_RETURN(req.requesterDeviceId >= 0, ErrorCode::kInvalid, "requester_device_id should be non-negative");
         TE_CHECK_OR_RETURN(!req.rootInfo.empty(), ErrorCode::kInvalid, "root_info is empty");
 
-        rsp->code = kRpcOkCode;
-        rsp->msg = "accepted";
-        rsp->ownerDeviceId = localDeviceId_;
-
-        OwnerInitTask task;
-        task.spec.localHost = localHost_;
-        task.spec.localPort = localPort_;
-        task.spec.localDeviceId = localDeviceId_;
-        task.spec.peerHost = req.requesterHost;
-        task.spec.peerPort = static_cast<uint16_t>(req.requesterPort);
-        task.spec.peerDeviceId = req.requesterDeviceId;
-        task.key = ConnectionKey{ localDeviceId_, req.requesterHost, static_cast<uint16_t>(req.requesterPort),
-                                  req.requesterDeviceId };
-        task.rootInfo = req.rootInfo;
-        {
-            std::lock_guard<std::mutex> lock(ownerInitQueueMutex_);
-            if (ownerInitQueue_.size() >= kMaxOwnerInitQueueSize) {
-                rsp->code = static_cast<int32_t>(ErrorCode::kNotReady);
-                rsp->msg = "owner init queue is full";
-                TE_LOG_WARNING << "owner init queue full"
-                             << ", requester=" << req.requesterHost << ":" << req.requesterPort
-                             << ", requester_device_id=" << req.requesterDeviceId
-                             << ", queue_size=" << ownerInitQueue_.size();
+        FillAcceptedExchangeRsp(rsp);
+        if (RejectBackendMismatch(req, rsp)) {
+            return Result::OK();
+        }
+        if (backend_->SupportsReceiverDrivenRead()) {
+            Result rootRc = backend_->CreateRootInfo(&rsp->requesterInitRootInfo);
+            if (rootRc.IsError()) {
+                rsp->code = static_cast<int32_t>(rootRc.GetCode());
+                rsp->msg = rootRc.GetMsg();
                 return Result::OK();
             }
-            ownerInitQueue_.push_back(std::move(task));
         }
-        TE_LOG_DEBUG << "exchange root info accepted"
-                  << ", requester=" << req.requesterHost << ":" << req.requesterPort
-                  << ", requester_device_id=" << req.requesterDeviceId
-                  << ", owner_device_id=" << localDeviceId_;
-        ownerInitQueueCv_.notify_one();
-        return Result::OK();
+        return EnqueueOwnerInit(req, rsp);
     }
 
     Result QueryConnReady(const QueryConnReadyRequest &req, QueryConnReadyResponse *rsp) override
@@ -105,6 +113,7 @@ public:
         rsp->code = kRpcOkCode;
         rsp->msg = "ok";
         rsp->ready = state.ownerSendReady && !state.stale;
+        rsp->ownerMemGeneration = backend_->MemoryGeneration();
         return Result::OK();
     }
 
@@ -158,7 +167,7 @@ public:
 
         rsp->code = kRpcOkCode;
         rsp->msg = "accepted";
-        TE_LOG_DEBUG << "read trigger accepted"
+        TE_VLOG_1 << "read trigger accepted"
                   << ", request_id=" << req.requestId
                   << ", requester=" << req.requesterHost << ":" << req.requesterPort
                   << ", requester_device_id=" << req.requesterDeviceId
@@ -176,6 +185,144 @@ public:
         TE_CHECK_OR_RETURN(!req.items.empty(), ErrorCode::kInvalid, "batch items is empty");
 
         rsp->failedItemIndex = -1;
+        rsp->readLeaseId = 0;
+        rsp->ownerMemGeneration = backend_->MemoryGeneration();
+
+        if (backend_->SupportsReceiverDrivenRead()) {
+            return HandleReceiverDrivenBatchRead(req, rsp);
+        }
+        return HandlePostSendBatchRead(req, rsp);
+    }
+
+    Result ReleaseReadLease(const ReleaseReadLeaseRequest &req, ReleaseReadLeaseResponse *rsp) override
+    {
+        TE_CHECK_PTR_OR_RETURN(rsp);
+        if (req.readLeaseId != 0) {
+            registeredMemory_->ReleaseReadLease(req.readLeaseId);
+        }
+        rsp->code = kRpcOkCode;
+        rsp->msg = "released";
+        TE_VLOG_1 << "release read lease"
+                  << ", requester=" << req.requesterHost << ":" << req.requesterPort
+                  << ", requester_device_id=" << req.requesterDeviceId
+                  << ", read_lease_id=" << req.readLeaseId;
+        return Result::OK();
+    }
+
+private:
+    struct OwnerInitTask {
+        ConnectionSpec spec;
+        ConnectionKey key;
+        std::string rootInfo;
+    };
+
+    void FillAcceptedExchangeRsp(ExchangeRootInfoResponse *rsp) const
+    {
+        rsp->code = kRpcOkCode;
+        rsp->msg = "accepted";
+        rsp->ownerDeviceId = localDeviceId_;
+        rsp->backendKind = backend_->BackendKind();
+        rsp->hixlRoutePolicy = backend_->RoutePolicy();
+        rsp->ownerMemGeneration = backend_->MemoryGeneration();
+    }
+
+    bool RejectBackendMismatch(const ExchangeRootInfoRequest &req, ExchangeRootInfoResponse *rsp) const
+    {
+        const std::string requesterBackendKind = NormalizeBackendKind(req.backendKind);
+        if (requesterBackendKind != backend_->BackendKind()) {
+            rsp->code = static_cast<int32_t>(ErrorCode::kNotSupported);
+            rsp->msg = "backend kind mismatch, requester=" + requesterBackendKind +
+                       ", owner=" + backend_->BackendKind();
+            TE_LOG_WARNING << "exchange root info rejected: backend mismatch"
+                         << ", requester_backend=" << requesterBackendKind
+                         << ", owner_backend=" << backend_->BackendKind();
+            return true;
+        }
+        if (backend_->BackendKind() == "hixl" && req.hixlRoutePolicy != backend_->RoutePolicy()) {
+            rsp->code = static_cast<int32_t>(ErrorCode::kNotSupported);
+            rsp->msg = "hixl route policy mismatch, requester=" + req.hixlRoutePolicy +
+                       ", owner=" + backend_->RoutePolicy();
+            TE_LOG_WARNING << "exchange root info rejected: hixl route mismatch"
+                         << ", requester_route=" << req.hixlRoutePolicy
+                         << ", owner_route=" << backend_->RoutePolicy();
+            return true;
+        }
+        return false;
+    }
+
+    Result EnqueueOwnerInit(const ExchangeRootInfoRequest &req, ExchangeRootInfoResponse *rsp)
+    {
+        OwnerInitTask task;
+        task.spec.localHost = localHost_;
+        task.spec.localPort = localPort_;
+        task.spec.localDeviceId = localDeviceId_;
+        task.spec.peerHost = req.requesterHost;
+        task.spec.peerPort = static_cast<uint16_t>(req.requesterPort);
+        task.spec.peerDeviceId = req.requesterDeviceId;
+        task.key = ConnectionKey{ localDeviceId_, req.requesterHost, static_cast<uint16_t>(req.requesterPort),
+                                  req.requesterDeviceId };
+        task.rootInfo = req.rootInfo;
+        {
+            std::lock_guard<std::mutex> lock(ownerInitQueueMutex_);
+            if (ownerInitQueue_.size() >= kMaxOwnerInitQueueSize) {
+                rsp->code = static_cast<int32_t>(ErrorCode::kNotReady);
+                rsp->msg = "owner init queue is full";
+                TE_LOG_WARNING << "owner init queue full"
+                             << ", requester=" << req.requesterHost << ":" << req.requesterPort
+                             << ", requester_device_id=" << req.requesterDeviceId
+                             << ", queue_size=" << ownerInitQueue_.size();
+                return Result::OK();
+            }
+            ownerInitQueue_.push_back(std::move(task));
+        }
+        TE_LOG_INFO << "exchange root info accepted"
+                  << ", requester=" << req.requesterHost << ":" << req.requesterPort
+                  << ", requester_device_id=" << req.requesterDeviceId
+                  << ", owner_device_id=" << localDeviceId_
+                  << ", backend=" << backend_->BackendKind()
+                  << ", hixl_route_policy=" << backend_->RoutePolicy()
+                  << ", owner_mem_generation=" << rsp->ownerMemGeneration;
+        ownerInitQueueCv_.notify_one();
+        return Result::OK();
+    }
+
+    Result HandleReceiverDrivenBatchRead(const BatchReadTriggerRequest &req, BatchReadTriggerResponse *rsp)
+    {
+        std::vector<TransferMemoryRegion> ranges;
+        ranges.reserve(req.items.size());
+        for (size_t i = 0; i < req.items.size(); ++i) {
+            const auto &item = req.items[i];
+            if (item.remoteAddr == 0 || item.length == 0) {
+                rsp->code = static_cast<int32_t>(ErrorCode::kInvalid);
+                rsp->msg = "invalid batch read item";
+                rsp->failedItemIndex = static_cast<int32_t>(i);
+                return Result::OK();
+            }
+            ranges.push_back(TransferMemoryRegion{ item.remoteAddr, item.length });
+        }
+        uint64_t leaseId = 0;
+        Result leaseRc = registeredMemory_->AcquireReadLease(ranges, localDeviceId_, GetReadLeaseTtlMs(), &leaseId);
+        if (leaseRc.IsError()) {
+            rsp->code = static_cast<int32_t>(leaseRc.GetCode());
+            rsp->msg = leaseRc.GetMsg();
+            rsp->failedItemIndex = -1;
+            return leaseRc;
+        }
+        rsp->code = kRpcOkCode;
+        rsp->msg = "accepted";
+        rsp->readLeaseId = leaseId;
+        rsp->ownerMemGeneration = backend_->MemoryGeneration();
+        TE_LOG_INFO << "hixl batch read lease accepted"
+                  << ", requester=" << req.requesterHost << ":" << req.requesterPort
+                  << ", requester_device_id=" << req.requesterDeviceId
+                  << ", item_count=" << req.items.size()
+                  << ", read_lease_id=" << leaseId
+                  << ", owner_mem_generation=" << rsp->ownerMemGeneration;
+        return Result::OK();
+    }
+
+    Result HandlePostSendBatchRead(const BatchReadTriggerRequest &req, BatchReadTriggerResponse *rsp)
+    {
         for (size_t i = 0; i < req.items.size(); ++i) {
             const auto &item = req.items[i];
             ReadTriggerRequest singleReq;
@@ -195,25 +342,19 @@ public:
                 rsp->failedItemIndex = static_cast<int32_t>(i);
                 return Result::OK();
             }
-            if (singleRsp.code != kRpcOkCode) {
-                rsp->code = singleRsp.code;
-                rsp->msg = singleRsp.msg;
-                rsp->failedItemIndex = static_cast<int32_t>(i);
-                return Result::OK();
+            if (singleRsp.code == kRpcOkCode) {
+                continue;
             }
+            rsp->code = singleRsp.code;
+            rsp->msg = singleRsp.msg;
+            rsp->failedItemIndex = static_cast<int32_t>(i);
+            return Result::OK();
         }
 
         rsp->code = kRpcOkCode;
         rsp->msg = "accepted";
         return Result::OK();
     }
-
-private:
-    struct OwnerInitTask {
-        ConnectionSpec spec;
-        ConnectionKey key;
-        std::string rootInfo;
-    };
 
     void OwnerInitLoop()
     {
@@ -241,7 +382,7 @@ private:
             }
             if (rc.IsOk()) {
                 connMgr_->MarkOwnerSendReady(task.key);
-                TE_LOG_DEBUG << "owner init done"
+                TE_VLOG_1 << "owner init done"
                           << ", peer=" << task.spec.peerHost << ":" << task.spec.peerPort
                           << ", peer_device_id=" << task.spec.peerDeviceId
                           << ", owner_device_id=" << localDeviceId_;

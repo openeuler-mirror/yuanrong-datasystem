@@ -50,6 +50,7 @@ Options:
        gpu  = GPU only (CUDA), no Ascend required
        npu  = NPU only (Ascend)
        all  = both NPU and GPU
+       CMake modes that include NPU support (on/npu/all) also enable the transfer_engine HIXL D2D backend.
     -T Compiles the code for os pipeline h2d feature in kvclient. The options are on and off. The default value is 'off'.
 
     For communication layer
@@ -141,6 +142,7 @@ function main() {
     exit 0
   fi
   init_default_opts
+  TRANSFER_ENGINE_ENABLE_HIXL="off"
   set_datasystem_version
   local logical_cpu_cout
   logical_cpu_cout=$(cat /proc/cpuinfo | grep "processor" | wc -l)
@@ -362,8 +364,9 @@ function main() {
       BUILD_HETERO_GPU="off"
     fi
   fi
-
-
+  if [[ "${BUILD_SYSTEM}" == "cmake" ]] && is_on "${BUILD_HETERO}" && is_on "${BUILD_HETERO_NPU}"; then
+    TRANSFER_ENGINE_ENABLE_HIXL="on"
+  fi
   echo -e "-- Build system: ${BUILD_SYSTEM}"
 
   # Dispatch to build system

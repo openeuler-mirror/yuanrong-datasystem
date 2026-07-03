@@ -62,6 +62,18 @@ Result SocketControlClient::BatchReadTrigger(const std::string &host, uint16_t p
     return Result::OK();
 }
 
+Result SocketControlClient::ReleaseReadLease(const std::string &host, uint16_t port,
+                                             const ReleaseReadLeaseRequest &req, ReleaseReadLeaseResponse *rsp)
+{
+    TE_CHECK_PTR_OR_RETURN(rsp);
+    std::vector<uint8_t> rspPayload;
+    TE_RETURN_IF_ERROR(
+        InvokeRpc(host, port, RpcMethod::kReleaseReadLease, EncodeReleaseReadLeaseReq(req), &rspPayload));
+    TE_CHECK_OR_RETURN(DecodeReleaseReadLeaseRsp(rspPayload, rsp),
+                       ErrorCode::kRuntimeError, "decode release read lease response failed");
+    return Result::OK();
+}
+
 SocketControlServer::SocketControlServer() = default;
 
 SocketControlServer::~SocketControlServer()

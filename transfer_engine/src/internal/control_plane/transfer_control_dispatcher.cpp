@@ -98,6 +98,25 @@ Result DispatchControlRequest(const std::shared_ptr<ITransferControlService> &se
         return Result::OK();
     }
 
+    if (method == RpcMethod::kReleaseReadLease) {
+        ReleaseReadLeaseRequest req;
+        ReleaseReadLeaseResponse rsp;
+        if (!DecodeReleaseReadLeaseReq(reqPayload, &req)) {
+            rsp.code = static_cast<int32_t>(ErrorCode::kInvalid);
+            rsp.msg = "decode release read lease request failed";
+            TE_LOG_WARNING << "dispatch release read lease failed to decode request";
+        } else {
+            Result rc = service->ReleaseReadLease(req, &rsp);
+            if (rc.IsError()) {
+                rsp.code = static_cast<int32_t>(rc.GetCode());
+                rsp.msg = rc.GetMsg();
+                TE_LOG_ERROR << "dispatch release read lease failed, reason=" << rc.ToString();
+            }
+        }
+        *rspPayload = EncodeReleaseReadLeaseRsp(rsp);
+        return Result::OK();
+    }
+
     ReadTriggerResponse rsp;
     rsp.code = static_cast<int32_t>(ErrorCode::kInvalid);
     rsp.msg = "unknown rpc method";

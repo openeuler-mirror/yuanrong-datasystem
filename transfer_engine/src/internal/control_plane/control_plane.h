@@ -24,6 +24,7 @@ public:
     virtual Result QueryConnReady(const QueryConnReadyRequest &req, QueryConnReadyResponse *rsp) = 0;
     virtual Result ReadTrigger(const ReadTriggerRequest &req, ReadTriggerResponse *rsp) = 0;
     virtual Result BatchReadTrigger(const BatchReadTriggerRequest &req, BatchReadTriggerResponse *rsp) = 0;
+    virtual Result ReleaseReadLease(const ReleaseReadLeaseRequest &req, ReleaseReadLeaseResponse *rsp) = 0;
 };
 
 class ITransferControlClient {
@@ -38,6 +39,8 @@ public:
                                ReadTriggerResponse *rsp) = 0;
     virtual Result BatchReadTrigger(const std::string &host, uint16_t port, const BatchReadTriggerRequest &req,
                                     BatchReadTriggerResponse *rsp) = 0;
+    virtual Result ReleaseReadLease(const std::string &host, uint16_t port, const ReleaseReadLeaseRequest &req,
+                                    ReleaseReadLeaseResponse *rsp) = 0;
 };
 
 class SocketControlClient : public ITransferControlClient {
@@ -50,6 +53,8 @@ public:
                        ReadTriggerResponse *rsp) override;
     Result BatchReadTrigger(const std::string &host, uint16_t port, const BatchReadTriggerRequest &req,
                             BatchReadTriggerResponse *rsp) override;
+    Result ReleaseReadLease(const std::string &host, uint16_t port, const ReleaseReadLeaseRequest &req,
+                            ReleaseReadLeaseResponse *rsp) override;
 };
 
 class SocketControlServer {

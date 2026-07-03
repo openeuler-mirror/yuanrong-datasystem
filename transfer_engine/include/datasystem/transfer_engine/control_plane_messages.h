@@ -13,12 +13,18 @@ struct ExchangeRootInfoRequest {
     int32_t requesterDeviceId = -1;
     int32_t ownerDeviceId = -1;
     std::string rootInfo;
+    std::string backendKind;
+    std::string hixlRoutePolicy;
 };
 
 struct ExchangeRootInfoResponse {
     int32_t code = 0;
     std::string msg;
     int32_t ownerDeviceId = -1;
+    std::string requesterInitRootInfo;
+    std::string backendKind;
+    std::string hixlRoutePolicy;
+    uint64_t ownerMemGeneration = 0;
 };
 
 struct QueryConnReadyRequest {
@@ -32,6 +38,7 @@ struct QueryConnReadyResponse {
     int32_t code = 0;
     std::string msg;
     bool ready = false;
+    uint64_t ownerMemGeneration = 0;
 };
 
 struct ReadTriggerRequest {
@@ -67,6 +74,20 @@ struct BatchReadTriggerResponse {
     int32_t code = 0;
     std::string msg;
     int32_t failedItemIndex = -1;
+    uint64_t readLeaseId = 0;
+    uint64_t ownerMemGeneration = 0;
+};
+
+struct ReleaseReadLeaseRequest {
+    uint64_t readLeaseId = 0;
+    std::string requesterHost;
+    uint32_t requesterPort = 0;
+    int32_t requesterDeviceId = -1;
+};
+
+struct ReleaseReadLeaseResponse {
+    int32_t code = 0;
+    std::string msg;
 };
 
 }  // namespace datasystem

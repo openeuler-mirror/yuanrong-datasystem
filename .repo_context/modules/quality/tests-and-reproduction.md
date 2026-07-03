@@ -149,6 +149,32 @@ bash build.sh -t run_python
 bash build.sh -t run_example
 ```
 
+- Run the transfer_engine same-node HIXL D2D smoke suite after building with `-X on` in an Ascend/HIXL environment
+  where `build.sh` auto-enabled HIXL:
+
+```bash
+export TRANSFER_ENGINE_HIXL_ROUTE=hccs
+export TRANSFER_ENGINE_HIXL_BASE_PORT=21000
+transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh
+```
+
+Override `OWNER_DEVICE`, `REQUESTER_DEVICE`, and `REQUESTER_DEVICE_STEP` when the smoke should select devices
+explicitly, for example on validation hosts that need zero-based device selection:
+
+```bash
+export TRANSFER_ENGINE_HIXL_ROUTE=hccs
+export TRANSFER_ENGINE_HIXL_BASE_PORT=21000
+OWNER_DEVICE=0 REQUESTER_DEVICE=1 REQUESTER_DEVICE_STEP=1 \
+  transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh
+```
+
+Use the same suite for A3-oriented runs by passing `OWNER_DEVICE`, `REQUESTER_DEVICE`, and
+`REQUESTER_DEVICE_STEP` explicitly when a specific device pair is required.
+The HIXL suite defaults `TRANSFER_ENGINE_ACL_MALLOC_POLICY=huge_only` so smoke-owned HBM allocations satisfy HIXL
+HCCS D2D registration requirements; set it to `huge_first` to reproduce the older allocation behavior.
+The smoke requester explicitly registers its HIXL read-destination buffers before `BatchTransferSyncRead`; this mirrors
+the production TransferEngine contract that receiver-driven read destinations are registered by the caller.
+
 - Run a single generated CTest case from the build directory:
 
 ```bash
@@ -188,6 +214,11 @@ python3 -m unittest
 - Verified from `tests/common/binmock/CMakeLists.txt`:
   - `binmock`
   - `binmock_spec`
+- Transfer Engine HIXL smoke helpers:
+  - `transfer_engine/scripts/run_cross_node_smoke_cases.sh`: manual owner/requester wrapper around
+    `transfer_engine_cross_node_smoke`.
+  - `transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh`: same-node HIXL D2D suite covering batch reads, reverse
+    direction, concurrent requesters, unregistered-address rejection, and a 4 x 16 MiB transfer.
 
 ## Python And Example Tests
 

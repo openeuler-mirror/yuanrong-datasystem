@@ -63,6 +63,7 @@
 | `bash build.sh -n on` | Ninja generator | Otherwise `Unix Makefiles`. |
 | `bash build.sh -X off` | disable hetero build | Sets `BUILD_HETERO=off`, `BUILD_HETERO_NPU=off`, and `BUILD_HETERO_GPU=off`. |
 | `bash build.sh -X gpu/npu/all` | select hetero backend set | `gpu` enables CUDA without Ascend, `npu` enables Ascend only, and `all` enables both backends. |
+| `bash build.sh -X on/npu/all` | enable transfer_engine HIXL D2D backend for CMake NPU builds | Requires Ascend/NPU support; the repository assumes the CANN environment provides HIXL. |
 | `bash build.sh -P off` | disable Python SDK/wheel | Default is Python on. |
 | `bash build.sh -J on` | build Java API | Adds JNI and Maven jar packaging. |
 | `bash build.sh -G on` | build Go SDK | Adds C wrapper target and post-install Go package validation. |
@@ -118,6 +119,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | `-X on/off/gpu/npu/all` | `BUILD_HETERO` | `on` | Adds hetero compile definitions and device/plugin dependencies when on. |
 | `-X off/gpu/npu/all` plus default | `BUILD_HETERO_NPU` | `on` | Enables Ascend/NPU backend; `-X off` and `-X gpu` force it off. |
 | `-X off/gpu/npu/all` plus default | `BUILD_HETERO_GPU` | `off` | Enables CUDA/GPU backend; `-X gpu` and `-X all` force it on, `-X off` and `-X npu` force it off. |
+| CMake `-X on/npu/all` | `TRANSFER_ENGINE_ENABLE_HIXL` | set by `build.sh` | Adds the transfer_engine HIXL D2D backend whenever the selected hetero mode includes NPU support. |
 | `-T on` | `BUILD_PIPLN_H2D` | `off` | Temporarily ignored and forced back to `off`; Pipeline H2D currently remains disabled even when requested. |
 | `-M on` | `BUILD_WITH_URMA` | `off` | Adds URMA dependency and RDMA-related source. |
 | `-A on` | `BUILD_WITH_RDMA` | `off` | Adds UCX and rdma-core checks/source. |

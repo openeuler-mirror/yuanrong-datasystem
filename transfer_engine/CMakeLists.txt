@@ -142,8 +142,57 @@ set(TRANSFER_ENGINE_SRCS
     src/internal/control_plane/transfer_control_service.cpp
 )
 
+if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY OR TRANSFER_ENGINE_ENABLE_HIXL)
+    if (NOT DEFINED Ascend_ROOT)
+        if (DEFINED ENV{ASCEND_HOME_PATH})
+            set(Ascend_ROOT $ENV{ASCEND_HOME_PATH})
+        elseif(DEFINED ENV{ASCEND_CUSTOM_PATH})
+            set(Ascend_ROOT $ENV{ASCEND_CUSTOM_PATH}/latest)
+        else()
+            set(Ascend_ROOT /usr/local/Ascend/ascend-toolkit/latest)
+        endif()
+    endif()
+    set(_te_ascend_include_dir ${Ascend_ROOT}/include)
+    set(_te_ascend_include_dirs
+        ${_te_ascend_include_dir}
+        ${_te_ascend_include_dir}/experiment
+        ${_te_ascend_include_dir}/experiment/runtime)
+    set(_te_ascend_lib_dirs ${Ascend_ROOT}/lib64 ${Ascend_ROOT}/lib)
+endif()
+
 if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
     list(APPEND TRANSFER_ENGINE_SRCS src/internal/backend/ascend/p2p_transfer_backend.cpp)
+endif()
+
+if (TRANSFER_ENGINE_ENABLE_HIXL)
+    find_path(TRANSFER_ENGINE_HIXL_INCLUDE_DIR
+        NAMES hixl/hixl.h hixl/hixl_types.h
+        PATHS ${_te_ascend_include_dir}
+    )
+    find_library(TRANSFER_ENGINE_HIXL_LIBRARY
+        NAMES cann_hixl
+        PATHS ${_te_ascend_lib_dirs}
+    )
+    find_library(TRANSFER_ENGINE_METADEF_LIBRARY
+        NAMES metadef
+        PATHS ${_te_ascend_lib_dirs}
+    )
+    find_library(TRANSFER_ENGINE_ASCENDCL_LIBRARY
+        NAMES ascendcl
+        PATHS ${_te_ascend_lib_dirs}
+    )
+    if (NOT TRANSFER_ENGINE_HIXL_INCLUDE_DIR OR NOT TRANSFER_ENGINE_HIXL_LIBRARY OR
+        NOT TRANSFER_ENGINE_METADEF_LIBRARY OR NOT TRANSFER_ENGINE_ASCENDCL_LIBRARY)
+        message(FATAL_ERROR
+            "TRANSFER_ENGINE_ENABLE_HIXL=ON requires an Ascend CANN toolkit with HIXL. "
+            "Check ASCEND_HOME_PATH or ASCEND_CUSTOM_PATH."
+        )
+    endif()
+    set(_te_hixl_libraries
+        ${TRANSFER_ENGINE_HIXL_LIBRARY}
+        ${TRANSFER_ENGINE_METADEF_LIBRARY}
+        ${TRANSFER_ENGINE_ASCENDCL_LIBRARY})
+    list(APPEND TRANSFER_ENGINE_SRCS src/internal/backend/ascend/hixl_d2d_backend.cpp)
 endif()
 
 add_library(transfer_engine_obj OBJECT ${TRANSFER_ENGINE_SRCS})
@@ -216,28 +265,21 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
             VERBATIM
         )
         add_dependencies(transfer_engine_obj copy_p2p_transfer_so)
+
         message(STATUS "Bundled p2p_transfer shared library output: ${CMAKE_CURRENT_BINARY_DIR}/lib")
     endif()
 
     target_include_directories(transfer_engine_obj PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/backend/ascend/p2p_transfer/include
-    )
-
-    if (DEFINED ENV{ASCEND_HOME_PATH})
-        set(_ascend_root $ENV{ASCEND_HOME_PATH})
-    elseif(DEFINED ENV{ASCEND_CUSTOM_PATH})
-        set(_ascend_root $ENV{ASCEND_CUSTOM_PATH}/latest)
-    else()
-        set(_ascend_root /usr/local/Ascend/ascend-toolkit/latest)
-    endif()
-
-    target_include_directories(transfer_engine_obj PRIVATE
-        ${_ascend_root}/include
-        ${_ascend_root}/include/experiment
-        ${_ascend_root}/include/experiment/runtime
+        ${_te_ascend_include_dirs}
     )
 
     target_compile_definitions(transfer_engine_obj PRIVATE TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY=1)
+endif()
+
+if (TRANSFER_ENGINE_ENABLE_HIXL)
+    target_include_directories(transfer_engine_obj PRIVATE ${TRANSFER_ENGINE_HIXL_INCLUDE_DIR})
+    target_compile_definitions(transfer_engine_obj PRIVATE TRANSFER_ENGINE_ENABLE_HIXL=1)
 endif()
 
 add_library(transfer_engine STATIC $<TARGET_OBJECTS:transfer_engine_obj>)
@@ -253,12 +295,9 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
     if (TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
         add_dependencies(transfer_engine p2p_transfer copy_p2p_transfer_so)
     endif()
-    target_include_directories(transfer_engine PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/internal/backend/ascend/p2p_transfer/include
-        ${_ascend_root}/include
-        ${_ascend_root}/include/experiment
-        ${_ascend_root}/include/experiment/runtime
-    )
+endif()
+if (TRANSFER_ENGINE_ENABLE_HIXL)
+    target_link_libraries(transfer_engine PUBLIC ${_te_hixl_libraries})
 endif()
 
 add_executable(transfer_engine_compile_smoke tests/smoke/compile_smoke.cpp)
@@ -458,6 +497,9 @@ if (TRANSFER_ENGINE_BUILD_PYTHON)
     endif()
     if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY AND TRANSFER_ENGINE_BUILD_BUNDLED_P2P_SO)
         add_dependencies(_transfer_engine p2p_transfer copy_p2p_transfer_so)
+    endif()
+    if (TRANSFER_ENGINE_ENABLE_HIXL)
+        target_link_libraries(_transfer_engine PRIVATE ${_te_hixl_libraries})
     endif()
     set_target_properties(_transfer_engine PROPERTIES
         BUILD_RPATH "$ORIGIN;$ORIGIN/lib"

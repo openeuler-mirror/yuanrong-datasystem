@@ -95,6 +95,34 @@ TEST(RegisteredMemoryTableLltTest, RemoveByBaseFindDevice)
     EXPECT_FALSE(table.RemoveByBaseAddr(0x5000));
 }
 
+// 中文说明：验证 HIXL read lease 会阻止 owner 侧提前反注册，释放 lease 后可正常反注册。
+TEST(RegisteredMemoryTableLltTest, ReadLeaseBlocksRemoveUntilRelease)
+{
+    RegisteredMemoryTable table;
+    ASSERT_TRUE(table.AddRegion(RegisteredRegion{ 0x6000, 0x100, 5 }));
+
+    uint64_t leaseId = 0;
+    ASSERT_TRUE(table.AcquireReadLease({ TransferMemoryRegion{ 0x6040, 0x20 } }, 5, 30000, &leaseId).IsOk());
+    EXPECT_NE(leaseId, 0);
+    EXPECT_EQ(table.RemoveByBaseAddrIfNoActiveLease(0x6000), RegisteredMemoryTable::RemoveResult::K_BUSY);
+
+    table.ReleaseReadLease(leaseId);
+    EXPECT_EQ(table.RemoveByBaseAddrIfNoActiveLease(0x6000), RegisteredMemoryTable::RemoveResult::K_REMOVED);
+    EXPECT_EQ(table.RemoveByBaseAddrIfNoActiveLease(0x6000), RegisteredMemoryTable::RemoveResult::K_NOT_FOUND);
+}
+
+// 中文说明：验证 read lease 不允许授权未注册或跨界的远端地址。
+TEST(RegisteredMemoryTableLltTest, ReadLeaseRejectsUnregisteredRange)
+{
+    RegisteredMemoryTable table;
+    ASSERT_TRUE(table.AddRegion(RegisteredRegion{ 0x7000, 0x80, 6 }));
+
+    uint64_t leaseId = 0;
+    Result rc = table.AcquireReadLease({ TransferMemoryRegion{ 0x7070, 0x20 } }, 6, 30000, &leaseId);
+    EXPECT_EQ(rc.GetCode(), ErrorCode::kNotAuthorized);
+    EXPECT_EQ(leaseId, 0);
+}
+
 // 中文说明：验证 MockDataPlaneBackend 在双端建链后，可通过 PostRecv/PostSend/WaitRecv 完成数据拷贝。
 TEST(MockDataPlaneBackendLltTest, SendRecvRoundTrip)
 {

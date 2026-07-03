@@ -22,6 +22,7 @@ function generate_config() {
   echo "set(BUILD_HETERO \"${BUILD_HETERO}\")" >> "${config_file}"
   echo "set(BUILD_HETERO_NPU \"${BUILD_HETERO_NPU}\")" >> "${config_file}"
   echo "set(BUILD_HETERO_GPU \"${BUILD_HETERO_GPU}\")" >> "${config_file}"
+  echo "set(TRANSFER_ENGINE_ENABLE_HIXL \"${TRANSFER_ENGINE_ENABLE_HIXL}\")" >> "${config_file}"
   echo "set(BUILD_PIPLN_H2D \"${BUILD_PIPLN_H2D}\")" >> "${config_file}"
   echo "set(PACKAGE_PYTHON \"${PACKAGE_PYTHON}\")" >> "${config_file}"
 }
@@ -74,6 +75,7 @@ function build_datasystem_cmake() {
     "-DBUILD_PYTHON_API:BOOL=${PACKAGE_PYTHON}"
     "-DBUILD_THREAD_NUM:STRING=${BUILD_THREAD_NUM}"
     "-DTRANSFER_ENGINE_BUILD_THREAD_NUM:STRING=${TRANSFER_ENGINE_BUILD_THREAD_NUM}"
+    "-DTRANSFER_ENGINE_ENABLE_HIXL:BOOL=${TRANSFER_ENGINE_ENABLE_HIXL}"
     "-DENABLE_STRIP:BOOL=${ENABLE_STRIP}"
     "-DBUILD_HETERO:BOOL=${BUILD_HETERO}"
     "-DBUILD_HETERO_NPU:BOOL=${BUILD_HETERO_NPU}"

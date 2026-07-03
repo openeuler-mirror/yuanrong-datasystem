@@ -30,7 +30,7 @@ This document captures a coarse, source-backed map of the repository. It is inte
 | `cli` | operational and deployment CLI scripts | includes `start`, `stop`, `up`, `generate_config`, `generate_helm_chart`, benchmark tools |
 | `tests` | C++/system/perf/common tests | `tests/CMakeLists.txt` adds `ut`, `st`, `perf`, `common` |
 | `example` | multi-language usage samples | includes C++, Go, Java, Python examples |
-| `transfer_engine` | separate but related transfer subsystem | linked from root build when hetero and NPU-related flags are enabled |
+| `transfer_engine` | separate but related transfer subsystem | linked from root build when hetero and NPU-related flags are enabled; supports legacy P2P/mock data planes and CMake `-X on` auto-enabled D2D-over-HIXL backend |
 | `docs` | checked-in docs source and generated docs artifacts | current source docs live under `docs/source_zh_cn` |
 | `.skills` | repository-local official Codex skills | includes reusable Codex workflows for GitCode PR creation and online documentation refresh |
 | `.codex` | project-local Codex hooks and context survival layer | routes Codex hook events to compact `.repo_context/` slices and writes transient `.codex/context/working-state.md` |
