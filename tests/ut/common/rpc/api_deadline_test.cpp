@@ -153,6 +153,32 @@ TEST(ApiDeadlineTest, GuardSurvivesInnerReqTimeoutInitWithoutReset)
     reqTimeoutDuration.Reset();
 }
 
+// Regression for issue #615: Set(buffer)'s UB data-plane write (Buffer::Publish, which
+// runs before the Publish RPC) reads thread-local reqTimeoutDuration. A prior RPC (e.g.
+// Create) could leave it with an expired budget, making the UB write return
+// K_URMA_WAIT_TIMEOUT. Set(buffer) must re-init reqTimeoutDuration from the fresh
+// ApiDeadline at entry. Covers the <=10ms (no-decay) and >10ms (scaled) regimes.
+TEST(ApiDeadlineTest, SetBufferReinitsReqTimeoutDurationBeforePreRpcDataPlane)
+{
+    ApiDeadline::Instance().Reset();
+    reqTimeoutDuration.Reset();
+    reqTimeoutDuration.InitUs(5'000);  // 5ms, as a prior RPC would
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));  // exceed the prior budget
+    EXPECT_LE(reqTimeoutDuration.CalcRemainingTime(), 0);  // stale read the UB write would hit
+    {
+        ApiDeadlineGuard guard(8);  // <=10ms regime: decay bypassed
+        reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+        EXPECT_GT(reqTimeoutDuration.CalcRemainingTime(), 0);
+    }
+    {
+        ApiDeadlineGuard guard(200);  // >10ms regime: decay applies
+        reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+        EXPECT_GT(reqTimeoutDuration.CalcRemainingTime(), 0);
+    }
+    ApiDeadline::Instance().Reset();
+    reqTimeoutDuration.Reset();
+}
+
 TEST(InitTimeoutsFromDispatchTest, InitsBothTimeoutsWhenPositive)
 {
     reqTimeoutDuration.Reset();

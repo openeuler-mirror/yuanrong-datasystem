@@ -3867,6 +3867,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
     AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "The buffer should not be empty.");
     RETURN_IF_NOT_OK(buffer->CheckDeprecated());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);
