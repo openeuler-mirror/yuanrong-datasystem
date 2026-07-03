@@ -6,8 +6,13 @@ int CalcKeysPerRound(int workerMemoryMb, uint64_t dataSize) {
     if (workerMemoryMb <= 0 || dataSize == 0) return 0;
     uint64_t memBytes = static_cast<uint64_t>(workerMemoryMb) * 1024 * 1024;
     uint64_t usable = memBytes * 80 / 100;  // 80% safety margin
-    int keys = static_cast<int>(usable / dataSize);
-    return std::max(keys, 1);
+    uint64_t keys64 = usable / dataSize;
+    // Cap to avoid int overflow for 1B payloads with large worker memory.
+    // 1M keys per round provides enough samples for robust percentile
+    // calculations without making small-payload benchmarks take hours.
+    constexpr uint64_t kMaxKeys = 1000000;
+    if (keys64 > kMaxKeys) keys64 = kMaxKeys;
+    return static_cast<int>(std::max(keys64, static_cast<uint64_t>(1)));
 }
 
 std::string MakeBenchKey(int instanceId, int round, int index) {

@@ -113,7 +113,7 @@ public:
      * @param[in] clusterInfo The necessary cluster information at startup.
      * @return Status of the call
      */
-    Status Init(const ClusterInfo &clusterInfo);
+    Status Init(const ClusterInfo &clusterInfo, bool startKeepAlive = true);
 
     /**
      * @brief Enqueue an external cluster store event for the cluster manager background thread.
@@ -133,6 +133,16 @@ public:
      * @brief Set waitPost value to 1 when worker init all services.
      */
     void SetWorkerReady();
+
+    /**
+     * @brief Start the etcd keepalive that publishes this worker to peers.
+     *
+     * Must be called after brpc server is listening so peer workers can
+     * immediately reach us when they receive the etcd event.  Separated
+     * from Init() because brpc services must be registered before the
+     * server starts, and the server must start before the keepalive fires.
+     */
+    Status StartKeepAlive();
 
     /**
      * @brief Check worker is scale down.

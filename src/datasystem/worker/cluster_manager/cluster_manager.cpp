@@ -288,7 +288,20 @@ Status ClusterManager::GetNodeAddrListFromEtcd(std::vector<HostPort> &nodeAddrs)
     return Status::OK();
 }
 
-Status ClusterManager::Init(const ClusterInfo &clusterInfo)
+Status ClusterManager::StartKeepAlive()
+{
+    bool isRestart = false;
+    RETURN_IF_NOT_OK(IsRestart(isRestart));
+    RETURN_IF_NOT_OK(
+        clusterStore_->InitKeepAlive(CLUSTER_TABLE, workerAddress_.ToString(), isRestart, isEtcdAvailableWhenStart_));
+
+    // Display the final list of nodes that were set up into the log
+    LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
+
+    return Status::OK();
+}
+
+Status ClusterManager::Init(const ClusterInfo &clusterInfo, bool startKeepAlive)
 {
     LOG(INFO) << "Init cluster manager.";
     auto traceId = Trace::Instance().GetTraceID();
@@ -338,13 +351,9 @@ Status ClusterManager::Init(const ClusterInfo &clusterInfo)
         }
     }
 
-    bool isRestart = false;
-    RETURN_IF_NOT_OK(IsRestart(isRestart));
-    RETURN_IF_NOT_OK(
-        clusterStore_->InitKeepAlive(CLUSTER_TABLE, workerAddress_.ToString(), isRestart, isEtcdAvailableWhenStart_));
-
-    // Display the final list of nodes that were set up into the log
-    LOG(INFO) << "Nodes tracked by cluster manager:\n" << this->NodesToString();
+    if (startKeepAlive) {
+        RETURN_IF_NOT_OK(StartKeepAlive());
+    }
 
     return Status::OK();
 }
