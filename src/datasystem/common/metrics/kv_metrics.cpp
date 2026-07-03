@@ -107,6 +107,14 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 78, "worker_process_exist_latency", MetricType::HISTOGRAM, "us" },
     { 79, "client_put_shm_write_total_bytes", MetricType::COUNTER, "bytes" },
     { 80, "client_put_local_write_total_bytes", MetricType::COUNTER, "bytes" },
+    { 81, "brpc_client_req_framework_latency", MetricType::HISTOGRAM, "us" },
+    { 82, "brpc_remote_processing_latency", MetricType::HISTOGRAM, "us" },
+    { 83, "brpc_client_rsp_framework_latency", MetricType::HISTOGRAM, "us" },
+    { 84, "brpc_server_req_queue_latency", MetricType::HISTOGRAM, "us" },
+    { 85, "brpc_server_exec_latency", MetricType::HISTOGRAM, "us" },
+    { 86, "brpc_server_rsp_queue_latency", MetricType::HISTOGRAM, "us" },
+    { 87, "brpc_rpc_e2e_latency", MetricType::HISTOGRAM, "us" },
+    { 88, "brpc_rpc_network_residual_latency", MetricType::HISTOGRAM, "us" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

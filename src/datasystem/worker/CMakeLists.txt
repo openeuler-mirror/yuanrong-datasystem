@@ -37,6 +37,7 @@ set(WORKER_DEPEND_LIBS
         common_iam
         common_metastore_service
         common_perf
+        common_flags
         common_rocksdb
         common_rpc_zmq
         common_slot_client

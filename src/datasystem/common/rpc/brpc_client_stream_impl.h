@@ -42,6 +42,7 @@
 #include <google/protobuf/message.h>
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/trace_attachment.h"
+#include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -71,7 +72,9 @@ public:
           streamCreated_(false),
           rpcDone_(false),
           rpcFailed_(false),
-          finished_(false)
+          finished_(false),
+          traceRecorded_(false),
+          trace_(Trace::Instance().GetTraceID(), method == nullptr ? "unknown" : method->full_name())
     {
     }
 
@@ -83,6 +86,9 @@ public:
         }
         if (cntl_) {
             brpc::Join(cntl_->call_id());
+        }
+        if (ShouldRecordBrpcTraceOnDestroy(trace_)) {
+            RecordTraceOnce();
         }
     }
 
@@ -132,10 +138,14 @@ public:
                 google::protobuf::MessageFactory::generated_factory()
                     ->GetPrototype(respProto)->New());
             AttachTraceIDToAttachment(cntl_->request_attachment());
+            trace_.MarkClientStart();
+            trace_.MarkClientSend();
             channel_->CallMethod(method_, cntl_.get(),
                                  static_cast<const google::protobuf::Message *>(&pb),
                                  response_.get(), nullptr);
             if (cntl_->Failed()) {
+                trace_.MarkClientRecv();
+                RecordTraceOnce();
                 auto errText = cntl_->ErrorText();
                 // Wrap with RETURN_STATUS to retain this adapter's call-site
                 // (file/line) for on-call; the helper's Status carries the
@@ -177,8 +187,10 @@ public:
 
         // Wait for the RPC to complete
         brpc::Join(cntl_->call_id());
+        trace_.MarkClientRecv();
 
         if (cntl_->Failed()) {
+            RecordTraceOnce();
             auto errText = cntl_->ErrorText();
             return TryExtractStatusFromControllerError(errText, cntl_->ErrorCode());
         }
@@ -188,6 +200,7 @@ public:
         if (!rspBuf.empty()) {
             std::string data = rspBuf.to_string();
             if (pb.ParseFromString(data)) {
+                RecordTraceOnce();
                 return Status::OK();
             }
             // Fallback: try parsing from the response Message itself
@@ -197,6 +210,7 @@ public:
         auto *typedRsp = dynamic_cast<R *>(response_.get());
         if (typedRsp != nullptr) {
             pb.CopyFrom(*typedRsp);
+            RecordTraceOnce();
             return Status::OK();
         }
 
@@ -245,6 +259,17 @@ private:
     bool rpcDone_;
     bool rpcFailed_;
     std::atomic<bool> finished_;
+    std::atomic<bool> traceRecorded_;
+    BrpcPerfTrace trace_;
+
+    void RecordTraceOnce()
+    {
+        if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
+            // Stream RPC tracing is one summary sample per stream, not one sample per message.
+            trace_.MarkClientEnd();
+            RecordBrpcRpcTrace(trace_);
+        }
+    }
 };
 
 /**
@@ -269,7 +294,9 @@ public:
           finished_(false),
           readReady_(false),
           streamEnd_(false),
-          readError_(false)
+          readError_(false),
+          traceRecorded_(false),
+          trace_(Trace::Instance().GetTraceID(), method == nullptr ? "unknown" : method->full_name())
     {
     }
 
@@ -279,6 +306,9 @@ public:
             {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
             cntl_,
             "~BrpcClientReaderImpl");
+        if (ShouldRecordBrpcTraceOnDestroy(trace_)) {
+            RecordTraceOnce();
+        }
     }
 
     // --- brpc::StreamInputHandler callbacks ---
@@ -286,6 +316,9 @@ public:
     int on_received_messages(brpc::StreamId id, butil::IOBuf *const messages[], size_t size) override
     {
         (void)id;
+        if (firstResponseTs_.exchange(BrpcTraceNowNs(), std::memory_order_acq_rel) == 0) {
+            trace_.MarkClientRecv(firstResponseTs_.load(std::memory_order_relaxed));
+        }
         std::lock_guard<std::mutex> lock(readMtx_);
         for (size_t i = 0; i < size; ++i) {
             if (messages[i] != nullptr) {
@@ -359,10 +392,14 @@ public:
         // The response is a placeholder — real responses arrive via the stream.
         R dummyResponse;
         AttachTraceIDToAttachment(cntl_->request_attachment());
+        trace_.MarkClientStart();
+        trace_.MarkClientSend();
         channel_->CallMethod(method_, cntl_.get(), &pb, &dummyResponse, nullptr);
         if (cntl_->Failed()) {
+            trace_.MarkClientRecv();
             Status embedded = TryExtractStatusFromResponse(dummyResponse);
             if (embedded.IsError()) {
+                RecordTraceOnce();
                 StreamCloseAndDrain(
                     {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
                     cntl_,
@@ -370,6 +407,7 @@ public:
                 return embedded;
             }
             auto errText = cntl_->ErrorText();
+            RecordTraceOnce();
             StreamCloseAndDrain(
                 {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
                 cntl_,
@@ -421,6 +459,7 @@ public:
 
         // No pending messages and stream ended
         if (streamEnd_) {
+            RecordTraceOnce();
             RETURN_STATUS(StatusCode::K_RPC_STREAM_END, "Stream ended");
         }
 
@@ -440,6 +479,7 @@ public:
             {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
             cntl_,
             "BrpcClientReaderImpl::Finish");
+        RecordTraceOnce();
         return Status::OK();
     }
 
@@ -475,6 +515,18 @@ private:
     bool readError_;
     std::shared_ptr<std::atomic<bool>> closeNotifier_ =
         std::make_shared<std::atomic<bool>>(false);
+    std::atomic<uint64_t> firstResponseTs_ { 0 };
+    std::atomic<bool> traceRecorded_;
+    BrpcPerfTrace trace_;
+
+    void RecordTraceOnce()
+    {
+        if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
+            // Stream RPC tracing is one summary sample per stream, not one sample per message.
+            trace_.MarkClientEnd();
+            RecordBrpcRpcTrace(trace_);
+        }
+    }
 };
 
 }  // namespace datasystem

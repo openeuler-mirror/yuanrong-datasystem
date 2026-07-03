@@ -29,6 +29,7 @@
 #include <brpc/controller.h>
 #include <butil/iobuf.h>
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/log/log.h"
@@ -81,6 +82,8 @@ public:
     {
         bool expected = false;
         if (readOnce_.compare_exchange_strong(expected, true)) {
+            BrpcPerfTrace trace(Trace::Instance().GetTraceID(), method_ == nullptr ? "unknown" : method_->full_name());
+            trace.MarkClientStart();
             brpc::Controller cntl;
             if (timeoutMs_ > 0) {
                 cntl.set_timeout_ms(timeoutMs_);
@@ -90,8 +93,12 @@ public:
                 cntl.request_attachment().append(payloadBuf_);
                 payloadBuf_.clear();
             }
+            trace.MarkClientSend();
             channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
+            trace.MarkClientRecv();
             if (cntl.Failed()) {
+                trace.MarkClientEnd();
+                RecordBrpcRpcTrace(trace);
                 Status embedded = TryExtractStatusFromResponse(response_);
                 const auto &errorText = cntl.ErrorText();
                 VLOG(1)
@@ -114,6 +121,8 @@ public:
             }
             responseAttachment_ = std::move(cntl.response_attachment());
             pb.CopyFrom(response_);
+            trace.MarkClientEnd();
+            RecordBrpcRpcTrace(trace);
         } else {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                 "BrpcClientUnaryWriterReader::Read called more than once");

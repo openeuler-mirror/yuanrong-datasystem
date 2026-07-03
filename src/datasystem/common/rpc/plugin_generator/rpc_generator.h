@@ -399,6 +399,8 @@ private:
                                            int methodIndex, const std::string &indent);
     static std::string BuildDirectCallCaseCode(const google::protobuf::MethodDescriptor &method);
     static std::string BuildSendRecvPayloadImpl();
+    static std::string BuildSendRecvPayloadDecodeSnippet();
+    static std::string BuildSendRecvPayloadEncodeSnippet();
     static std::string BuildCallMethodPrologue();
     static std::string BuildCallMethodEpilogue();
     static std::string BuildScTimeoutDurationInitSnippet();
@@ -462,6 +464,7 @@ private:
 
     static void ImplementBrpcStubNoStreamDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
                                              int methodIndex, const std::string &indent, const std::string &stub);
+    static std::string BuildBrpcStubNoStreamImpl(const google::protobuf::MethodDescriptor &method);
     static std::string BuildTraceIDAttachSnippet();
     static std::string BuildSendPayloadFramingSnippet();
     static std::string BuildRecvPayloadFramingSnippet();

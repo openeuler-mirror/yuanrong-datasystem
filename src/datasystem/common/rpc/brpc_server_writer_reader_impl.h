@@ -40,11 +40,14 @@
 
 #include <sys/time.h>
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include <brpc/controller.h>
 #include <brpc/stream.h>
 #include <butil/iobuf.h>
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/server_writer_reader_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
@@ -72,14 +75,18 @@ public:
      * @param cntl    brpc controller.
      * @param request Pointer to the deserialized request protobuf.
      */
-    BrpcServerWriterReaderImpl(brpc::Controller *cntl, const google::protobuf::Message *request)
+    BrpcServerWriterReaderImpl(brpc::Controller *cntl, const google::protobuf::Message *request,
+                               std::string methodName = "unknown")
         : cntl_(cntl),
           request_(nullptr),
           streamId_(brpc::INVALID_STREAM_ID),
           acceptFailed_(false),
           readOnce_(false),
-          finished_(false)
+          finished_(false),
+          traceRecorded_(false),
+          trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
+        trace_.MarkServerRecv();
         request_ = dynamic_cast<const R *>(request);
 
         // Accept the stream that the client created with StreamCreate.
@@ -123,6 +130,7 @@ public:
             brpc::StreamClose(streamId_);
             streamId_ = brpc::INVALID_STREAM_ID;
         }
+        RecordTraceOnce();
     }
 
     // --- ServerWriterReaderBase interface ---
@@ -138,6 +146,7 @@ public:
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                 "Request protobuf is null (type mismatch?)");
         }
+        trace_.MarkServerExecStart();
         pb.CopyFrom(*request_);
         return Status::OK();
     }
@@ -180,9 +189,11 @@ public:
             return Status::OK();  // Already finished
         }
         if (streamId_ != brpc::INVALID_STREAM_ID) {
+            trace_.MarkServerExecEnd();
             brpc::StreamClose(streamId_);
             streamId_ = brpc::INVALID_STREAM_ID;
         }
+        RecordTraceOnce();
         return Status::OK();
     }
 
@@ -274,6 +285,17 @@ private:
     std::atomic<bool> readOnce_;
     std::atomic<bool> finished_;
     TimeoutDuration scTimeoutDuration_;
+    std::atomic<bool> traceRecorded_;
+    BrpcPerfTrace trace_;
+
+    void RecordTraceOnce()
+    {
+        if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
+            // Stream RPC tracing is one summary sample per stream, not one sample per message.
+            trace_.MarkServerSend();
+            RecordBrpcRpcTrace(trace_);
+        }
+    }
 };
 
 }  // namespace datasystem

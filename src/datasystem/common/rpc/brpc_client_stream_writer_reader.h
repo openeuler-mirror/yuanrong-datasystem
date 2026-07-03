@@ -44,6 +44,7 @@
 #include <brpc/controller.h>
 #include <brpc/stream.h>
 #include <butil/iobuf.h>
+#include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/client_writer_reader_base.h"
@@ -75,7 +76,9 @@ public:
           finished_(false),
           readReady_(false),
           streamEnd_(false),
-          readError_(false)
+          readError_(false),
+          traceRecorded_(false),
+          trace_(Trace::Instance().GetTraceID(), method == nullptr ? "unknown" : method->full_name())
     {
     }
 
@@ -85,6 +88,9 @@ public:
             {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
             stream_cntl_,
             "~BrpcClientStreamWriterReader");
+        if (ShouldRecordBrpcTraceOnDestroy(trace_)) {
+            RecordTraceOnce();
+        }
     }
 
     // --- StreamInputHandler callbacks (called by brpc IO threads) ---
@@ -92,6 +98,9 @@ public:
     int on_received_messages(brpc::StreamId id, butil::IOBuf *const messages[], size_t size) override
     {
         (void)id;
+        if (firstResponseTs_.exchange(BrpcTraceNowNs()) == 0) {
+            trace_.MarkClientRecv(firstResponseTs_.load());
+        }
         std::lock_guard<std::mutex> lock(readMtx_);
         for (size_t i = 0; i < size; ++i) {
             if (messages[i] != nullptr) {
@@ -163,8 +172,12 @@ public:
         AttachTraceIDToAttachment(stream_cntl_->request_attachment());
         // Send the RPC with the request protobuf in the body.
         R dummyResponse;
+        trace_.MarkClientStart();
+        trace_.MarkClientSend();
         channel_->CallMethod(method_, stream_cntl_.get(), &pb, &dummyResponse, nullptr);
         if (stream_cntl_->Failed()) {
+            trace_.MarkClientRecv();
+            RecordTraceOnce();
             // The server refused the stream (or RPC failed). Close the stream
             // immediately to prevent brpc from calling Stream::Consume() on the
             // bthread execution queue, which would SIGSEGV on the unconnected state.
@@ -231,6 +244,7 @@ public:
 
         // No pending messages and stream ended
         if (streamEnd_) {
+            RecordTraceOnce();
             RETURN_STATUS(StatusCode::K_RPC_STREAM_END, "Stream ended");
         }
 
@@ -265,6 +279,7 @@ public:
             {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
             stream_cntl_,
             "BrpcClientStreamWriterReader::Finish");
+        RecordTraceOnce();
         return Status::OK();
     }
 
@@ -286,6 +301,18 @@ private:
     bool readError_;
     std::shared_ptr<std::atomic<bool>> closeNotifier_ =
         std::make_shared<std::atomic<bool>>(false);
+    std::atomic<uint64_t> firstResponseTs_ { 0 };
+    std::atomic<bool> traceRecorded_;
+    BrpcPerfTrace trace_;
+
+    void RecordTraceOnce()
+    {
+        if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
+            // Stream RPC tracing is one summary sample per stream, not one sample per message.
+            trace_.MarkClientEnd();
+            RecordBrpcRpcTrace(trace_);
+        }
+    }
 };
 
 }  // namespace datasystem

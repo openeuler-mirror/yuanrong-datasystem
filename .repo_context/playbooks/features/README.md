@@ -20,6 +20,7 @@ Current docs:
 
 - `infra-engineering-workflow.md`
 - `performance-change.md`
+- `brpc-communication-architecture.md`
 - `concurrency-and-memory-safety.md`
 - `recovery-and-persistence.md`
 - `runtime/README.md`
