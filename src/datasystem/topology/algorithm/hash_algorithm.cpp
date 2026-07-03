@@ -43,7 +43,7 @@ constexpr uint32_t MAX_TOKEN_PROBE_NUM = 1024;
 
 struct TokenOwner {
     uint32_t token{ 0 };
-    WorkerId workerId;
+    TopologyNodeId nodeId;
 };
 
 class HashRoutingState final : public AlgorithmRoutingState {
@@ -51,13 +51,14 @@ public:
     std::vector<TokenOwner> owners;
 };
 
-bool IsKnownState(WorkerTopologyState state)
+bool IsKnownState(TopologyNodeState state)
 {
     switch (state) {
-        case WorkerTopologyState::INITIAL:
-        case WorkerTopologyState::JOINING:
-        case WorkerTopologyState::ACTIVE:
-        case WorkerTopologyState::LEAVING:
+        case TopologyNodeState::INITIAL:
+        case TopologyNodeState::JOINING:
+        case TopologyNodeState::ACTIVE:
+        case TopologyNodeState::LEAVING:
+        case TopologyNodeState::PRE_LEAVING:
             return true;
         default:
             return false;
@@ -83,30 +84,30 @@ void AddDiagnostic(ValidateResult &result, std::string message)
     result.diagnostics.emplace_back(std::move(message));
 }
 
-Status NormalizeTargetWorkers(const std::vector<WorkerId> &targetWorkerIds, std::vector<WorkerId> &workers)
+Status NormalizeTargetWorkers(const std::vector<TopologyNodeId> &targetNodeIds, std::vector<TopologyNodeId> &members)
 {
-    workers = targetWorkerIds;
-    CHECK_FAIL_RETURN_STATUS(!workers.empty(), K_INVALID, "target worker set is empty");
-    std::sort(workers.begin(), workers.end());
-    for (size_t i = 0; i < workers.size(); ++i) {
-        CHECK_FAIL_RETURN_STATUS(!workers[i].empty(), K_INVALID, "target worker id is empty");
+    members = targetNodeIds;
+    CHECK_FAIL_RETURN_STATUS(!members.empty(), K_INVALID, "target worker set is empty");
+    std::sort(members.begin(), members.end());
+    for (size_t i = 0; i < members.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(!members[i].empty(), K_INVALID, "target worker id is empty");
         if (i > 0) {
-            CHECK_FAIL_RETURN_STATUS(workers[i - 1] != workers[i], K_INVALID, "target worker id is duplicated");
+            CHECK_FAIL_RETURN_STATUS(members[i - 1] != members[i], K_INVALID, "target worker id is duplicated");
         }
     }
     return Status::OK();
 }
 
-uint32_t BuildToken(const WorkerId &workerId, uint32_t tokenIndex, uint32_t probe)
+uint32_t BuildToken(const TopologyNodeId &nodeId, uint32_t tokenIndex, uint32_t probe)
 {
-    auto seed = workerId + TOKEN_SEED_SEPARATOR + std::to_string(tokenIndex);
+    auto seed = nodeId + TOKEN_SEED_SEPARATOR + std::to_string(tokenIndex);
     if (probe != 0) {
         seed += TOKEN_SEED_SEPARATOR + std::to_string(probe);
     }
     return MurmurHash3_32(seed);
 }
 
-Status GenerateTokens(const WorkerId &workerId, uint32_t tokenNum, std::unordered_set<uint32_t> &occupied,
+Status GenerateTokens(const TopologyNodeId &nodeId, uint32_t tokenNum, std::unordered_set<uint32_t> &occupied,
                       std::vector<uint32_t> &tokens)
 {
     tokens.clear();
@@ -114,7 +115,7 @@ Status GenerateTokens(const WorkerId &workerId, uint32_t tokenNum, std::unordere
     for (uint32_t tokenIndex = 0; tokenIndex < tokenNum; ++tokenIndex) {
         bool allocated = false;
         for (uint32_t probe = 0; probe < MAX_TOKEN_PROBE_NUM; ++probe) {
-            auto token = BuildToken(workerId, tokenIndex, probe);
+            auto token = BuildToken(nodeId, tokenIndex, probe);
             if (occupied.insert(token).second) {
                 tokens.emplace_back(token);
                 allocated = true;
@@ -129,12 +130,12 @@ Status GenerateTokens(const WorkerId &workerId, uint32_t tokenNum, std::unordere
 Status BuildOwnerVector(const TopologyDescriptor &topology, std::vector<TokenOwner> &owners)
 {
     owners.clear();
-    for (const auto &worker : topology.workers) {
-        if (worker.state != WorkerTopologyState::ACTIVE) {
+    for (const auto &worker : topology.members) {
+        if (worker.state != TopologyNodeState::ACTIVE) {
             continue;
         }
         for (auto token : worker.tokens) {
-            owners.push_back({ token, worker.workerId });
+            owners.push_back({ token, worker.nodeId });
         }
     }
     CHECK_FAIL_RETURN_STATUS(!owners.empty(), K_NOT_READY, "no active hash owner");
@@ -146,7 +147,23 @@ Status BuildOwnerVector(const TopologyDescriptor &topology, std::vector<TokenOwn
     return Status::OK();
 }
 
-Status FindOwner(const std::vector<TokenOwner> &owners, uint32_t token, WorkerId &workerId)
+uint32_t NextHashPosition(uint32_t token)
+{
+    return token == std::numeric_limits<uint32_t>::max() ? 0 : token + 1;
+}
+
+void BuildOwnerRanges(const std::vector<TokenOwner> &owners, std::vector<AlgorithmOwnerRange> &ranges)
+{
+    ranges.clear();
+    ranges.reserve(owners.size());
+    auto previous = owners.back();
+    for (const auto &current : owners) {
+        ranges.emplace_back(AlgorithmOwnerRange{ NextHashPosition(previous.token), current.token, current.nodeId });
+        previous = current;
+    }
+}
+
+Status FindOwner(const std::vector<TokenOwner> &owners, uint32_t token, TopologyNodeId &nodeId)
 {
     CHECK_FAIL_RETURN_STATUS(!owners.empty(), K_NOT_READY, "hash owner list is empty");
     auto iter = std::lower_bound(owners.begin(), owners.end(), token,
@@ -154,7 +171,7 @@ Status FindOwner(const std::vector<TokenOwner> &owners, uint32_t token, WorkerId
     if (iter == owners.end()) {
         iter = owners.begin();
     }
-    workerId = iter->workerId;
+    nodeId = iter->nodeId;
     return Status::OK();
 }
 
@@ -199,14 +216,14 @@ Status HashAlgorithm::BuildRoutingState(const TopologyDescriptor &snapshot,
     auto state = std::make_unique<HashRoutingState>();
     state->algorithmId = algorithmId_;
     state->topologyVersion = snapshot.version;
-    std::unordered_set<WorkerId> workerIds;
-    workerIds.reserve(snapshot.workers.size());
+    std::unordered_set<TopologyNodeId> nodeIds;
+    nodeIds.reserve(snapshot.members.size());
     std::unordered_set<uint32_t> activeTokens;
-    for (const auto &worker : snapshot.workers) {
-        CHECK_FAIL_RETURN_STATUS(!worker.workerId.empty(), K_INVALID, "worker id is empty");
-        CHECK_FAIL_RETURN_STATUS(workerIds.insert(worker.workerId).second, K_INVALID, "worker id is duplicated");
+    for (const auto &worker : snapshot.members) {
+        CHECK_FAIL_RETURN_STATUS(!worker.nodeId.empty(), K_INVALID, "worker id is empty");
+        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(worker.nodeId).second, K_INVALID, "worker id is duplicated");
         CHECK_FAIL_RETURN_STATUS(IsKnownState(worker.state), K_INVALID, "worker topology state is invalid");
-        if (worker.state != WorkerTopologyState::ACTIVE) {
+        if (worker.state != TopologyNodeState::ACTIVE) {
             continue;
         }
         CHECK_FAIL_RETURN_STATUS(!worker.tokens.empty(), K_INVALID, "active worker token list is empty");
@@ -215,6 +232,7 @@ Status HashAlgorithm::BuildRoutingState(const TopologyDescriptor &snapshot,
         }
     }
     RETURN_IF_NOT_OK(BuildOwnerVector(snapshot, state->owners));
+    BuildOwnerRanges(state->owners, state->ownerRanges);
     routing = std::move(state);
     return Status::OK();
 }
@@ -223,11 +241,11 @@ Status HashAlgorithm::BuildPlacementUnit(const RouteContext &context, const Plac
                                          PlacementUnit &unit) const
 {
     unit = {};
-    CHECK_FAIL_RETURN_STATUS(!context.objectKey.empty(), K_INVALID, "object key is empty");
+    CHECK_FAIL_RETURN_STATUS(!context.key.empty(), K_INVALID, "business key is empty");
     CHECK_FAIL_RETURN_STATUS(policy.algorithmId == algorithmId_, K_INVALID, "placement policy algorithm mismatch");
     unit.algorithmId = algorithmId_;
     unit.unitType = HASH_UNIT_TYPE;
-    unit.opaqueUnit = std::to_string(MurmurHash3_32(context.objectKey));
+    unit.opaqueUnit = std::to_string(MurmurHash3_32(context.key));
     return Status::OK();
 }
 
@@ -242,7 +260,7 @@ Status HashAlgorithm::Route(const AlgorithmRoutingState &routing, const Placemen
 
     uint32_t token = 0;
     RETURN_IF_NOT_OK(ParseUint32(unit.opaqueUnit, token));
-    RETURN_IF_NOT_OK(FindOwner(hashState->owners, token, owner.workerId));
+    RETURN_IF_NOT_OK(FindOwner(hashState->owners, token, owner.nodeId));
     owner.topologyVersion = routing.topologyVersion;
     return Status::OK();
 }
@@ -260,25 +278,25 @@ Status HashAlgorithm::ValidatePlacement(const TopologyDescriptor &topology, Vali
     if (!topology.clusterHasInit) {
         AddDiagnostic(result, "topology is not initialized");
     }
-    if (topology.workers.empty()) {
+    if (topology.members.empty()) {
         AddDiagnostic(result, "topology worker list is empty");
     }
 
     bool hasActiveWorker = false;
-    std::unordered_set<WorkerId> workerIds;
+    std::unordered_set<TopologyNodeId> nodeIds;
     std::unordered_set<uint32_t> tokens;
-    for (const auto &worker : topology.workers) {
-        if (worker.workerId.empty()) {
+    for (const auto &worker : topology.members) {
+        if (worker.nodeId.empty()) {
             AddDiagnostic(result, "worker id is empty");
             continue;
         }
-        if (!workerIds.insert(worker.workerId).second) {
+        if (!nodeIds.insert(worker.nodeId).second) {
             AddDiagnostic(result, "worker id is duplicated");
         }
         if (!IsKnownState(worker.state)) {
             AddDiagnostic(result, "worker topology state is invalid");
         }
-        if (worker.state == WorkerTopologyState::ACTIVE) {
+        if (worker.state == TopologyNodeState::ACTIVE) {
             hasActiveWorker = true;
             if (worker.tokens.empty()) {
                 AddDiagnostic(result, "active worker token list is empty");
@@ -290,7 +308,7 @@ Status HashAlgorithm::ValidatePlacement(const TopologyDescriptor &topology, Vali
             }
         }
     }
-    if (!topology.workers.empty() && !hasActiveWorker) {
+    if (!topology.members.empty() && !hasActiveWorker) {
         AddDiagnostic(result, "topology has no active worker");
     }
     return Status::OK();
@@ -303,21 +321,21 @@ Status HashAlgorithm::InitPlacement(const PlanInput &input, PlanResult &result) 
     CHECK_FAIL_RETURN_STATUS(virtualTokenNum_ > 0, K_INVALID, "virtual token num is zero");
     CHECK_FAIL_RETURN_STATUS(input.current.version >= 0, K_INVALID, "current topology version is invalid");
 
-    std::vector<WorkerId> targetWorkers;
-    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetWorkerIds, targetWorkers));
+    std::vector<TopologyNodeId> targetWorkers;
+    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetNodeIds, targetWorkers));
 
     result.algorithmId = algorithmId_;
     result.next.version = input.current.version + 1;
     result.next.clusterHasInit = true;
-    result.next.workers.reserve(targetWorkers.size());
+    result.next.members.reserve(targetWorkers.size());
     std::unordered_set<uint32_t> occupied;
     occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetWorkers.size());
-    for (const auto &workerId : targetWorkers) {
-        TopologyWorker worker;
-        worker.workerId = workerId;
-        worker.state = WorkerTopologyState::ACTIVE;
-        RETURN_IF_NOT_OK(GenerateTokens(workerId, virtualTokenNum_, occupied, worker.tokens));
-        result.next.workers.emplace_back(std::move(worker));
+    for (const auto &nodeId : targetWorkers) {
+        TopologyNode worker;
+        worker.nodeId = nodeId;
+        worker.state = TopologyNodeState::ACTIVE;
+        RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, worker.tokens));
+        result.next.members.emplace_back(std::move(worker));
     }
     return Status::OK();
 }
@@ -325,7 +343,7 @@ Status HashAlgorithm::InitPlacement(const PlanInput &input, PlanResult &result) 
 Status HashAlgorithm::PlanPlacement(const PlanInput &input, PlanResult &result) const
 {
     result = {};
-    if (input.current.workers.empty() || !input.current.clusterHasInit) {
+    if (input.current.members.empty() || !input.current.clusterHasInit) {
         return InitPlacement(input, result);
     }
 
@@ -334,35 +352,35 @@ Status HashAlgorithm::PlanPlacement(const PlanInput &input, PlanResult &result) 
     CHECK_FAIL_RETURN_STATUS(validation.valid, K_INVALID, "current topology is invalid");
     CHECK_FAIL_RETURN_STATUS(virtualTokenNum_ > 0, K_INVALID, "virtual token num is zero");
 
-    std::vector<WorkerId> targetWorkers;
-    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetWorkerIds, targetWorkers));
-    std::unordered_map<WorkerId, const TopologyWorker *> currentWorkers;
-    currentWorkers.reserve(input.current.workers.size());
-    for (const auto &worker : input.current.workers) {
-        currentWorkers.emplace(worker.workerId, &worker);
+    std::vector<TopologyNodeId> targetWorkers;
+    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetNodeIds, targetWorkers));
+    std::unordered_map<TopologyNodeId, const TopologyNode *> currentWorkers;
+    currentWorkers.reserve(input.current.members.size());
+    for (const auto &worker : input.current.members) {
+        currentWorkers.emplace(worker.nodeId, &worker);
     }
 
     result.algorithmId = algorithmId_;
     result.next.version = input.current.version + 1;
     result.next.clusterHasInit = true;
-    result.next.workers.reserve(targetWorkers.size());
+    result.next.members.reserve(targetWorkers.size());
     std::unordered_set<uint32_t> occupied;
     occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetWorkers.size());
-    for (const auto &workerId : targetWorkers) {
-        TopologyWorker worker;
-        worker.workerId = workerId;
-        worker.state = WorkerTopologyState::ACTIVE;
-        auto iter = currentWorkers.find(workerId);
-        if (iter != currentWorkers.end() && iter->second->state == WorkerTopologyState::ACTIVE
+    for (const auto &nodeId : targetWorkers) {
+        TopologyNode worker;
+        worker.nodeId = nodeId;
+        worker.state = TopologyNodeState::ACTIVE;
+        auto iter = currentWorkers.find(nodeId);
+        if (iter != currentWorkers.end() && iter->second->state == TopologyNodeState::ACTIVE
             && !iter->second->tokens.empty()) {
             worker.tokens = iter->second->tokens;
             for (auto token : worker.tokens) {
                 CHECK_FAIL_RETURN_STATUS(occupied.insert(token).second, K_INVALID, "hash token is duplicated");
             }
         } else {
-            RETURN_IF_NOT_OK(GenerateTokens(workerId, virtualTokenNum_, occupied, worker.tokens));
+            RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, worker.tokens));
         }
-        result.next.workers.emplace_back(std::move(worker));
+        result.next.members.emplace_back(std::move(worker));
     }
     RETURN_IF_NOT_OK(DiffPlacement(input.current, result.next, result.ownerChanges));
     return Status::OK();
@@ -394,15 +412,15 @@ Status HashAlgorithm::DiffPlacement(const TopologyDescriptor &from, const Topolo
     std::sort(boundaries.begin(), boundaries.end());
     boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
 
-    std::map<std::pair<WorkerId, WorkerId>, std::vector<PlacementRange>> grouped;
+    std::map<std::pair<TopologyNodeId, TopologyNodeId>, std::vector<PlacementRange>> grouped;
     for (size_t i = 0; i < boundaries.size(); ++i) {
         auto begin = boundaries[i];
         auto end = std::numeric_limits<uint32_t>::max();
         if (i + 1 < boundaries.size()) {
             end = boundaries[i + 1] - 1;
         }
-        WorkerId fromWorker;
-        WorkerId toWorker;
+        TopologyNodeId fromWorker;
+        TopologyNodeId toWorker;
         RETURN_IF_NOT_OK(FindOwner(fromOwners, begin, fromWorker));
         RETURN_IF_NOT_OK(FindOwner(toOwners, begin, toWorker));
         if (fromWorker == toWorker) {
@@ -414,8 +432,8 @@ Status HashAlgorithm::DiffPlacement(const TopologyDescriptor &from, const Topolo
     changes.reserve(grouped.size());
     for (auto &entry : grouped) {
         OwnerChange change;
-        change.fromWorkerId = entry.first.first;
-        change.toWorkerId = entry.first.second;
+        change.fromNodeId = entry.first.first;
+        change.toNodeId = entry.first.second;
         change.ranges = std::move(entry.second);
         changes.emplace_back(std::move(change));
     }

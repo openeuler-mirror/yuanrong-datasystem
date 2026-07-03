@@ -1079,7 +1079,7 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         if (clusterManager_->CheckLocalNodeIsExiting()) {
             INJECT_POINT("recover.toexiting.delay");
             CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-            RETURN_IF_NOT_OK(coordinationBackend_->UpdateNodeState(topology::WorkerServiceState::EXITING));
+            RETURN_IF_NOT_OK(coordinationBackend_->UpdateNodeState(topology::MemberLifecycleState::EXITING));
         } else {
             RETURN_IF_NOT_OK(clusterManager_->InformEtcdReconciliationDone());
         }
@@ -1981,7 +1981,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
 Status WorkerOCServiceImpl::UpdateLocalNodeReady()
 {
     CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-    return coordinationBackend_->UpdateNodeState(topology::WorkerServiceState::READY);
+    return coordinationBackend_->UpdateNodeState(topology::MemberLifecycleState::READY);
 }
 
 Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason,

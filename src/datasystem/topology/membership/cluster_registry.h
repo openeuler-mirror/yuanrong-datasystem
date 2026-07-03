@@ -24,6 +24,7 @@
 
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/membership/membership_types.h"
+#include "datasystem/topology/membership/membership_value_codec.h"
 
 namespace datasystem {
 namespace topology {
@@ -34,20 +35,20 @@ public:
     ~ClusterRegistryKeyHelper() = delete;
 
     /**
-     * @brief Build the cluster-table key used by ICoordinationBackend for one worker.
-     * @param[in] workerId Canonical worker address.
+     * @brief Build the cluster-table key used by ICoordinationBackend for one member.
+     * @param[in] nodeId Canonical member address.
      * @param[out] key Built store key relative to ETCD_CLUSTER_TABLE.
-     * @return K_OK on success; K_INVALID when workerId is malformed.
+     * @return K_OK on success; K_INVALID when nodeId is malformed.
      */
-    static Status BuildWorkerKey(const WorkerId &workerId, std::string &key);
+    static Status BuildMemberKey(const TopologyNodeId &nodeId, std::string &key);
 
     /**
      * @brief Parse a cluster-table event/list key.
      * @param[in] key Store key. Both relative keys and full ETCD event keys are accepted.
-     * @param[out] workerId Canonical worker address in the key.
-     * @return K_OK on success; K_INVALID when key is not a valid cluster worker key.
+     * @param[out] nodeId Canonical member address in the key.
+     * @return K_OK on success; K_INVALID when key is not a valid cluster member key.
      */
-    static Status ParseWorkerKey(const std::string &key, WorkerId &workerId);
+    static Status ParseMemberKey(const std::string &key, TopologyNodeId &nodeId);
 };
 
 class IClusterRegistry {
@@ -55,20 +56,20 @@ public:
     virtual ~IClusterRegistry() = default;
 
     /**
-     * @brief List current worker records from the existing cluster table.
+     * @brief List current member records from the existing cluster table.
      * @param[out] snapshot Snapshot decoded from cluster-table records.
      * @return K_OK on success. Malformed records are logged and excluded from the snapshot.
      */
-    virtual Status ListWorkers(MembershipSnapshot &snapshot) = 0;
+    virtual Status ListMembers(MembershipSnapshot &snapshot) = 0;
 
     /**
      * @brief Decode one coordination-backend event into a typed membership event.
      * @param[in] event Raw coordination-backend event.
-     * @param[out] typed Typed worker event.
+     * @param[out] typed Typed membership event.
      * @return K_OK when event belongs to the cluster table; K_NOT_FOUND for unrelated events; K_INVALID for malformed
      * cluster-table payload.
      */
-    virtual Status HandleWorkerEvent(const CoordinationEvent &event, WorkerWatchEvent &typed) = 0;
+    virtual Status HandleMembershipEvent(const CoordinationEvent &event, MembershipWatchEvent &typed) = 0;
 };
 
 class ClusterRegistry final : public IClusterRegistry {
@@ -80,8 +81,8 @@ public:
     ClusterRegistry(ClusterRegistry &&) = delete;
     ClusterRegistry &operator=(ClusterRegistry &&) = delete;
 
-    Status ListWorkers(MembershipSnapshot &snapshot) override;
-    Status HandleWorkerEvent(const CoordinationEvent &event, WorkerWatchEvent &typed) override;
+    Status ListMembers(MembershipSnapshot &snapshot) override;
+    Status HandleMembershipEvent(const CoordinationEvent &event, MembershipWatchEvent &typed) override;
 
 private:
     ICoordinationBackend &store_;

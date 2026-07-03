@@ -37,7 +37,7 @@
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/coordinator.pb.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/topology/membership/membership_value_codec.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -61,6 +61,8 @@ struct WatchKey {
     int64_t startRevision = 0;
 };
 
+using CoordinationStoreResult = RangeSearchResult;
+
 class ICoordinationBackend {
 public:
     using EventHandler = std::function<void(CoordinationEvent &&event)>;
@@ -83,7 +85,7 @@ public:
     virtual Status WatchEvents(const std::vector<WatchKey> &watchKeys) = 0;
     virtual Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                  bool isStoreAvailableWhenStart) = 0;
-    virtual Status UpdateNodeState(WorkerServiceState state) = 0;
+    virtual Status UpdateNodeState(MemberLifecycleState state) = 0;
     virtual Status GetStorePrefix(const std::string &tableName, std::string &prefix) = 0;
     virtual Status InformReconciliationDone(const HostPort &workerAddr) = 0;
     virtual bool IsKeepAliveTimeout() = 0;
@@ -112,7 +114,7 @@ public:
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override;
-    Status UpdateNodeState(WorkerServiceState state) override;
+    Status UpdateNodeState(MemberLifecycleState state) override;
     Status GetStorePrefix(const std::string &tableName, std::string &prefix) override;
     Status InformReconciliationDone(const HostPort &workerAddr) override;
     bool IsKeepAliveTimeout() override;
@@ -144,7 +146,7 @@ private:
     std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
-    WorkerServiceInfo keepAliveValue_;
+    MembershipValue keepAliveValue_;
     std::mutex keepAliveMutex_;
     std::condition_variable keepAliveCv_;
     std::thread keepAliveThread_;

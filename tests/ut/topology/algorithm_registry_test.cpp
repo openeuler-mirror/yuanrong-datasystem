@@ -64,11 +64,11 @@ public:
     Status BuildPlacementUnit(const RouteContext &context, const PlacementPolicyRule &policy,
                               PlacementUnit &unit) const override
     {
-        CHECK_FAIL_RETURN_STATUS(!context.objectKey.empty(), K_INVALID, "object key is empty");
+        CHECK_FAIL_RETURN_STATUS(!context.key.empty(), K_INVALID, "business key is empty");
         CHECK_FAIL_RETURN_STATUS(policy.algorithmId == id_, K_INVALID, "policy algorithm mismatch");
         unit.algorithmId = id_;
         unit.unitType = "fake-key";
-        unit.opaqueUnit = context.objectKey;
+        unit.opaqueUnit = context.key;
         return Status::OK();
     }
 
@@ -76,7 +76,7 @@ public:
     {
         CHECK_FAIL_RETURN_STATUS(routing.algorithmId == id_, K_INVALID, "routing algorithm mismatch");
         CHECK_FAIL_RETURN_STATUS(unit.algorithmId == id_, K_INVALID, "unit algorithm mismatch");
-        owner.workerId = PLUGIN_OWNER;
+        owner.nodeId = PLUGIN_OWNER;
         owner.topologyVersion = routing.topologyVersion;
         return Status::OK();
     }
@@ -211,7 +211,7 @@ TEST(AlgorithmRegistryTest, RoutingAlgorithmPluginNoFacadeChange)
 
     PlacementPolicyEngine policyEngine;
     RouteContext context;
-    context.objectKey = "prefix-object";
+    context.key = "prefix-object";
     std::vector<PlacementPolicyRule> rules = {
         { "fallback", PlacementPolicyMatchType::CATCH_ALL, "", 0, FAKE_ALGORITHM_ID, "" },
         { "plugin", PlacementPolicyMatchType::PREFIX, "prefix-", 10, PLUGIN_ALGORITHM_ID, "" },
@@ -226,7 +226,7 @@ TEST(AlgorithmRegistryTest, RoutingAlgorithmPluginNoFacadeChange)
 
     TopologyDescriptor topology;
     topology.version = 7;
-    topology.workers = { { PLUGIN_OWNER, WorkerTopologyState::ACTIVE, { 1 } } };
+    topology.members = { { PLUGIN_OWNER, TopologyNodeState::ACTIVE, { 1 } } };
     std::unique_ptr<AlgorithmRoutingState> state;
     DS_ASSERT_OK(algorithm->BuildRoutingState(topology, state));
 
@@ -235,7 +235,7 @@ TEST(AlgorithmRegistryTest, RoutingAlgorithmPluginNoFacadeChange)
 
     LogicalOwner owner;
     DS_ASSERT_OK(algorithm->Route(*state, unit, owner));
-    EXPECT_EQ(owner.workerId, PLUGIN_OWNER);
+    EXPECT_EQ(owner.nodeId, PLUGIN_OWNER);
     EXPECT_EQ(owner.topologyVersion, topology.version);
 }
 

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/topology/model/topology_types.h"
 #include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
@@ -35,21 +36,21 @@ namespace topology {
 
 struct RoutingOwnerEntry {
     RoutingRange unit;
-    std::string ownerWorkerId;
+    std::string ownerNodeId;
 };
 
 struct RoutingRedirectHint {
     RoutingRange unit;
-    std::string targetWorkerId;
+    std::string targetNodeId;
     HostPort targetAddress;
 };
 
 struct RoutingSnapshotFacts {
     std::vector<RoutingRedirectHint> redirectHints;
     std::vector<RoutingRange> localOwnedRanges;
-    std::vector<std::string> workerOrder;
-    std::unordered_set<std::string> validWorkerIds;
-    std::unordered_set<std::string> activeWorkerIds;
+    std::vector<std::string> nodeOrder;
+    std::unordered_set<std::string> validTopologyNodeIds;
+    std::unordered_set<std::string> activeTopologyNodeIds;
 };
 
 class RoutingSnapshot {
@@ -74,9 +75,23 @@ public:
           sortedOwners_(std::move(owners)),
           redirectHints_(std::move(facts.redirectHints)),
           localOwnedRanges_(std::move(facts.localOwnedRanges)),
-          workerOrder_(std::move(facts.workerOrder)),
-          validWorkerIds_(std::move(facts.validWorkerIds)),
-          activeWorkerIds_(std::move(facts.activeWorkerIds))
+          nodeOrder_(std::move(facts.nodeOrder)),
+          validTopologyNodeIds_(std::move(facts.validTopologyNodeIds)),
+          activeTopologyNodeIds_(std::move(facts.activeTopologyNodeIds))
+    {
+        Sort();
+    }
+
+    RoutingSnapshot(int64_t version, std::unique_ptr<AlgorithmRoutingState> routingState,
+                    std::vector<RoutingOwnerEntry> owners, RoutingSnapshotFacts facts)
+        : version_(version),
+          routingState_(std::move(routingState)),
+          sortedOwners_(std::move(owners)),
+          redirectHints_(std::move(facts.redirectHints)),
+          localOwnedRanges_(std::move(facts.localOwnedRanges)),
+          nodeOrder_(std::move(facts.nodeOrder)),
+          validTopologyNodeIds_(std::move(facts.validTopologyNodeIds)),
+          activeTopologyNodeIds_(std::move(facts.activeTopologyNodeIds))
     {
         Sort();
     }
@@ -96,7 +111,16 @@ public:
      */
     bool Empty() const
     {
-        return sortedOwners_.empty();
+        return routingState_ == nullptr && sortedOwners_.empty();
+    }
+
+    /**
+     * @brief Return algorithm-owned immutable routing state for DTO-neutral owner lookup.
+     * @return Algorithm routing state, or nullptr for an empty committed topology snapshot.
+     */
+    const AlgorithmRoutingState *RoutingState() const
+    {
+        return routingState_.get();
     }
 
     /**
@@ -152,7 +176,7 @@ public:
     }
 
     /**
-     * @brief Return local worker owned hash ranges.
+     * @brief Return hash ranges owned by the local member.
      * @return Local owned hash ranges.
      */
     const std::vector<RoutingRange> &LocalOwnedRanges() const
@@ -161,52 +185,67 @@ public:
     }
 
     /**
-     * @brief Return valid worker ids in the current topology.
-     * @return Valid worker ids.
+     * @brief Return valid node ids in the current topology.
+     * @return Valid node ids.
      */
+    const std::unordered_set<std::string> &ValidTopologyNodeIds() const
+    {
+        return validTopologyNodeIds_;
+    }
+
+    /**
+     * @brief Return active node ids in the current topology.
+     * @return Active node ids.
+     */
+    const std::unordered_set<std::string> &ActiveTopologyNodeIds() const
+    {
+        return activeTopologyNodeIds_;
+    }
+
     const std::unordered_set<std::string> &ValidWorkerIds() const
     {
-        return validWorkerIds_;
+        return ValidTopologyNodeIds();
     }
 
-    /**
-     * @brief Return active worker ids in the current topology.
-     * @return Active worker ids.
-     */
     const std::unordered_set<std::string> &ActiveWorkerIds() const
     {
-        return activeWorkerIds_;
+        return ActiveTopologyNodeIds();
     }
 
     /**
-     * @brief Return worker ids in standby lookup order.
-     * @return Ordered worker ids.
+     * @brief Return node ids in failover lookup order.
+     * @return Ordered node ids.
      */
-    const std::vector<std::string> &WorkerOrder() const
+    const std::vector<std::string> &NodeOrder() const
     {
-        return workerOrder_;
+        return nodeOrder_;
     }
 
     /**
-     * @brief Return the next worker id after the input worker id in topology order.
-     * @param[in] workerId Current worker id.
-     * @param[out] nextWorkerId Next worker id.
-     * @return K_OK if found, K_RUNTIME_ERROR if no standby worker exists.
+     * @brief Return the next node id after the input node id in topology order.
+     * @param[in] nodeId Current node id.
+     * @param[out] nextTopologyNodeId Next node id.
+     * @return K_OK if found, K_RUNTIME_ERROR if no standby node exists.
      */
-    Status GetStandbyWorkerId(const std::string &workerId, std::string &nextWorkerId) const
+    Status GetStandbyTopologyNodeId(const std::string &nodeId, std::string &nextTopologyNodeId) const
     {
-        CHECK_FAIL_RETURN_STATUS(workerOrder_.size() > 1, K_RUNTIME_ERROR, "Standby worker not found.");
-        auto iter = std::find(workerOrder_.begin(), workerOrder_.end(), workerId);
-        CHECK_FAIL_RETURN_STATUS(iter != workerOrder_.end(), K_NOT_FOUND, "Worker is not found in topology order.");
-        for (size_t i = 1; i < workerOrder_.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(nodeOrder_.size() > 1, K_RUNTIME_ERROR, "Standby node not found.");
+        auto iter = std::find(nodeOrder_.begin(), nodeOrder_.end(), nodeId);
+        CHECK_FAIL_RETURN_STATUS(iter != nodeOrder_.end(), K_NOT_FOUND, "Node is not found in topology order.");
+        for (size_t i = 1; i < nodeOrder_.size(); ++i) {
             const auto &candidate =
-                workerOrder_[(static_cast<size_t>(iter - workerOrder_.begin()) + i) % workerOrder_.size()];
-            if (candidate != workerId) {
-                nextWorkerId = candidate;
+                nodeOrder_[(static_cast<size_t>(iter - nodeOrder_.begin()) + i) % nodeOrder_.size()];
+            if (candidate != nodeId) {
+                nextTopologyNodeId = candidate;
                 return Status::OK();
             }
         }
-        RETURN_STATUS(K_RUNTIME_ERROR, "Standby worker not found.");
+        RETURN_STATUS(K_RUNTIME_ERROR, "Standby node not found.");
+    }
+
+    Status GetStandbyWorkerId(const std::string &workerId, std::string &nextWorkerId) const
+    {
+        return GetStandbyTopologyNodeId(workerId, nextWorkerId);
     }
 
 private:
@@ -248,12 +287,13 @@ private:
     }
 
     int64_t version_ = -1;
+    std::unique_ptr<const AlgorithmRoutingState> routingState_;
     std::vector<RoutingOwnerEntry> sortedOwners_;
     std::vector<RoutingRedirectHint> redirectHints_;
     std::vector<RoutingRange> localOwnedRanges_;
-    std::vector<std::string> workerOrder_;
-    std::unordered_set<std::string> validWorkerIds_;
-    std::unordered_set<std::string> activeWorkerIds_;
+    std::vector<std::string> nodeOrder_;
+    std::unordered_set<std::string> validTopologyNodeIds_;
+    std::unordered_set<std::string> activeTopologyNodeIds_;
 };
 
 }  // namespace topology

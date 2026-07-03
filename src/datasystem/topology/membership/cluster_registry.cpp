@@ -36,141 +36,140 @@ constexpr int MAX_ENDPOINT_PORT = 65535;
 constexpr size_t BRACKET_PORT_OFFSET = 2;
 constexpr int DECIMAL_BASE = 10;
 
-Status ParseWorkerEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint)
+Status ParseTopologyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint)
 {
     endpoint = {};
-    CHECK_FAIL_RETURN_STATUS(!workerId.empty(), K_INVALID, "worker id is empty");
-    CHECK_FAIL_RETURN_STATUS(workerId.find('/') == std::string::npos, K_INVALID, "worker id contains reserved char");
-    CHECK_FAIL_RETURN_STATUS(workerId.find_first_of("|,=;") == std::string::npos, K_INVALID,
-                             "worker id contains reserved char");
+    CHECK_FAIL_RETURN_STATUS(!nodeId.empty(), K_INVALID, "member id is empty");
+    CHECK_FAIL_RETURN_STATUS(nodeId.find('/') == std::string::npos, K_INVALID, "member id contains reserved char");
+    CHECK_FAIL_RETURN_STATUS(nodeId.find_first_of("|,=;") == std::string::npos, K_INVALID,
+                             "member id contains reserved char");
 
     std::string host;
     std::string portText;
-    if (workerId.front() == '[') {
-        auto close = workerId.find(']');
+    if (nodeId.front() == '[') {
+        auto close = nodeId.find(']');
         CHECK_FAIL_RETURN_STATUS(
-            close != std::string::npos && close + 1 < workerId.size() && workerId[close + 1] == ':', K_INVALID,
-            "invalid worker address");
-        host = workerId.substr(1, close - 1);
-        portText = workerId.substr(close + BRACKET_PORT_OFFSET);
+            close != std::string::npos && close + 1 < nodeId.size() && nodeId[close + 1] == ':', K_INVALID,
+            "invalid member address");
+        host = nodeId.substr(1, close - 1);
+        portText = nodeId.substr(close + BRACKET_PORT_OFFSET);
     } else {
-        auto sep = workerId.rfind(':');
-        CHECK_FAIL_RETURN_STATUS(sep != std::string::npos && sep > 0 && sep + 1 < workerId.size(), K_INVALID,
-                                 "invalid worker address");
-        CHECK_FAIL_RETURN_STATUS(workerId.find(':') == sep, K_INVALID, "ipv6 worker address must be bracketed");
-        host = workerId.substr(0, sep);
-        portText = workerId.substr(sep + 1);
+        auto sep = nodeId.rfind(':');
+        CHECK_FAIL_RETURN_STATUS(sep != std::string::npos && sep > 0 && sep + 1 < nodeId.size(), K_INVALID,
+                                 "invalid member address");
+        CHECK_FAIL_RETURN_STATUS(nodeId.find(':') == sep, K_INVALID, "ipv6 member address must be bracketed");
+        host = nodeId.substr(0, sep);
+        portText = nodeId.substr(sep + 1);
     }
-    CHECK_FAIL_RETURN_STATUS(!host.empty() && !portText.empty(), K_INVALID, "invalid worker address");
+    CHECK_FAIL_RETURN_STATUS(!host.empty() && !portText.empty(), K_INVALID, "invalid member address");
     int port = 0;
     for (auto c : portText) {
-        CHECK_FAIL_RETURN_STATUS(c >= '0' && c <= '9', K_INVALID, "invalid worker port");
+        CHECK_FAIL_RETURN_STATUS(c >= '0' && c <= '9', K_INVALID, "invalid member port");
         port = port * DECIMAL_BASE + (c - '0');
-        CHECK_FAIL_RETURN_STATUS(port <= MAX_ENDPOINT_PORT, K_INVALID, "worker port is out of range");
+        CHECK_FAIL_RETURN_STATUS(port <= MAX_ENDPOINT_PORT, K_INVALID, "member port is out of range");
     }
     endpoint.host = std::move(host);
     endpoint.port = port;
     return Status::OK();
 }
 
-Status DecodeWorkerValue(const WorkerId &workerId, const std::string &value, Revision revision, WorkerRecord &record)
+Status DecodeMemberValue(const TopologyNodeId &nodeId, const std::string &value, Revision revision,
+                         MembershipRecord &record)
 {
     record = {};
-    record.workerId = workerId;
-    RETURN_IF_NOT_OK(ParseWorkerEndpoint(workerId, record.endpoint));
-    WorkerServiceInfo nodeInfo;
-    auto protoRc = WorkerServiceInfo::FromProto(value, nodeInfo);
-    if (protoRc.IsError()) {
-        RETURN_IF_NOT_OK(WorkerServiceInfo::FromString(value, nodeInfo));
-    }
-    record.serviceState = nodeInfo.state;
-    CHECK_FAIL_RETURN_STATUS(nodeInfo.timestamp > 0, K_INVALID, "worker timestamp is empty");
-    record.capability.hostId = nodeInfo.hostId;
-    record.capability.compatibilityVersion = nodeInfo.compatibilityVersion;
-    record.registerTimestamp = std::to_string(nodeInfo.timestamp);
+    record.nodeId = nodeId;
+    RETURN_IF_NOT_OK(ParseTopologyEndpoint(nodeId, record.endpoint));
+    MembershipValue memberValue;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(value, memberValue));
+    record.lifecycleState = memberValue.lifecycleState;
+    CHECK_FAIL_RETURN_STATUS(memberValue.timestamp > 0, K_INVALID, "member timestamp is empty");
+    record.capability.hostId = memberValue.hostId;
+    record.capability.compatibilityVersion = memberValue.compatibilityVersion;
+    record.registerTimestamp = std::to_string(memberValue.timestamp);
     record.modRevision = revision;
     return Status::OK();
 }
 
-void LogBadWorkerRecord(const std::string &tableName, const std::string &key, Revision revision,
-                        uint64_t badRecordCount, const Status &rc)
+void LogBadMembershipRecord(const std::string &tableName, const std::string &key, Revision revision,
+                            uint64_t malformedRecordCount, const Status &rc)
 {
     LOG(WARNING) << "Ignore malformed topology membership record, table=" << tableName << ", key=" << key
-                 << ", revision=" << revision << ", badRecordCount=" << badRecordCount << ", status=" << rc.ToString();
+                 << ", revision=" << revision << ", malformedRecordCount=" << malformedRecordCount
+                 << ", status=" << rc.ToString();
 }
 
 }  // namespace
 
-Status ClusterRegistryKeyHelper::BuildWorkerKey(const WorkerId &workerId, std::string &key)
+Status ClusterRegistryKeyHelper::BuildMemberKey(const TopologyNodeId &nodeId, std::string &key)
 {
     key.clear();
-    WorkerEndpoint endpoint;
-    RETURN_IF_NOT_OK(ParseWorkerEndpoint(workerId, endpoint));
-    key = workerId;
+    TopologyEndpoint endpoint;
+    RETURN_IF_NOT_OK(ParseTopologyEndpoint(nodeId, endpoint));
+    key = nodeId;
     return Status::OK();
 }
 
-Status ClusterRegistryKeyHelper::ParseWorkerKey(const std::string &key, WorkerId &workerId)
+Status ClusterRegistryKeyHelper::ParseMemberKey(const std::string &key, TopologyNodeId &nodeId)
 {
-    workerId.clear();
-    CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID, "cluster worker key is empty");
+    nodeId.clear();
+    CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID, "cluster member key is empty");
     auto tablePos = key.find(ETCD_CLUSTER_TABLE);
     if (tablePos != std::string::npos) {
         auto begin = tablePos + std::string(ETCD_CLUSTER_TABLE).size();
         if (begin < key.size() && key[begin] == '/') {
             ++begin;
         }
-        workerId = key.substr(begin);
+        nodeId = key.substr(begin);
     } else {
-        workerId = key;
+        nodeId = key;
     }
-    WorkerEndpoint endpoint;
-    return ParseWorkerEndpoint(workerId, endpoint);
+    TopologyEndpoint endpoint;
+    return ParseTopologyEndpoint(nodeId, endpoint);
 }
 
 ClusterRegistry::ClusterRegistry(ICoordinationBackend &store) : store_(store)
 {
 }
 
-Status ClusterRegistry::ListWorkers(MembershipSnapshot &snapshot)
+Status ClusterRegistry::ListMembers(MembershipSnapshot &snapshot)
 {
     snapshot = {};
     std::vector<std::pair<std::string, std::string>> kvs;
     RETURN_IF_NOT_OK(store_.GetAll(ETCD_CLUSTER_TABLE, kvs));
     for (const auto &kv : kvs) {
-        WorkerId workerId;
-        auto rc = ClusterRegistryKeyHelper::ParseWorkerKey(kv.first, workerId);
+        TopologyNodeId nodeId;
+        auto rc = ClusterRegistryKeyHelper::ParseMemberKey(kv.first, nodeId);
         if (rc.IsOk()) {
-            WorkerRecord record;
-            rc = DecodeWorkerValue(workerId, kv.second, 0, record);
+            MembershipRecord record;
+            rc = DecodeMemberValue(nodeId, kv.second, 0, record);
             if (rc.IsOk()) {
-                snapshot.workers[record.workerId] = std::move(record);
+                snapshot.members[record.nodeId] = std::move(record);
                 continue;
             }
         }
-        ++snapshot.badRecordCount;
-        LogBadWorkerRecord(ETCD_CLUSTER_TABLE, kv.first, 0, snapshot.badRecordCount, rc);
+        ++snapshot.malformedRecordCount;
+        LogBadMembershipRecord(ETCD_CLUSTER_TABLE, kv.first, 0, snapshot.malformedRecordCount, rc);
     }
     return Status::OK();
 }
 
-Status ClusterRegistry::HandleWorkerEvent(const CoordinationEvent &event, WorkerWatchEvent &typed)
+Status ClusterRegistry::HandleMembershipEvent(const CoordinationEvent &event, MembershipWatchEvent &typed)
 {
     typed = {};
     CHECK_FAIL_RETURN_STATUS(event.key.find(ETCD_CLUSTER_TABLE) != std::string::npos, K_NOT_FOUND,
                              "unrelated membership event");
-    WorkerId workerId;
-    RETURN_IF_NOT_OK(ClusterRegistryKeyHelper::ParseWorkerKey(event.key, workerId));
-    typed.workerId = workerId;
+    TopologyNodeId nodeId;
+    RETURN_IF_NOT_OK(ClusterRegistryKeyHelper::ParseMemberKey(event.key, nodeId));
+    typed.nodeId = nodeId;
     typed.revision = event.revision;
     if (event.type == CoordinationEventType::DELETE) {
-        typed.type = WorkerWatchEventType::DELETED;
+        typed.type = MembershipWatchEventType::DELETED;
         return Status::OK();
     }
-    typed.type = WorkerWatchEventType::UPDATED;
-    auto rc = DecodeWorkerValue(workerId, event.value, event.revision, typed.record);
+    typed.type = MembershipWatchEventType::UPDATED;
+    auto rc = DecodeMemberValue(nodeId, event.value, event.revision, typed.record);
     if (rc.IsError()) {
-        LogBadWorkerRecord(ETCD_CLUSTER_TABLE, event.key, event.revision, 1, rc);
+        LogBadMembershipRecord(ETCD_CLUSTER_TABLE, event.key, event.revision, 1, rc);
         return rc;
     }
     return Status::OK();

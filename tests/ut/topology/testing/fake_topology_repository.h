@@ -64,10 +64,21 @@ public:
     void InjectTransferProgressConflict();
 
     Status GetCommittedTopology(TopologyDescriptor &topology, Revision &revision) override;
+    Status TryCreateCommittedTopology(const TopologyDescriptor &topology, Revision &revision) override;
+    Status TryUpdateCommittedTopology(const TopologyDescriptor &expectedTopology, Revision expectedRevision,
+                                      const TopologyDescriptor &nextTopology, Revision &revision) override;
+    Status ClearEphemeralRecords() override;
     Status ListTransferTaskRecords(const TaskFilter &filter, std::vector<TransferTaskRecord> &tasks) override;
     Status ListRecoveryTaskRecords(const TaskFilter &filter, std::vector<RecoveryTaskRecord> &tasks) override;
+    Status TryCreateTransferTaskRecord(const TransferTaskRecord &task, Revision &revision) override;
+    Status DeleteTransferTaskRecord(const TaskId &taskId) override;
+    Status TryCreateRecoveryTaskRecord(const RecoveryTaskRecord &task, Revision &revision) override;
+    Status DeleteRecoveryTaskRecord(const TaskId &taskId) override;
+    Status UpsertTaskNotify(const TaskNotify &notify, Revision &revision) override;
     Status ReportTransferProgress(const TaskId &taskId, const TaskProgressUpdate &update) override;
+    Status ReportTransferProgressBatch(const TaskId &taskId, const std::vector<TaskProgressUpdate> &updates) override;
     Status ReportRecoveryProgress(const TaskId &taskId, const TaskProgressUpdate &update) override;
+    Status ReportRecoveryProgressBatch(const TaskId &taskId, const std::vector<TaskProgressUpdate> &updates) override;
     Status HandleCommittedTopologyEvent(const CoordinationEvent &event, TopologyWatchEvent &typed) override;
 
 private:

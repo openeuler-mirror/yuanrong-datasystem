@@ -22,10 +22,10 @@
 
 #include <memory>
 
-#include "datasystem/topology/routing/placement_directory.h"
-#include "datasystem/topology/routing/routing_view.h"
-#include "datasystem/topology/routing/worker_locator.h"
+#include "datasystem/topology/routing/membership_endpoint_view.h"
+#include "datasystem/topology/routing/owner_endpoint_resolver.h"
 #include "datasystem/topology/routing/placement_types.h"
+#include "datasystem/topology/routing/routing_view.h"
 
 namespace datasystem {
 namespace topology {
@@ -35,49 +35,42 @@ public:
     virtual ~IRedirectPolicy() = default;
 
     /**
-     * @brief Evaluate redirect action for an object key using local R0 facts.
-     * @param[in] objectKey Business object key.
+     * @brief Evaluate redirect action for an business key using local R0 facts.
+     * @param[in] key Business business key.
      * @param[in] options Route and response policy options.
      * @param[out] decision Redirect decision.
      * @return K_OK if a response action is generated, K_INVALID if context is malformed, K_NOT_READY if routing
-     * snapshot or placement directory is not published, K_NOT_FOUND if local worker or routing owner cannot be
+     * snapshot or placement endpointView is not published, K_NOT_FOUND if local member or routing owner cannot be
      * resolved, K_RPC_UNAVAILABLE if the locator fallback rejects an unavailable target.
      *
-     * Redirect policy only reads local immutable snapshots and placement directory facts. It must not scan tasks, wait
-     * for topology progress, perform repository/backend IO, or execute migration/recovery/cleanup. Worker default
-     * request paths should not call this policy.
+     * Redirect policy only reads local immutable snapshots and placement endpointView facts. It must not scan tasks,
+     * wait for topology progress, perform repository/backend IO, or execute migration/recovery/cleanup. Request paths
+     * should not call this policy.
      */
-    virtual Status Evaluate(const std::string &objectKey, const RouteOptions &options,
+    virtual Status Evaluate(const std::string &key, const RouteOptions &options,
                             RedirectDecision &decision) const = 0;
 };
 
 class RedirectPolicy final : public IRedirectPolicy {
 public:
-    RedirectPolicy(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IPlacementDirectory> directory,
-                   std::shared_ptr<IWorkerLocator> locator);
+    RedirectPolicy(std::shared_ptr<IRoutingView> routingView,
+                   std::shared_ptr<IMembershipEndpointView> endpointView,
+                   std::shared_ptr<IOwnerEndpointResolver> locator);
     ~RedirectPolicy() override = default;
 
-    Status Evaluate(const std::string &objectKey, const RouteOptions &options,
+    Status Evaluate(const std::string &key, const RouteOptions &options,
                     RedirectDecision &decision) const override;
 
 private:
     /**
-     * @brief Build a redirect decision for centralized (single-master) mode.
-     * @param[in] options Route options carrying the centralized master address.
-     * @param[out] decision Redirect decision carrying the centralized master endpoint.
-     * @return K_OK on success, K_INVALID if master address is empty, otherwise the finish status.
-     */
-    Status EvaluateCentralized(const RouteOptions &options, RedirectDecision &decision) const;
-
-    /**
-     * @brief Resolve the worker endpoint that should receive this object's request.
-     * @param[in] objectKey Business object key.
+     * @brief Resolve the member endpoint that should receive this object's request.
+     * @param[in] key Business business key.
      * @param[out] targetEndpoint Resolved redirect target endpoint.
      * @return K_OK if a target is resolved, K_INVALID if dependencies are unset, K_NOT_READY if the snapshot is absent.
      *
      * Prefers a redirect hint for the object hash and falls back to the regular meta-owner lookup when no hint exists.
      */
-    Status ResolveRedirectTarget(const std::string &objectKey, PlacementEndpoint &targetEndpoint) const;
+    Status ResolveRedirectTarget(const std::string &key, MemberEndpoint &targetEndpoint) const;
 
     /**
      * @brief Resolve the redirect target from a routing redirect hint, if present.
@@ -87,25 +80,26 @@ private:
      * @param[out] hasHint True when a hint matched the hash, false otherwise.
      * @return K_OK on success, K_INVALID if the matched hint has an empty target address.
      *
-     * When hasHint is false the caller must fall back to meta-owner lookup. A hint whose worker id resolves in the
-     * directory upgrades the endpoint to the directory's availability; otherwise the raw hint address is NOT_READY.
+     * When hasHint is false the caller must fall back to meta-owner lookup. A hint whose node id resolves in the
+     * endpointView upgrades the endpoint to the endpointView's availability; otherwise the raw hint address is
+     * NOT_READY.
      */
     Status ResolveHintTarget(uint32_t objectHash, const std::shared_ptr<const RoutingSnapshot> &snapshot,
-                             PlacementEndpoint &targetEndpoint, bool &hasHint) const;
+                             MemberEndpoint &targetEndpoint, bool &hasHint) const;
 
     /**
-     * @brief Finalize a redirect decision by comparing the target against the local worker.
+     * @brief Finalize a redirect decision by comparing the target against the local member.
      * @param[in] targetEndpoint Redirect target endpoint.
      * @param[out] decision Redirect decision with action and target filled in.
-     * @return K_OK on success, K_INVALID if the target address is empty or local worker lookup fails.
+     * @return K_OK on success, K_INVALID if the target address is empty or local member lookup fails.
      *
-     * Sets SERVE_LOCAL when the target is the local worker, REDIRECT otherwise.
+     * Sets SERVE_LOCAL when the target is the local member, REDIRECT otherwise.
      */
-    Status FinishDecision(const PlacementEndpoint &targetEndpoint, RedirectDecision &decision) const;
+    Status FinishDecision(const MemberEndpoint &targetEndpoint, RedirectDecision &decision) const;
 
     std::shared_ptr<IRoutingView> routingView_;
-    std::shared_ptr<IPlacementDirectory> directory_;
-    std::shared_ptr<IWorkerLocator> locator_;
+    std::shared_ptr<IMembershipEndpointView> endpointView_;
+    std::shared_ptr<IOwnerEndpointResolver> locator_;
 };
 
 }  // namespace topology

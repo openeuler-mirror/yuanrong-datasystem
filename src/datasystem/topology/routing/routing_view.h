@@ -24,6 +24,9 @@
 #include <shared_mutex>
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/topology/algorithm/topology_algorithm.h"
+#include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/repository/topology_repository.h"
 #include "datasystem/topology/routing/routing_snapshot.h"
 
 namespace datasystem {
@@ -58,6 +61,28 @@ public:
      * The caller must build the snapshot before calling Publish. Publish only swaps the shared pointer.
      */
     void Publish(std::shared_ptr<const RoutingSnapshot> snapshot);
+
+    /**
+     * @brief Apply one raw backend event through the repository committed-topology decoder.
+     * @param[in] repository Repository contract that classifies and decodes the event.
+     * @param[in] event Raw coordination-backend event.
+     * @return K_OK for applied or ignored events; K_INVALID for malformed exact committed topology payload.
+     *
+     * Only exact committed topology updates publish a new routing snapshot. Task, notify, and unrelated subkeys are
+     * ignored, and exact deletes keep the last usable snapshot published.
+     */
+    Status ApplyCommittedTopologyEvent(ITopologyRoutingRepository &repository, const CoordinationEvent &event,
+                                       const IRoutingAlgorithm &algorithm);
+
+    /**
+     * @brief Publish a routing snapshot from the current committed topology.
+     * @param[in] repository Repository used to read the committed topology.
+     * @return K_OK if the snapshot was published; K_NOT_FOUND/K_NOT_READY if committed topology is not yet usable.
+     *
+     * This is for topology background/startup paths that already allow repository IO. Request paths must continue to
+     * use GetSnapshot only.
+     */
+    Status ApplyCommittedTopology(ITopologyRoutingRepository &repository, const IRoutingAlgorithm &algorithm);
 
 private:
     mutable std::shared_timed_mutex mutex_;

@@ -65,6 +65,30 @@ Status PlacementDirectory::GetLocalWorker(PlacementEndpoint &endpoint) const
     return Status::OK();
 }
 
+Status PlacementDirectory::ResolveEndpoint(const std::string &nodeId, MemberEndpoint &endpoint) const
+{
+    PlacementEndpoint workerEndpoint;
+    RETURN_IF_NOT_OK(ResolveWorker(nodeId, workerEndpoint));
+    endpoint = workerEndpoint;
+    return Status::OK();
+}
+
+Status PlacementDirectory::ResolveEndpointByAddress(const std::string &nodeAddress, MemberEndpoint &endpoint) const
+{
+    PlacementEndpoint workerEndpoint;
+    RETURN_IF_NOT_OK(ResolveWorkerByAddress(nodeAddress, workerEndpoint));
+    endpoint = workerEndpoint;
+    return Status::OK();
+}
+
+Status PlacementDirectory::GetLocalEndpoint(MemberEndpoint &endpoint) const
+{
+    PlacementEndpoint workerEndpoint;
+    RETURN_IF_NOT_OK(GetLocalWorker(workerEndpoint));
+    endpoint = workerEndpoint;
+    return Status::OK();
+}
+
 void PlacementDirectory::Publish(std::shared_ptr<const PlacementDirectorySnapshot> snapshot)
 {
     std::lock_guard<std::shared_timed_mutex> lock(mutex_);

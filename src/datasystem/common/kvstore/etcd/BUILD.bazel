@@ -8,6 +8,19 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "member_service_info",
+    srcs = ["member_service_info.cpp"],
+    hdrs = ["member_service_info.h"],
+    deps = [
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_cc_proto",
+        "//src/datasystem/topology:membership_types",
+    ],
+)
+
+ds_cc_library(
     name = "etcd_elector",
     hdrs = ["etcd_elector.h"],
     srcs = [
@@ -93,7 +106,7 @@ ds_cc_library(
         "//third_party/protos/etcd:rpc_cc_grpc",
         "//third_party/protos/etcd:rpc_cc_proto",
         "//src/datasystem/common/kvstore:kv_store",
-        "//src/datasystem/topology:worker_node_info",
+        ":member_service_info",
     ],
 )
 

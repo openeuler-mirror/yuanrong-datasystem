@@ -19,7 +19,7 @@
  */
 #include "tests/ut/topology/testing/fake_topology_change_requester.h"
 #include "tests/ut/topology/testing/fake_topology_repository.h"
-#include "tests/ut/topology/testing/fake_worker_directory.h"
+#include "tests/ut/topology/testing/fake_membership_view.h"
 
 #include <initializer_list>
 #include <memory>
@@ -41,12 +41,12 @@ constexpr char WORKER_A[] = "worker-a";
 constexpr char WORKER_B[] = "worker-b";
 constexpr char WORKER_C[] = "worker-c";
 
-TopologyDescriptor MakeTopology(std::initializer_list<TopologyWorker> workers, Revision version)
+TopologyDescriptor MakeTopology(std::initializer_list<TopologyNode> members, Revision version)
 {
     TopologyDescriptor topology;
     topology.version = version;
     topology.clusterHasInit = true;
-    topology.workers.assign(workers.begin(), workers.end());
+    topology.members.assign(members.begin(), members.end());
     return topology;
 }
 
@@ -59,37 +59,37 @@ PlacementUnit MakeHashUnit(uint32_t token)
     return unit;
 }
 
-TransferTaskRecord MakeTransferTask(const WorkerId &target, const WorkerId &source, uint32_t begin, uint32_t end)
+TransferTaskRecord MakeTransferTask(const TopologyNodeId &target, const TopologyNodeId &source, uint32_t begin, uint32_t end)
 {
     TransferTaskRecord task;
     task.taskId = target + "|" + source;
-    task.targetWorkerId = target;
-    task.sourceWorkerId = source;
+    task.targetNodeId = target;
+    task.sourceNodeId = source;
     task.ranges = { { begin, end, source, false } };
     return task;
 }
 
-RecoveryTaskRecord MakeRecoveryTask(const WorkerId &failed, const WorkerId &recovery, uint32_t begin, uint32_t end)
+RecoveryTaskRecord MakeRecoveryTask(const TopologyNodeId &failed, const TopologyNodeId &recovery, uint32_t begin, uint32_t end)
 {
     RecoveryTaskRecord task;
     task.taskId = failed + "|" + recovery;
-    task.failedWorkerId = failed;
-    task.recoveryWorkerId = recovery;
+    task.failedNodeId = failed;
+    task.recoveryNodeId = recovery;
     task.ranges = { { begin, end, recovery, false } };
     return task;
 }
 
-MembershipSnapshot MakeReadySnapshot(std::initializer_list<WorkerId> workers, Revision revision)
+MembershipSnapshot MakeReadySnapshot(std::initializer_list<TopologyNodeId> members, Revision revision)
 {
     MembershipSnapshot snapshot;
     snapshot.revision = revision;
-    for (const auto &workerId : workers) {
-        WorkerRecord record;
-        record.workerId = workerId;
-        record.endpoint.host = workerId;
+    for (const auto &nodeId : members) {
+        MembershipRecord record;
+        record.nodeId = nodeId;
+        record.endpoint.host = nodeId;
         record.endpoint.port = 8080;
-        record.serviceState = WorkerServiceState::READY;
-        snapshot.workers[workerId] = record;
+        record.lifecycleState = MemberLifecycleState::READY;
+        snapshot.members[nodeId] = record;
     }
     return snapshot;
 }
@@ -97,7 +97,7 @@ MembershipSnapshot MakeReadySnapshot(std::initializer_list<WorkerId> workers, Re
 TEST(TopologyFakeIntegrationTest, RoutingConsumesCommittedTopologyOnly)
 {
     FakeTopologyRepository repo;
-    DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopology({ { WORKER_A, WorkerTopologyState::ACTIVE, { 100 } } }, 10)));
+    DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopology({ { WORKER_A, TopologyNodeState::ACTIVE, { 100 } } }, 10)));
 
     HashAlgorithm algorithm;
     TopologyDescriptor topology;
@@ -107,17 +107,17 @@ TEST(TopologyFakeIntegrationTest, RoutingConsumesCommittedTopologyOnly)
     DS_ASSERT_OK(algorithm.BuildRoutingState(topology, state));
 
     DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopology(
-        { { WORKER_A, WorkerTopologyState::ACTIVE, { 100 } }, { WORKER_B, WorkerTopologyState::ACTIVE, { 60 } } },
+        { { WORKER_A, TopologyNodeState::ACTIVE, { 100 } }, { WORKER_B, TopologyNodeState::ACTIVE, { 60 } } },
         11)));
 
     LogicalOwner owner;
     DS_ASSERT_OK(algorithm.Route(*state, MakeHashUnit(50), owner));
-    EXPECT_EQ(owner.workerId, WORKER_A);
+    EXPECT_EQ(owner.nodeId, WORKER_A);
 
     DS_ASSERT_OK(repo.GetCommittedTopology(topology, revision));
     DS_ASSERT_OK(algorithm.BuildRoutingState(topology, state));
     DS_ASSERT_OK(algorithm.Route(*state, MakeHashUnit(50), owner));
-    EXPECT_EQ(owner.workerId, WORKER_B);
+    EXPECT_EQ(owner.nodeId, WORKER_B);
 }
 
 TEST(TopologyFakeIntegrationTest, TaskExecutorReadsNotifyThenTaskFact)
@@ -127,7 +127,7 @@ TEST(TopologyFakeIntegrationTest, TaskExecutorReadsNotifyThenTaskFact)
     DS_ASSERT_OK(repo.SeedTransferTask(task));
 
     TaskFilter filter;
-    filter.workerId = WORKER_A;
+    filter.nodeId = WORKER_A;
     filter.unfinishedOnly = true;
     std::vector<TransferTaskRecord> tasks;
     DS_ASSERT_OK(repo.ListTransferTaskRecords(filter, tasks));
@@ -136,7 +136,7 @@ TEST(TopologyFakeIntegrationTest, TaskExecutorReadsNotifyThenTaskFact)
 
     TaskProgressUpdate progress;
     progress.taskId = task.taskId;
-    progress.workerId = WORKER_A;
+    progress.nodeId = WORKER_A;
     progress.range = { 1, 10, WORKER_A, true };
     DS_ASSERT_OK(repo.ReportTransferProgress(task.taskId, progress));
 
@@ -153,7 +153,7 @@ TEST(TopologyFakeIntegrationTest, ProgressConflictRequiresReload)
 
     TaskProgressUpdate progress;
     progress.taskId = task.taskId;
-    progress.workerId = WORKER_A;
+    progress.nodeId = WORKER_A;
     progress.range = { 1, 10, WORKER_A, true };
     EXPECT_EQ(repo.ReportTransferProgress(task.taskId, progress).GetCode(), K_TRY_AGAIN);
 
@@ -170,7 +170,7 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryRejectsMalformedSeedData)
     FakeTopologyRepository repo;
     EXPECT_EQ(repo.SeedCommittedTopology({}).GetCode(), K_INVALID);
 
-    auto topology = MakeTopology({ { WORKER_A, WorkerTopologyState::ACTIVE, { 1 } } }, -1);
+    auto topology = MakeTopology({ { WORKER_A, TopologyNodeState::ACTIVE, { 1 } } }, -1);
     EXPECT_EQ(repo.SeedCommittedTopology(topology).GetCode(), K_INVALID);
 
     auto transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);
@@ -178,11 +178,11 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryRejectsMalformedSeedData)
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);
-    transfer.sourceWorkerId.clear();
+    transfer.sourceNodeId.clear();
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);
-    transfer.targetWorkerId.clear();
+    transfer.targetNodeId.clear();
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);
@@ -193,7 +193,7 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryRejectsMalformedSeedData)
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);
-    transfer.ranges[0].workerId.clear();
+    transfer.ranges[0].nodeId.clear();
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     auto recovery = MakeRecoveryTask(WORKER_B, WORKER_A, 20, 30);
@@ -201,11 +201,11 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryRejectsMalformedSeedData)
     EXPECT_EQ(repo.SeedRecoveryTask(recovery).GetCode(), K_INVALID);
 
     recovery = MakeRecoveryTask(WORKER_B, WORKER_A, 20, 30);
-    recovery.failedWorkerId.clear();
+    recovery.failedNodeId.clear();
     EXPECT_EQ(repo.SeedRecoveryTask(recovery).GetCode(), K_INVALID);
 
     recovery = MakeRecoveryTask(WORKER_B, WORKER_A, 20, 30);
-    recovery.recoveryWorkerId.clear();
+    recovery.recoveryNodeId.clear();
     EXPECT_EQ(repo.SeedRecoveryTask(recovery).GetCode(), K_INVALID);
 
     recovery = MakeRecoveryTask(WORKER_B, WORKER_A, 20, 30);
@@ -220,20 +220,20 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryFiltersAndReportsRecoveryTasks)
     DS_ASSERT_OK(repo.SeedRecoveryTask(recovery));
 
     TaskFilter filter;
-    filter.workerId = WORKER_C;
+    filter.nodeId = WORKER_C;
     filter.unfinishedOnly = true;
     std::vector<RecoveryTaskRecord> recoveryTasks;
     DS_ASSERT_OK(repo.ListRecoveryTaskRecords(filter, recoveryTasks));
     EXPECT_TRUE(recoveryTasks.empty());
 
-    filter.workerId = WORKER_A;
+    filter.nodeId = WORKER_A;
     DS_ASSERT_OK(repo.ListRecoveryTaskRecords(filter, recoveryTasks));
     ASSERT_EQ(recoveryTasks.size(), 1ul);
     EXPECT_EQ(recoveryTasks[0].taskId, recovery.taskId);
 
     TaskProgressUpdate progress;
     progress.taskId = recovery.taskId;
-    progress.workerId = WORKER_A;
+    progress.nodeId = WORKER_A;
     progress.range = { 20, 30, WORKER_A, true };
     DS_ASSERT_OK(repo.ReportRecoveryProgress(recovery.taskId, progress));
 
@@ -253,7 +253,7 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryReportsTransferRangeNotFound)
 
     TaskProgressUpdate progress;
     progress.taskId = task.taskId;
-    progress.workerId = WORKER_A;
+    progress.nodeId = WORKER_A;
     progress.range = { 2, 10, WORKER_A, true };
     EXPECT_EQ(repo.ReportTransferProgress(task.taskId, progress).GetCode(), K_INVALID);
 }
@@ -290,20 +290,20 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryDecodesCommittedTopologyEvents)
     event.revision = 18;
     TopologyRepositoryCodec codec;
     DS_ASSERT_OK(
-        codec.EncodeTopology(MakeTopology({ { WORKER_A, WorkerTopologyState::ACTIVE, { 1 } } }, 1), event.value));
+        codec.EncodeTopology(MakeTopology({ { WORKER_A, TopologyNodeState::ACTIVE, { 1 } } }, 1), event.value));
     DS_ASSERT_OK(repo.HandleCommittedTopologyEvent(event, typed));
     EXPECT_EQ(typed.type, TopologyWatchEventType::UPDATED);
     EXPECT_EQ(typed.revision, 18);
     EXPECT_EQ(typed.topology.version, 18);
-    ASSERT_EQ(typed.topology.workers.size(), 1ul);
-    EXPECT_EQ(typed.topology.workers[0].workerId, WORKER_A);
+    ASSERT_EQ(typed.topology.members.size(), 1ul);
+    EXPECT_EQ(typed.topology.members[0].nodeId, WORKER_A);
 }
 
 TEST(TopologyFakeIntegrationTest, ScaleInRequesterAcceptRejectAndQueueFull)
 {
     FakeTopologyChangeRequester requester(1);
     ScaleInRequest request;
-    request.workerId = WORKER_A;
+    request.nodeId = WORKER_A;
     request.reason = ScaleInReason::ORDERLY_SHUTDOWN;
 
     requester.SetAvailable(false);
@@ -324,27 +324,27 @@ TEST(TopologyFakeIntegrationTest, FakesDoNotExposeRingMutation)
                   "fake repository must not expose raw ring/store mutation");
 
     ITopologyRepository *contract = &repo;
-    DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopology({ { WORKER_A, WorkerTopologyState::ACTIVE, { 1 } } }, 1)));
+    DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopology({ { WORKER_A, TopologyNodeState::ACTIVE, { 1 } } }, 1)));
     TopologyDescriptor topology;
     Revision revision = 0;
     DS_ASSERT_OK(contract->GetCommittedTopology(topology, revision));
-    EXPECT_EQ(topology.workers.size(), 1ul);
+    EXPECT_EQ(topology.members.size(), 1ul);
 }
 
-TEST(TopologyFakeIntegrationTest, WorkerDirectoryFakeProvidesReadyView)
+TEST(TopologyFakeIntegrationTest, MembershipViewFakeProvidesReadyView)
 {
-    FakeWorkerDirectory directory;
-    std::vector<WorkerRecord> workers;
-    EXPECT_EQ(directory.ListReadyWorkers(workers).GetCode(), K_NOT_READY);
+    FakeMembershipView endpointView;
+    std::vector<MembershipRecord> members;
+    EXPECT_EQ(endpointView.ListReadyMembers(members).GetCode(), K_NOT_READY);
 
-    DS_ASSERT_OK(directory.SeedSnapshot(MakeReadySnapshot({ WORKER_A, WORKER_B }, 3)));
-    WorkerEndpoint endpoint;
-    DS_ASSERT_OK(directory.GetReadyEndpoint(WORKER_A, endpoint));
+    DS_ASSERT_OK(endpointView.SeedSnapshot(MakeReadySnapshot({ WORKER_A, WORKER_B }, 3)));
+    TopologyEndpoint endpoint;
+    DS_ASSERT_OK(endpointView.GetReadyEndpoint(WORKER_A, endpoint));
     EXPECT_EQ(endpoint.host, WORKER_A);
 
-    workers.clear();
-    DS_ASSERT_OK(directory.ListReadyWorkers(workers));
-    EXPECT_EQ(workers.size(), 2ul);
+    members.clear();
+    DS_ASSERT_OK(endpointView.ListReadyMembers(members));
+    EXPECT_EQ(members.size(), 2ul);
 }
 
 }  // namespace

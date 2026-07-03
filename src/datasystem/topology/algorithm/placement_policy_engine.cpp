@@ -48,19 +48,19 @@ Status MatchRule(const RouteContext &context, const PlacementPolicyRule &rule, b
             return Status::OK();
         case PlacementPolicyMatchType::EXACT_KEY:
             CHECK_FAIL_RETURN_STATUS(!rule.matchPattern.empty(), K_INVALID, "exact pattern is empty");
-            matched = context.objectKey == rule.matchPattern;
+            matched = context.key == rule.matchPattern;
             specificity = EXACT_KEY_SPECIFICITY;
             return Status::OK();
         case PlacementPolicyMatchType::PREFIX:
             CHECK_FAIL_RETURN_STATUS(!rule.matchPattern.empty(), K_INVALID, "prefix pattern is empty");
-            matched = context.objectKey.rfind(rule.matchPattern, 0) == 0;
+            matched = context.key.rfind(rule.matchPattern, 0) == 0;
             specificity = PREFIX_SPECIFICITY;
             return Status::OK();
         case PlacementPolicyMatchType::SUFFIX:
             CHECK_FAIL_RETURN_STATUS(!rule.matchPattern.empty(), K_INVALID, "suffix pattern is empty");
-            matched = context.objectKey.size() >= rule.matchPattern.size()
-                      && context.objectKey.compare(context.objectKey.size() - rule.matchPattern.size(),
-                                                   rule.matchPattern.size(), rule.matchPattern)
+            matched = context.key.size() >= rule.matchPattern.size()
+                      && context.key.compare(context.key.size() - rule.matchPattern.size(), rule.matchPattern.size(),
+                                             rule.matchPattern)
                              == 0;
             specificity = SUFFIX_SPECIFICITY;
             return Status::OK();

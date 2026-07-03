@@ -1240,16 +1240,16 @@ void HashRing::FillWorkerIdsNoLock(topology::RoutingSnapshotFacts &facts) const
             || ringInfo_.del_node_info().find(worker.first) != ringInfo_.del_node_info().end()) {
             continue;
         }
-        facts.validWorkerIds.emplace(worker.second.worker_uuid());
+        facts.validTopologyNodeIds.emplace(worker.second.worker_uuid());
         if (worker.second.state() == WorkerPb::ACTIVE && !worker.second.need_scale_down()) {
-            facts.activeWorkerIds.emplace(worker.second.worker_uuid());
+            facts.activeTopologyNodeIds.emplace(worker.second.worker_uuid());
         }
     }
-    facts.workerOrder.reserve(workerUuidHashMap_.size());
+    facts.nodeOrder.reserve(workerUuidHashMap_.size());
     for (const auto &worker : workerUuidHashMap_) {
         auto workerIdIter = workerAddr2UuidMap_.find(worker.second);
         if (workerIdIter != workerAddr2UuidMap_.end()) {
-            facts.workerOrder.emplace_back(workerIdIter->second);
+            facts.nodeOrder.emplace_back(workerIdIter->second);
         }
     }
 }

@@ -47,7 +47,7 @@ Status FakeTopologyChangeRequester::SubmitScaleInRequest(const ScaleInRequest &r
 {
     std::lock_guard<std::mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(available_, K_NOT_READY, "fake topology change requester is unavailable");
-    CHECK_FAIL_RETURN_STATUS(!request.workerId.empty(), K_INVALID, "fake scale-in worker id is empty");
+    CHECK_FAIL_RETURN_STATUS(!request.nodeId.empty(), K_INVALID, "fake scale-in worker id is empty");
     CHECK_FAIL_RETURN_STATUS(
         request.reason == ScaleInReason::ORDERLY_SHUTDOWN || request.reason == ScaleInReason::MANUAL_DRAIN, K_INVALID,
         "fake scale-in reason is invalid");

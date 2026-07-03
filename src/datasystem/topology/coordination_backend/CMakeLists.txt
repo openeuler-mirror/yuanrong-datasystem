@@ -9,6 +9,6 @@ target_link_libraries(coordination_backend PUBLIC
         common_coordinator_store
         common_etcd
         common_util
-        worker_node_info
+        membership_value_codec
         coordinator_protos
         )

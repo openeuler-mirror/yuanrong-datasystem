@@ -37,8 +37,8 @@ bool HasUnfinishedRange(const std::vector<TokenRange> &ranges)
 
 bool MatchTransferTask(const TransferTaskRecord &task, const TaskFilter &filter)
 {
-    if (filter.workerId.has_value() && task.sourceWorkerId != *filter.workerId
-        && task.targetWorkerId != *filter.workerId) {
+    if (filter.nodeId.has_value() && task.sourceNodeId != *filter.nodeId
+        && task.targetNodeId != *filter.nodeId) {
         return false;
     }
     return !filter.unfinishedOnly || HasUnfinishedRange(task.ranges);
@@ -46,8 +46,8 @@ bool MatchTransferTask(const TransferTaskRecord &task, const TaskFilter &filter)
 
 bool MatchRecoveryTask(const RecoveryTaskRecord &task, const TaskFilter &filter)
 {
-    if (filter.workerId.has_value() && task.failedWorkerId != *filter.workerId
-        && task.recoveryWorkerId != *filter.workerId) {
+    if (filter.nodeId.has_value() && task.failedNodeId != *filter.nodeId
+        && task.recoveryNodeId != *filter.nodeId) {
         return false;
     }
     return !filter.unfinishedOnly || HasUnfinishedRange(task.ranges);
@@ -56,15 +56,15 @@ bool MatchRecoveryTask(const RecoveryTaskRecord &task, const TaskFilter &filter)
 Status ValidateRange(const TokenRange &range)
 {
     CHECK_FAIL_RETURN_STATUS(range.begin < range.end, K_INVALID, "invalid fake token range");
-    CHECK_FAIL_RETURN_STATUS(!range.workerId.empty(), K_INVALID, "fake range worker is empty");
+    CHECK_FAIL_RETURN_STATUS(!range.nodeId.empty(), K_INVALID, "fake range worker is empty");
     return Status::OK();
 }
 
 Status ValidateTransferTask(const TransferTaskRecord &task)
 {
     CHECK_FAIL_RETURN_STATUS(!task.taskId.empty(), K_INVALID, "fake transfer task id is empty");
-    CHECK_FAIL_RETURN_STATUS(!task.sourceWorkerId.empty(), K_INVALID, "fake transfer source is empty");
-    CHECK_FAIL_RETURN_STATUS(!task.targetWorkerId.empty(), K_INVALID, "fake transfer target is empty");
+    CHECK_FAIL_RETURN_STATUS(!task.sourceNodeId.empty(), K_INVALID, "fake transfer source is empty");
+    CHECK_FAIL_RETURN_STATUS(!task.targetNodeId.empty(), K_INVALID, "fake transfer target is empty");
     CHECK_FAIL_RETURN_STATUS(!task.ranges.empty(), K_INVALID, "fake transfer ranges are empty");
     for (const auto &range : task.ranges) {
         RETURN_IF_NOT_OK(ValidateRange(range));
@@ -75,8 +75,8 @@ Status ValidateTransferTask(const TransferTaskRecord &task)
 Status ValidateRecoveryTask(const RecoveryTaskRecord &task)
 {
     CHECK_FAIL_RETURN_STATUS(!task.taskId.empty(), K_INVALID, "fake recovery task id is empty");
-    CHECK_FAIL_RETURN_STATUS(!task.failedWorkerId.empty(), K_INVALID, "fake recovery failed worker is empty");
-    CHECK_FAIL_RETURN_STATUS(!task.recoveryWorkerId.empty(), K_INVALID, "fake recovery worker is empty");
+    CHECK_FAIL_RETURN_STATUS(!task.failedNodeId.empty(), K_INVALID, "fake recovery failed worker is empty");
+    CHECK_FAIL_RETURN_STATUS(!task.recoveryNodeId.empty(), K_INVALID, "fake recovery worker is empty");
     CHECK_FAIL_RETURN_STATUS(!task.ranges.empty(), K_INVALID, "fake recovery ranges are empty");
     for (const auto &range : task.ranges) {
         RETURN_IF_NOT_OK(ValidateRange(range));
@@ -86,16 +86,16 @@ Status ValidateRecoveryTask(const RecoveryTaskRecord &task)
 
 template <typename TaskT>
 Status MarkProgress(std::vector<TaskT> &tasks, const TaskId &taskId, const TaskProgressUpdate &update,
-                    const WorkerId &expectedWorker)
+                    const TopologyNodeId &expectedWorker)
 {
     CHECK_FAIL_RETURN_STATUS(update.taskId.empty() || update.taskId == taskId, K_INVALID, "fake task id mismatch");
-    CHECK_FAIL_RETURN_STATUS(update.workerId == expectedWorker, K_INVALID, "fake worker mismatch");
+    CHECK_FAIL_RETURN_STATUS(update.nodeId == expectedWorker, K_INVALID, "fake worker mismatch");
     CHECK_FAIL_RETURN_STATUS(update.range.finished, K_INVALID, "fake progress must be finished");
     auto taskIter =
         std::find_if(tasks.begin(), tasks.end(), [&taskId](const TaskT &task) { return task.taskId == taskId; });
     CHECK_FAIL_RETURN_STATUS(taskIter != tasks.end(), K_NOT_FOUND, "fake task not found");
     for (auto &range : taskIter->ranges) {
-        if (range.workerId == update.range.workerId && range.begin == update.range.begin
+        if (range.nodeId == update.range.nodeId && range.begin == update.range.begin
             && range.end == update.range.end) {
             range.finished = true;
             return Status::OK();
@@ -109,7 +109,7 @@ Status MarkProgress(std::vector<TaskT> &tasks, const TaskId &taskId, const TaskP
 Status FakeTopologyRepository::SeedCommittedTopology(const TopologyDescriptor &topology)
 {
     CHECK_FAIL_RETURN_STATUS(topology.version >= 0, K_INVALID, "fake topology version is invalid");
-    CHECK_FAIL_RETURN_STATUS(!topology.workers.empty(), K_INVALID, "fake topology workers are empty");
+    CHECK_FAIL_RETURN_STATUS(!topology.members.empty(), K_INVALID, "fake topology members are empty");
     std::lock_guard<std::mutex> lock(mutex_);
     topology_ = topology;
     revision_ = topology.version > 0 ? topology.version : revision_ + 1;
@@ -153,6 +153,42 @@ Status FakeTopologyRepository::GetCommittedTopology(TopologyDescriptor &topology
     return Status::OK();
 }
 
+Status FakeTopologyRepository::TryCreateCommittedTopology(const TopologyDescriptor &topology, Revision &revision)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(!hasTopology_, K_TRY_AGAIN, "fake topology already exists");
+    topology_ = topology;
+    revision_++;
+    topology_.version = revision_;
+    revision = revision_;
+    hasTopology_ = true;
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::TryUpdateCommittedTopology(const TopologyDescriptor &expectedTopology,
+                                                          Revision expectedRevision,
+                                                          const TopologyDescriptor &nextTopology, Revision &revision)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(hasTopology_, K_NOT_FOUND, "fake topology is absent");
+    CHECK_FAIL_RETURN_STATUS(revision_ == expectedRevision, K_TRY_AGAIN, "fake topology revision changed");
+    CHECK_FAIL_RETURN_STATUS(topology_.version == expectedTopology.version, K_TRY_AGAIN,
+                             "fake topology value changed");
+    topology_ = nextTopology;
+    revision_++;
+    topology_.version = revision_;
+    revision = revision_;
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::ClearEphemeralRecords()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    transferTasks_.clear();
+    recoveryTasks_.clear();
+    return Status::OK();
+}
+
 Status FakeTopologyRepository::ListTransferTaskRecords(const TaskFilter &filter, std::vector<TransferTaskRecord> &tasks)
 {
     tasks.clear();
@@ -179,6 +215,70 @@ Status FakeTopologyRepository::ListRecoveryTaskRecords(const TaskFilter &filter,
     return Status::OK();
 }
 
+Status FakeTopologyRepository::TryCreateTransferTaskRecord(const TransferTaskRecord &task, Revision &revision)
+{
+    RETURN_IF_NOT_OK(ValidateTransferTask(task));
+    std::lock_guard<std::mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(std::none_of(transferTasks_.begin(), transferTasks_.end(),
+                             [&task](const TransferTaskRecord &existing) {
+                                 return existing.taskId == task.taskId;
+                             }),
+                             K_TRY_AGAIN, "fake transfer task already exists");
+    auto next = task;
+    next.taskRevision = ++revision_;
+    next.ringRevision = revision_;
+    revision = revision_;
+    transferTasks_.push_back(std::move(next));
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::DeleteTransferTaskRecord(const TaskId &taskId)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    transferTasks_.erase(std::remove_if(transferTasks_.begin(), transferTasks_.end(),
+                                        [&taskId](const TransferTaskRecord &task) {
+                                            return task.taskId == taskId;
+                                        }),
+                         transferTasks_.end());
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::TryCreateRecoveryTaskRecord(const RecoveryTaskRecord &task, Revision &revision)
+{
+    RETURN_IF_NOT_OK(ValidateRecoveryTask(task));
+    std::lock_guard<std::mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(std::none_of(recoveryTasks_.begin(), recoveryTasks_.end(),
+                             [&task](const RecoveryTaskRecord &existing) {
+                                 return existing.taskId == task.taskId;
+                             }),
+                             K_TRY_AGAIN, "fake recovery task already exists");
+    auto next = task;
+    next.taskRevision = ++revision_;
+    next.ringRevision = revision_;
+    revision = revision_;
+    recoveryTasks_.push_back(std::move(next));
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::DeleteRecoveryTaskRecord(const TaskId &taskId)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    recoveryTasks_.erase(std::remove_if(recoveryTasks_.begin(), recoveryTasks_.end(),
+                                        [&taskId](const RecoveryTaskRecord &task) {
+                                            return task.taskId == taskId;
+                                        }),
+                         recoveryTasks_.end());
+    return Status::OK();
+}
+
+Status FakeTopologyRepository::UpsertTaskNotify(const TaskNotify &notify, Revision &revision)
+{
+    CHECK_FAIL_RETURN_STATUS(!notify.nodeAddress.empty(), K_INVALID, "fake notify worker is empty");
+    std::lock_guard<std::mutex> lock(mutex_);
+    revision = ++revision_;
+    return Status::OK();
+}
+
 Status FakeTopologyRepository::ReportTransferProgress(const TaskId &taskId, const TaskProgressUpdate &update)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -186,13 +286,31 @@ Status FakeTopologyRepository::ReportTransferProgress(const TaskId &taskId, cons
         transferConflict_ = false;
         RETURN_STATUS(K_TRY_AGAIN, "fake transfer CAS conflict");
     }
-    return MarkProgress(transferTasks_, taskId, update, update.range.workerId);
+    return MarkProgress(transferTasks_, taskId, update, update.range.nodeId);
+}
+
+Status FakeTopologyRepository::ReportTransferProgressBatch(const TaskId &taskId,
+                                                           const std::vector<TaskProgressUpdate> &updates)
+{
+    for (const auto &update : updates) {
+        RETURN_IF_NOT_OK(ReportTransferProgress(taskId, update));
+    }
+    return Status::OK();
 }
 
 Status FakeTopologyRepository::ReportRecoveryProgress(const TaskId &taskId, const TaskProgressUpdate &update)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return MarkProgress(recoveryTasks_, taskId, update, update.range.workerId);
+    return MarkProgress(recoveryTasks_, taskId, update, update.range.nodeId);
+}
+
+Status FakeTopologyRepository::ReportRecoveryProgressBatch(const TaskId &taskId,
+                                                           const std::vector<TaskProgressUpdate> &updates)
+{
+    for (const auto &update : updates) {
+        RETURN_IF_NOT_OK(ReportRecoveryProgress(taskId, update));
+    }
+    return Status::OK();
 }
 
 Status FakeTopologyRepository::HandleCommittedTopologyEvent(const CoordinationEvent &event, TopologyWatchEvent &typed)

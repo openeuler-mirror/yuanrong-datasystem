@@ -31,14 +31,15 @@
 namespace datasystem {
 namespace topology {
 
-enum class WorkerServiceState {
-    UNSPECIFIED = 0,
-    START,
-    RESTART,
-    RECOVER,
+enum class MemberLifecycleState {
+    UNKNOWN = 0,
+    STARTING,
+    RESTARTING,
+    RECOVERING,
     READY,
     EXITING,
-    DOWNGRADE_RESTART,
+    DOWNGRADE_RESTARTING,
+    FAILED,
 };
 
 enum class ScaleInReason {
@@ -46,7 +47,7 @@ enum class ScaleInReason {
     MANUAL_DRAIN,
 };
 
-struct WorkerEndpoint {
+struct TopologyEndpoint {
     std::string host;
     int port{ -1 };
 
@@ -62,41 +63,41 @@ struct WorkerEndpoint {
     }
 };
 
-struct WorkerCapability {
+struct MemberCapability {
     std::string hostId;
     std::string compatibilityVersion;
 };
 
-struct WorkerRecord {
-    WorkerId workerId;
-    WorkerEndpoint endpoint;
-    WorkerServiceState serviceState{ WorkerServiceState::START };
-    WorkerCapability capability;
+struct MembershipRecord {
+    TopologyNodeId nodeId;
+    TopologyEndpoint endpoint;
+    MemberLifecycleState lifecycleState{ MemberLifecycleState::STARTING };
+    MemberCapability capability;
     std::string registerTimestamp;
     Revision modRevision{ 0 };
 };
 
 struct MembershipSnapshot {
     Revision revision{ 0 };
-    std::unordered_map<WorkerId, WorkerRecord> workers;
-    uint64_t badRecordCount{ 0 };
+    std::unordered_map<TopologyNodeId, MembershipRecord> members;
+    uint64_t malformedRecordCount{ 0 };
 };
 
-enum class WorkerWatchEventType {
+enum class MembershipWatchEventType {
     UPDATED,
     DELETED,
 };
 
-struct WorkerWatchEvent {
-    WorkerWatchEventType type{ WorkerWatchEventType::UPDATED };
-    WorkerId workerId;
-    WorkerRecord record;
+struct MembershipWatchEvent {
+    MembershipWatchEventType type{ MembershipWatchEventType::UPDATED };
+    TopologyNodeId nodeId;
+    MembershipRecord record;
     Revision revision{ 0 };
     Status status;
 };
 
 struct ScaleInRequest {
-    WorkerId workerId;
+    TopologyNodeId nodeId;
     ScaleInReason reason{ ScaleInReason::ORDERLY_SHUTDOWN };
 };
 
@@ -112,32 +113,32 @@ public:
     virtual Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const = 0;
 };
 
-class IWorkerDirectory : public IMembershipSnapshotProvider {
+class IMembershipView : public IMembershipSnapshotProvider {
 public:
-    ~IWorkerDirectory() override = default;
+    ~IMembershipView() override = default;
 
     /**
-     * @brief Look up one worker record from the local snapshot.
-     * @param[in] workerId Canonical worker address.
-     * @param[out] record Worker record copied from the immutable snapshot.
+     * @brief Look up one membership record from the local snapshot.
+     * @param[in] nodeId Canonical topology node id.
+     * @param[out] record Membership record copied from the immutable snapshot when the function returns K_OK.
      * @return K_OK on success; K_NOT_READY before the first snapshot; K_NOT_FOUND when absent.
      */
-    virtual Status GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const = 0;
+    virtual Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const = 0;
 
     /**
-     * @brief Resolve one ready worker endpoint from the local snapshot.
-     * @param[in] workerId Canonical worker address.
-     * @param[out] endpoint Ready worker endpoint.
+     * @brief Resolve one ready member endpoint from the local snapshot.
+     * @param[in] nodeId Canonical topology node id.
+     * @param[out] endpoint Ready member endpoint copied when the function returns K_OK.
      * @return K_OK on success; K_NOT_READY before the first snapshot; K_NOT_FOUND when absent or not ready.
      */
-    virtual Status GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const = 0;
+    virtual Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const = 0;
 
     /**
-     * @brief List workers whose service state is READY.
-     * @param[out] workers Ready worker records.
+     * @brief List members whose service state is READY.
+     * @param[out] members Ready membership records copied when the function returns K_OK.
      * @return K_OK when a snapshot is available; K_NOT_READY before the first successful rebuild.
      */
-    virtual Status ListReadyWorkers(std::vector<WorkerRecord> &workers) const = 0;
+    virtual Status ListReadyMembers(std::vector<MembershipRecord> &members) const = 0;
 };
 
 }  // namespace topology

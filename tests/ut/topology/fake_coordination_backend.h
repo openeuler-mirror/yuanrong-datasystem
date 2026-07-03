@@ -21,6 +21,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,7 +29,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/topology/membership/membership_value_codec.h"
 
 namespace datasystem {
 namespace topology {
@@ -60,6 +61,11 @@ public:
 
     Status GetAll(const std::string &tableName, std::vector<std::pair<std::string, std::string>> &outKeyValues) override
     {
+        if (nextGetAllStatus_.has_value()) {
+            auto status = *nextGetAllStatus_;
+            nextGetAllStatus_.reset();
+            return status;
+        }
         outKeyValues.clear();
         for (const auto &entry : entries_) {
             if (entry.first.first == tableName) {
@@ -102,10 +108,19 @@ public:
         constexpr uint32_t maxRetry = 10;
         Status lastErr;
         for (uint32_t retryNum = 0; retryNum < maxRetry; ++retryNum) {
-            RETURN_IF_NOT_OK(Get(tableName, key, res));
+            RangeSearchResult current;
+            auto getRc = Get(tableName, key, current);
+            CHECK_FAIL_RETURN_STATUS(getRc.IsOk() || getRc.GetCode() == K_NOT_FOUND, getRc.GetCode(),
+                                     getRc.GetMsg());
+            if (exposeCasResultBeforeProcess_) {
+                res = current;
+            }
             std::unique_ptr<std::string> newValue;
             bool retry = true;
-            auto rc = processFunc(res.value, newValue, retry);
+            auto rc = processFunc(current.value, newValue, retry);
+            if (!exposeCasResultBeforeProcess_) {
+                res = current;
+            }
             if (rc.IsError()) {
                 if (!retry) {
                     return rc;
@@ -116,19 +131,26 @@ public:
             if (newValue == nullptr) {
                 return Status::OK();
             }
+            if (getRc.GetCode() == K_NOT_FOUND) {
+                RETURN_IF_NOT_OK(PutForTest(tableName, key, *newValue));
+                DeleteKeyAfterCasWriteIfNeeded(tableName, key);
+                return Status::OK();
+            }
             InjectCasConflictIfNeeded(tableName, key);
             auto iter = entries_.find({ tableName, key });
             if (iter == entries_.end()) {
                 RETURN_STATUS(K_TRY_AGAIN, "key was deleted during CAS");
             }
-            if (iter->second.revision != res.modRevision) {
+            if (iter->second.revision != current.modRevision) {
                 if (!retry) {
                     RETURN_STATUS(K_TRY_AGAIN, "CAS revision mismatch");
                 }
                 lastErr = Status(K_TRY_AGAIN, "CAS revision mismatch");
                 continue;
             }
-            return PutForTest(tableName, key, *newValue);
+            RETURN_IF_NOT_OK(PutForTest(tableName, key, *newValue));
+            DeleteKeyAfterCasWriteIfNeeded(tableName, key);
+            return Status::OK();
         }
         return lastErr.IsError() ? lastErr : Status(K_TRY_AGAIN, "CAS retry limit exceeded");
     }
@@ -165,6 +187,11 @@ public:
 
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override
     {
+        if (nextWatchStatus_.has_value()) {
+            auto status = *nextWatchStatus_;
+            nextWatchStatus_.reset();
+            return status;
+        }
         watchKeys_ = watchKeys;
         return Status::OK();
     }
@@ -172,22 +199,35 @@ public:
     Status InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override
     {
-        WorkerServiceInfo value;
+        MembershipValue value;
         value.timestamp = 1;
         if (!isStoreAvailableWhenStart) {
-            value.state = WorkerServiceState::DOWNGRADE_RESTART;
+            value.lifecycleState = MemberLifecycleState::DOWNGRADE_RESTARTING;
         } else if (isRestart) {
-            value.state = WorkerServiceState::RESTART;
+            value.lifecycleState = MemberLifecycleState::RESTARTING;
         } else {
-            value.state = WorkerServiceState::START;
+            value.lifecycleState = MemberLifecycleState::STARTING;
         }
-        return PutForTest(tableName, key, value.ToString());
+        keepAliveInitialized_ = true;
+        keepAliveTableName_ = tableName;
+        keepAliveKey_ = key;
+        std::string encoded;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, encoded));
+        return PutForTest(tableName, key, encoded);
     }
 
-    Status UpdateNodeState(WorkerServiceState state) override
+    Status UpdateNodeState(MemberLifecycleState state) override
     {
         nodeState_ = state;
-        return Status::OK();
+        if (!keepAliveInitialized_) {
+            return Status::OK();
+        }
+        MembershipValue value;
+        value.timestamp = revision_ + 1;
+        value.lifecycleState = state;
+        std::string encoded;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, encoded));
+        return PutForTest(keepAliveTableName_, keepAliveKey_, encoded);
     }
 
     Status GetStorePrefix(const std::string &tableName, std::string &prefix) override
@@ -227,6 +267,46 @@ public:
         casConflictCount_ = conflictCount;
     }
 
+    void DeleteKeyAfterNextCasWriteForTest(const std::string &tableName, const std::string &key)
+    {
+        deleteAfterNextCasWriteKey_ = std::make_pair(tableName, key);
+    }
+
+    void SetExposeCasResultBeforeProcessForTest(bool expose)
+    {
+        exposeCasResultBeforeProcess_ = expose;
+    }
+
+    void SetNextWatchStatusForTest(Status status)
+    {
+        nextWatchStatus_ = std::move(status);
+    }
+
+    void SetNextGetAllStatusForTest(Status status)
+    {
+        nextGetAllStatus_ = std::move(status);
+    }
+
+    const std::vector<WatchKey> &WatchKeysForTest() const
+    {
+        return watchKeys_;
+    }
+
+    MemberLifecycleState NodeStateForTest() const
+    {
+        return nodeState_;
+    }
+
+    bool HasEventHandlerForTest() const
+    {
+        return eventHandler_ != nullptr;
+    }
+
+    EventHandler CopyEventHandlerForTest() const
+    {
+        return eventHandler_;
+    }
+
 private:
     struct Entry {
         std::string value;
@@ -263,13 +343,30 @@ private:
         (void)PutForTest(tableName, key, iter->second.value);
     }
 
+    void DeleteKeyAfterCasWriteIfNeeded(const std::string &tableName, const std::string &key)
+    {
+        if (!deleteAfterNextCasWriteKey_.has_value()
+            || *deleteAfterNextCasWriteKey_ != std::make_pair(tableName, key)) {
+            return;
+        }
+        deleteAfterNextCasWriteKey_.reset();
+        (void)DeleteForTest(tableName, key);
+    }
+
     std::map<std::pair<std::string, std::string>, Entry> entries_;
     int64_t revision_{ 0 };
     EventHandler eventHandler_;
     std::function<bool()> checkStoreStateHandler_;
     std::vector<WatchKey> watchKeys_;
-    WorkerServiceState nodeState_{ WorkerServiceState::UNSPECIFIED };
+    MemberLifecycleState nodeState_{ MemberLifecycleState::UNKNOWN };
+    bool keepAliveInitialized_{ false };
+    std::string keepAliveTableName_;
+    std::string keepAliveKey_;
+    std::optional<Status> nextWatchStatus_;
+    std::optional<Status> nextGetAllStatus_;
+    std::optional<std::pair<std::string, std::string>> deleteAfterNextCasWriteKey_;
     uint32_t casConflictCount_{ 0 };
+    bool exposeCasResultBeforeProcess_{ true };
 };
 
 }  // namespace topology

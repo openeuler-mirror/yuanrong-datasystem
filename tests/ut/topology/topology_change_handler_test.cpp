@@ -23,7 +23,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/topology/membership/membership_value_codec.h"
 #include "tests/ut/common.h"
 #include "tests/ut/topology/fake_coordination_backend.h"
 
@@ -47,19 +47,23 @@ public:
     Status nextStatus;
 };
 
-std::string MakeWorkerServiceInfoValue(const std::string &state)
+std::string MakeMembershipValue(MemberLifecycleState state)
 {
-    WorkerServiceInfo value;
+    MembershipValue value;
     value.timestamp = 100;
     value.hostId = "host-a";
-    auto rc = StringToWorkerServiceState(state, value.state);
-    return rc.IsOk() ? value.ToString() : "100;" + state + ";host-a";
+    value.lifecycleState = state;
+    std::string encoded;
+    auto rc = MembershipValueCodec::Encode(value, encoded);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    return encoded;
 }
 
 TEST(TopologyChangeHandlerTest, SubmitsScaleInForReadyLocalWorker)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -69,14 +73,15 @@ TEST(TopologyChangeHandlerTest, SubmitsScaleInForReadyLocalWorker)
     DS_ASSERT_OK(handler.RequestScaleIn(ScaleInReason::ORDERLY_SHUTDOWN));
 
     EXPECT_EQ(requester.callCount, 1ul);
-    EXPECT_EQ(requester.lastRequest.workerId, "127.0.0.1:7001");
+    EXPECT_EQ(requester.lastRequest.nodeId, "127.0.0.1:7001");
     EXPECT_EQ(requester.lastRequest.reason, ScaleInReason::ORDERLY_SHUTDOWN);
 }
 
 TEST(TopologyChangeHandlerTest, DoesNotSubmitWhenMembershipRejects)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("start")));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::STARTING)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -90,7 +95,8 @@ TEST(TopologyChangeHandlerTest, DoesNotSubmitWhenMembershipRejects)
 TEST(TopologyChangeHandlerTest, PropagatesRequesterBackpressure)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue(ETCD_NODE_READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());

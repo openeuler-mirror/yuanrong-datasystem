@@ -67,6 +67,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_parallel
         common_coordinator_store
         coordinator_protos_client
+        worker_node_info_client
         dl
         client_mmap_static
         gRPC::grpc++

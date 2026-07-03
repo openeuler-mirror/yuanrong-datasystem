@@ -35,44 +35,52 @@ bool ContainsHash(const Range &range, uint32_t hash)
 
 }  // namespace
 
-PlacementFacade::PlacementFacade(std::shared_ptr<IWorkerLocator> locator,
+PlacementFacade::PlacementFacade(std::shared_ptr<IOwnerEndpointResolver> locator,
                                  std::shared_ptr<IRedirectPolicy> redirectPolicy)
-    : locator_(std::move(locator)), redirectPolicy_(std::move(redirectPolicy))
+    : PlacementFacade(std::move(locator), std::move(redirectPolicy), nullptr)
 {
 }
 
-Status PlacementFacade::LocateMetaOwner(const std::string &objectKey, const RouteOptions &options,
+PlacementFacade::PlacementFacade(std::shared_ptr<IOwnerEndpointResolver> locator,
+                                 std::shared_ptr<IRedirectPolicy> redirectPolicy,
+                                 std::shared_ptr<IRoutingView> routingView)
+    : locator_(std::move(locator)), redirectPolicy_(std::move(redirectPolicy)), routingView_(std::move(routingView))
+{
+}
+
+Status PlacementFacade::LocateMetaOwner(const std::string &key, const RouteOptions &options,
                                         RouteDecision &decision) const
 {
     CHECK_FAIL_RETURN_STATUS(locator_ != nullptr, K_INVALID, "Placement facade locator is not set.");
-    return locator_->LocateMetaOwner(objectKey, options, nullptr, decision);
+    return locator_->LocateMetaOwner(key, options, nullptr, decision);
 }
 
-Status PlacementFacade::LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys, const RouteOptions &options,
+Status PlacementFacade::LocateMetaOwnersBatch(const std::vector<std::string> &keys, const RouteOptions &options,
                                               BatchRouteDecision &decision) const
 {
     CHECK_FAIL_RETURN_STATUS(locator_ != nullptr, K_INVALID, "Placement facade locator is not set.");
-    return locator_->LocateMetaOwnersBatch(objectKeys, options, decision);
+    return locator_->LocateMetaOwnersBatch(keys, options, decision);
 }
 
-Status PlacementFacade::EvaluateRedirect(const std::string &objectKey, const RouteOptions &options,
+Status PlacementFacade::EvaluateRedirect(const std::string &key, const RouteOptions &options,
                                          RedirectDecision &decision) const
 {
     CHECK_FAIL_RETURN_STATUS(redirectPolicy_ != nullptr, K_INVALID, "Placement facade redirect policy is not set.");
-    return redirectPolicy_->Evaluate(objectKey, options, decision);
+    return redirectPolicy_->Evaluate(key, options, decision);
 }
 
 Status PlacementFacade::QueryLocalPlacement(const LocalPlacementQuery &query, LocalPlacementDecision &decision) const
 {
-    CHECK_FAIL_RETURN_STATUS(locator_ != nullptr, K_INVALID, "Placement facade locator is not set.");
-    RouteDecision route;
-    RouteOptions options;
-    Status rc = locator_->LocateMetaOwner(query.objectKey, options, nullptr, route);
+    CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr, K_INVALID, "Placement facade routing view is not set.");
     decision = LocalPlacementDecision{};
-    decision.objectKeyHash = route.objectKeyHash;
-    decision.routingVersion = route.routingVersion;
-    decision.placementUnit = route.placementUnit;
-    return rc;
+    decision.keyHash = MurmurHash3_32(query.key);
+    std::shared_ptr<const RoutingSnapshot> snapshot;
+    RETURN_IF_NOT_OK(routingView_->GetSnapshot(snapshot));
+    RoutingOwnerEntry entry;
+    RETURN_IF_NOT_OK(snapshot->Locate(decision.keyHash, entry));
+    decision.routingVersion = snapshot->Version();
+    decision.placementUnit = entry.unit;
+    return Status::OK();
 }
 
 bool PlacementFacade::IsInRange(const std::string &key, const std::vector<Range> &ranges) const

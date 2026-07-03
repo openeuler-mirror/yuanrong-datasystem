@@ -103,7 +103,7 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos)
 
 GENERATE_PROTO_CPP(HASHRING_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
-        PROTO_FILES ${PROTO_SRC_DIR}/hash_ring.proto
+        PROTO_FILES ${PROTO_SRC_DIR}/hash_ring.proto ${PROTO_SRC_DIR}/hash_ring_v2.proto
         PROTO_DEPEND proto_lib_depend)
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME hash_ring_protos

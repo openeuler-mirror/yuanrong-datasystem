@@ -21,6 +21,7 @@
 
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1874,7 +1875,7 @@ void WorkerOCServer::WaitClientsExit()
         if (checkThreadRunning_) {
             LOG(INFO) << "Update node state in coordination backend to exiting";
             CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-            return coordinationBackend_->UpdateNodeState(topology::WorkerServiceState::EXITING);
+            return coordinationBackend_->UpdateNodeState(topology::MemberLifecycleState::EXITING);
         }
         return Status::OK();
     });
