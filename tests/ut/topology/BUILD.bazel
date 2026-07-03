@@ -18,14 +18,18 @@ ds_cc_test_library(
     srcs = [
         "testing/fake_topology_change_requester.cpp",
         "testing/fake_topology_repository.cpp",
-        "testing/fake_worker_directory.cpp",
+        "testing/fake_membership_view.cpp",
+        "testing/topology_test_utils.cpp",
     ],
     hdrs = [
         "testing/fake_topology_change_requester.h",
         "testing/fake_topology_repository.h",
-        "testing/fake_worker_directory.h",
+        "testing/fake_membership_view.h",
+        "testing/topology_test_utils.h",
     ],
     deps = [
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/common/util:status_helper",
         "//src/datasystem/topology:topology",
     ],
 )
@@ -39,6 +43,26 @@ ds_cc_test(
         "//src/datasystem/protos:hash_ring_cc_proto",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_test_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_key_helper_test",
+    srcs = ["topology_key_helper_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "hash_ring_v2_schema_test",
+    srcs = ["hash_ring_v2_schema_test.cpp"],
+    deps = [
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//tests/ut:ut_common",
     ],
 )
 
@@ -67,24 +91,12 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_directory_test",
-    srcs = ["worker_directory_test.cpp"],
+    name = "membership_view_test",
+    srcs = ["membership_view_test.cpp"],
     deps = [
         "//src/datasystem/topology:topology",
         "//src/datasystem/common/util:status_helper",
         "//tests/ut:ut_common",
-    ],
-)
-
-ds_cc_test(
-    name = "topology_change_handler_test",
-    srcs = ["topology_change_handler_test.cpp"],
-    deps = [
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
-        "//src/datasystem/topology:topology",
-        "//tests/ut:ut_common",
-        "//tests/ut/topology:topology_test_common",
     ],
 )
 
@@ -122,6 +134,7 @@ ds_cc_test(
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
     ],
 )
 
@@ -152,12 +165,13 @@ test_suite(
         "cluster_membership_test",
         "cluster_registry_test",
         "hash_algorithm_test",
+        "hash_ring_v2_schema_test",
         "placement_runtime_test",
         "placement_policy_engine_test",
         "topology_fake_integration_test",
-        "topology_change_handler_test",
+        "topology_key_helper_test",
         "topology_memory_scale_module_test",
         "topology_repository_test",
-        "worker_directory_test",
+        "membership_view_test",
     ],
 )

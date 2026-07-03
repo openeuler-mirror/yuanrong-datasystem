@@ -35,26 +35,29 @@ using Revision = int64_t;
 using AlgorithmId = std::string;
 using PlacementPolicyId = std::string;
 using TaskId = std::string;
-using WorkerAddress = std::string;
-using WorkerId = std::string;
+using TopologyAddress = std::string;
+using TopologyNodeId = std::string;
 
-enum class WorkerTopologyState {
+static constexpr uint32_t TOPOLOGY_SCHEMA_VERSION = 1;
+
+enum class TopologyNodeState {
     INITIAL,
     JOINING,
     ACTIVE,
     LEAVING,
+    PRE_LEAVING,
 };
 
-struct TopologyWorker {
-    WorkerId workerId;
-    WorkerTopologyState state{ WorkerTopologyState::INITIAL };
+struct TopologyNode {
+    TopologyNodeId nodeId;
+    TopologyNodeState state{ TopologyNodeState::INITIAL };
     std::vector<uint32_t> tokens;
 };
 
 struct TopologyDescriptor {
     int64_t version{ 0 };
     bool clusterHasInit{ true };
-    std::vector<TopologyWorker> workers;
+    std::vector<TopologyNode> members;
 };
 
 enum class PlacementPolicyMatchType {
@@ -82,8 +85,14 @@ struct PlacementUnit {
 };
 
 struct LogicalOwner {
-    WorkerId workerId;
+    TopologyNodeId nodeId;
     int64_t topologyVersion{ 0 };
+};
+
+struct AlgorithmOwnerRange {
+    uint32_t begin{ 0 };
+    uint32_t end{ 0 };
+    TopologyNodeId nodeId;
 };
 
 struct AlgorithmRoutingState {
@@ -91,44 +100,75 @@ struct AlgorithmRoutingState {
 
     AlgorithmId algorithmId;
     int64_t topologyVersion{ 0 };
+    std::vector<AlgorithmOwnerRange> ownerRanges;
 };
 
 struct RouteContext {
-    std::string objectKey;
+    std::string key;
     std::string namespaceId;
 };
 
 struct TokenRange {
     uint32_t begin{ 0 };
     uint32_t end{ 0 };
-    WorkerId workerId;
+    TopologyNodeId nodeId;
     bool finished{ false };
 };
 
 struct TaskFilter {
-    std::optional<WorkerId> workerId;
+    std::optional<TopologyNodeId> nodeId;
+    std::optional<TopologyNodeId> executorNodeId;
     bool unfinishedOnly{ false };
+};
+
+enum class TaskTerminalStatus {
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    BLOCKED,
+};
+
+enum class TaskNotifyType {
+    SCALE_OUT,
+    ACTIVE_SCALE_IN,
+    PASSIVE_SCALE_IN,
+};
+
+struct TaskNotify {
+    TopologyAddress nodeAddress;
+    TaskNotifyType type{ TaskNotifyType::SCALE_OUT };
+    std::vector<TaskId> taskIds;
 };
 
 struct TransferTaskRecord {
     TaskId taskId;
+    Revision taskRevision{ 0 };
     Revision ringRevision{ 0 };
-    WorkerId sourceWorkerId;
-    WorkerId targetWorkerId;
+    TopologyNodeId executorNodeId;
+    TopologyNodeId sourceNodeId;
+    TopologyNodeId targetNodeId;
+    int64_t createdTopologyVersion{ 0 };
+    int64_t targetTopologyVersion{ 0 };
+    TaskTerminalStatus status{ TaskTerminalStatus::RUNNING };
     std::vector<TokenRange> ranges;
 };
 
 struct RecoveryTaskRecord {
     TaskId taskId;
+    Revision taskRevision{ 0 };
     Revision ringRevision{ 0 };
-    WorkerId failedWorkerId;
-    WorkerId recoveryWorkerId;
+    TopologyNodeId executorNodeId;
+    TopologyNodeId failedNodeId;
+    TopologyNodeId recoveryNodeId;
+    int64_t createdTopologyVersion{ 0 };
+    int64_t targetTopologyVersion{ 0 };
+    TaskTerminalStatus status{ TaskTerminalStatus::RUNNING };
     std::vector<TokenRange> ranges;
 };
 
 struct TaskProgressUpdate {
     TaskId taskId;
-    WorkerId workerId;
+    TopologyNodeId nodeId;
     TokenRange range;
 };
 

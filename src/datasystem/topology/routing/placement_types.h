@@ -44,21 +44,40 @@ struct RoutingRange {
 
     bool Contains(uint32_t objectHash) const
     {
-        if (rangeBegin == rangeEnd) {
-            return false;
-        }
         if (IsWrapped()) {
-            return objectHash > rangeBegin || objectHash <= rangeEnd;
+            return objectHash >= rangeBegin || objectHash <= rangeEnd;
         }
-        return objectHash > rangeBegin && objectHash <= rangeEnd;
+        return objectHash >= rangeBegin && objectHash <= rangeEnd;
     }
 };
 
-enum class WorkerAvailability {
+enum class MemberAvailability {
     READY,
     NOT_READY,
     UNCONFIRMED,
 };
+
+struct MemberEndpoint {
+    MemberEndpoint() : address()
+    {
+    }
+
+    MemberEndpoint(std::string nodeId, HostPort address, MemberAvailability availability)
+        : nodeId(std::move(nodeId)), address(std::move(address)), availability(availability)
+    {
+    }
+
+    std::string nodeId;
+    HostPort address;
+    MemberAvailability availability = MemberAvailability::NOT_READY;
+
+    bool Empty() const
+    {
+        return nodeId.empty() && address.Empty();
+    }
+};
+
+using WorkerAvailability = MemberAvailability;
 
 struct PlacementEndpoint {
     PlacementEndpoint() : address()
@@ -70,13 +89,18 @@ struct PlacementEndpoint {
     {
     }
 
+    explicit PlacementEndpoint(const MemberEndpoint &endpoint)
+        : workerId(endpoint.nodeId), address(endpoint.address), availability(endpoint.availability)
+    {
+    }
+
     std::string workerId;
     HostPort address;
     WorkerAvailability availability = WorkerAvailability::NOT_READY;
 
-    bool Empty() const
+    operator MemberEndpoint() const
     {
-        return workerId.empty() && address.Empty();
+        return MemberEndpoint{ workerId, address, availability };
     }
 };
 
@@ -89,17 +113,17 @@ struct RouteOptions {
 struct RouteDecision {
     RouteDecision() = default;
 
-    uint32_t objectKeyHash = 0;
+    uint32_t keyHash = 0;
     int64_t routingVersion = -1;
     RoutingRange placementUnit;
-    std::string ownerWorkerId;
-    PlacementEndpoint ownerEndpoint;
+    std::string ownerNodeId;
+    MemberEndpoint ownerEndpoint;
 
     MetaAddrInfo ToMetaAddrInfo() const
     {
         MetaAddrInfo info;
         info.SetAddress(ownerEndpoint.address);
-        info.SetDbName(ownerWorkerId);
+        info.SetDbName(ownerNodeId);
         return info;
     }
 };
@@ -113,11 +137,11 @@ struct BatchRouteDecision {
 };
 
 struct LocalPlacementQuery {
-    std::string objectKey;
+    std::string key;
 };
 
 struct LocalPlacementDecision {
-    uint32_t objectKeyHash = 0;
+    uint32_t keyHash = 0;
     int64_t routingVersion = -1;
     RoutingRange placementUnit;
 };
@@ -131,7 +155,7 @@ struct RedirectDecision {
     RedirectDecision() = default;
 
     RedirectAction action = RedirectAction::SERVE_LOCAL;
-    PlacementEndpoint targetEndpoint;
+    MemberEndpoint targetEndpoint;
 };
 
 }  // namespace topology

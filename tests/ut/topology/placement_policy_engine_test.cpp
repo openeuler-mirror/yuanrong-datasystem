@@ -49,7 +49,7 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyDeterministicSelection)
 {
     PlacementPolicyEngine engine;
     RouteContext context;
-    context.objectKey = "tenant-a/orders/42";
+    context.key = "tenant-a/orders/42";
     context.namespaceId = "tenant-a";
 
     std::vector<PlacementPolicyRule> rules = {
@@ -62,8 +62,8 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyDeterministicSelection)
     DS_ASSERT_OK(engine.SelectPolicy(context, rules, selected));
     EXPECT_EQ(selected.policyId, "prefix");
 
-    rules.push_back(MakeRule("exact-b", PlacementPolicyMatchType::EXACT_KEY, context.objectKey, 10));
-    rules.push_back(MakeRule("exact-a", PlacementPolicyMatchType::EXACT_KEY, context.objectKey, 10));
+    rules.push_back(MakeRule("exact-b", PlacementPolicyMatchType::EXACT_KEY, context.key, 10));
+    rules.push_back(MakeRule("exact-a", PlacementPolicyMatchType::EXACT_KEY, context.key, 10));
     DS_ASSERT_OK(engine.SelectPolicy(context, rules, selected));
     EXPECT_EQ(selected.policyId, "exact-a");
 
@@ -76,7 +76,7 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyRejectsInvalidRules)
 {
     PlacementPolicyEngine engine;
     RouteContext context;
-    context.objectKey = "object";
+    context.key = "object";
     PlacementPolicyRule selected;
 
     EXPECT_EQ(engine.SelectPolicy(context, {}, selected).GetCode(), K_NOT_FOUND);
@@ -103,7 +103,7 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyReturnsNotFoundWhenNoRuleMatches)
 {
     PlacementPolicyEngine engine;
     RouteContext context;
-    context.objectKey = "object";
+    context.key = "object";
     context.namespaceId = "tenant-a";
     std::vector<PlacementPolicyRule> rules = {
         MakeRule("prefix", PlacementPolicyMatchType::PREFIX, "other", 0),

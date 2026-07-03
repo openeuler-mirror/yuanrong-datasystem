@@ -28,8 +28,8 @@
 namespace datasystem {
 namespace topology {
 
-ClusterMembership::ClusterMembership(IClusterRegistry &registry, WorkerId localWorkerId)
-    : registry_(registry), localWorkerId_(std::move(localWorkerId))
+ClusterMembership::ClusterMembership(IClusterRegistry &registry, TopologyNodeId localNodeId)
+    : registry_(registry), localNodeId_(std::move(localNodeId))
 {
 }
 
@@ -49,7 +49,7 @@ Status ClusterMembership::Rebuild()
     }
 
     MembershipSnapshot listed;
-    auto rc = registry_.ListWorkers(listed);
+    auto rc = registry_.ListMembers(listed);
     if (!rc.IsOk()) {
         PublishSnapshot(nullptr, MembershipRuntimeState::DEGRADED);
         return rc;
@@ -67,9 +67,9 @@ void ClusterMembership::Stop()
 
 Status ClusterMembership::HandleStoreEvent(const CoordinationEvent &event)
 {
-    WorkerWatchEvent typed;
-    RETURN_IF_NOT_OK(registry_.HandleWorkerEvent(event, typed));
-    return ApplyWorkerEvent(typed);
+    MembershipWatchEvent typed;
+    RETURN_IF_NOT_OK(registry_.HandleMembershipEvent(event, typed));
+    return ApplyMembershipEvent(typed);
 }
 
 Status ClusterMembership::GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const
@@ -81,35 +81,44 @@ Status ClusterMembership::GetSnapshot(std::shared_ptr<const MembershipSnapshot> 
     return Status::OK();
 }
 
-Status ClusterMembership::GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const
+Status ClusterMembership::GetLastSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot = snapshot_;
+    CHECK_FAIL_RETURN_STATUS(snapshot != nullptr && state_ != MembershipRuntimeState::STOPPED, K_NOT_READY,
+                             "membership last-good snapshot is not ready");
+    return Status::OK();
+}
+
+Status ClusterMembership::GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const
 {
     record = {};
     std::shared_ptr<const MembershipSnapshot> snapshot;
     RETURN_IF_NOT_OK(GetSnapshot(snapshot));
-    auto iter = snapshot->workers.find(workerId);
-    CHECK_FAIL_RETURN_STATUS(iter != snapshot->workers.end(), K_NOT_FOUND, "worker is absent from membership snapshot");
+    auto iter = snapshot->members.find(nodeId);
+    CHECK_FAIL_RETURN_STATUS(iter != snapshot->members.end(), K_NOT_FOUND, "member is absent from membership snapshot");
     record = iter->second;
     return Status::OK();
 }
 
-Status ClusterMembership::GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const
+Status ClusterMembership::GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const
 {
     endpoint = {};
-    WorkerRecord record;
-    RETURN_IF_NOT_OK(GetWorkerRecord(workerId, record));
-    CHECK_FAIL_RETURN_STATUS(record.serviceState == WorkerServiceState::READY, K_NOT_FOUND, "worker is not ready");
+    MembershipRecord record;
+    RETURN_IF_NOT_OK(GetRecord(nodeId, record));
+    CHECK_FAIL_RETURN_STATUS(record.lifecycleState == MemberLifecycleState::READY, K_NOT_FOUND, "member is not ready");
     endpoint = record.endpoint;
     return Status::OK();
 }
 
-Status ClusterMembership::ListReadyWorkers(std::vector<WorkerRecord> &workers) const
+Status ClusterMembership::ListReadyMembers(std::vector<MembershipRecord> &members) const
 {
-    workers.clear();
+    members.clear();
     std::shared_ptr<const MembershipSnapshot> snapshot;
     RETURN_IF_NOT_OK(GetSnapshot(snapshot));
-    for (const auto &entry : snapshot->workers) {
-        if (entry.second.serviceState == WorkerServiceState::READY) {
-            workers.push_back(entry.second);
+    for (const auto &entry : snapshot->members) {
+        if (entry.second.lifecycleState == MemberLifecycleState::READY) {
+            members.push_back(entry.second);
         }
     }
     return Status::OK();
@@ -123,12 +132,12 @@ Status ClusterMembership::BuildLocalScaleInRequest(ScaleInReason reason, ScaleIn
     RETURN_IF_NOT_OK(ValidateScaleInReason(reason));
     std::shared_ptr<const MembershipSnapshot> snapshot;
     RETURN_IF_NOT_OK(GetSnapshot(snapshot));
-    auto iter = snapshot->workers.find(localWorkerId_);
-    CHECK_FAIL_RETURN_STATUS(iter != snapshot->workers.end(), K_NOT_FOUND,
-                             "local worker is not in membership snapshot");
-    CHECK_FAIL_RETURN_STATUS(iter->second.serviceState == WorkerServiceState::READY, K_NOT_READY,
-                             "local worker is not ready for scale-in");
-    request.workerId = localWorkerId_;
+    auto iter = snapshot->members.find(localNodeId_);
+    CHECK_FAIL_RETURN_STATUS(iter != snapshot->members.end(), K_NOT_FOUND,
+                             "local member is not in membership snapshot");
+    CHECK_FAIL_RETURN_STATUS(iter->second.lifecycleState == MemberLifecycleState::READY, K_NOT_READY,
+                             "local member is not ready for scale-in");
+    request.nodeId = localNodeId_;
     request.reason = reason;
     observedRevision = snapshot->revision;
     return Status::OK();
@@ -140,17 +149,17 @@ MembershipRuntimeState ClusterMembership::RuntimeState() const
     return state_;
 }
 
-Status ClusterMembership::ApplyWorkerEvent(const WorkerWatchEvent &event)
+Status ClusterMembership::ApplyMembershipEvent(const MembershipWatchEvent &event)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr && state_ == MembershipRuntimeState::READY, K_NOT_READY,
                              "membership snapshot is not ready");
     auto next = std::make_shared<MembershipSnapshot>(*snapshot_);
     next->revision = event.revision;
-    if (event.type == WorkerWatchEventType::DELETED) {
-        next->workers.erase(event.workerId);
+    if (event.type == MembershipWatchEventType::DELETED) {
+        next->members.erase(event.nodeId);
     } else {
-        next->workers[event.record.workerId] = event.record;
+        next->members[event.record.nodeId] = event.record;
     }
     snapshot_ = std::move(next);
     return Status::OK();
@@ -163,7 +172,9 @@ void ClusterMembership::PublishSnapshot(std::shared_ptr<const MembershipSnapshot
     if (state_ == MembershipRuntimeState::STOPPED) {
         return;
     }
-    snapshot_ = std::move(snapshot);
+    if (snapshot != nullptr) {
+        snapshot_ = std::move(snapshot);
+    }
     state_ = state;
 }
 

@@ -54,6 +54,7 @@
 #include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/flags/flags.h"

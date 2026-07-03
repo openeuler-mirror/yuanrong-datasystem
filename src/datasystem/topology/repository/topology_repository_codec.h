@@ -21,6 +21,7 @@
 #define DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_CODEC_H
 
 #include <string>
+#include <vector>
 
 #include "datasystem/topology/model/topology_types.h"
 
@@ -47,41 +48,22 @@ public:
      */
     Status EncodeTopology(const TopologyDescriptor &topology, std::string &bytes) const;
 
-    /**
-     * @brief Decode transfer tasks from HashRingPb.add_node_info.
-     * @param[in] ringBytes Serialized HashRingPb.
-     * @param[out] tasks Worker-facing transfer task records grouped by target and source worker.
-     * @return K_OK on success; K_INVALID for parse or semantic errors.
-     */
-    Status DecodeTransferTasksFromRing(const std::string &ringBytes, std::vector<TransferTaskRecord> &tasks) const;
-
-    /**
-     * @brief Decode recovery tasks from HashRingPb.del_node_info.
-     * @param[in] ringBytes Serialized HashRingPb.
-     * @param[out] tasks Worker-facing recovery task records grouped by failed and recovery worker.
-     * @return K_OK on success; K_INVALID for parse or semantic errors.
-     */
-    Status DecodeRecoveryTasksFromRing(const std::string &ringBytes, std::vector<RecoveryTaskRecord> &tasks) const;
-
-    /**
-     * @brief Apply one transfer task progress update to HashRingPb.add_node_info.
-     * @param[in] currentBytes Current serialized HashRingPb.
-     * @param[in] update Progress update to merge.
-     * @param[out] newBytes Serialized ring after merge.
-     * @return K_OK on success; K_INVALID when update mismatches ring tasks.
-     */
-    Status ApplyTransferProgressToRing(const std::string &currentBytes, const TaskProgressUpdate &update,
+    Status DecodeMigrateTask(const std::string &bytes, const TaskId &taskId, TransferTaskRecord &task) const;
+    Status EncodeMigrateTask(const TransferTaskRecord &task, std::string &bytes) const;
+    Status ApplyTransferProgressToTask(const std::string &currentBytes, const TaskProgressUpdate &update,
                                        std::string &newBytes) const;
-
-    /**
-     * @brief Apply one recovery task progress update to HashRingPb.del_node_info.
-     * @param[in] currentBytes Current serialized HashRingPb.
-     * @param[in] update Progress update to merge.
-     * @param[out] newBytes Serialized ring after merge.
-     * @return K_OK on success; K_INVALID when update mismatches ring tasks.
-     */
-    Status ApplyRecoveryProgressToRing(const std::string &currentBytes, const TaskProgressUpdate &update,
+    Status ApplyTransferProgressBatchToTask(const std::string &currentBytes,
+                                            const std::vector<TaskProgressUpdate> &updates,
+                                            std::string &newBytes) const;
+    Status DecodeDeleteNodeTask(const std::string &bytes, const TaskId &taskId, RecoveryTaskRecord &task) const;
+    Status EncodeDeleteNodeTask(const RecoveryTaskRecord &task, std::string &bytes) const;
+    Status ApplyRecoveryProgressToTask(const std::string &currentBytes, const TaskProgressUpdate &update,
                                        std::string &newBytes) const;
+    Status ApplyRecoveryProgressBatchToTask(const std::string &currentBytes,
+                                            const std::vector<TaskProgressUpdate> &updates,
+                                            std::string &newBytes) const;
+    Status DecodeNotify(const std::string &bytes, const TopologyAddress &nodeAddress, TaskNotify &notify) const;
+    Status EncodeNotify(const TaskNotify &notify, std::string &bytes) const;
 };
 
 }  // namespace topology

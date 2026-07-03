@@ -29,11 +29,16 @@ namespace topology {
 
 enum class TopologyKeyType {
     COMMITTED_TOPOLOGY,
+    MIGRATE_TASK,
+    DELETE_NODE_TASK,
+    NOTIFY,
     UNRELATED,
 };
 
 struct TopologyKeyParts {
     TopologyKeyType type{ TopologyKeyType::UNRELATED };
+    TaskId taskId;
+    TopologyAddress nodeAddress;
 };
 
 class TopologyKeyHelper {
@@ -46,6 +51,9 @@ public:
      * @return The exact `/datasystem/ring` key.
      */
     static std::string CommittedTopologyKey();
+    static Status BuildMigrateTaskKey(const TaskId &taskId, std::string &key);
+    static Status BuildDeleteNodeTaskKey(const TaskId &taskId, std::string &key);
+    static Status BuildNotifyKey(const TopologyAddress &nodeAddress, std::string &key);
 
     /**
      * @brief Parse one backend key into topology key parts.

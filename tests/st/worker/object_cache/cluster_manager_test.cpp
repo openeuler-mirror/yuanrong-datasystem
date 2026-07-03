@@ -32,6 +32,7 @@
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
 
 using namespace datasystem::worker;

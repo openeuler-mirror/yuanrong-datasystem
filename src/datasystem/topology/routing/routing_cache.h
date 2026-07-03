@@ -21,8 +21,11 @@
 #define DATASYSTEM_TOPOLOGY_ROUTING_ROUTING_CACHE_H
 
 #include <cstddef>
+#include <functional>
+#include <string>
 #include <unordered_map>
 
+#include "datasystem/topology/model/topology_types.h"
 #include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
@@ -30,18 +33,33 @@ namespace topology {
 
 struct RouteCacheKey {
     int64_t version = -1;
-    uint32_t objectHash = 0;
+    PlacementUnit unit;
 
     bool operator==(const RouteCacheKey &other) const
     {
-        return version == other.version && objectHash == other.objectHash;
+        return version == other.version && unit.algorithmId == other.unit.algorithmId
+               && unit.unitType == other.unit.unitType && unit.opaqueUnit == other.unit.opaqueUnit;
     }
 };
 
 struct RouteCacheKeyHash {
     size_t operator()(const RouteCacheKey &key) const
     {
-        return std::hash<int64_t>()(key.version) ^ std::hash<uint32_t>()(key.objectHash);
+        size_t seed = std::hash<int64_t>()(key.version);
+        HashCombine(seed, std::hash<std::string>()(key.unit.algorithmId));
+        HashCombine(seed, std::hash<std::string>()(key.unit.unitType));
+        HashCombine(seed, std::hash<std::string>()(key.unit.opaqueUnit));
+        return seed;
+    }
+
+private:
+    static constexpr size_t HASH_COMBINE_MAGIC = 0x9e3779b9;
+    static constexpr size_t HASH_COMBINE_LEFT_SHIFT = 6;
+    static constexpr size_t HASH_COMBINE_RIGHT_SHIFT = 2;
+
+    static void HashCombine(size_t &seed, size_t value)
+    {
+        seed ^= value + HASH_COMBINE_MAGIC + (seed << HASH_COMBINE_LEFT_SHIFT) + (seed >> HASH_COMBINE_RIGHT_SHIFT);
     }
 };
 
@@ -50,7 +68,7 @@ public:
     virtual ~IRoutingCache() = default;
 
     /**
-     * @brief Lookup a route decision by snapshot version and key hash.
+     * @brief Lookup a route decision by snapshot version and algorithm placement unit.
      * @param[in] key Cache key.
      * @param[out] decision Cached route decision.
      * @return True if a decision is cached.

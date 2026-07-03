@@ -35,14 +35,14 @@ struct PlacementRange {
 };
 
 struct OwnerChange {
-    WorkerId fromWorkerId;
-    WorkerId toWorkerId;
+    TopologyNodeId fromNodeId;
+    TopologyNodeId toNodeId;
     std::vector<PlacementRange> ranges;
 };
 
 struct PlanInput {
     TopologyDescriptor current;
-    std::vector<WorkerId> targetWorkerIds;
+    std::vector<TopologyNodeId> targetNodeIds;
     std::string algorithmOptions;
 };
 
@@ -127,7 +127,7 @@ public:
      * @brief Diff two topology descriptors and return only ownership changes.
      * @param[in] from Source topology descriptor.
      * @param[in] to Destination topology descriptor.
-     * @param[out] changes Ownership changes grouped by source and target worker.
+     * @param[out] changes Ownership changes grouped by source and target member.
      * @return K_OK on success; K_INVALID for malformed topology descriptors.
      */
     virtual Status DiffPlacement(const TopologyDescriptor &from, const TopologyDescriptor &to,

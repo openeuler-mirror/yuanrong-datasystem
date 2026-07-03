@@ -224,11 +224,11 @@ Status CoordinationBackend::InitKeepAlive(const std::string &tableName, const st
     keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
     if (!isStoreAvailableWhenStart) {
-        keepAliveValue_.state = WorkerServiceState::DOWNGRADE_RESTART;
+        keepAliveValue_.lifecycleState = MemberLifecycleState::DOWNGRADE_RESTARTING;
     } else if (isRestart) {
-        keepAliveValue_.state = WorkerServiceState::RESTART;
+        keepAliveValue_.lifecycleState = MemberLifecycleState::RESTARTING;
     } else {
-        keepAliveValue_.state = WorkerServiceState::START;
+        keepAliveValue_.lifecycleState = MemberLifecycleState::STARTING;
     }
     RETURN_IF_NOT_OK(AutoCreateKeepAliveKey());
     LaunchKeepAliveThread();
@@ -240,18 +240,18 @@ Status CoordinationBackend::AutoCreateKeepAliveKey()
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!keepAliveTableName_.empty(), K_INVALID, "Coordinator keepalive table is empty");
     CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty(), K_INVALID, "Coordinator keepalive key is empty");
-    CHECK_FAIL_RETURN_STATUS(keepAliveValue_.state != WorkerServiceState::UNSPECIFIED, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
                              "Node state should not be empty.");
 
-    WorkerServiceInfo value;
+    MembershipValue value;
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         keepAliveValue_.timestamp = timeStamp;
         value = keepAliveValue_;
     }
-    std::string valueStr = value.ToProto();
-    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
+    std::string valueStr;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
     auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
@@ -260,9 +260,9 @@ Status CoordinationBackend::AutoCreateKeepAliveKey()
     RETURN_IF_NOT_OK(rc);
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        if (keepAliveValue_.state == WorkerServiceState::START
-            || keepAliveValue_.state == WorkerServiceState::RESTART) {
-            keepAliveValue_.state = WorkerServiceState::RECOVER;
+        if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
+            || keepAliveValue_.lifecycleState == MemberLifecycleState::RESTARTING) {
+            keepAliveValue_.lifecycleState = MemberLifecycleState::RECOVERING;
         }
     }
     return Status::OK();
@@ -302,7 +302,7 @@ void CoordinationBackend::RunKeepAliveLoop()
     const std::string realKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
     while (!keepAliveExit_) {
         auto rc = RenewKeepAliveOnce();
-        VLOG(1) << "Worker " << watcherAddr_ << " keepalive result: " << rc.ToString();
+        VLOG(1) << "Member " << watcherAddr_ << " keepalive result: " << rc.ToString();
         if (rc.IsOk()) {
             keepAliveTimeout_ = false;
             keepAliveTimeoutTimer.Reset();
@@ -384,19 +384,19 @@ void CoordinationBackend::ShutdownKeepAliveThread()
     }
 }
 
-Status CoordinationBackend::UpdateNodeState(WorkerServiceState state)
+Status CoordinationBackend::UpdateNodeState(MemberLifecycleState state)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
-    WorkerServiceInfo value;
+    MembershipValue value;
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_.state = state;
+        keepAliveValue_.lifecycleState = state;
         value = keepAliveValue_;
     }
-    std::string valueStr = value.ToProto();
-    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
+    std::string valueStr;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
     RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
@@ -418,12 +418,13 @@ Status CoordinationBackend::InformReconciliationDone(const HostPort &workerAddr)
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::string valueStr;
     RETURN_IF_NOT_OK(Get(CLUSTER_TABLE, workerAddr.ToString(), valueStr));
-    WorkerServiceInfo value;
-    RETURN_IF_NOT_OK(WorkerServiceInfo::FromProto(valueStr, value));
-    if (value.state == WorkerServiceState::RESTART || value.state == WorkerServiceState::RECOVER) {
-        value.state = WorkerServiceState::READY;
-        std::string readyValue = value.ToProto();
-        CHECK_FAIL_RETURN_STATUS(!readyValue.empty(), K_RUNTIME_ERROR, "failed to serialize worker service info");
+    MembershipValue value;
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(valueStr, value));
+    if (value.lifecycleState == MemberLifecycleState::RESTARTING
+        || value.lifecycleState == MemberLifecycleState::RECOVERING) {
+        value.lifecycleState = MemberLifecycleState::READY;
+        std::string readyValue;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, readyValue));
         int64_t version = 0;
         int64_t revision = 0;
         RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(CLUSTER_TABLE, workerAddr.ToString()), readyValue, keepAliveTtlMs_,
@@ -440,7 +441,7 @@ bool CoordinationBackend::IsKeepAliveTimeout()
 bool CoordinationBackend::IsFirstKeepAliveSent()
 {
     std::lock_guard<std::mutex> lock(keepAliveMutex_);
-    return keepAliveValue_.state == WorkerServiceState::RECOVER;
+    return keepAliveValue_.lifecycleState == MemberLifecycleState::RECOVERING;
 }
 
 void CoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

@@ -12,6 +12,7 @@
 #include "etcd/api/mvccpb/kv.pb.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/protos/coordinator.pb.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "tests/ut/common.h"
 
@@ -203,7 +204,7 @@ TEST(CoordinationBackendTest, StoresWorkerServiceInfoProto)
     StubCoordinatorProxy proxy;
     topology::CoordinationBackend backend(&proxy, "127.0.0.1:0");
     DS_ASSERT_OK(backend.InitKeepAlive(CLUSTER_TABLE, "127.0.0.1:31501", false, true));
-    DS_ASSERT_OK(backend.UpdateNodeState(WorkerServiceState::READY));
+    DS_ASSERT_OK(backend.UpdateNodeState(topology::MemberLifecycleState::READY));
 
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
@@ -300,7 +301,7 @@ TEST(CoordinationBackendTest, NullEtcdStoreReturnsRuntimeError)
     EXPECT_EQ(backend.Delete(ETCD_RING_PREFIX, "").GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(backend.WatchEvents(watchKeys).GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(backend.InitKeepAlive(ETCD_RING_PREFIX, "", false, true).GetCode(), K_RUNTIME_ERROR);
-    EXPECT_EQ(backend.UpdateNodeState(WorkerServiceState::READY).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(backend.UpdateNodeState(topology::MemberLifecycleState::READY).GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(backend.GetStorePrefix(ETCD_RING_PREFIX, value).GetCode(), K_RUNTIME_ERROR);
     EXPECT_EQ(backend.InformReconciliationDone(workerAddr).GetCode(), K_RUNTIME_ERROR);
     EXPECT_FALSE(backend.IsKeepAliveTimeout());

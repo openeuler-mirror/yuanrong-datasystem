@@ -39,6 +39,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "etcd/api/mvccpb/kv.pb.h"
 

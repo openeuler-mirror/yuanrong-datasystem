@@ -195,6 +195,7 @@ proto_library(
     name = "hash_ring_proto",
     srcs = [
         "hash_ring.proto",
+        "hash_ring_v2.proto",
     ],
     strip_import_prefix = PROTO_ROOT,
 )

@@ -25,6 +25,7 @@
 #include <unordered_map>
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/topology/routing/membership_endpoint_view.h"
 #include "datasystem/topology/routing/placement_types.h"
 
 namespace datasystem {
@@ -42,9 +43,9 @@ struct PlacementDirectorySnapshot {
     std::unordered_map<std::string, std::string> workerIdsByAddress;
 };
 
-class IPlacementDirectory {
+class IPlacementDirectory : public IMembershipEndpointView {
 public:
-    virtual ~IPlacementDirectory() = default;
+    ~IPlacementDirectory() override = default;
 
     /**
      * @brief Resolve a worker endpoint from the local immutable directory snapshot.
@@ -81,6 +82,9 @@ public:
     Status ResolveWorker(const std::string &workerId, PlacementEndpoint &endpoint) const override;
     Status ResolveWorkerByAddress(const std::string &workerAddress, PlacementEndpoint &endpoint) const override;
     Status GetLocalWorker(PlacementEndpoint &endpoint) const override;
+    Status ResolveEndpoint(const std::string &nodeId, MemberEndpoint &endpoint) const override;
+    Status ResolveEndpointByAddress(const std::string &nodeAddress, MemberEndpoint &endpoint) const override;
+    Status GetLocalEndpoint(MemberEndpoint &endpoint) const override;
 
     /**
      * @brief Publish an immutable placement directory snapshot.

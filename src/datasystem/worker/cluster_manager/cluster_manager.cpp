@@ -52,6 +52,7 @@
 #include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/topology/routing/worker_locator.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/cluster_manager/cluster_node.h"
@@ -425,7 +426,7 @@ Status ClusterManager::HandleNodeStateToActive(const HostPort &eventNodeKey,
         if (eventNode->NodeWasRecovered() && eventNodeKey == workerAddress_) {
             // if etcd restart, set worker to ready from recover.
             INJECT_POINT("etcdrecover.worker.delaytoready");
-            RETURN_IF_NOT_OK(clusterStore_->UpdateNodeState(topology::WorkerServiceState::READY));
+            RETURN_IF_NOT_OK(clusterStore_->UpdateNodeState(topology::MemberLifecycleState::READY));
         }
     } else {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Existing node has an unknown state during node addition event.");
@@ -884,7 +885,7 @@ Status ClusterManager::GetActiveWorkers(uint32_t num, std::vector<std::string> &
     RETURN_IF_NOT_OK(LoadRoutingSnapshot(routingView_, snapshot));
     topology::PlacementEndpoint localWorker;
     (void)placementDirectory_->GetLocalWorker(localWorker);
-    for (const auto &workerId : snapshot->WorkerOrder()) {
+    for (const auto &workerId : snapshot->NodeOrder()) {
         if (workerId == localWorker.workerId
             || snapshot->ActiveWorkerIds().find(workerId) == snapshot->ActiveWorkerIds().end()) {
             continue;

@@ -37,9 +37,9 @@ enum class MembershipRuntimeState {
     STOPPED,
 };
 
-class ClusterMembership final : public IWorkerDirectory {
+class ClusterMembership final : public IMembershipView {
 public:
-    ClusterMembership(IClusterRegistry &registry, WorkerId localWorkerId);
+    ClusterMembership(IClusterRegistry &registry, TopologyNodeId localNodeId);
     ~ClusterMembership() override;
     ClusterMembership(const ClusterMembership &) = delete;
     ClusterMembership &operator=(const ClusterMembership &) = delete;
@@ -71,16 +71,23 @@ public:
      * @return K_OK when available; K_NOT_READY before first rebuild or after Stop.
      */
     Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
-    Status GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const override;
-    Status GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const override;
-    Status ListReadyWorkers(std::vector<WorkerRecord> &workers) const override;
+    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const override;
+    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const override;
+    Status ListReadyMembers(std::vector<MembershipRecord> &members) const override;
+
+    /**
+     * @brief Get the last published membership snapshot for diagnostic/read-state queries.
+     * @param[out] snapshot Snapshot pointer.
+     * @return K_OK when a last-good snapshot exists; K_NOT_READY before first rebuild or after Stop.
+     */
+    Status GetLastSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const;
 
     /**
      * @brief Build a local scale-in request from the latest snapshot.
      * @param[in] reason Local scale-in reason.
      * @param[out] request Request to submit to the Coordinator topology boundary.
      * @param[out] observedRevision Membership revision used for validation.
-     * @return K_OK on success; K_INVALID for invalid reason; K_NOT_READY/K_NOT_FOUND when local worker is unavailable.
+     * @return K_OK on success; K_INVALID for invalid reason; K_NOT_READY/K_NOT_FOUND when local member is unavailable.
      */
     Status BuildLocalScaleInRequest(ScaleInReason reason, ScaleInRequest &request, Revision &observedRevision) const;
 
@@ -91,12 +98,12 @@ public:
     MembershipRuntimeState RuntimeState() const;
 
 private:
-    Status ApplyWorkerEvent(const WorkerWatchEvent &event);
+    Status ApplyMembershipEvent(const MembershipWatchEvent &event);
     void PublishSnapshot(std::shared_ptr<const MembershipSnapshot> snapshot, MembershipRuntimeState state);
     static Status ValidateScaleInReason(ScaleInReason reason);
 
     IClusterRegistry &registry_;
-    WorkerId localWorkerId_;
+    TopologyNodeId localNodeId_;
     mutable std::mutex mutex_;
     std::shared_ptr<const MembershipSnapshot> snapshot_;
     MembershipRuntimeState state_{ MembershipRuntimeState::NOT_READY };

@@ -15,10 +15,10 @@
  */
 
 /**
- * Description: Worker directory fake for module tests.
+ * Description: Membership view fake for module tests.
  */
-#ifndef TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H
-#define TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H
+#ifndef TESTS_UT_TOPOLOGY_TESTING_FAKE_MEMBERSHIP_VIEW_H
+#define TESTS_UT_TOPOLOGY_TESTING_FAKE_MEMBERSHIP_VIEW_H
 
 #include <memory>
 #include <mutex>
@@ -28,26 +28,26 @@
 namespace datasystem {
 namespace topology {
 
-class FakeWorkerDirectory final : public IWorkerDirectory {
+class FakeMembershipView final : public IMembershipView {
 public:
-    FakeWorkerDirectory() = default;
-    ~FakeWorkerDirectory() override = default;
-    FakeWorkerDirectory(const FakeWorkerDirectory &) = delete;
-    FakeWorkerDirectory &operator=(const FakeWorkerDirectory &) = delete;
-    FakeWorkerDirectory(FakeWorkerDirectory &&) = delete;
-    FakeWorkerDirectory &operator=(FakeWorkerDirectory &&) = delete;
+    FakeMembershipView() = default;
+    ~FakeMembershipView() override = default;
+    FakeMembershipView(const FakeMembershipView &) = delete;
+    FakeMembershipView &operator=(const FakeMembershipView &) = delete;
+    FakeMembershipView(FakeMembershipView &&) = delete;
+    FakeMembershipView &operator=(FakeMembershipView &&) = delete;
 
     /**
      * @brief Seed one immutable membership snapshot.
-     * @param[in] snapshot Snapshot exposed through IWorkerDirectory.
+     * @param[in] snapshot Snapshot exposed through IMembershipView.
      * @return K_OK on success.
      */
     Status SeedSnapshot(const MembershipSnapshot &snapshot);
 
     Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
-    Status GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const override;
-    Status GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const override;
-    Status ListReadyWorkers(std::vector<WorkerRecord> &workers) const override;
+    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const override;
+    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const override;
+    Status ListReadyMembers(std::vector<MembershipRecord> &members) const override;
 
 private:
     mutable std::mutex mutex_;
@@ -57,4 +57,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // TESTS_UT_TOPOLOGY_TESTING_FAKE_WORKER_DIRECTORY_H
+#endif  // TESTS_UT_TOPOLOGY_TESTING_FAKE_MEMBERSHIP_VIEW_H

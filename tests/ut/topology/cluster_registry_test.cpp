@@ -30,35 +30,34 @@ namespace datasystem {
 namespace topology {
 namespace {
 
-std::string MakeWorkerServiceInfoValue(const std::string &timestamp, const std::string &state,
-                                       const std::string &hostId = "host-a")
+std::string MakeMembershipValue(int64_t timestamp, MemberLifecycleState state, const std::string &hostId = "host-a")
 {
-    WorkerServiceInfo value;
-    auto rc = StringToWorkerServiceState(state, value.state);
-    if (rc.IsError()) {
-        return timestamp + ";" + state + ";" + hostId;
-    }
-    value.timestamp = timestamp.empty() ? 0 : std::stoll(timestamp);
+    MembershipValue value;
+    value.timestamp = timestamp;
+    value.lifecycleState = state;
     value.hostId = hostId;
-    return value.ToString();
+    std::string encoded;
+    auto rc = MembershipValueCodec::Encode(value, encoded);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    return encoded;
 }
 
-TEST(ClusterRegistryTest, ListsWorkersAndIsolatesBadRecords)
+TEST(ClusterRegistryTest, ListsMembersAndIsolatesBadRecords)
 {
     FakeCoordinationBackend store;
     DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
-                                  MakeWorkerServiceInfoValue("100", ETCD_NODE_READY, "host-a")));
+                                  MakeMembershipValue(100, MemberLifecycleState::READY, "host-a")));
     DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", "bad-value"));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
-    DS_ASSERT_OK(registry.ListWorkers(snapshot));
+    DS_ASSERT_OK(registry.ListMembers(snapshot));
 
-    EXPECT_EQ(snapshot.workers.size(), 1ul);
-    EXPECT_EQ(snapshot.badRecordCount, 1ul);
-    auto iter = snapshot.workers.find("127.0.0.1:7001");
-    ASSERT_NE(iter, snapshot.workers.end());
-    EXPECT_EQ(iter->second.serviceState, WorkerServiceState::READY);
+    EXPECT_EQ(snapshot.members.size(), 1ul);
+    EXPECT_EQ(snapshot.malformedRecordCount, 1ul);
+    auto iter = snapshot.members.find("127.0.0.1:7001");
+    ASSERT_NE(iter, snapshot.members.end());
+    EXPECT_EQ(iter->second.lifecycleState, MemberLifecycleState::READY);
     EXPECT_EQ(iter->second.capability.hostId, "host-a");
     EXPECT_EQ(iter->second.endpoint.ToString(), "127.0.0.1:7001");
 }
@@ -67,81 +66,85 @@ TEST(ClusterRegistryTest, ParsesIpv6AndLifecycleStates)
 {
     FakeCoordinationBackend store;
     DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:7001",
-                                  MakeWorkerServiceInfoValue("100", ETCD_NODE_DOWNGRADE_RESTART)));
+                                  MakeMembershipValue(100, MemberLifecycleState::DOWNGRADE_RESTARTING)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("101", ETCD_NODE_EXITING)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeMembershipValue(101, MemberLifecycleState::EXITING)));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
-    DS_ASSERT_OK(registry.ListWorkers(snapshot));
+    DS_ASSERT_OK(registry.ListMembers(snapshot));
 
-    EXPECT_EQ(snapshot.workers.at("[::1]:7001").endpoint.ToString(), "[::1]:7001");
-    EXPECT_EQ(snapshot.workers.at("[::1]:7001").serviceState, WorkerServiceState::DOWNGRADE_RESTART);
-    EXPECT_EQ(snapshot.workers.at("127.0.0.1:7002").serviceState, WorkerServiceState::EXITING);
+    EXPECT_EQ(snapshot.members.at("[::1]:7001").endpoint.ToString(), "[::1]:7001");
+    EXPECT_EQ(snapshot.members.at("[::1]:7001").lifecycleState, MemberLifecycleState::DOWNGRADE_RESTARTING);
+    EXPECT_EQ(snapshot.members.at("127.0.0.1:7002").lifecycleState, MemberLifecycleState::EXITING);
 }
 
-TEST(ClusterRegistryTest, ParsesStartupServiceStatesAndBuildsWorkerKey)
+TEST(ClusterRegistryTest, ParsesStartupLifecycleStatesAndBuildsMemberKey)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("100", "start")));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("101", "restart")));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7003", MakeWorkerServiceInfoValue("102", "recover")));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(100, MemberLifecycleState::STARTING)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002",
+                                  MakeMembershipValue(101, MemberLifecycleState::RESTARTING)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7003",
+                                  MakeMembershipValue(102, MemberLifecycleState::RECOVERING)));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
-    DS_ASSERT_OK(registry.ListWorkers(snapshot));
+    DS_ASSERT_OK(registry.ListMembers(snapshot));
 
-    EXPECT_EQ(snapshot.workers.at("127.0.0.1:7001").serviceState, WorkerServiceState::START);
-    EXPECT_EQ(snapshot.workers.at("127.0.0.1:7002").serviceState, WorkerServiceState::RESTART);
-    EXPECT_EQ(snapshot.workers.at("127.0.0.1:7003").serviceState, WorkerServiceState::RECOVER);
+    EXPECT_EQ(snapshot.members.at("127.0.0.1:7001").lifecycleState, MemberLifecycleState::STARTING);
+    EXPECT_EQ(snapshot.members.at("127.0.0.1:7002").lifecycleState, MemberLifecycleState::RESTARTING);
+    EXPECT_EQ(snapshot.members.at("127.0.0.1:7003").lifecycleState, MemberLifecycleState::RECOVERING);
 
     std::string key;
-    DS_ASSERT_OK(ClusterRegistryKeyHelper::BuildWorkerKey("127.0.0.1:7001", key));
+    DS_ASSERT_OK(ClusterRegistryKeyHelper::BuildMemberKey("127.0.0.1:7001", key));
     EXPECT_EQ(key, "127.0.0.1:7001");
-    EXPECT_EQ(ClusterRegistryKeyHelper::BuildWorkerKey("bad/id", key).GetCode(), K_INVALID);
+    EXPECT_EQ(ClusterRegistryKeyHelper::BuildMemberKey("bad/id", key).GetCode(), K_INVALID);
 }
 
-TEST(ClusterRegistryTest, IsolatesUnknownServiceState)
+TEST(ClusterRegistryTest, RejectsLegacyStringMembershipValue)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoValue("100", "unknown")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", "100;ready;host-a"));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
-    DS_ASSERT_OK(registry.ListWorkers(snapshot));
+    DS_ASSERT_OK(registry.ListMembers(snapshot));
 
-    EXPECT_TRUE(snapshot.workers.empty());
-    EXPECT_EQ(snapshot.badRecordCount, 1ul);
+    EXPECT_TRUE(snapshot.members.empty());
+    EXPECT_EQ(snapshot.malformedRecordCount, 1ul);
 }
 
 TEST(ClusterRegistryTest, IsolatesInvalidWorkerKeysAndValues)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "", MakeWorkerServiceInfoValue("100", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1", MakeWorkerServiceInfoValue("101", ETCD_NODE_READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "", MakeMembershipValue(100, MemberLifecycleState::READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:abc", MakeWorkerServiceInfoValue("102", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1", MakeMembershipValue(101, MemberLifecycleState::READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:65536", MakeWorkerServiceInfoValue("103", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:abc", MakeMembershipValue(102, MemberLifecycleState::READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:1:2", MakeWorkerServiceInfoValue("104", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1", MakeWorkerServiceInfoValue("105", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:65536", MakeMembershipValue(103, MemberLifecycleState::READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001|bad", MakeWorkerServiceInfoValue("106", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[]:7001", MakeWorkerServiceInfoValue("107", ETCD_NODE_READY)));
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:", MakeWorkerServiceInfoValue("108", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:1:2", MakeMembershipValue(104, MemberLifecycleState::READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1", MakeMembershipValue(105, MemberLifecycleState::READY)));
     DS_ASSERT_OK(
-        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoValue("", ETCD_NODE_READY)));
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001|bad", MakeMembershipValue(106, MemberLifecycleState::READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[]:7001", MakeMembershipValue(107, MemberLifecycleState::READY)));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "[::1]:", MakeMembershipValue(108, MemberLifecycleState::READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeMembershipValue(0, MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
 
     MembershipSnapshot snapshot;
-    DS_ASSERT_OK(registry.ListWorkers(snapshot));
+    DS_ASSERT_OK(registry.ListMembers(snapshot));
 
-    EXPECT_TRUE(snapshot.workers.empty());
-    EXPECT_EQ(snapshot.badRecordCount, 10ul);
+    EXPECT_TRUE(snapshot.members.empty());
+    EXPECT_EQ(snapshot.malformedRecordCount, 10ul);
 
     std::string key;
-    EXPECT_EQ(ClusterRegistryKeyHelper::BuildWorkerKey("", key).GetCode(), K_INVALID);
+    EXPECT_EQ(ClusterRegistryKeyHelper::BuildMemberKey("", key).GetCode(), K_INVALID);
 }
 
 TEST(ClusterRegistryTest, DecodesPutDeleteEvents)
@@ -152,29 +155,30 @@ TEST(ClusterRegistryTest, DecodesPutDeleteEvents)
     CoordinationEvent put;
     put.type = CoordinationEventType::PUT;
     put.key = "/datasystem/cluster/127.0.0.1:7001";
-    put.value = MakeWorkerServiceInfoValue("200", ETCD_NODE_READY);
+    put.value = MakeMembershipValue(200, MemberLifecycleState::READY);
     put.revision = 8;
-    WorkerWatchEvent typed;
-    DS_ASSERT_OK(registry.HandleWorkerEvent(put, typed));
-    EXPECT_EQ(typed.type, WorkerWatchEventType::UPDATED);
-    EXPECT_EQ(typed.workerId, "127.0.0.1:7001");
+    MembershipWatchEvent typed;
+    DS_ASSERT_OK(registry.HandleMembershipEvent(put, typed));
+    EXPECT_EQ(typed.type, MembershipWatchEventType::UPDATED);
+    EXPECT_EQ(typed.nodeId, "127.0.0.1:7001");
     EXPECT_EQ(typed.record.modRevision, 8);
 
     CoordinationEvent del;
     del.type = CoordinationEventType::DELETE;
     del.key = "/datasystem/cluster/127.0.0.1:7001";
     del.revision = 9;
-    DS_ASSERT_OK(registry.HandleWorkerEvent(del, typed));
-    EXPECT_EQ(typed.type, WorkerWatchEventType::DELETED);
-    EXPECT_EQ(typed.workerId, "127.0.0.1:7001");
+    DS_ASSERT_OK(registry.HandleMembershipEvent(del, typed));
+    EXPECT_EQ(typed.type, MembershipWatchEventType::DELETED);
+    EXPECT_EQ(typed.nodeId, "127.0.0.1:7001");
     EXPECT_EQ(
-        registry.HandleWorkerEvent({ CoordinationEventType::PUT, "/datasystem/ring/", "", 0, 0 }, typed).GetCode(),
+        registry.HandleMembershipEvent({ CoordinationEventType::PUT, "/datasystem/ring/", "", 0, 0 }, typed).GetCode(),
         K_NOT_FOUND);
-    EXPECT_EQ(registry.HandleWorkerEvent({ CoordinationEventType::PUT, "127.0.0.1:7001", "", 0, 0 }, typed).GetCode(),
-              K_NOT_FOUND);
+    EXPECT_EQ(
+        registry.HandleMembershipEvent({ CoordinationEventType::PUT, "127.0.0.1:7001", "", 0, 0 }, typed).GetCode(),
+        K_NOT_FOUND);
 }
 
-TEST(ClusterRegistryTest, RejectsMalformedWorkerEventPayload)
+TEST(ClusterRegistryTest, RejectsMalformedMembershipEventPayload)
 {
     FakeCoordinationBackend store;
     ClusterRegistry registry(store);
@@ -184,8 +188,8 @@ TEST(ClusterRegistryTest, RejectsMalformedWorkerEventPayload)
     put.key = "/datasystem/cluster/127.0.0.1:7001";
     put.value = "bad-value";
     put.revision = 10;
-    WorkerWatchEvent typed;
-    EXPECT_EQ(registry.HandleWorkerEvent(put, typed).GetCode(), K_INVALID);
+    MembershipWatchEvent typed;
+    EXPECT_EQ(registry.HandleMembershipEvent(put, typed).GetCode(), K_INVALID);
 }
 
 }  // namespace

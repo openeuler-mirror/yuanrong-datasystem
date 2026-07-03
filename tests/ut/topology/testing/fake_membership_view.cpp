@@ -15,23 +15,23 @@
  */
 
 /**
- * Description: Worker directory fake for module tests.
+ * Description: Membership view fake for module tests.
  */
-#include "tests/ut/topology/testing/fake_worker_directory.h"
+#include "tests/ut/topology/testing/fake_membership_view.h"
 
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace topology {
 
-Status FakeWorkerDirectory::SeedSnapshot(const MembershipSnapshot &snapshot)
+Status FakeMembershipView::SeedSnapshot(const MembershipSnapshot &snapshot)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshot_ = std::make_shared<MembershipSnapshot>(snapshot);
     return Status::OK();
 }
 
-Status FakeWorkerDirectory::GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const
+Status FakeMembershipView::GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     snapshot = snapshot_;
@@ -39,36 +39,37 @@ Status FakeWorkerDirectory::GetSnapshot(std::shared_ptr<const MembershipSnapshot
     return Status::OK();
 }
 
-Status FakeWorkerDirectory::GetWorkerRecord(const WorkerId &workerId, WorkerRecord &record) const
+Status FakeMembershipView::GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const
 {
     record = {};
     std::shared_ptr<const MembershipSnapshot> snapshot;
     RETURN_IF_NOT_OK(GetSnapshot(snapshot));
-    auto iter = snapshot->workers.find(workerId);
-    CHECK_FAIL_RETURN_STATUS(iter != snapshot->workers.end(), K_NOT_FOUND, "fake worker is absent");
+    auto iter = snapshot->members.find(nodeId);
+    CHECK_FAIL_RETURN_STATUS(iter != snapshot->members.end(), K_NOT_FOUND, "fake member is absent");
     record = iter->second;
     return Status::OK();
 }
 
-Status FakeWorkerDirectory::GetReadyEndpoint(const WorkerId &workerId, WorkerEndpoint &endpoint) const
+Status FakeMembershipView::GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const
 {
     endpoint = {};
-    WorkerRecord record;
-    RETURN_IF_NOT_OK(GetWorkerRecord(workerId, record));
-    CHECK_FAIL_RETURN_STATUS(record.serviceState == WorkerServiceState::READY, K_NOT_FOUND, "fake worker is not ready");
+    MembershipRecord record;
+    RETURN_IF_NOT_OK(GetRecord(nodeId, record));
+    CHECK_FAIL_RETURN_STATUS(record.lifecycleState == MemberLifecycleState::READY, K_NOT_FOUND,
+                             "fake member is not ready");
     endpoint = record.endpoint;
     return Status::OK();
 }
 
-Status FakeWorkerDirectory::ListReadyWorkers(std::vector<WorkerRecord> &workers) const
+Status FakeMembershipView::ListReadyMembers(std::vector<MembershipRecord> &members) const
 {
-    workers.clear();
+    members.clear();
     std::shared_ptr<const MembershipSnapshot> snapshot;
     RETURN_IF_NOT_OK(GetSnapshot(snapshot));
-    workers.reserve(snapshot->workers.size());
-    for (const auto &entry : snapshot->workers) {
-        if (entry.second.serviceState == WorkerServiceState::READY) {
-            workers.push_back(entry.second);
+    members.reserve(snapshot->members.size());
+    for (const auto &entry : snapshot->members) {
+        if (entry.second.lifecycleState == MemberLifecycleState::READY) {
+            members.push_back(entry.second);
         }
     }
     return Status::OK();

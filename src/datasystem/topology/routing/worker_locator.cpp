@@ -27,6 +27,19 @@
 
 namespace datasystem {
 namespace topology {
+namespace {
+constexpr char LEGACY_HASH_ALGORITHM_ID[] = "hash";
+constexpr char LEGACY_HASH_UNIT_TYPE[] = "hash-token";
+
+RouteCacheKey BuildLegacyRouteCacheKey(int64_t version, uint32_t objectHash)
+{
+    PlacementUnit unit;
+    unit.algorithmId = LEGACY_HASH_ALGORITHM_ID;
+    unit.unitType = LEGACY_HASH_UNIT_TYPE;
+    unit.opaqueUnit = std::to_string(objectHash);
+    return RouteCacheKey{ version, unit };
+}
+}  // namespace
 
 WorkerLocator::WorkerLocator(std::shared_ptr<IRoutingView> routingView, std::shared_ptr<IPlacementDirectory> directory)
     : routingView_(std::move(routingView)), directory_(std::move(directory))
@@ -37,7 +50,7 @@ Status WorkerLocator::LocateMetaOwner(const std::string &objectKey, const RouteO
                                       RouteDecision &decision) const
 {
     decision = RouteDecision{};
-    decision.objectKeyHash = MurmurHash3_32(objectKey);
+    decision.keyHash = MurmurHash3_32(objectKey);
     CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Worker locator placement directory is not set.");
     if (options.centralizedMode) {
         return LocateCentralizedMaster(objectKey, options, decision);
@@ -46,7 +59,7 @@ Status WorkerLocator::LocateMetaOwner(const std::string &objectKey, const RouteO
 
     std::shared_ptr<const RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(routingView_->GetSnapshot(snapshot));
-    return LocateWithSnapshot(decision.objectKeyHash, options, snapshot, cache, decision);
+    return LocateWithSnapshot(decision.keyHash, options, snapshot, cache, decision);
 }
 
 Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys, const RouteOptions &options,
@@ -61,7 +74,7 @@ Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &obje
         RETURN_IF_NOT_OK(LocateCentralizedMaster(objectKeys.front(), options, route));
         const auto metaAddrInfo = route.ToMetaAddrInfo();
         for (const auto &objectKey : objectKeys) {
-            route.objectKeyHash = MurmurHash3_32(objectKey);
+            route.keyHash = MurmurHash3_32(objectKey);
             decision.perKeyDecision.emplace(objectKey, route);
             decision.groupsByEndpoint[metaAddrInfo].emplace_back(objectKey);
         }
@@ -94,13 +107,13 @@ Status WorkerLocator::LocateWithSnapshot(uint32_t objectHash, const RouteOptions
                                          const std::shared_ptr<const RoutingSnapshot> &snapshot, IRoutingCache *cache,
                                          RouteDecision &decision) const
 {
-    const RouteCacheKey cacheKey{ snapshot->Version(), objectHash };
+    const auto cacheKey = BuildLegacyRouteCacheKey(snapshot->Version(), objectHash);
     if (cache != nullptr && cache->Lookup(cacheKey, decision)) {
         return Status::OK();
     }
 
     decision = RouteDecision{};
-    decision.objectKeyHash = objectHash;
+    decision.keyHash = objectHash;
     decision.routingVersion = snapshot->Version();
     RoutingOwnerEntry entry;
     Status rc = snapshot->Locate(objectHash, entry);
@@ -108,7 +121,7 @@ Status WorkerLocator::LocateWithSnapshot(uint32_t objectHash, const RouteOptions
         return rc;
     }
     decision.placementUnit = entry.unit;
-    decision.ownerWorkerId = entry.ownerWorkerId;
+    decision.ownerNodeId = entry.ownerNodeId;
     rc = ResolveOwner(entry, options, decision);
     if (rc.IsError()) {
         return rc;
@@ -122,7 +135,9 @@ Status WorkerLocator::LocateWithSnapshot(uint32_t objectHash, const RouteOptions
 Status WorkerLocator::ResolveOwner(const RoutingOwnerEntry &entry, const RouteOptions &options,
                                    RouteDecision &decision) const
 {
-    RETURN_IF_NOT_OK(directory_->ResolveWorker(entry.ownerWorkerId, decision.ownerEndpoint));
+    PlacementEndpoint endpoint;
+    RETURN_IF_NOT_OK(directory_->ResolveWorker(entry.ownerNodeId, endpoint));
+    decision.ownerEndpoint = endpoint;
     if (options.requireAvailableTarget && decision.ownerEndpoint.availability != WorkerAvailability::READY) {
         RETURN_STATUS(K_RPC_UNAVAILABLE, "Route target is not available in local placement directory.");
     }
@@ -134,15 +149,16 @@ Status WorkerLocator::LocateCentralizedMaster(const std::string &objectKey, cons
 {
     CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Worker locator placement directory is not set.");
     decision = RouteDecision{};
-    decision.objectKeyHash = MurmurHash3_32(objectKey);
+    decision.keyHash = MurmurHash3_32(objectKey);
     CHECK_FAIL_RETURN_STATUS(!options.masterAddress.Empty(), K_INVALID, "Centralized master address is empty.");
     decision.ownerEndpoint.availability = WorkerAvailability::READY;
     decision.ownerEndpoint.address = options.masterAddress;
     INJECT_POINT("WorkerLocator.LocateCentralizedMaster.skipDirectoryCheck");
-    decision.ownerWorkerId = options.masterAddress.ToString();
-    if (!decision.ownerWorkerId.empty()) {
+    decision.ownerNodeId = options.masterAddress.ToString();
+    decision.ownerEndpoint.nodeId = decision.ownerNodeId;
+    if (!decision.ownerNodeId.empty()) {
         PlacementEndpoint resolved;
-        if (directory_->ResolveWorker(decision.ownerWorkerId, resolved).IsOk()) {
+        if (directory_->ResolveWorker(decision.ownerNodeId, resolved).IsOk()) {
             decision.ownerEndpoint.availability = resolved.availability;
         }
     }

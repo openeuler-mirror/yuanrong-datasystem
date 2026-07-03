@@ -23,6 +23,7 @@
 #include <memory>
 #include <vector>
 
+#include "datasystem/topology/routing/owner_endpoint_resolver.h"
 #include "datasystem/topology/routing/placement_directory.h"
 #include "datasystem/topology/routing/routing_cache.h"
 #include "datasystem/topology/routing/routing_view.h"
@@ -30,9 +31,9 @@
 namespace datasystem {
 namespace topology {
 
-class IWorkerLocator {
+class IWorkerLocator : public IOwnerEndpointResolver {
 public:
-    virtual ~IWorkerLocator() = default;
+    ~IWorkerLocator() override = default;
 
     /**
      * @brief Locate the metadata owner endpoint for one object key.
@@ -45,8 +46,8 @@ public:
      * Request threads only read local immutable snapshots. This method must not perform repository/backend IO,
      * CAS/List/Watch, task scan, migration, recovery, cleanup, or success-path logging.
      */
-    virtual Status LocateMetaOwner(const std::string &objectKey, const RouteOptions &options, IRoutingCache *cache,
-                                   RouteDecision &decision) const = 0;
+    Status LocateMetaOwner(const std::string &objectKey, const RouteOptions &options, IRoutingCache *cache,
+                           RouteDecision &decision) const override = 0;
 
     /**
      * @brief Locate metadata owners for a batch of object keys using one routing snapshot.
@@ -55,8 +56,8 @@ public:
      * @param[out] decision Batch route decision.
      * @return K_OK if batch-level prerequisites are ready. Per-key failures are stored in decision.
      */
-    virtual Status LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys, const RouteOptions &options,
-                                         BatchRouteDecision &decision) const = 0;
+    Status LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys, const RouteOptions &options,
+                                 BatchRouteDecision &decision) const override = 0;
 };
 
 class WorkerLocator final : public IWorkerLocator {

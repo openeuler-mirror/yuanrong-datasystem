@@ -227,6 +227,7 @@ ds_cc_library(
         "//src/datasystem/protos:master_heartbeat_cc_proto",
         "//src/datasystem/protos:object_posix_brpc",
         "//src/datasystem/protos:share_memory_cc_proto",
+        "//src/datasystem/topology:worker_node_info",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/cluster_manager:worker_health_check",
         "//src/datasystem/worker/hash_ring",

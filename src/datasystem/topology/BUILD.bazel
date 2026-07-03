@@ -3,6 +3,31 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "membership_types",
+    hdrs = [
+        "membership/membership_types.h",
+        "model/topology_types.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
+ds_cc_library(
+    name = "membership_value_codec",
+    srcs = ["membership/membership_value_codec.cpp"],
+    hdrs = [
+        "membership/membership_types.h",
+        "membership/membership_value_codec.h",
+        "model/topology_types.h",
+    ],
+    deps = [
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "worker_node_info",
     srcs = ["membership/worker_node_info.cpp"],
     hdrs = [
@@ -12,6 +37,7 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_cc_proto",
@@ -27,9 +53,11 @@ ds_cc_library(
         "membership/cluster_membership.cpp",
         "membership/cluster_registry.cpp",
         "routing/placement_directory.cpp",
+        "routing/membership_endpoint_view.cpp",
         "routing/redirect_policy.cpp",
         "routing/routing_cache.cpp",
         "routing/routing_view.cpp",
+        "routing/owner_endpoint_resolver.cpp",
         "routing/worker_locator.cpp",
         "routing/placement_facade.cpp",
         "repository/topology_key_helper.cpp",
@@ -45,13 +73,16 @@ ds_cc_library(
         "membership/cluster_membership.h",
         "membership/cluster_registry.h",
         "membership/membership_types.h",
+        "membership/membership_value_codec.h",
         "membership/worker_node_info.h",
         "model/topology_types.h",
         "routing/placement_directory.h",
+        "routing/membership_endpoint_view.h",
         "routing/redirect_policy.h",
         "routing/routing_cache.h",
         "routing/routing_snapshot.h",
         "routing/routing_view.h",
+        "routing/owner_endpoint_resolver.h",
         "routing/worker_locator.h",
         "routing/placement_facade.h",
         "routing/placement_types.h",
@@ -72,6 +103,7 @@ ds_cc_library(
         "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/protos:hash_ring_cc_proto",
+        ":membership_value_codec",
         ":worker_node_info",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
     ],

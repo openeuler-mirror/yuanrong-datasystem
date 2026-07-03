@@ -86,16 +86,16 @@ public:
         directory->localAddress = workerAddress_;
 
         topology::RoutingSnapshotFacts facts;
-        facts.workerOrder.reserve(workerAddrs.size());
+        facts.nodeOrder.reserve(workerAddrs.size());
         for (const auto &workerAddr : workerAddrs) {
             HostPort hostPort;
             DS_ASSERT_OK(hostPort.ParseString(workerAddr));
             directory->workers.emplace(
                 workerAddr, topology::PlacementEndpoint{ workerAddr, hostPort, topology::WorkerAvailability::READY });
             directory->workerIdsByAddress.emplace(workerAddr, workerAddr);
-            facts.workerOrder.emplace_back(workerAddr);
-            facts.validWorkerIds.emplace(workerAddr);
-            facts.activeWorkerIds.emplace(workerAddr);
+            facts.nodeOrder.emplace_back(workerAddr);
+            facts.validTopologyNodeIds.emplace(workerAddr);
+            facts.activeTopologyNodeIds.emplace(workerAddr);
         }
         placementDirectory_->Publish(std::move(directory));
 

@@ -27,46 +27,36 @@
 namespace datasystem {
 namespace topology {
 namespace {
-bool IsSameWorker(const PlacementEndpoint &lhs, const PlacementEndpoint &rhs)
+bool IsSameWorker(const MemberEndpoint &lhs, const MemberEndpoint &rhs)
 {
-    if (!lhs.workerId.empty() && !rhs.workerId.empty()) {
-        return lhs.workerId == rhs.workerId;
+    if (!lhs.nodeId.empty() && !rhs.nodeId.empty()) {
+        return lhs.nodeId == rhs.nodeId;
     }
     return !lhs.address.Empty() && !rhs.address.Empty() && lhs.address == rhs.address;
 }
 }  // namespace
 
 RedirectPolicy::RedirectPolicy(std::shared_ptr<IRoutingView> routingView,
-                               std::shared_ptr<IPlacementDirectory> directory, std::shared_ptr<IWorkerLocator> locator)
-    : routingView_(std::move(routingView)), directory_(std::move(directory)), locator_(std::move(locator))
+                               std::shared_ptr<IMembershipEndpointView> endpointView,
+                               std::shared_ptr<IOwnerEndpointResolver> locator)
+    : routingView_(std::move(routingView)), endpointView_(std::move(endpointView)), locator_(std::move(locator))
 {
 }
 
-Status RedirectPolicy::Evaluate(const std::string &objectKey, const RouteOptions &options,
+Status RedirectPolicy::Evaluate(const std::string &key, const RouteOptions &options,
                                 RedirectDecision &decision) const
 {
+    (void)options;
     decision = RedirectDecision{};
-    CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "Redirect object key is empty.");
-    CHECK_FAIL_RETURN_STATUS(directory_ != nullptr, K_INVALID, "Redirect policy directory is not set.");
-    if (options.centralizedMode) {
-        return EvaluateCentralized(options, decision);
-    }
+    CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID, "Redirect business key is empty.");
+    CHECK_FAIL_RETURN_STATUS(endpointView_ != nullptr, K_INVALID, "Redirect policy endpointView is not set.");
 
-    PlacementEndpoint targetEndpoint;
-    RETURN_IF_NOT_OK(ResolveRedirectTarget(objectKey, targetEndpoint));
+    MemberEndpoint targetEndpoint;
+    RETURN_IF_NOT_OK(ResolveRedirectTarget(key, targetEndpoint));
     return FinishDecision(targetEndpoint, decision);
 }
 
-Status RedirectPolicy::EvaluateCentralized(const RouteOptions &options, RedirectDecision &decision) const
-{
-    PlacementEndpoint targetEndpoint;
-    CHECK_FAIL_RETURN_STATUS(!options.masterAddress.Empty(), K_INVALID, "Centralized master address is empty.");
-    targetEndpoint.availability = WorkerAvailability::READY;
-    targetEndpoint.address = options.masterAddress;
-    return FinishDecision(targetEndpoint, decision);
-}
-
-Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, PlacementEndpoint &targetEndpoint) const
+Status RedirectPolicy::ResolveRedirectTarget(const std::string &key, MemberEndpoint &targetEndpoint) const
 {
     CHECK_FAIL_RETURN_STATUS(routingView_ != nullptr && locator_ != nullptr, K_INVALID,
                              "Redirect policy dependencies are not set.");
@@ -75,7 +65,7 @@ Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, Place
     RETURN_IF_NOT_OK(routingView_->GetSnapshot(snapshot));
     CHECK_FAIL_RETURN_STATUS(snapshot != nullptr, K_NOT_READY, "Routing snapshot is not published.");
 
-    const uint32_t objectHash = MurmurHash3_32(objectKey);
+    const uint32_t objectHash = MurmurHash3_32(key);
     bool hasHint = false;
     RETURN_IF_NOT_OK(ResolveHintTarget(objectHash, snapshot, targetEndpoint, hasHint));
     if (hasHint) {
@@ -84,13 +74,14 @@ Status RedirectPolicy::ResolveRedirectTarget(const std::string &objectKey, Place
 
     RouteDecision route;
     RouteOptions options;
-    RETURN_IF_NOT_OK(locator_->LocateMetaOwner(objectKey, options, nullptr, route));
+    RETURN_IF_NOT_OK(locator_->LocateMetaOwner(key, options, nullptr, route));
     targetEndpoint = route.ownerEndpoint;
     return Status::OK();
 }
 
-Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_ptr<const RoutingSnapshot> &snapshot,
-                                         PlacementEndpoint &targetEndpoint, bool &hasHint) const
+Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash,
+                                         const std::shared_ptr<const RoutingSnapshot> &snapshot,
+                                         MemberEndpoint &targetEndpoint, bool &hasHint) const
 {
     hasHint = false;
     RoutingRedirectHint hint;
@@ -98,10 +89,10 @@ Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_
         return Status::OK();
     }
 
-    targetEndpoint = PlacementEndpoint{ hint.targetWorkerId, hint.targetAddress, WorkerAvailability::NOT_READY };
-    if (!hint.targetWorkerId.empty()) {
-        PlacementEndpoint resolvedEndpoint;
-        if (directory_->ResolveWorker(hint.targetWorkerId, resolvedEndpoint).IsOk()) {
+    targetEndpoint = MemberEndpoint{ hint.targetNodeId, hint.targetAddress, MemberAvailability::NOT_READY };
+    if (!hint.targetNodeId.empty()) {
+        MemberEndpoint resolvedEndpoint;
+        if (endpointView_->ResolveEndpoint(hint.targetNodeId, resolvedEndpoint).IsOk()) {
             targetEndpoint = resolvedEndpoint;
         }
     }
@@ -110,13 +101,13 @@ Status RedirectPolicy::ResolveHintTarget(uint32_t objectHash, const std::shared_
     return Status::OK();
 }
 
-Status RedirectPolicy::FinishDecision(const PlacementEndpoint &targetEndpoint, RedirectDecision &decision) const
+Status RedirectPolicy::FinishDecision(const MemberEndpoint &targetEndpoint, RedirectDecision &decision) const
 {
-    PlacementEndpoint localWorker;
-    RETURN_IF_NOT_OK(directory_->GetLocalWorker(localWorker));
+    MemberEndpoint localNode;
+    RETURN_IF_NOT_OK(endpointView_->GetLocalEndpoint(localNode));
     CHECK_FAIL_RETURN_STATUS(!targetEndpoint.address.Empty(), K_INVALID, "Redirect target address is empty.");
     decision.targetEndpoint = targetEndpoint;
-    if (IsSameWorker(localWorker, decision.targetEndpoint)) {
+    if (IsSameWorker(localNode, decision.targetEndpoint)) {
         decision.action = RedirectAction::SERVE_LOCAL;
         return Status::OK();
     }

@@ -30,6 +30,16 @@
 namespace datasystem {
 namespace topology {
 
+enum class WorkerServiceState {
+    UNSPECIFIED = 0,
+    START,
+    RESTART,
+    RECOVER,
+    READY,
+    EXITING,
+    DOWNGRADE_RESTART,
+};
+
 struct WorkerServiceInfo {
     int64_t timestamp = 0;
     WorkerServiceState state = WorkerServiceState::UNSPECIFIED;

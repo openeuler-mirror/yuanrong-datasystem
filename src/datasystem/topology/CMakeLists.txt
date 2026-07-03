@@ -1,3 +1,8 @@
+add_library(membership_value_codec STATIC membership/membership_value_codec.cpp)
+target_include_directories(membership_value_codec PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(membership_value_codec PUBLIC common_util coordinator_protos)
+add_dependencies(membership_value_codec coordinator_protos)
+
 add_library(worker_node_info STATIC membership/worker_node_info.cpp)
 target_include_directories(worker_node_info PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(worker_node_info PUBLIC common_util coordinator_protos)
@@ -17,9 +22,11 @@ set(TOPOLOGY_SRCS
         membership/cluster_membership.cpp
         membership/cluster_registry.cpp
         routing/placement_directory.cpp
+        routing/membership_endpoint_view.cpp
         routing/redirect_policy.cpp
         routing/routing_cache.cpp
         routing/routing_view.cpp
+        routing/owner_endpoint_resolver.cpp
         routing/worker_locator.cpp
         routing/placement_facade.cpp
         repository/topology_key_helper.cpp
@@ -35,6 +42,7 @@ target_link_libraries(topology PUBLIC
         common_log
         common_etcd
         coordination_backend
+        membership_value_codec
         worker_node_info
         coordinator_protos
         hash_ring_protos
