@@ -367,6 +367,7 @@ TEST_F(HardDiskExporterTest, ResourceCollectorWritesKvResourceLogJsonLines)
                       std::chrono::milliseconds(100)));
 
     EXPECT_TRUE(FileContains(jsonPath, "\"event\":\"resource_snapshot\""));
+    EXPECT_TRUE(FileContains(jsonPath, "\"time\""));
     EXPECT_TRUE(FileContains(jsonPath, "\"pod_name\""));
     EXPECT_TRUE(FileContains(jsonPath, "\"cluster_name\""));
     EXPECT_TRUE(FileContains(jsonPath, "\"shared_memory\""));
@@ -437,15 +438,17 @@ TEST_F(HardDiskExporterTest, KvMetricsLogWritesWrappedSummaryAsPureJsonLines)
     DS_ASSERT_OK(exporter.Init(filePath));
     const std::string body = R"({"event":"metrics_summary","version":"v0","cycle":1,"interval_ms":10000,)"
                              R"("part_index":1,"part_count":1,"metrics":[]})";
-    const std::string line = WrapJsonWithPodCluster(body, "worker_0", "recs");
+    const std::string timestamp = "2023-06-02T14:58:32.081156";
+    const std::string line = WrapJsonWithPodCluster(body, "worker_0", "recs", timestamp);
     exporter.WriteJsonLine(line);
 
     const auto retryTimes = 30;
     ASSERT_TRUE(Retry([this, &filePath, &line]() { return FileContains(filePath, line); }, retryTimes,
                       std::chrono::milliseconds(100)));
 
-    // pod_name/cluster_name lead, then the original event body.
-    EXPECT_TRUE(FileContains(filePath, "{\"pod_name\":\"worker_0\""));
+    // time/pod_name/cluster_name lead, then the original event body.
+    EXPECT_TRUE(FileContains(filePath, "{\"time\":\"2023-06-02T14:58:32.081156\""));
+    EXPECT_TRUE(FileContains(filePath, "\"pod_name\":\"worker_0\""));
     EXPECT_TRUE(FileContains(filePath, ",\"cluster_name\":\"recs\""));
     EXPECT_TRUE(FileContains(filePath, "\"event\":\"metrics_summary\""));
     // Pure jsonl: first byte is '{', no text prefix.

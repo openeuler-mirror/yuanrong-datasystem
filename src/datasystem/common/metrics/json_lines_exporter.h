@@ -89,18 +89,21 @@ private:
 };
 
 /**
- * @brief Prepend pod_name/cluster_name as the first top-level fields of a JSON object body.
+ * @brief Prepend time/pod_name/cluster_name as the first top-level fields of a JSON object body.
  *
- * Both labels are JSON-escaped. The body is not re-serialized: a plain string splice inserts the
- * two escaped labels right after the leading '{'. Used by both kv_resource.log and kv_metrics.log
- * so the two outputs share one escaping + prefixing path (no shotgun edit when the label source
- * changes).
+ * time uses the same ISO8601 format as the standard log prefix (see FormatLogTimestamp). When time
+ * is empty, the current wall-clock time is captured at call time. Both labels are JSON-escaped. The
+ * body is not re-serialized: a plain string splice inserts the escaped fields right after the
+ * leading '{'. Used by both kv_resource.log and kv_metrics.log so the two outputs share one
+ * escaping + prefixing path (no shotgun edit when the label source changes).
  * @param[in] body A complete JSON object starting with '{'.
  * @param[in] podName Pod identifier for the top-level pod_name field.
  * @param[in] clusterName Cluster name for the top-level cluster_name field.
+ * @param[in] time Optional ISO8601 timestamp; empty means capture now.
  * @return The wrapped JSON string, or the input unchanged if it is not a JSON object.
  */
 [[nodiscard]] std::string WrapJsonWithPodCluster(const std::string &body, const std::string &podName,
-                                                 const std::string &clusterName);
+                                                 const std::string &clusterName,
+                                                 const std::string &time = "");
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_METRICS_JSON_LINES_EXPORTER_H

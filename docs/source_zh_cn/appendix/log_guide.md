@@ -11,8 +11,8 @@ openYuanrong datasystem 的日志分为以下类型：
 5. **流缓存指标日志（sc_metrics）**：流缓存运行数据（需开启 `log_monitor`）。
 6. **容器/进程相关日志**：容器运行日志，管理和监控worker进程的生命周期。
 7. **操作审计日志（operation）**：记录进程启动/停止、配置初始化及运行时动态配置变更（`UpdateConfig` API 或 `monitor_config_file` 热更新），便于运维追溯配置操作历史。
-8. **资源快照日志（kv_resource）**：`resource.log` 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 `pod_name`/`cluster_name`，`metrics` 为按 ods 白名单过滤后的命名字段（需 `json_log_monitor` 且 `log_monitor_exporter=harddisk`；与 `resource.log` 复用同一采集线程和周期，但不受 `log_monitor` 开关控制）。
-9. **指标摘要日志（kv_metrics）**：`datasystem_worker.INFO.log` 中 `metrics_summary` 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 `pod_name`/`cluster_name`，body 与 INFO.log 逐字一致（需 `json_log_monitor`；INFO.log 原 `metrics_summary` 仍由 `log_monitor` 控制）。
+8. **资源快照日志（kv_resource）**：`resource.log` 同源字段的 JSON-Lines 快照，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，`metrics` 为按 `resource_json_schema` 配置的 metric 组及子字段（需 `json_log_monitor` 且 `log_monitor_exporter=harddisk`；与 `resource.log` 复用同一采集线程和周期，写入由 `json_log_monitor` 独立控制）。
+9. **指标摘要日志（kv_metrics）**：`datasystem_worker.INFO.log` 中 `metrics_summary` 摘要的 JSON-Lines 并行输出，每行一个完整 JSON 对象，顶层含 `time`/`pod_name`/`cluster_name`，body 与 INFO.log 逐字一致（需 `json_log_monitor`；INFO.log 原 `metrics_summary` 仍由 `log_monitor` 控制）。
 
 日志目录一般为配置项 `log_dir`（如部署下的 `yr_datasystem/logs`）；下文 `/path/yr_datasystem/logs` 表示该目录。
 
@@ -27,8 +27,8 @@ openYuanrong datasystem 的日志分为以下类型：
 | 5 | datasystem_worker | `/path/yr_datasystem/logs/sc_metrics.log` | 流缓存运行数据；由 `log_monitor` 控制是否开启 |
 | 6 | datasystem_worker | `/path/yr_datasystem/logs/container.log` | 容器运行日志，管理和监控worker进程的生命周期 |
 | 7 | datasystem_worker | `/path/yr_datasystem/logs/{log_filename}_operation.log` | 操作审计日志；记录 Init/Shutdown、配置初始化快照及运行时 flag 变更（`UpdateConfig` 或配置文件热更新） |
-| 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `pod_name`/`cluster_name`，`metrics` 按 ods 白名单过滤；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
-| 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；INFO.log 中 `metrics_summary` 的并行输出，body 逐字一致，额外前置 `pod_name`/`cluster_name`；由 `json_log_monitor` 控制（INFO.log 原输出仍由 `log_monitor` 控制） |
+| 8 | datasystem_worker | `/path/yr_datasystem/logs/kv_resource.log` | 资源快照 JSON-Lines；`resource.log` 同源字段的纯 JSON 输出，顶层 `time`/`pod_name`/`cluster_name`，`metrics` 按 schema 输出已配置的 metric 组；由 `json_log_monitor` 且 `log_monitor_exporter=harddisk` 控制 |
+| 9 | datasystem_worker | `/path/yr_datasystem/logs/kv_metrics.log` | 指标摘要 JSON-Lines；INFO.log 中 `metrics_summary` 的并行输出，body 逐字一致，额外前置 `time`/`pod_name`/`cluster_name`；由 `json_log_monitor` 控制（INFO.log 原输出仍由 `log_monitor` 控制） |
 | 10 | Client | `/path/client/ds_client.INFO.log`（及 `.WARNING`、`.ERROR` 等；关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}.INFO.log`） | SDK 运行日志；基名可由启动参数与环境变量 `DATASYSTEM_CLIENT_LOG_NAME` 覆盖 |
 | 11 | Client | `/path/client/ds_client_operation.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_{pid}_operation.log`） | Client 操作审计日志；记录 Init/Shutdown 及 `UpdateConfig` 动态配置变更 |
 | 12 | Client | `/path/client/ds_client_access.log`（关闭 `DATASYSTEM_CLIENT_LOG_WITHOUT_PID` 后恢复为 `/path/client/ds_client_access_{pid}.log`） | SDK 接口访问日志；基名可由 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
@@ -44,7 +44,7 @@ openYuanrong datasystem 的日志分为以下类型：
 | 1 | 运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 | 2 | 访问日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
 | 3 | 访问第三方日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| status_code \| action \| cost \| data size \| request param\| response param |
-| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| shared disk info \| scLocalCache info \| Cache Hit Info |
+| 4 | 资源日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| shm info \| spill disk info \| client nums \| object nums \| object total datasize \| WorkerOcService threadpool \| WorkerWorkerOcService threadpool \| MasterWorkerOcService threadpool \| MasterOcService threadpool \| write ETCD queue \| ETCDrequest success rate \| OBSrequest success rate \| Master AsyncTask threadpool \| stream nums \| ClientWorkerSCService threadpool \| WorkerWorkerSCService threadpool \| MasterWorkerSCService threadpool \| MasterSCService threadpool \| remote stream push success rate \| shared disk info \| scLocalCache info \| Cache Hit Info \| brpc stream leak count \| deferred cleanup queue size |
 | 5 | 流缓存数据日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| sc_metric |
 | 6 | 容器运行日志 | Time \| level \| filename \| pod_name \| pid:tid \| trace_id \| cluster_name \| message |
 
@@ -88,6 +88,8 @@ openYuanrong datasystem 的日志分为以下类型：
 | shared disk info | 47 | 记录共享磁盘使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usage/physicaleUsage/totalLimit/rate<br>1) usage  已使用的磁盘大小，是已缓存的对象大小总和<br>2) physicaleUsage 已使用的物理磁盘大小<br>3) totalLimit     共享磁盘总大小<br>4) rate   共享磁盘使用率，usage/totalLimit, 保留3位有效数字，单位: % |
 | scLocalCache info | 47 | 记录scLocalCache使用信息，单位为Byte，按照1T限制大小，每个长度 13 Byte，格式为：usedSize/reservedSize/totalLimit/usedRate |
 |Cache Hit Info | 9 | 缓存命中统计,格式为:memHitNum/diskHitNum/l2HitNum/remoteHitNum/missNum,<br>1) memHitNum	本地内存命中次数。<br>2) diskHitNum	本地磁盘命中次数. <br>3) l2HitNum	二级缓存命中次数。<br>4) remoteHitNum 远端worker命中次数。<br>5) missNum 未命中次数。
+| brpc stream leak count | 9 | brpc stream 关闭超时后为避免 UAF 而有意泄漏的 `brpc::Controller` 累计次数（进程启动以来单调递增）。正常应为 0 |
+| deferred cleanup queue size | 9 | 当前待延迟清理的 `brpc::Controller` 队列深度；stream 关闭超时时若配置了 `closeNotifier`，Controller 会入队等待 reaper 线程释放 |
 | sc_metric | 1024 | 流缓存运行数据(sc_stream_metric)。worker上一个stream的的流缓存数据，格式：streamName ["exit"]/numLocalProd/numRemoteProd/numLocalCon/numRemoteCon/sharedMemUsed/localMemUsed/numEleSent/numEleRecv/numEleAck/numSendReq/numRecvReq/numPagesCreated/numPagesReleased/numPagesInUse/numPagesCached/numBigPagesCreated/numBigPagesReleased/numLocalProdBlocked/numRemoteProdBlocked/numRemoteConBlocking/retainData/streamState/numProdMaster/numConMaster<br>1) streamName ["exit"] stream名字，带有" exit"表示stream正要关闭<br>2) numLocalProd 本地producer数量<br>3) numRemoteProd - Number of remote workers with atleast one producewill be 0, if no local consumers)<br>4) numLocalCon 本地consumer数量<br>5) numRemoteCon 远端consumer数量<br>6) sharedMemUsed stream使用共享内存大小，单位: Byte<br>7) localMemUsed stream使用本地内存大小，单位: Byte<br>8) numEleSent - Total number of elements produced by all local producers<br>9) numEleRecv - Total number of elements received by all local consumers (value will be 0, if no local consumers)<br>10) numEleAck element acked数量<br>11) numSendReq client调用producer.send()次数<br>12) numRecvReq client调用consumer.receive()次数<br>13) numPagesCreated page创建次数<br>14) numPagesReleased page释放次数<br>15) numPagesInUse page in use数量<br>16) numPagesCached page cached数量<br>17) numBigPagesCreated big element page创建次数<br>18) numBigPagesReleased big element page释放次数<br>19) numLocalProdBlocked 本地producer blocked数量<br>20) numRemoteProdBlocked 远端producer blocked数量<br>21) numRemoteConBlocking 远端consumer blocking数量<br>22) retainData retain data state<br>23) streamState stream state<br>24) numProdMaster master上producer数量<br>25) numConMaster master上consumer数量<br>- 如果worker不是stream的master，24-25会没有数据。如果worker只有master数据，2-23会没有据 |
 
 ### SDK 与 Worker 访问日志关键请求参数
@@ -112,6 +114,26 @@ openYuanrong datasystem 的日志分为以下类型：
 | 外部组件 | 请求类型 | 关键请求参数 | 描述 |
 |------|--------|----------|------|
 | ETCD | GRPC | key | 将Key字段获取并打印。|
+
+### 资源快照日志（kv_resource.log）字段
+
+每行一个完整 JSON 对象，采集周期与 `resource.log` 相同（`log_monitor_interval_ms`，默认 10s）。
+
+**顶层字段**：`time`（ISO8601，与文本日志前缀 time 格式一致）、`pod_name`、`cluster_name`、`event`（固定 `resource_snapshot`）、`version`（当前 `v0`）、`metrics`（object）。
+
+**`metrics` 内已输出的 metric 组**（与 `resource.log` 管道字段同源；字段映射真源：`resource_json_schema`）：
+
+| JSON 组名 | 子字段 | 对应 resource.log 语义 |
+|-----------|--------|------------------------|
+| `shared_memory` | `memory_usage`、`physical_memory_usage`、`total_limit`、`worker_share_memory_usage` | 共享内存使用 |
+| `spill_hard_disk` | `space_usage`、`physical_space_usage`、`total_limit`、`worker_spill_hard_disk_usage` | Spill 磁盘使用 |
+| `active_client_count` / `object_count` / `object_size` | （标量） | Client 数 / 对象数 / 对象总大小 |
+| `worker_oc_service_thread_pool` 等 OC 线程池组 | 线程池五元组 | 线程池状态 |
+| `etcd_queue` / `etcd_request_success_rate` | 见 schema | ETCD 队列 / 成功率 |
+| `master_async_tasks_thread_pool` | 线程池五元组 | Master 异步任务线程池 |
+| `oc_hit_num` | 命中统计五元组 | 缓存命中统计 |
+| `brpc_stream_leak_count` | （标量） | brpc stream 有意泄漏计数 |
+| `deferred_cleanup_queue_size` | （标量） | 延迟清理队列深度 |
 
 ---
 
