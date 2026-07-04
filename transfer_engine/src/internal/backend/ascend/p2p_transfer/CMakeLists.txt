@@ -184,6 +184,7 @@ target_compile_features(p2p_transfer PUBLIC cxx_std_11)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(p2p_transfer PRIVATE
+        -w
         -Wno-error=reorder
         -Wno-error=unused-parameter
         -Wno-error=switch

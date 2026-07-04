@@ -119,7 +119,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | `-X on/off/gpu/npu/all` | `BUILD_HETERO` | `on` | Adds hetero compile definitions and device/plugin dependencies when on. |
 | `-X off/gpu/npu/all` plus default | `BUILD_HETERO_NPU` | `on` | Enables Ascend/NPU backend; `-X off` and `-X gpu` force it off. |
 | `-X off/gpu/npu/all` plus default | `BUILD_HETERO_GPU` | `off` | Enables CUDA/GPU backend; `-X gpu` and `-X all` force it on, `-X off` and `-X npu` force it off. |
-| CMake `-X on/npu/all` | `TRANSFER_ENGINE_ENABLE_HIXL` | set by `build.sh` | Adds the transfer_engine HIXL D2D backend whenever the selected hetero mode includes NPU support. |
+| CMake `-X on/npu/all` | `TRANSFER_ENGINE_ENABLE_HIXL` | set by `build.sh`; transfer_engine may force it back off during configure | Adds the transfer_engine HIXL D2D backend only when CANN/HIXL `8.5.2+` is detected; lower or unknown HIXL versions keep the rest of the NPU build and compile without this backend. |
 | `-T on` | `BUILD_PIPLN_H2D` | `off` | Temporarily ignored and forced back to `off`; Pipeline H2D currently remains disabled even when requested. |
 | `-M on` | `BUILD_WITH_URMA` | `off` | Adds URMA dependency and RDMA-related source. |
 | `-A on` | `BUILD_WITH_RDMA` | `off` | Adds UCX and rdma-core checks/source. |
@@ -200,7 +200,9 @@ Rules for updating baselines:
     package validation.
   - `ASCEND_HIXL_FOUND` means basic HIXL headers and libraries were found. HCCS RH2D is gated separately by
     `ASCEND_HIXL_HCCS_SUPPORTED`, which requires detected HIXL version `8.5.2+`; lower versions skip
-    `hccs_transport.cpp` while retaining hetero and default ROCE builds.
+    `hccs_transport.cpp` while retaining hetero, default ROCE builds, and the vendored `p2p-transfer` dependency. The
+    transfer_engine HIXL D2D backend has the same effective version floor and is disabled during configure when
+    CANN/HIXL is missing, lower than `8.5.2`, or has an unknown version.
 - Good first files when a build regression appears:
   - `scripts/build_cmake.sh`
   - `cmake/dependency.cmake`

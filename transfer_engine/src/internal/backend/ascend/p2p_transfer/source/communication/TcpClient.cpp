@@ -18,7 +18,7 @@
 #include <netinet/tcp.h>
 
 TCPClient::TCPClient(const std::string &serverAddress, uint16_t port, uint32_t connectTimeOut)
-    : serverFd(-1), port(port), server_address(serverAddress), connectTimeOut(connectTimeOut), initialized(false)
+    : serverFd(-1), port(port), server_address(serverAddress), initialized(false), connectTimeOut(connectTimeOut)
 {
     memset_s(&address, sizeof(address), 0, sizeof(address));
 }
