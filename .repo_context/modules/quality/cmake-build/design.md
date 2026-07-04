@@ -72,8 +72,8 @@
 2. `build.sh` parses command-line options and validates `on/off`, test labels, sanitizer values, paths, and thread
    counts.
 3. If hetero is on but Ascend toolkit cannot be found, `build.sh` sets `BUILD_HETERO=off`.
-4. For CMake builds with hetero still on, `build.sh` enables `TRANSFER_ENGINE_ENABLE_HIXL=on`; the repository assumes
-   the detected CANN environment provides HIXL.
+4. For CMake builds with hetero still on, `build.sh` enables `TRANSFER_ENGINE_ENABLE_HIXL=on`; transfer_engine configure
+   then keeps that backend only when detected CANN/HIXL is `8.5.2+`, otherwise it warns and compiles without HIXL D2D.
 5. For CMake, `build.sh` sources `scripts/build_cmake.sh`.
 6. `build_datasystem_cmake` cleans or preserves build/output directories based on `BUILD_INCREMENT`.
 7. `build_datasystem_cmake` assembles CMake options and selects `Ninja` or `Unix Makefiles`.
@@ -132,8 +132,8 @@
 | pybind11 | `2.10.3` | `BUILD_PYTHON_API=on` | Finds Python3 interpreter/development and builds `ds_client_py`. |
 | JNI | system JNI | `BUILD_JAVA_API=on` | Finds JNI headers for `client_jni_api`. |
 | Ascend CANN | external toolkit | `BUILD_HETERO AND BUILD_HETERO_NPU` | Located via `ASCEND_HOME_PATH`, `ASCEND_CUSTOM_PATH/latest`, or `/usr/local/Ascend/ascend-toolkit/latest`. |
-| p2p-transfer | vendored `third_party/P2P-Transfer`, version `0.1.0` | `BUILD_HETERO AND BUILD_HETERO_NPU` | Built through third-party helper; not treated as DS_PACKAGE open-source package. |
-| CANN HIXL | external toolkit libraries `cann_hixl`, `metadef`, `ascendcl` | Enabled by `build.sh` for CMake `-X on`, then passed as `TRANSFER_ENGINE_ENABLE_HIXL=ON` | The repository assumes the detected CANN environment provides HIXL. When enabled, root CMake requires `BUILD_TRANSFER_ENGINE AND BUILD_HETERO AND BUILD_HETERO_NPU`; `transfer_engine/CMakeLists.txt` performs final dependency discovery. |
+| p2p-transfer | vendored `third_party/P2P-Transfer`, version `0.1.0` | `BUILD_HETERO AND BUILD_HETERO_NPU` | Built through third-party helper; not treated as DS_PACKAGE open-source package. This dependency is independent of the transfer_engine HIXL D2D version gate. |
+| CANN HIXL | external toolkit libraries `cann_hixl`, `metadef`, `ascendcl` | Enabled by `build.sh` for CMake `-X on`, then passed as `TRANSFER_ENGINE_ENABLE_HIXL=ON`; `transfer_engine/CMakeLists.txt` can force it off | HIXL D2D is compiled only when CANN/HIXL `8.5.2+` is detected. Lower or unknown versions retain the NPU build while disabling this backend. When enabled, root CMake requires `BUILD_TRANSFER_ENGINE AND BUILD_HETERO AND BUILD_HETERO_NPU`; `transfer_engine/CMakeLists.txt` performs final dependency discovery and version gating. |
 | CUDA / NCCL | external toolkit | `BUILD_HETERO AND BUILD_HETERO_GPU` | Located via `CUDA_HOME_PATH`, `CUDA_CUSTOM_PATH`, or `/usr/local/cuda`. |
 | URMA | system package | `BUILD_WITH_URMA=on` | `BUILD_PIPLN_H2D` requires URMA. |
 | UCX | `1.18.0` plus rdma-core headers | `BUILD_WITH_RDMA=on` | Configure build with verbs/rdmacm/multithreading and no Go/Java. |
@@ -218,8 +218,8 @@ root
 | --- | --- | --- |
 | `WITH_TESTS` | `tests` subtree, GTest, test-only protos, test-only worker/server sources, CTest registration | `CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
 | `ENABLE_PERF` | perf client source, perf service source, perf proto targets, `perf_client.h` included in SDK headers | `src/datasystem/client/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt`, `cmake/package.cmake` |
-| `BUILD_HETERO_NPU` | Ascend find, p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation; TransferEngine links the repository-private `ds_spdlog` target and installs a process-local callback into the bundled P2P DSO | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files, `transfer_engine/CMakeLists.txt` |
-| `TRANSFER_ENGINE_ENABLE_HIXL` | Adds `transfer_engine/src/internal/backend/ascend/hixl_d2d_backend.cpp`, defines `TRANSFER_ENGINE_ENABLE_HIXL=1`, and links `cann_hixl`, `metadef`, `ascendcl`; `protocol=hixl` returns `kNotSupported` when this is off | `build.sh`, `scripts/build_cmake.sh`, `transfer_engine/CMakeLists.txt`, `transfer_engine/cmake/options.cmake` |
+| `BUILD_HETERO_NPU` | Ascend find, optional p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation; TransferEngine links the repository-private `ds_spdlog` target and installs a process-local callback into the bundled P2P DSO | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files, `transfer_engine/CMakeLists.txt` |
+| `TRANSFER_ENGINE_ENABLE_HIXL` | Adds `transfer_engine/src/internal/backend/ascend/hixl_d2d_backend.cpp`, defines `TRANSFER_ENGINE_ENABLE_HIXL=1`, and links `cann_hixl`, `metadef`, `ascendcl` only after CANN/HIXL `8.5.2+` is detected; `protocol=hixl` returns `kNotSupported` when this is off | `build.sh`, `scripts/build_cmake.sh`, `transfer_engine/CMakeLists.txt`, `transfer_engine/cmake/options.cmake` |
 | `BUILD_HETERO_GPU` | CUDA find, `common_cuda_device`, `cuda_plugin`, plugin hash generation | `cmake/dependency.cmake`, device CMake files |
 | `BUILD_PIPLN_H2D` | FATAL unless URMA is on; adds `os_transport_pipeline` and links it into SDK/worker | `cmake/dependency.cmake`, `src/datasystem/common/os_transport_pipeline/CMakeLists.txt` |
 | `BUILD_WITH_RDMA` | UCX source/library and rdma-core header check; installs UCX base and IB libs | `cmake/external_libs/ucx.cmake`, `cmake/package.cmake` |

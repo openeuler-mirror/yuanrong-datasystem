@@ -165,9 +165,18 @@ if (TRANSFER_ENGINE_ENABLE_P2P_THIRD_PARTY)
 endif()
 
 if (TRANSFER_ENGINE_ENABLE_HIXL)
+    set(TRANSFER_ENGINE_HIXL_MIN_VERSION "8.5.2")
     find_path(TRANSFER_ENGINE_HIXL_INCLUDE_DIR
         NAMES hixl/hixl.h hixl/hixl_types.h
         PATHS ${_te_ascend_include_dir}
+    )
+    find_file(TRANSFER_ENGINE_HIXL_VERSION_HEADER
+        NAMES version/hixl_version.h
+        PATHS ${_te_ascend_include_dir}
+    )
+    find_file(TRANSFER_ENGINE_HIXL_VERSION_INFO
+        NAMES version.info
+        PATHS ${Ascend_ROOT}/share/info/hixl
     )
     find_library(TRANSFER_ENGINE_HIXL_LIBRARY
         NAMES cann_hixl
@@ -181,13 +190,53 @@ if (TRANSFER_ENGINE_ENABLE_HIXL)
         NAMES ascendcl
         PATHS ${_te_ascend_lib_dirs}
     )
+    set(TRANSFER_ENGINE_HIXL_VERSION "")
+    if (TRANSFER_ENGINE_HIXL_VERSION_HEADER)
+        file(READ "${TRANSFER_ENGINE_HIXL_VERSION_HEADER}" _te_hixl_version_content)
+        string(REGEX MATCH "#define[ \t]+HIXL_VERSION_STR[ \t]+\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+            _te_hixl_version_match "${_te_hixl_version_content}")
+        if (_te_hixl_version_match)
+            set(TRANSFER_ENGINE_HIXL_VERSION "${CMAKE_MATCH_1}")
+        endif()
+        unset(_te_hixl_version_content)
+        unset(_te_hixl_version_match)
+    endif()
+    if (NOT TRANSFER_ENGINE_HIXL_VERSION AND TRANSFER_ENGINE_HIXL_VERSION_INFO)
+        file(READ "${TRANSFER_ENGINE_HIXL_VERSION_INFO}" _te_hixl_version_info_content)
+        string(REGEX MATCH "Version=([0-9]+\\.[0-9]+\\.[0-9]+)"
+            _te_hixl_version_info_match "${_te_hixl_version_info_content}")
+        if (_te_hixl_version_info_match)
+            set(TRANSFER_ENGINE_HIXL_VERSION "${CMAKE_MATCH_1}")
+        endif()
+        unset(_te_hixl_version_info_content)
+        unset(_te_hixl_version_info_match)
+    endif()
+
+    set(TRANSFER_ENGINE_HIXL_SUPPORTED FALSE)
     if (NOT TRANSFER_ENGINE_HIXL_INCLUDE_DIR OR NOT TRANSFER_ENGINE_HIXL_LIBRARY OR
         NOT TRANSFER_ENGINE_METADEF_LIBRARY OR NOT TRANSFER_ENGINE_ASCENDCL_LIBRARY)
-        message(FATAL_ERROR
+        message(WARNING
             "TRANSFER_ENGINE_ENABLE_HIXL=ON requires an Ascend CANN toolkit with HIXL. "
-            "Check ASCEND_HOME_PATH or ASCEND_CUSTOM_PATH."
-        )
+            "HIXL D2D backend will be disabled. Check ASCEND_HOME_PATH or ASCEND_CUSTOM_PATH.")
+    elseif (TRANSFER_ENGINE_HIXL_VERSION AND
+        "${TRANSFER_ENGINE_HIXL_VERSION}" VERSION_GREATER_EQUAL "${TRANSFER_ENGINE_HIXL_MIN_VERSION}")
+        set(TRANSFER_ENGINE_HIXL_SUPPORTED TRUE)
+    elseif (TRANSFER_ENGINE_HIXL_VERSION)
+        message(WARNING
+            "cann_hixl version ${TRANSFER_ENGINE_HIXL_VERSION} is lower than "
+            "${TRANSFER_ENGINE_HIXL_MIN_VERSION}. "
+            "HIXL D2D backend will be disabled.")
+    else()
+        message(WARNING
+            "cann_hixl version is unknown. HIXL D2D backend will be disabled. "
+            "Build with CANN/HIXL ${TRANSFER_ENGINE_HIXL_MIN_VERSION}+ to enable HIXL D2D.")
     endif()
+    if (NOT TRANSFER_ENGINE_HIXL_SUPPORTED)
+        set(TRANSFER_ENGINE_ENABLE_HIXL OFF CACHE BOOL "Enable HIXL D2D backend" FORCE)
+    endif()
+endif()
+
+if (TRANSFER_ENGINE_ENABLE_HIXL)
     set(_te_hixl_libraries
         ${TRANSFER_ENGINE_HIXL_LIBRARY}
         ${TRANSFER_ENGINE_METADEF_LIBRARY}
