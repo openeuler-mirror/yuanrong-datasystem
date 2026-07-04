@@ -75,6 +75,50 @@ function _bazel_build_configs() {
   fi
 }
 
+function _bazel_test_query_expr() {
+  local base_expr="tests(//tests/...)"
+  local -a include_exprs=()
+  local label
+  local sanitizer_lower
+  sanitizer_lower=$(echo "${USE_SANITIZER}" | tr '[:upper:]' '[:lower:]')
+  local sanitizer_tag
+  sanitizer_tag=$(_sanitizer_to_bazel_config "${sanitizer_lower}")
+  local expr="attr(tags, '${sanitizer_tag}', ${base_expr})"
+  if [[ "${sanitizer_tag}" != "sanitizer" ]]; then
+    expr="(${expr}) union attr(tags, 'sanitizer', ${base_expr})"
+  fi
+
+  for label in ${LLT_LABELS}; do
+    case "${label}" in
+      level0|level1|ut|st)
+        include_exprs+=("attr(tags, '${label}', ${base_expr})")
+        ;;
+      level\*|object\*)
+        ;;
+      ut\*)
+        include_exprs+=("attr(tags, 'ut', ${base_expr})")
+        ;;
+      st\*)
+        include_exprs+=("attr(tags, 'st', ${base_expr})")
+        ;;
+      *)
+        echo -e "-- [INFO] bazel mode: ignoring unsupported test label '${label}'." >&2
+        ;;
+    esac
+  done
+
+  if [[ "${#include_exprs[@]}" -gt 0 ]]; then
+    local label_expr="${include_exprs[0]}"
+    local i
+    for ((i = 1; i < ${#include_exprs[@]}; i++)); do
+      label_expr="(${label_expr}) union (${include_exprs[i]})"
+    done
+    expr="(${expr}) intersect (${label_expr})"
+  fi
+
+  echo "(${expr}) except attr(tags, 'manual', ${base_expr})"
+}
+
 # Build and install using bazel.
 function build_datasystem_bazel() {
   echo -e "-- building datasystem (bazel)..."
@@ -290,10 +334,47 @@ function run_bazel_testcases() {
 
   local baseTime_s
   baseTime_s=$(date +%s)
+  local sanitizer_lower
+  sanitizer_lower=$(echo "${USE_SANITIZER}" | tr '[:upper:]' '[:lower:]')
+  local sanitizer_config
+  sanitizer_config=$(_sanitizer_to_bazel_config "${sanitizer_lower}")
 
-  echo -e "-- bazel test command: bazel test ${configs[@]} --jobs=${TEST_PARALLEL_JOBS} //..."
   cd "${DATASYSTEM_DIR}"
-  bazel test "${configs[@]}" --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" //... \
+  if [[ "${sanitizer_config}" != "asan" && "${sanitizer_config}" != "tsan" ]]; then
+    echo -e "-- bazel test command: bazel test ${configs[*]} --jobs=${TEST_PARALLEL_JOBS} " \
+      "--test_timeout=${LLT_TIMEOUT_S} //..."
+    bazel test "${configs[@]}" --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" //... \
+      || go_die "-- bazel test failed!"
+    echo -e "---- run datasystem testcases success!"
+    echo -e "---- [TIMER] Run bazel test: $(($(date +%s)-$baseTime_s)) seconds"
+    return 0
+  fi
+
+  local test_query_expr
+  test_query_expr=$(_bazel_test_query_expr)
+  local -a test_targets
+  local test_targets_file
+
+  echo -e "-- bazel test query: ${test_query_expr}"
+  test_targets_file=$(mktemp)
+  bazel query "${test_query_expr}" --output=label > "${test_targets_file}" || {
+    rm -f "${test_targets_file}"
+    go_die "-- bazel test query failed!"
+  }
+  while IFS= read -r target; do
+    [[ -n "${target}" ]] && test_targets+=("${target}")
+  done < "${test_targets_file}"
+  rm -f "${test_targets_file}"
+
+  if [[ "${#test_targets[@]}" -eq 0 ]]; then
+    go_die "-- bazel test query returned no targets!"
+  fi
+
+  echo -e "-- bazel test targets: ${#test_targets[@]}"
+  echo -e "-- bazel test command: bazel test ${configs[*]} --build_tag_filters=-manual --jobs=${TEST_PARALLEL_JOBS} " \
+    "--test_timeout=${LLT_TIMEOUT_S} <${#test_targets[@]} targets>"
+  bazel test "${configs[@]}" --build_tag_filters=-manual \
+    --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" "${test_targets[@]}" \
     || go_die "-- bazel test failed!"
   echo -e "---- run datasystem testcases success!"
   echo -e "---- [TIMER] Run bazel test: $(($(date +%s)-$baseTime_s)) seconds"
