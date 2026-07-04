@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Cluster membership worker endpointView view tests.
+ * Description: Cluster membership view tests.
  */
 #include "datasystem/topology/membership/cluster_membership.h"
 
@@ -73,7 +73,7 @@ TEST(MembershipViewTest, SnapshotUnavailableReturnsNotReady)
 {
     MembershipRegistry registry;
     ClusterMembership membership(registry, "127.0.0.1:7001");
-    IMembershipView &endpointView = membership;
+    ClusterMembership &endpointView = membership;
 
     std::shared_ptr<const MembershipSnapshot> snapshot;
     EXPECT_EQ(endpointView.GetSnapshot(snapshot).GetCode(), K_NOT_READY);
@@ -97,7 +97,7 @@ TEST(MembershipViewTest, ReadsOnlyImmutableSnapshot)
     registry.SetSnapshot(std::move(snapshot));
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
-    IMembershipView &endpointView = membership;
+    ClusterMembership &endpointView = membership;
 
     MembershipRecord record;
     DS_ASSERT_OK(endpointView.GetRecord("127.0.0.1:7001", record));

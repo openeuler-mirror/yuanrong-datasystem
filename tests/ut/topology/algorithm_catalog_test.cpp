@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Topology algorithm registry tests.
+ * Description: Topology algorithm catalog tests.
  */
-#include "datasystem/topology/algorithm/algorithm_registry.h"
+#include "datasystem/topology/algorithm/algorithm_catalog.h"
 
 #include <memory>
 #include <string>
@@ -27,7 +27,7 @@
 
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/topology/algorithm/hash_algorithm.h"
-#include "datasystem/topology/algorithm/placement_policy_engine.h"
+#include "datasystem/topology/algorithm/route_policy_engine.h"
 #include "tests/ut/common.h"
 
 namespace datasystem {
@@ -144,9 +144,9 @@ private:
     AlgorithmId id_;
 };
 
-TEST(AlgorithmRegistryTest, RoutingAlgorithmRegistryRegistration)
+TEST(AlgorithmCatalogTest, RoutingAlgorithmCatalogRegistration)
 {
-    AlgorithmRegistry registry;
+    AlgorithmCatalog registry;
     const IRoutingAlgorithm *algorithm = nullptr;
 
     EXPECT_EQ(registry.RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm>{}).GetCode(), K_INVALID);
@@ -164,15 +164,15 @@ TEST(AlgorithmRegistryTest, RoutingAlgorithmRegistryRegistration)
               K_INVALID);
 }
 
-TEST(AlgorithmRegistryTest, RejectsAlgorithmWithoutRoutingOrPlanningFacet)
+TEST(AlgorithmCatalogTest, RejectsAlgorithmWithoutRoutingOrPlanningFacet)
 {
-    AlgorithmRegistry registry;
+    AlgorithmCatalog registry;
     EXPECT_EQ(registry.RegisterAlgorithm(std::make_unique<IdOnlyAlgorithm>("id-only")).GetCode(), K_INVALID);
 }
 
-TEST(AlgorithmRegistryTest, PlanningOnlyAlgorithmResolvesOnlyPlanningFacet)
+TEST(AlgorithmCatalogTest, PlanningOnlyAlgorithmResolvesOnlyPlanningFacet)
 {
-    AlgorithmRegistry registry;
+    AlgorithmCatalog registry;
     const IRoutingAlgorithm *routing = nullptr;
     const IPlanningAlgorithm *planning = nullptr;
 
@@ -184,9 +184,9 @@ TEST(AlgorithmRegistryTest, PlanningOnlyAlgorithmResolvesOnlyPlanningFacet)
     EXPECT_EQ(planning, static_cast<const IPlanningAlgorithm *>(raw));
 }
 
-TEST(AlgorithmRegistryTest, PlanningAlgorithmRegistryFacet)
+TEST(AlgorithmCatalogTest, PlanningAlgorithmCatalogFacet)
 {
-    AlgorithmRegistry registry;
+    AlgorithmCatalog registry;
     const IRoutingAlgorithm *routing = nullptr;
     const IPlanningAlgorithm *planning = nullptr;
 
@@ -204,12 +204,12 @@ TEST(AlgorithmRegistryTest, PlanningAlgorithmRegistryFacet)
     EXPECT_EQ(registry.RegisterAlgorithm(std::make_unique<HashAlgorithm>()).GetCode(), K_INVALID);
 }
 
-TEST(AlgorithmRegistryTest, RoutingAlgorithmPluginNoFacadeChange)
+TEST(AlgorithmCatalogTest, RoutingAlgorithmPluginNoFacadeChange)
 {
-    AlgorithmRegistry registry;
+    AlgorithmCatalog registry;
     DS_ASSERT_OK(registry.RegisterAlgorithm(std::make_unique<FakeRoutingAlgorithm>(PLUGIN_ALGORITHM_ID)));
 
-    PlacementPolicyEngine policyEngine;
+    RoutePolicyEngine policyEngine;
     RouteContext context;
     context.key = "prefix-object";
     std::vector<PlacementPolicyRule> rules = {

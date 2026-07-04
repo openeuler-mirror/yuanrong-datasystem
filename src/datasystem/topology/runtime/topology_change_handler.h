@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Topology change request boundary for worker lifecycle.
+ * Description: Topology change request boundary for member lifecycle.
  */
 #ifndef DATASYSTEM_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H
 #define DATASYSTEM_TOPOLOGY_RUNTIME_TOPOLOGY_CHANGE_HANDLER_H

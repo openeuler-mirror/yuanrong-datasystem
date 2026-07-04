@@ -37,10 +37,10 @@ enum class MembershipRuntimeState {
     STOPPED,
 };
 
-class ClusterMembership final : public IMembershipView {
+class ClusterMembership final {
 public:
     ClusterMembership(IClusterRegistry &registry, TopologyNodeId localNodeId);
-    ~ClusterMembership() override;
+    ~ClusterMembership();
     ClusterMembership(const ClusterMembership &) = delete;
     ClusterMembership &operator=(const ClusterMembership &) = delete;
     ClusterMembership(ClusterMembership &&) = delete;
@@ -70,10 +70,10 @@ public:
      * @param[out] snapshot Snapshot pointer.
      * @return K_OK when available; K_NOT_READY before first rebuild or after Stop.
      */
-    Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
-    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const override;
-    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const override;
-    Status ListReadyMembers(std::vector<MembershipRecord> &members) const override;
+    Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const;
+    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const;
+    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const;
+    Status ListReadyMembers(std::vector<MembershipRecord> &members) const;
 
     /**
      * @brief Get the last published membership snapshot for diagnostic/read-state queries.

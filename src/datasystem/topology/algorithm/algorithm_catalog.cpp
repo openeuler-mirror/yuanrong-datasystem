@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Topology algorithm registry.
+ * Description: Topology algorithm catalog.
  */
-#include "datasystem/topology/algorithm/algorithm_registry.h"
+#include "datasystem/topology/algorithm/algorithm_catalog.h"
 
 #include <utility>
 
@@ -26,7 +26,7 @@
 namespace datasystem {
 namespace topology {
 
-Status AlgorithmRegistry::RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm> algorithm)
+Status AlgorithmCatalog::RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm> algorithm)
 {
     CHECK_FAIL_RETURN_STATUS(algorithm != nullptr, K_INVALID, "topology algorithm is null");
     auto id = algorithm->GetAlgorithmId();
@@ -57,7 +57,7 @@ Status AlgorithmRegistry::RegisterAlgorithm(std::unique_ptr<const ITopologyAlgor
     return Status::OK();
 }
 
-Status AlgorithmRegistry::ResolveRouting(const AlgorithmId &id, const IRoutingAlgorithm *&algorithm) const
+Status AlgorithmCatalog::ResolveRouting(const AlgorithmId &id, const IRoutingAlgorithm *&algorithm) const
 {
     algorithm = nullptr;
     auto iter = routingFacets_.find(id);
@@ -66,7 +66,7 @@ Status AlgorithmRegistry::ResolveRouting(const AlgorithmId &id, const IRoutingAl
     return Status::OK();
 }
 
-Status AlgorithmRegistry::ResolvePlanning(const AlgorithmId &id, const IPlanningAlgorithm *&algorithm) const
+Status AlgorithmCatalog::ResolvePlanning(const AlgorithmId &id, const IPlanningAlgorithm *&algorithm) const
 {
     algorithm = nullptr;
     auto iter = planningFacets_.find(id);

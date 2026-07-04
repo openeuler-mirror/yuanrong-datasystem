@@ -63,6 +63,13 @@ public:
     void Publish(std::shared_ptr<const RoutingSnapshot> snapshot);
 
     /**
+     * @brief Publish the snapshot only when it does not move the routing version backwards.
+     * @param[in] snapshot Fully constructed snapshot.
+     * @return True if the snapshot is published; false if a newer snapshot already exists.
+     */
+    bool PublishIfNotOlder(std::shared_ptr<const RoutingSnapshot> snapshot);
+
+    /**
      * @brief Apply one raw backend event through the repository committed-topology decoder.
      * @param[in] repository Repository contract that classifies and decodes the event.
      * @param[in] event Raw coordination-backend event.

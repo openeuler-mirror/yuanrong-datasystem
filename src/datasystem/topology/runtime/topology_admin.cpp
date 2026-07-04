@@ -15,26 +15,22 @@
  */
 
 /**
- * Description: Topology change request boundary for member lifecycle.
+ * Description: Administrative topology maintenance entrypoints.
  */
-#include "datasystem/topology/runtime/topology_change_handler.h"
+#include "datasystem/topology/runtime/topology_admin.h"
 
-#include "datasystem/common/util/status_helper.h"
+#include "datasystem/topology/runtime/topology_snapshot_rebuilder.h"
 
 namespace datasystem {
 namespace topology {
 
-TopologyChangeHandler::TopologyChangeHandler(ClusterMembership &membership, ITopologyChangeRequester &requester)
-    : membership_(membership), requester_(requester)
+TopologyAdmin::TopologyAdmin(TopologySnapshotRebuilder &rebuilder) : rebuilder_(rebuilder)
 {
 }
 
-Status TopologyChangeHandler::RequestScaleIn(ScaleInReason reason)
+Status TopologyAdmin::RebuildFromBackend()
 {
-    ScaleInRequest request;
-    Revision observedRevision = 0;
-    RETURN_IF_NOT_OK(membership_.BuildLocalScaleInRequest(reason, request, observedRevision));
-    return requester_.SubmitScaleInRequest(request, observedRevision);
+    return rebuilder_.RebuildFromCommittedTopology();
 }
 
 }  // namespace topology

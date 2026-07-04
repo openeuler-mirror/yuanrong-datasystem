@@ -84,18 +84,23 @@ void AddDiagnostic(ValidateResult &result, std::string message)
     result.diagnostics.emplace_back(std::move(message));
 }
 
-Status NormalizeTargetWorkers(const std::vector<TopologyNodeId> &targetNodeIds, std::vector<TopologyNodeId> &members)
+Status NormalizeTargetNodes(const std::vector<TopologyNodeId> &targetNodeIds, std::vector<TopologyNodeId> &members)
 {
     members = targetNodeIds;
-    CHECK_FAIL_RETURN_STATUS(!members.empty(), K_INVALID, "target worker set is empty");
+    CHECK_FAIL_RETURN_STATUS(!members.empty(), K_INVALID, "target node set is empty");
     std::sort(members.begin(), members.end());
     for (size_t i = 0; i < members.size(); ++i) {
-        CHECK_FAIL_RETURN_STATUS(!members[i].empty(), K_INVALID, "target worker id is empty");
+        CHECK_FAIL_RETURN_STATUS(!members[i].empty(), K_INVALID, "target node id is empty");
         if (i > 0) {
-            CHECK_FAIL_RETURN_STATUS(members[i - 1] != members[i], K_INVALID, "target worker id is duplicated");
+            CHECK_FAIL_RETURN_STATUS(members[i - 1] != members[i], K_INVALID, "target node id is duplicated");
         }
     }
     return Status::OK();
+}
+
+bool IsRoutingOwnerState(TopologyNodeState state)
+{
+    return state == TopologyNodeState::ACTIVE || state == TopologyNodeState::PRE_LEAVING;
 }
 
 uint32_t BuildToken(const TopologyNodeId &nodeId, uint32_t tokenIndex, uint32_t probe)
@@ -130,12 +135,12 @@ Status GenerateTokens(const TopologyNodeId &nodeId, uint32_t tokenNum, std::unor
 Status BuildOwnerVector(const TopologyDescriptor &topology, std::vector<TokenOwner> &owners)
 {
     owners.clear();
-    for (const auto &worker : topology.members) {
-        if (worker.state != TopologyNodeState::ACTIVE) {
+    for (const auto &member : topology.members) {
+        if (!IsRoutingOwnerState(member.state)) {
             continue;
         }
-        for (auto token : worker.tokens) {
-            owners.push_back({ token, worker.nodeId });
+        for (auto token : member.tokens) {
+            owners.push_back({ token, member.nodeId });
         }
     }
     CHECK_FAIL_RETURN_STATUS(!owners.empty(), K_NOT_READY, "no active hash owner");
@@ -219,15 +224,15 @@ Status HashAlgorithm::BuildRoutingState(const TopologyDescriptor &snapshot,
     std::unordered_set<TopologyNodeId> nodeIds;
     nodeIds.reserve(snapshot.members.size());
     std::unordered_set<uint32_t> activeTokens;
-    for (const auto &worker : snapshot.members) {
-        CHECK_FAIL_RETURN_STATUS(!worker.nodeId.empty(), K_INVALID, "worker id is empty");
-        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(worker.nodeId).second, K_INVALID, "worker id is duplicated");
-        CHECK_FAIL_RETURN_STATUS(IsKnownState(worker.state), K_INVALID, "worker topology state is invalid");
-        if (worker.state != TopologyNodeState::ACTIVE) {
+    for (const auto &member : snapshot.members) {
+        CHECK_FAIL_RETURN_STATUS(!member.nodeId.empty(), K_INVALID, "topology node id is empty");
+        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(member.nodeId).second, K_INVALID, "topology node id is duplicated");
+        CHECK_FAIL_RETURN_STATUS(IsKnownState(member.state), K_INVALID, "topology node state is invalid");
+        if (!IsRoutingOwnerState(member.state)) {
             continue;
         }
-        CHECK_FAIL_RETURN_STATUS(!worker.tokens.empty(), K_INVALID, "active worker token list is empty");
-        for (auto token : worker.tokens) {
+        CHECK_FAIL_RETURN_STATUS(!member.tokens.empty(), K_INVALID, "active node token list is empty");
+        for (auto token : member.tokens) {
             CHECK_FAIL_RETURN_STATUS(activeTokens.insert(token).second, K_INVALID, "duplicated hash token");
         }
     }
@@ -279,37 +284,37 @@ Status HashAlgorithm::ValidatePlacement(const TopologyDescriptor &topology, Vali
         AddDiagnostic(result, "topology is not initialized");
     }
     if (topology.members.empty()) {
-        AddDiagnostic(result, "topology worker list is empty");
+        AddDiagnostic(result, "topology member list is empty");
     }
 
-    bool hasActiveWorker = false;
+    bool hasActiveNode = false;
     std::unordered_set<TopologyNodeId> nodeIds;
     std::unordered_set<uint32_t> tokens;
-    for (const auto &worker : topology.members) {
-        if (worker.nodeId.empty()) {
-            AddDiagnostic(result, "worker id is empty");
+    for (const auto &member : topology.members) {
+        if (member.nodeId.empty()) {
+            AddDiagnostic(result, "topology node id is empty");
             continue;
         }
-        if (!nodeIds.insert(worker.nodeId).second) {
-            AddDiagnostic(result, "worker id is duplicated");
+        if (!nodeIds.insert(member.nodeId).second) {
+            AddDiagnostic(result, "topology node id is duplicated");
         }
-        if (!IsKnownState(worker.state)) {
-            AddDiagnostic(result, "worker topology state is invalid");
+        if (!IsKnownState(member.state)) {
+            AddDiagnostic(result, "topology node state is invalid");
         }
-        if (worker.state == TopologyNodeState::ACTIVE) {
-            hasActiveWorker = true;
-            if (worker.tokens.empty()) {
-                AddDiagnostic(result, "active worker token list is empty");
+        if (IsRoutingOwnerState(member.state)) {
+            hasActiveNode = true;
+            if (member.tokens.empty()) {
+                AddDiagnostic(result, "active node token list is empty");
             }
         }
-        for (auto token : worker.tokens) {
+        for (auto token : member.tokens) {
             if (!tokens.insert(token).second) {
                 AddDiagnostic(result, "hash token is duplicated");
             }
         }
     }
-    if (!topology.members.empty() && !hasActiveWorker) {
-        AddDiagnostic(result, "topology has no active worker");
+    if (!topology.members.empty() && !hasActiveNode) {
+        AddDiagnostic(result, "topology has no active node");
     }
     return Status::OK();
 }
@@ -321,21 +326,21 @@ Status HashAlgorithm::InitPlacement(const PlanInput &input, PlanResult &result) 
     CHECK_FAIL_RETURN_STATUS(virtualTokenNum_ > 0, K_INVALID, "virtual token num is zero");
     CHECK_FAIL_RETURN_STATUS(input.current.version >= 0, K_INVALID, "current topology version is invalid");
 
-    std::vector<TopologyNodeId> targetWorkers;
-    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetNodeIds, targetWorkers));
+    std::vector<TopologyNodeId> targetNodes;
+    RETURN_IF_NOT_OK(NormalizeTargetNodes(input.targetNodeIds, targetNodes));
 
     result.algorithmId = algorithmId_;
     result.next.version = input.current.version + 1;
     result.next.clusterHasInit = true;
-    result.next.members.reserve(targetWorkers.size());
+    result.next.members.reserve(targetNodes.size());
     std::unordered_set<uint32_t> occupied;
-    occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetWorkers.size());
-    for (const auto &nodeId : targetWorkers) {
-        TopologyNode worker;
-        worker.nodeId = nodeId;
-        worker.state = TopologyNodeState::ACTIVE;
-        RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, worker.tokens));
-        result.next.members.emplace_back(std::move(worker));
+    occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetNodes.size());
+    for (const auto &nodeId : targetNodes) {
+        TopologyNode member;
+        member.nodeId = nodeId;
+        member.state = TopologyNodeState::ACTIVE;
+        RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, member.tokens));
+        result.next.members.emplace_back(std::move(member));
     }
     return Status::OK();
 }
@@ -352,35 +357,35 @@ Status HashAlgorithm::PlanPlacement(const PlanInput &input, PlanResult &result) 
     CHECK_FAIL_RETURN_STATUS(validation.valid, K_INVALID, "current topology is invalid");
     CHECK_FAIL_RETURN_STATUS(virtualTokenNum_ > 0, K_INVALID, "virtual token num is zero");
 
-    std::vector<TopologyNodeId> targetWorkers;
-    RETURN_IF_NOT_OK(NormalizeTargetWorkers(input.targetNodeIds, targetWorkers));
-    std::unordered_map<TopologyNodeId, const TopologyNode *> currentWorkers;
-    currentWorkers.reserve(input.current.members.size());
-    for (const auto &worker : input.current.members) {
-        currentWorkers.emplace(worker.nodeId, &worker);
+    std::vector<TopologyNodeId> targetNodes;
+    RETURN_IF_NOT_OK(NormalizeTargetNodes(input.targetNodeIds, targetNodes));
+    std::unordered_map<TopologyNodeId, const TopologyNode *> currentNodes;
+    currentNodes.reserve(input.current.members.size());
+    for (const auto &member : input.current.members) {
+        currentNodes.emplace(member.nodeId, &member);
     }
 
     result.algorithmId = algorithmId_;
     result.next.version = input.current.version + 1;
     result.next.clusterHasInit = true;
-    result.next.members.reserve(targetWorkers.size());
+    result.next.members.reserve(targetNodes.size());
     std::unordered_set<uint32_t> occupied;
-    occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetWorkers.size());
-    for (const auto &nodeId : targetWorkers) {
-        TopologyNode worker;
-        worker.nodeId = nodeId;
-        worker.state = TopologyNodeState::ACTIVE;
-        auto iter = currentWorkers.find(nodeId);
-        if (iter != currentWorkers.end() && iter->second->state == TopologyNodeState::ACTIVE
+    occupied.reserve(static_cast<size_t>(virtualTokenNum_) * targetNodes.size());
+    for (const auto &nodeId : targetNodes) {
+        TopologyNode member;
+        member.nodeId = nodeId;
+        member.state = TopologyNodeState::ACTIVE;
+        auto iter = currentNodes.find(nodeId);
+        if (iter != currentNodes.end() && iter->second->state == TopologyNodeState::ACTIVE
             && !iter->second->tokens.empty()) {
-            worker.tokens = iter->second->tokens;
-            for (auto token : worker.tokens) {
+            member.tokens = iter->second->tokens;
+            for (auto token : member.tokens) {
                 CHECK_FAIL_RETURN_STATUS(occupied.insert(token).second, K_INVALID, "hash token is duplicated");
             }
         } else {
-            RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, worker.tokens));
+            RETURN_IF_NOT_OK(GenerateTokens(nodeId, virtualTokenNum_, occupied, member.tokens));
         }
-        result.next.members.emplace_back(std::move(worker));
+        result.next.members.emplace_back(std::move(member));
     }
     RETURN_IF_NOT_OK(DiffPlacement(input.current, result.next, result.ownerChanges));
     return Status::OK();
@@ -419,14 +424,14 @@ Status HashAlgorithm::DiffPlacement(const TopologyDescriptor &from, const Topolo
         if (i + 1 < boundaries.size()) {
             end = boundaries[i + 1] - 1;
         }
-        TopologyNodeId fromWorker;
-        TopologyNodeId toWorker;
-        RETURN_IF_NOT_OK(FindOwner(fromOwners, begin, fromWorker));
-        RETURN_IF_NOT_OK(FindOwner(toOwners, begin, toWorker));
-        if (fromWorker == toWorker) {
+        TopologyNodeId fromNode;
+        TopologyNodeId toNode;
+        RETURN_IF_NOT_OK(FindOwner(fromOwners, begin, fromNode));
+        RETURN_IF_NOT_OK(FindOwner(toOwners, begin, toNode));
+        if (fromNode == toNode) {
             continue;
         }
-        AppendRange(grouped[{ fromWorker, toWorker }], begin, end);
+        AppendRange(grouped[{ fromNode, toNode }], begin, end);
     }
 
     changes.reserve(grouped.size());

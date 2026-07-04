@@ -15,10 +15,10 @@
  */
 
 /**
- * Description: Topology algorithm registry.
+ * Description: Topology algorithm catalog.
  */
-#ifndef DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_REGISTRY_H
-#define DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_REGISTRY_H
+#ifndef DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_CATALOG_H
+#define DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_CATALOG_H
 
 #include <memory>
 #include <unordered_map>
@@ -28,16 +28,21 @@
 namespace datasystem {
 namespace topology {
 
-class IAlgorithmRegistry {
+class AlgorithmCatalog final {
 public:
-    virtual ~IAlgorithmRegistry() = default;
+    AlgorithmCatalog() = default;
+    ~AlgorithmCatalog() = default;
+    AlgorithmCatalog(const AlgorithmCatalog &) = delete;
+    AlgorithmCatalog &operator=(const AlgorithmCatalog &) = delete;
+    AlgorithmCatalog(AlgorithmCatalog &&) = delete;
+    AlgorithmCatalog &operator=(AlgorithmCatalog &&) = delete;
 
     /**
      * @brief Register one read-only topology algorithm implementation.
      * @param[in] algorithm Algorithm object whose ownership is transferred to the registry.
      * @return K_OK on success; K_INVALID when algorithm is null, id is empty, duplicated, or has no facet.
      */
-    virtual Status RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm> algorithm) = 0;
+    Status RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm> algorithm);
 
     /**
      * @brief Resolve one routing algorithm by id.
@@ -45,7 +50,7 @@ public:
      * @param[out] algorithm Non-owning algorithm pointer valid until registry destruction.
      * @return K_OK on success; K_NOT_FOUND when id is unknown.
      */
-    virtual Status ResolveRouting(const AlgorithmId &id, const IRoutingAlgorithm *&algorithm) const = 0;
+    Status ResolveRouting(const AlgorithmId &id, const IRoutingAlgorithm *&algorithm) const;
 
     /**
      * @brief Resolve one planning algorithm by id.
@@ -53,21 +58,7 @@ public:
      * @param[out] algorithm Non-owning algorithm pointer valid until registry destruction.
      * @return K_OK on success; K_NOT_FOUND when id is unknown or has no planning facet.
      */
-    virtual Status ResolvePlanning(const AlgorithmId &id, const IPlanningAlgorithm *&algorithm) const = 0;
-};
-
-class AlgorithmRegistry final : public IAlgorithmRegistry {
-public:
-    AlgorithmRegistry() = default;
-    ~AlgorithmRegistry() override = default;
-    AlgorithmRegistry(const AlgorithmRegistry &) = delete;
-    AlgorithmRegistry &operator=(const AlgorithmRegistry &) = delete;
-    AlgorithmRegistry(AlgorithmRegistry &&) = delete;
-    AlgorithmRegistry &operator=(AlgorithmRegistry &&) = delete;
-
-    Status RegisterAlgorithm(std::unique_ptr<const ITopologyAlgorithm> algorithm) override;
-    Status ResolveRouting(const AlgorithmId &id, const IRoutingAlgorithm *&algorithm) const override;
-    Status ResolvePlanning(const AlgorithmId &id, const IPlanningAlgorithm *&algorithm) const override;
+    Status ResolvePlanning(const AlgorithmId &id, const IPlanningAlgorithm *&algorithm) const;
 
 private:
     std::unordered_map<AlgorithmId, std::unique_ptr<const ITopologyAlgorithm>> entries_;
@@ -78,4 +69,4 @@ private:
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_REGISTRY_H
+#endif  // DATASYSTEM_TOPOLOGY_ALGORITHM_ALGORITHM_CATALOG_H

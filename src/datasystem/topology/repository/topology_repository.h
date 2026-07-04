@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Worker-facing topology repository.
+ * Description: Topology repository.
  */
 #ifndef DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
 #define DATASYSTEM_TOPOLOGY_REPOSITORY_TOPOLOGY_REPOSITORY_H
@@ -34,7 +34,7 @@ public:
     virtual ~ITopologyReader() = default;
 
     /**
-     * @brief Read the committed topology fact from the existing hash-ring store entry.
+     * @brief Read the committed topology fact from the backend store.
      * @param[out] topology Decoded topology descriptor.
      * @param[out] revision Store revision observed by the read.
      * @return K_OK on success; K_NOT_FOUND when topology is absent; K_INVALID for malformed topology.
@@ -90,6 +90,13 @@ public:
      * @brief List recovery task records stored under delete_node_tasks child keys.
      */
     virtual Status ListRecoveryTaskRecords(const TaskFilter &filter, std::vector<RecoveryTaskRecord> &tasks) = 0;
+
+    /**
+     * @brief Summarize unfinished topology tasks without exposing task payloads.
+     * @param[out] summary Count of unfinished transfer and recovery tasks.
+     * @return K_OK on success.
+     */
+    virtual Status GetTaskSummary(TopologyTaskSummary &summary) = 0;
 };
 
 class ITopologyTaskWriter {
@@ -132,7 +139,7 @@ public:
     virtual ~ITopologyNotifyWriter() = default;
 
     /**
-     * @brief Overwrite one notify doorbell for a worker.
+     * @brief Overwrite one notify doorbell for a topology node.
      * @param[in] notify Notify payload to encode under notify.
      * @param[out] revision Store revision observed after the write succeeds.
      * @return K_OK on successful write; K_INVALID for malformed notify payload.
@@ -243,6 +250,7 @@ public:
     Status ClearEphemeralRecords() override;
     Status ListTransferTaskRecords(const TaskFilter &filter, std::vector<TransferTaskRecord> &tasks) override;
     Status ListRecoveryTaskRecords(const TaskFilter &filter, std::vector<RecoveryTaskRecord> &tasks) override;
+    Status GetTaskSummary(TopologyTaskSummary &summary) override;
     Status ReportTransferProgress(const TaskId &taskId, const TaskProgressUpdate &update) override;
     Status ReportTransferProgressBatch(const TaskId &taskId, const std::vector<TaskProgressUpdate> &updates) override;
     Status ReportRecoveryProgress(const TaskId &taskId, const TaskProgressUpdate &update) override;

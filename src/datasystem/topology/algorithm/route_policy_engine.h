@@ -15,10 +15,10 @@
  */
 
 /**
- * Description: Placement policy selection engine.
+ * Description: Route policy selection engine.
  */
-#ifndef DATASYSTEM_TOPOLOGY_ALGORITHM_PLACEMENT_POLICY_ENGINE_H
-#define DATASYSTEM_TOPOLOGY_ALGORITHM_PLACEMENT_POLICY_ENGINE_H
+#ifndef DATASYSTEM_TOPOLOGY_ALGORITHM_ROUTE_POLICY_ENGINE_H
+#define DATASYSTEM_TOPOLOGY_ALGORITHM_ROUTE_POLICY_ENGINE_H
 
 #include <vector>
 
@@ -27,9 +27,14 @@
 namespace datasystem {
 namespace topology {
 
-class IPlacementPolicyEngine {
+class RoutePolicyEngine final {
 public:
-    virtual ~IPlacementPolicyEngine() = default;
+    RoutePolicyEngine() = default;
+    ~RoutePolicyEngine() = default;
+    RoutePolicyEngine(const RoutePolicyEngine &) = default;
+    RoutePolicyEngine &operator=(const RoutePolicyEngine &) = default;
+    RoutePolicyEngine(RoutePolicyEngine &&) = default;
+    RoutePolicyEngine &operator=(RoutePolicyEngine &&) = default;
 
     /**
      * @brief Select one deterministic placement policy rule for a route context.
@@ -38,24 +43,11 @@ public:
      * @param[out] rule Selected rule.
      * @return K_OK on success; K_NOT_FOUND when no rule matches; K_INVALID for invalid or ambiguous rules.
      */
-    virtual Status SelectPolicy(const RouteContext &context, const std::vector<PlacementPolicyRule> &rules,
-                                PlacementPolicyRule &rule) const = 0;
-};
-
-class PlacementPolicyEngine final : public IPlacementPolicyEngine {
-public:
-    PlacementPolicyEngine() = default;
-    ~PlacementPolicyEngine() override = default;
-    PlacementPolicyEngine(const PlacementPolicyEngine &) = default;
-    PlacementPolicyEngine &operator=(const PlacementPolicyEngine &) = default;
-    PlacementPolicyEngine(PlacementPolicyEngine &&) = default;
-    PlacementPolicyEngine &operator=(PlacementPolicyEngine &&) = default;
-
     Status SelectPolicy(const RouteContext &context, const std::vector<PlacementPolicyRule> &rules,
-                        PlacementPolicyRule &rule) const override;
+                        PlacementPolicyRule &rule) const;
 };
 
 }  // namespace topology
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_TOPOLOGY_ALGORITHM_PLACEMENT_POLICY_ENGINE_H
+#endif  // DATASYSTEM_TOPOLOGY_ALGORITHM_ROUTE_POLICY_ENGINE_H

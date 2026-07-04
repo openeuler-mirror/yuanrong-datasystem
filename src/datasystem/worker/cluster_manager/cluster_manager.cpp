@@ -743,7 +743,7 @@ void ClusterManager::PublishPlacementDirectorySnapshot()
         // checks.
         const std::string masterId = masterAddress_.ToString();
         if (!masterId.empty()) {
-            topology::WorkerAvailability availability = topology::WorkerAvailability::NOT_READY;
+            topology::WorkerAvailability availability = topology::WorkerAvailability::UNCONFIRMED;
             TbbNodeTable::const_accessor accessor;
             if (clusterNodeTable_.find(accessor, masterAddress_)) {
                 availability = accessor->second->IsActive() ? topology::WorkerAvailability::READY
@@ -790,7 +790,7 @@ Status ClusterManager::CheckConnection(const std::string &objKey)
 {
     MetaAddrInfo info;
     RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, info));
-    return CheckConnection(info.GetAddress());
+    return CheckConnection(info.GetAddress(), IsCentralized());
 }
 
 Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowDirectoryLag)

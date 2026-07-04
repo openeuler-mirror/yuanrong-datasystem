@@ -162,7 +162,7 @@ Status WorkerLocator::LocateCentralizedMaster(const std::string &objectKey, cons
             decision.ownerEndpoint.availability = resolved.availability;
         }
     }
-    if (options.requireAvailableTarget && decision.ownerEndpoint.availability != WorkerAvailability::READY) {
+    if (options.requireAvailableTarget && decision.ownerEndpoint.availability == WorkerAvailability::NOT_READY) {
         RETURN_STATUS(K_RPC_UNAVAILABLE, "Centralized master is not available in local placement directory.");
     }
     return Status::OK();

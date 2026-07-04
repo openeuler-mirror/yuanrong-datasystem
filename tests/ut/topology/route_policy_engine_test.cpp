@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Placement policy engine tests.
+ * Description: Route policy engine tests.
  */
-#include "datasystem/topology/algorithm/placement_policy_engine.h"
+#include "datasystem/topology/algorithm/route_policy_engine.h"
 
 #include <string>
 #include <utility>
@@ -45,9 +45,9 @@ PlacementPolicyRule MakeRule(PlacementPolicyId policyId, PlacementPolicyMatchTyp
     return rule;
 }
 
-TEST(PlacementPolicyEngineTest, PlacementPolicyDeterministicSelection)
+TEST(RoutePolicyEngineTest, PlacementPolicyDeterministicSelection)
 {
-    PlacementPolicyEngine engine;
+    RoutePolicyEngine engine;
     RouteContext context;
     context.key = "tenant-a/orders/42";
     context.namespaceId = "tenant-a";
@@ -72,9 +72,9 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyDeterministicSelection)
     EXPECT_EQ(selected.policyId, "priority-wins");
 }
 
-TEST(PlacementPolicyEngineTest, PlacementPolicyRejectsInvalidRules)
+TEST(RoutePolicyEngineTest, PlacementPolicyRejectsInvalidRules)
 {
-    PlacementPolicyEngine engine;
+    RoutePolicyEngine engine;
     RouteContext context;
     context.key = "object";
     PlacementPolicyRule selected;
@@ -99,9 +99,9 @@ TEST(PlacementPolicyEngineTest, PlacementPolicyRejectsInvalidRules)
     EXPECT_EQ(engine.SelectPolicy(context, rules, selected).GetCode(), K_INVALID);
 }
 
-TEST(PlacementPolicyEngineTest, PlacementPolicyReturnsNotFoundWhenNoRuleMatches)
+TEST(RoutePolicyEngineTest, PlacementPolicyReturnsNotFoundWhenNoRuleMatches)
 {
-    PlacementPolicyEngine engine;
+    RoutePolicyEngine engine;
     RouteContext context;
     context.key = "object";
     context.namespaceId = "tenant-a";

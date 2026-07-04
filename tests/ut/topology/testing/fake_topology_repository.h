@@ -63,6 +63,11 @@ public:
      */
     void InjectTransferProgressConflict();
 
+    /**
+     * @brief Inject one notify write failure for the next notify call.
+     */
+    void InjectNotifyFailure(Status status);
+
     Status GetCommittedTopology(TopologyDescriptor &topology, Revision &revision) override;
     Status TryCreateCommittedTopology(const TopologyDescriptor &topology, Revision &revision) override;
     Status TryUpdateCommittedTopology(const TopologyDescriptor &expectedTopology, Revision expectedRevision,
@@ -70,6 +75,7 @@ public:
     Status ClearEphemeralRecords() override;
     Status ListTransferTaskRecords(const TaskFilter &filter, std::vector<TransferTaskRecord> &tasks) override;
     Status ListRecoveryTaskRecords(const TaskFilter &filter, std::vector<RecoveryTaskRecord> &tasks) override;
+    Status GetTaskSummary(TopologyTaskSummary &summary) override;
     Status TryCreateTransferTaskRecord(const TransferTaskRecord &task, Revision &revision) override;
     Status DeleteTransferTaskRecord(const TaskId &taskId) override;
     Status TryCreateRecoveryTaskRecord(const RecoveryTaskRecord &task, Revision &revision) override;
@@ -84,9 +90,11 @@ public:
 private:
     mutable std::mutex mutex_;
     TopologyDescriptor topology_;
-    Revision revision_{ 0 };
+    Revision committedRevision_{ 0 };
+    Revision writeRevision_{ 0 };
     bool hasTopology_{ false };
     bool transferConflict_{ false };
+    Status notifyFailure_;
     std::vector<TransferTaskRecord> transferTasks_;
     std::vector<RecoveryTaskRecord> recoveryTasks_;
 };

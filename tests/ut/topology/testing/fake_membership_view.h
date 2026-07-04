@@ -28,10 +28,10 @@
 namespace datasystem {
 namespace topology {
 
-class FakeMembershipView final : public IMembershipView {
+class FakeMembershipView final {
 public:
     FakeMembershipView() = default;
-    ~FakeMembershipView() override = default;
+    ~FakeMembershipView() = default;
     FakeMembershipView(const FakeMembershipView &) = delete;
     FakeMembershipView &operator=(const FakeMembershipView &) = delete;
     FakeMembershipView(FakeMembershipView &&) = delete;
@@ -39,15 +39,15 @@ public:
 
     /**
      * @brief Seed one immutable membership snapshot.
-     * @param[in] snapshot Snapshot exposed through IMembershipView.
+     * @param[in] snapshot Snapshot exposed through the fake view.
      * @return K_OK on success.
      */
     Status SeedSnapshot(const MembershipSnapshot &snapshot);
 
-    Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const override;
-    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const override;
-    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const override;
-    Status ListReadyMembers(std::vector<MembershipRecord> &members) const override;
+    Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const;
+    Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const;
+    Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const;
+    Status ListReadyMembers(std::vector<MembershipRecord> &members) const;
 
 private:
     mutable std::mutex mutex_;

@@ -91,8 +91,11 @@ TransferTaskRecord MakeTransferTask(const TopologyNodeId &target, const Topology
 {
     TransferTaskRecord task;
     task.taskId = target + "|" + source;
+    task.executorNodeId = source;
     task.targetNodeId = target;
     task.sourceNodeId = source;
+    task.createdTopologyVersion = 10;
+    task.targetTopologyVersion = 11;
     task.ranges = { { begin, begin + 1, source, false } };
     return task;
 }
@@ -101,8 +104,11 @@ RecoveryTaskRecord MakeRecoveryTask(const TopologyNodeId &failed, const Topology
 {
     RecoveryTaskRecord task;
     task.taskId = failed + "|" + recovery;
+    task.executorNodeId = recovery;
     task.failedNodeId = failed;
     task.recoveryNodeId = recovery;
+    task.createdTopologyVersion = 10;
+    task.targetTopologyVersion = 11;
     task.ranges = { { begin, begin + 1, recovery, false } };
     return task;
 }
