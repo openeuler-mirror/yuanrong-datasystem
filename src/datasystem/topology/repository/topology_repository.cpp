@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Worker-facing topology repository.
+ * Description: Topology repository.
  */
 #include "datasystem/topology/repository/topology_repository.h"
 
@@ -42,7 +42,7 @@ bool HasUnfinishedRange(const std::vector<TokenRange> &ranges)
     return false;
 }
 
-bool HasRangeWorker(const std::vector<TokenRange> &ranges, const TopologyNodeId &nodeId)
+bool HasRangeNode(const std::vector<TokenRange> &ranges, const TopologyNodeId &nodeId)
 {
     for (const auto &range : ranges) {
         if (range.nodeId == nodeId) {
@@ -111,10 +111,10 @@ bool SameTopology(const TopologyDescriptor &left, const TopologyDescriptor &righ
         || left.members.size() != right.members.size()) {
         return false;
     }
-    auto leftWorkers = NormalizeTopologyNodes(left);
-    auto rightWorkers = NormalizeTopologyNodes(right);
-    for (size_t i = 0; i < leftWorkers.size(); ++i) {
-        if (!SameTopologyNode(leftWorkers[i], rightWorkers[i])) {
+    auto leftNodes = NormalizeTopologyNodes(left);
+    auto rightNodes = NormalizeTopologyNodes(right);
+    for (size_t i = 0; i < leftNodes.size(); ++i) {
+        if (!SameTopologyNode(leftNodes[i], rightNodes[i])) {
             return false;
         }
     }
@@ -145,7 +145,7 @@ bool MatchTransferTask(const TransferTaskRecord &task, const TaskFilter &filter)
     }
     if (filter.nodeId.has_value() && task.executorNodeId != *filter.nodeId
         && task.sourceNodeId != *filter.nodeId && task.targetNodeId != *filter.nodeId
-        && !HasRangeWorker(task.ranges, *filter.nodeId)) {
+        && !HasRangeNode(task.ranges, *filter.nodeId)) {
         return false;
     }
     return !filter.unfinishedOnly || HasUnfinishedRange(task.ranges);
@@ -158,7 +158,7 @@ bool MatchRecoveryTask(const RecoveryTaskRecord &task, const TaskFilter &filter)
     }
     if (filter.nodeId.has_value() && task.executorNodeId != *filter.nodeId
         && task.failedNodeId != *filter.nodeId && task.recoveryNodeId != *filter.nodeId
-        && !HasRangeWorker(task.ranges, *filter.nodeId)) {
+        && !HasRangeNode(task.ranges, *filter.nodeId)) {
         return false;
     }
     return !filter.unfinishedOnly || HasUnfinishedRange(task.ranges);
@@ -434,6 +434,20 @@ Status TopologyRepository::ListRecoveryTaskRecords(const TaskFilter &filter, std
             tasks.push_back(std::move(task));
         }
     }
+    return Status::OK();
+}
+
+Status TopologyRepository::GetTaskSummary(TopologyTaskSummary &summary)
+{
+    summary = {};
+    TaskFilter filter;
+    filter.unfinishedOnly = true;
+    std::vector<TransferTaskRecord> transferTasks;
+    RETURN_IF_NOT_OK(ListTransferTaskRecords(filter, transferTasks));
+    std::vector<RecoveryTaskRecord> recoveryTasks;
+    RETURN_IF_NOT_OK(ListRecoveryTaskRecords(filter, recoveryTasks));
+    summary.unfinishedTransferTasks = transferTasks.size();
+    summary.unfinishedRecoveryTasks = recoveryTasks.size();
     return Status::OK();
 }
 

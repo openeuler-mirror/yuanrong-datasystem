@@ -101,8 +101,8 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "algorithm_registry_test",
-    srcs = ["algorithm_registry_test.cpp"],
+    name = "algorithm_catalog_test",
+    srcs = ["algorithm_catalog_test.cpp"],
     deps = [
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
@@ -110,8 +110,8 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "placement_policy_engine_test",
-    srcs = ["placement_policy_engine_test.cpp"],
+    name = "route_policy_engine_test",
+    srcs = ["route_policy_engine_test.cpp"],
     deps = [
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
@@ -149,6 +149,48 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "topology_engine_test",
+    srcs = ["topology_engine_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_test_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_control_loop_test",
+    srcs = ["topology_control_loop_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_degraded_startup_test",
+    srcs = ["topology_degraded_startup_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_task_executor_test",
+    srcs = ["topology_task_executor_test.cpp"],
+    deps = [
+        "//src/datasystem/topology:topology",
+        "//tests/ut:ut_common",
+        "//tests/ut/topology:topology_testing",
+    ],
+)
+
+ds_cc_test(
     name = "topology_memory_scale_module_test",
     srcs = ["topology_memory_scale_module_test.cpp"],
     deps = [
@@ -161,17 +203,21 @@ ds_cc_test(
 test_suite(
     name = "all_topology_tests",
     tests = [
-        "algorithm_registry_test",
+        "algorithm_catalog_test",
         "cluster_membership_test",
         "cluster_registry_test",
         "hash_algorithm_test",
         "hash_ring_v2_schema_test",
         "placement_runtime_test",
-        "placement_policy_engine_test",
+        "route_policy_engine_test",
+        "topology_control_loop_test",
+        "topology_degraded_startup_test",
+        "topology_engine_test",
         "topology_fake_integration_test",
         "topology_key_helper_test",
         "topology_memory_scale_module_test",
         "topology_repository_test",
+        "topology_task_executor_test",
         "membership_view_test",
     ],
 )

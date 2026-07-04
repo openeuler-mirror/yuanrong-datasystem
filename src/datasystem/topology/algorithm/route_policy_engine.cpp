@@ -15,9 +15,9 @@
  */
 
 /**
- * Description: Placement policy selection engine.
+ * Description: Route policy selection engine.
  */
-#include "datasystem/topology/algorithm/placement_policy_engine.h"
+#include "datasystem/topology/algorithm/route_policy_engine.h"
 
 #include <unordered_set>
 
@@ -88,8 +88,8 @@ bool IsBetterRule(const PlacementPolicyRule &candidate, uint32_t candidateSpecif
 
 }  // namespace
 
-Status PlacementPolicyEngine::SelectPolicy(const RouteContext &context, const std::vector<PlacementPolicyRule> &rules,
-                                           PlacementPolicyRule &rule) const
+Status RoutePolicyEngine::SelectPolicy(const RouteContext &context, const std::vector<PlacementPolicyRule> &rules,
+                                       PlacementPolicyRule &rule) const
 {
     rule = {};
     CHECK_FAIL_RETURN_STATUS(!rules.empty(), K_NOT_FOUND, "placement policy rule list is empty");

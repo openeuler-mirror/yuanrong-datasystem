@@ -225,11 +225,11 @@ public:
      * @brief Return the next node id after the input node id in topology order.
      * @param[in] nodeId Current node id.
      * @param[out] nextTopologyNodeId Next node id.
-     * @return K_OK if found, K_RUNTIME_ERROR if no standby node exists.
+     * @return K_OK if found, K_RUNTIME_ERROR if no alternate node exists.
      */
-    Status GetStandbyTopologyNodeId(const std::string &nodeId, std::string &nextTopologyNodeId) const
+    Status GetNextTopologyNodeId(const std::string &nodeId, std::string &nextTopologyNodeId) const
     {
-        CHECK_FAIL_RETURN_STATUS(nodeOrder_.size() > 1, K_RUNTIME_ERROR, "Standby node not found.");
+        CHECK_FAIL_RETURN_STATUS(nodeOrder_.size() > 1, K_RUNTIME_ERROR, "Alternate node not found.");
         auto iter = std::find(nodeOrder_.begin(), nodeOrder_.end(), nodeId);
         CHECK_FAIL_RETURN_STATUS(iter != nodeOrder_.end(), K_NOT_FOUND, "Node is not found in topology order.");
         for (size_t i = 1; i < nodeOrder_.size(); ++i) {
@@ -240,12 +240,12 @@ public:
                 return Status::OK();
             }
         }
-        RETURN_STATUS(K_RUNTIME_ERROR, "Standby node not found.");
+        RETURN_STATUS(K_RUNTIME_ERROR, "Alternate node not found.");
     }
 
     Status GetStandbyWorkerId(const std::string &workerId, std::string &nextWorkerId) const
     {
-        return GetStandbyTopologyNodeId(workerId, nextWorkerId);
+        return GetNextTopologyNodeId(workerId, nextWorkerId);
     }
 
 private:

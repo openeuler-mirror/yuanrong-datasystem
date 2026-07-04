@@ -101,14 +101,15 @@ private:
     /**
      * @brief Build a route decision pointing at the centralized master for centralized mode.
      * @param[in] objectKey Business object key.
-     * @param[in] options Route options; when requireAvailableTarget is set the master must be READY in the local
-     * placement directory.
+     * @param[in] options Route options; when requireAvailableTarget is set the master must not be confirmed NOT_READY
+     * in the local placement directory.
      * @param[out] decision Route decision with the master endpoint set as owner.
      * @return K_OK on success, K_RPC_UNAVAILABLE when requireAvailableTarget rejects a non-READY master, otherwise the
      * parse status of the master address.
      *
-     * The master is resolved through the placement directory (published under its address string) so the centralized
-     * and distributed paths share the same local availability semantics.
+     * The master is resolved through the placement directory (published under its address string). UNCONFIRMED is
+     * tolerated as startup/watch lag because the configured master address remains the source of truth until local
+     * topology confirms it is NOT_READY.
      */
     Status LocateCentralizedMaster(const std::string &objectKey, const RouteOptions &options,
                                    RouteDecision &decision) const;

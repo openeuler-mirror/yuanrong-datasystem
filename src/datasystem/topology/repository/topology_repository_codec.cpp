@@ -126,15 +126,15 @@ Status DecodeTaskVersionsFromId(const TaskId &taskId, int64_t &createdTopologyVe
 
 Status ValidateRange(const TokenRange &range)
 {
-    CHECK_FAIL_RETURN_STATUS(range.begin < range.end, K_INVALID, "invalid token range");
-    RETURN_IF_NOT_OK(ValidateAtom(range.nodeId, "range worker id"));
+    CHECK_FAIL_RETURN_STATUS(range.begin <= range.end, K_INVALID, "invalid token range");
+    RETURN_IF_NOT_OK(ValidateAtom(range.nodeId, "range node id"));
     return Status::OK();
 }
 
 Status ValidateProgress(const TaskProgressUpdate &update)
 {
     RETURN_IF_NOT_OK(ValidateTaskId(update.taskId));
-    RETURN_IF_NOT_OK(ValidateAtom(update.nodeId, "worker id"));
+    RETURN_IF_NOT_OK(ValidateAtom(update.nodeId, "node id"));
     CHECK_FAIL_RETURN_STATUS(update.range.finished, K_INVALID, "progress update must be finished");
     return ValidateRange(update.range);
 }
@@ -171,7 +171,7 @@ Status EncodeState(TopologyNodeState state, topology_v2::WorkerPb::StatePb &stat
             statePb = topology_v2::WorkerPb::PRE_LEAVING;
             return Status::OK();
         default:
-            RETURN_STATUS(K_INVALID, "invalid topology worker state");
+            RETURN_STATUS(K_INVALID, "invalid topology node state");
     }
 }
 
@@ -194,7 +194,7 @@ Status DecodeState(topology_v2::WorkerPb::StatePb statePb, TopologyNodeState &st
             state = TopologyNodeState::PRE_LEAVING;
             return Status::OK();
         default:
-            RETURN_STATUS(K_INVALID, "invalid topology worker state");
+            RETURN_STATUS(K_INVALID, "invalid topology node state");
     }
 }
 
@@ -203,9 +203,9 @@ Status ValidateTopology(const TopologyDescriptor &topology)
     CHECK_FAIL_RETURN_STATUS(topology.version >= 0, K_INVALID, "invalid topology version");
     std::unordered_set<TopologyNodeId> nodeIds;
     nodeIds.reserve(topology.members.size());
-    for (const auto &worker : topology.members) {
-        RETURN_IF_NOT_OK(ValidateAtom(worker.nodeId, "worker id"));
-        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(worker.nodeId).second, K_INVALID, "duplicated topology worker id");
+    for (const auto &member : topology.members) {
+        RETURN_IF_NOT_OK(ValidateAtom(member.nodeId, "topology node id"));
+        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(member.nodeId).second, K_INVALID, "duplicated topology node id");
     }
     return Status::OK();
 }
@@ -233,7 +233,7 @@ Status EncodeTaskRange(const TokenRange &range, topology_v2::TokenRangePb *range
 Status DecodeTaskRange(const topology_v2::TokenRangePb &rangePb, TokenRange &range)
 {
     range = {};
-    RETURN_IF_NOT_OK(ValidateAtom(rangePb.worker(), "range worker id"));
+    RETURN_IF_NOT_OK(ValidateAtom(rangePb.worker(), "range node id"));
     range.nodeId = rangePb.worker();
     range.begin = rangePb.from();
     range.end = rangePb.end();
@@ -264,7 +264,7 @@ Status ApplyTransferProgress(TransferTaskRecord &task, const TaskProgressUpdate 
 {
     RETURN_IF_NOT_OK(ValidateProgress(update));
     CHECK_FAIL_RETURN_STATUS(update.taskId == task.taskId, K_INVALID, "task id mismatch");
-    CHECK_FAIL_RETURN_STATUS(update.nodeId == update.range.nodeId, K_INVALID, "worker mismatch");
+    CHECK_FAIL_RETURN_STATUS(update.nodeId == update.range.nodeId, K_INVALID, "progress node mismatch");
     return MarkProgressRangeFinished(task.ranges, update);
 }
 
@@ -272,11 +272,11 @@ Status ApplyRecoveryProgress(RecoveryTaskRecord &task, const TaskProgressUpdate 
 {
     RETURN_IF_NOT_OK(ValidateProgress(update));
     CHECK_FAIL_RETURN_STATUS(update.taskId == task.taskId, K_INVALID, "task id mismatch");
-    CHECK_FAIL_RETURN_STATUS(update.nodeId == task.recoveryNodeId, K_INVALID, "worker mismatch");
+    CHECK_FAIL_RETURN_STATUS(update.nodeId == task.recoveryNodeId, K_INVALID, "progress node mismatch");
     return MarkProgressRangeFinished(task.ranges, update);
 }
 
-bool HasRangeWorker(const std::vector<TokenRange> &ranges, const TopologyNodeId &nodeId)
+bool HasRangeNode(const std::vector<TokenRange> &ranges, const TopologyNodeId &nodeId)
 {
     return std::any_of(ranges.begin(), ranges.end(),
                        [&nodeId](const TokenRange &range) { return range.nodeId == nodeId; });
@@ -285,9 +285,9 @@ bool HasRangeWorker(const std::vector<TokenRange> &ranges, const TopologyNodeId 
 Status ValidateTransferTask(const TransferTaskRecord &task)
 {
     RETURN_IF_NOT_OK(ValidateTaskId(task.taskId));
-    RETURN_IF_NOT_OK(ValidateAtom(task.executorNodeId, "executor worker id"));
-    RETURN_IF_NOT_OK(ValidateAtom(task.sourceNodeId, "source worker id"));
-    RETURN_IF_NOT_OK(ValidateAtom(task.targetNodeId, "target worker id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.executorNodeId, "executor node id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.sourceNodeId, "source node id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.targetNodeId, "target node id"));
     CHECK_FAIL_RETURN_STATUS(task.createdTopologyVersion >= 0, K_INVALID, "invalid created topology version");
     CHECK_FAIL_RETURN_STATUS(task.targetTopologyVersion >= 0, K_INVALID, "invalid target topology version");
     RETURN_IF_NOT_OK(ValidateTerminalStatus(task.status));
@@ -295,19 +295,19 @@ Status ValidateTransferTask(const TransferTaskRecord &task)
     for (const auto &range : task.ranges) {
         RETURN_IF_NOT_OK(ValidateRange(range));
     }
-    CHECK_FAIL_RETURN_STATUS(HasRangeWorker(task.ranges, task.sourceNodeId), K_INVALID,
-                             "source worker is not present in migrate task ranges");
-    CHECK_FAIL_RETURN_STATUS(HasRangeWorker(task.ranges, task.executorNodeId), K_INVALID,
-                             "executor worker is not present in migrate task ranges");
+    CHECK_FAIL_RETURN_STATUS(HasRangeNode(task.ranges, task.sourceNodeId), K_INVALID,
+                             "source node is not present in migrate task ranges");
+    CHECK_FAIL_RETURN_STATUS(HasRangeNode(task.ranges, task.executorNodeId), K_INVALID,
+                             "executor node is not present in migrate task ranges");
     return Status::OK();
 }
 
 Status ValidateRecoveryTask(const RecoveryTaskRecord &task)
 {
     RETURN_IF_NOT_OK(ValidateTaskId(task.taskId));
-    RETURN_IF_NOT_OK(ValidateAtom(task.executorNodeId, "executor worker id"));
-    RETURN_IF_NOT_OK(ValidateAtom(task.failedNodeId, "failed worker id"));
-    RETURN_IF_NOT_OK(ValidateAtom(task.recoveryNodeId, "recovery worker id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.executorNodeId, "executor node id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.failedNodeId, "failed node id"));
+    RETURN_IF_NOT_OK(ValidateAtom(task.recoveryNodeId, "recovery node id"));
     CHECK_FAIL_RETURN_STATUS(task.createdTopologyVersion >= 0, K_INVALID, "invalid created topology version");
     CHECK_FAIL_RETURN_STATUS(task.targetTopologyVersion >= 0, K_INVALID, "invalid target topology version");
     RETURN_IF_NOT_OK(ValidateTerminalStatus(task.status));
@@ -315,8 +315,8 @@ Status ValidateRecoveryTask(const RecoveryTaskRecord &task)
     for (const auto &range : task.ranges) {
         RETURN_IF_NOT_OK(ValidateRange(range));
     }
-    CHECK_FAIL_RETURN_STATUS(HasRangeWorker(task.ranges, task.recoveryNodeId), K_INVALID,
-                             "recovery worker is not present in delete-node task ranges");
+    CHECK_FAIL_RETURN_STATUS(HasRangeNode(task.ranges, task.recoveryNodeId), K_INVALID,
+                             "recovery node is not present in delete-node task ranges");
     return Status::OK();
 }
 
@@ -356,7 +356,7 @@ Status DecodeNotifyType(topology_v2::TaskNotifyPb::TypePb typePb, TaskNotifyType
 
 Status ValidateNotify(const TaskNotify &notify)
 {
-    RETURN_IF_NOT_OK(ValidateAtom(notify.nodeAddress, "notify worker address"));
+    RETURN_IF_NOT_OK(ValidateAtom(notify.nodeAddress, "notify node address"));
     topology_v2::TaskNotifyPb::TypePb typePb = topology_v2::TaskNotifyPb::SCALE_OUT;
     RETURN_IF_NOT_OK(EncodeNotifyType(notify.type, typePb));
     for (const auto &taskId : notify.taskIds) {
@@ -376,12 +376,12 @@ Status TopologyRepositoryCodec::DecodeTopology(const std::string &bytes, Topolog
     topology.clusterHasInit = ringPb.cluster_has_init();
     topology.members.reserve(ringPb.workers().size());
     for (const auto &entry : ringPb.workers()) {
-        TopologyNode worker;
-        RETURN_IF_NOT_OK(ValidateAtom(entry.first, "worker id"));
-        worker.nodeId = entry.first;
-        RETURN_IF_NOT_OK(DecodeState(entry.second.state(), worker.state));
-        worker.tokens.assign(entry.second.hash_tokens().begin(), entry.second.hash_tokens().end());
-        topology.members.push_back(std::move(worker));
+        TopologyNode member;
+        RETURN_IF_NOT_OK(ValidateAtom(entry.first, "topology node id"));
+        member.nodeId = entry.first;
+        RETURN_IF_NOT_OK(DecodeState(entry.second.state(), member.state));
+        member.tokens.assign(entry.second.hash_tokens().begin(), entry.second.hash_tokens().end());
+        topology.members.push_back(std::move(member));
     }
     std::sort(topology.members.begin(), topology.members.end(),
               [](const TopologyNode &left, const TopologyNode &right) { return left.nodeId < right.nodeId; });
@@ -397,12 +397,12 @@ Status TopologyRepositoryCodec::EncodeTopology(const TopologyDescriptor &topolog
     ringPb.set_schema_version(TOPOLOGY_SCHEMA_VERSION_TEXT);
     ringPb.set_version(static_cast<uint64_t>(topology.version));
     ringPb.set_cluster_has_init(topology.clusterHasInit);
-    for (const auto &worker : topology.members) {
-        auto &workerPb = (*ringPb.mutable_workers())[worker.nodeId];
+    for (const auto &member : topology.members) {
+        auto &workerPb = (*ringPb.mutable_workers())[member.nodeId];
         topology_v2::WorkerPb::StatePb statePb = topology_v2::WorkerPb::INITIAL;
-        RETURN_IF_NOT_OK(EncodeState(worker.state, statePb));
+        RETURN_IF_NOT_OK(EncodeState(member.state, statePb));
         workerPb.set_state(statePb);
-        for (auto token : worker.tokens) {
+        for (auto token : member.tokens) {
             workerPb.add_hash_tokens(token);
         }
     }
@@ -495,7 +495,7 @@ Status TopologyRepositoryCodec::EncodeDeleteNodeTask(const RecoveryTaskRecord &t
     bytes.clear();
     RETURN_IF_NOT_OK(ValidateRecoveryTask(task));
     CHECK_FAIL_RETURN_STATUS(task.executorNodeId == task.recoveryNodeId, K_INVALID,
-                             "delete-node task executor must match recovery worker");
+                             "delete-node task executor must match recovery node");
     topology_v2::DeleteNodeTaskPb taskPb;
     taskPb.set_failed_worker(task.failedNodeId);
     for (const auto &range : task.ranges) {
@@ -530,7 +530,7 @@ Status TopologyRepositoryCodec::DecodeNotify(const std::string &bytes, const Top
                                              TaskNotify &notify) const
 {
     notify = {};
-    RETURN_IF_NOT_OK(ValidateAtom(nodeAddress, "notify worker address"));
+    RETURN_IF_NOT_OK(ValidateAtom(nodeAddress, "notify node address"));
     topology_v2::TaskNotifyPb notifyPb;
     CHECK_FAIL_RETURN_STATUS(notifyPb.ParseFromString(bytes), K_INVALID, "parse TaskNotifyPb failed");
     notify.nodeAddress = nodeAddress;

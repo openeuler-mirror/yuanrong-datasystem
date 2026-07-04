@@ -21,7 +21,6 @@
 #define DATASYSTEM_TOPOLOGY_MEMBERSHIP_MEMBERSHIP_TYPES_H
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -99,46 +98,6 @@ struct MembershipWatchEvent {
 struct ScaleInRequest {
     TopologyNodeId nodeId;
     ScaleInReason reason{ ScaleInReason::ORDERLY_SHUTDOWN };
-};
-
-class IMembershipSnapshotProvider {
-public:
-    virtual ~IMembershipSnapshotProvider() = default;
-
-    /**
-     * @brief Get the latest local membership snapshot.
-     * @param[out] snapshot Immutable membership snapshot.
-     * @return K_OK when a snapshot is available; K_NOT_READY before the first successful rebuild.
-     */
-    virtual Status GetSnapshot(std::shared_ptr<const MembershipSnapshot> &snapshot) const = 0;
-};
-
-class IMembershipView : public IMembershipSnapshotProvider {
-public:
-    ~IMembershipView() override = default;
-
-    /**
-     * @brief Look up one membership record from the local snapshot.
-     * @param[in] nodeId Canonical topology node id.
-     * @param[out] record Membership record copied from the immutable snapshot when the function returns K_OK.
-     * @return K_OK on success; K_NOT_READY before the first snapshot; K_NOT_FOUND when absent.
-     */
-    virtual Status GetRecord(const TopologyNodeId &nodeId, MembershipRecord &record) const = 0;
-
-    /**
-     * @brief Resolve one ready member endpoint from the local snapshot.
-     * @param[in] nodeId Canonical topology node id.
-     * @param[out] endpoint Ready member endpoint copied when the function returns K_OK.
-     * @return K_OK on success; K_NOT_READY before the first snapshot; K_NOT_FOUND when absent or not ready.
-     */
-    virtual Status GetReadyEndpoint(const TopologyNodeId &nodeId, TopologyEndpoint &endpoint) const = 0;
-
-    /**
-     * @brief List members whose service state is READY.
-     * @param[out] members Ready membership records copied when the function returns K_OK.
-     * @return K_OK when a snapshot is available; K_NOT_READY before the first successful rebuild.
-     */
-    virtual Status ListReadyMembers(std::vector<MembershipRecord> &members) const = 0;
 };
 
 }  // namespace topology

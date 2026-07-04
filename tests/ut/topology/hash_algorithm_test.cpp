@@ -547,7 +547,7 @@ TEST(TopologyHashAlgorithmTest, HashValidatePlacementReportsAllMalformedFields)
     DS_ASSERT_OK(algorithm.ValidatePlacement(topology, validation));
     EXPECT_FALSE(validation.valid);
     EXPECT_TRUE(std::any_of(validation.diagnostics.begin(), validation.diagnostics.end(),
-                            [](const auto &message) { return message == "topology has no active worker"; }));
+                            [](const auto &message) { return message == "topology has no active node"; }));
 }
 
 TEST(TopologyHashAlgorithmTest, HashPlanningDoesNotTouchPbOrRepository)

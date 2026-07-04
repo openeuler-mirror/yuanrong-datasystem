@@ -63,8 +63,11 @@ TransferTaskRecord MakeTransferTask(const TopologyNodeId &target, const Topology
 {
     TransferTaskRecord task;
     task.taskId = target + "|" + source;
+    task.executorNodeId = source;
     task.targetNodeId = target;
     task.sourceNodeId = source;
+    task.createdTopologyVersion = 1;
+    task.targetTopologyVersion = 2;
     task.ranges = { { begin, end, source, false } };
     return task;
 }
@@ -73,8 +76,11 @@ RecoveryTaskRecord MakeRecoveryTask(const TopologyNodeId &failed, const Topology
 {
     RecoveryTaskRecord task;
     task.taskId = failed + "|" + recovery;
+    task.executorNodeId = recovery;
     task.failedNodeId = failed;
     task.recoveryNodeId = recovery;
+    task.createdTopologyVersion = 1;
+    task.targetTopologyVersion = 2;
     task.ranges = { { begin, end, recovery, false } };
     return task;
 }
@@ -189,7 +195,7 @@ TEST(TopologyFakeIntegrationTest, FakeRepositoryRejectsMalformedSeedData)
     transfer.ranges.clear();
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
-    transfer = MakeTransferTask(WORKER_C, WORKER_A, 10, 10);
+    transfer = MakeTransferTask(WORKER_C, WORKER_A, 10, 9);
     EXPECT_EQ(repo.SeedTransferTask(transfer).GetCode(), K_INVALID);
 
     transfer = MakeTransferTask(WORKER_C, WORKER_A, 1, 10);

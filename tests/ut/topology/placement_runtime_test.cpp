@@ -38,6 +38,8 @@
 #include "datasystem/topology/routing/routing_cache.h"
 #include "datasystem/topology/routing/routing_view.h"
 #include "datasystem/topology/routing/owner_endpoint_resolver.h"
+#include "datasystem/topology/routing/worker_locator.h"
+#include "datasystem/topology/runtime/topology_snapshot_rebuilder.h"
 #include "tests/ut/common.h"
 #include "tests/ut/topology/fake_coordination_backend.h"
 #include "tests/ut/topology/testing/fake_topology_repository.h"
@@ -234,6 +236,19 @@ std::shared_ptr<MembershipEndpointSnapshot> MakeEndpointSnapshot(
     snapshot->members.emplace(WORKER_B, MemberEndpoint{ WORKER_B, MakeAddr(2222), workerBAvailability });
     snapshot->nodeIdsByAddress.emplace(MakeAddr(1111).ToString(), WORKER_A);
     snapshot->nodeIdsByAddress.emplace(MakeAddr(2222).ToString(), WORKER_B);
+    return snapshot;
+}
+
+std::shared_ptr<PlacementDirectorySnapshot> MakeCentralizedMasterPlacementSnapshot(
+    const HostPort &masterAddress, WorkerAvailability availability)
+{
+    auto snapshot = std::make_shared<PlacementDirectorySnapshot>();
+    const std::string masterId = masterAddress.ToString();
+    snapshot->version = VERSION_1;
+    snapshot->localWorkerId = WORKER_A;
+    snapshot->localAddress = MakeAddr(1111);
+    snapshot->workers.emplace(masterId, PlacementEndpoint{ masterId, masterAddress, availability });
+    snapshot->workerIdsByAddress.emplace(masterId, masterId);
     return snapshot;
 }
 
@@ -440,6 +455,68 @@ TEST(PlacementRuntimeTest, ExactRingDeleteAndMalformedUpdateKeepLastSnapshot)
     EXPECT_EQ(snapshot->Version(), VERSION_1);
 }
 
+TEST(PlacementRuntimeTest, TopologySnapshotRebuilderRebuildsFromCommittedTopology)
+{
+    FakeTopologyRepository repo;
+    RoutingView view;
+    DS_ASSERT_OK(repo.SeedCommittedTopology(MakeTopologyDescriptor(VERSION_1)));
+
+    HashAlgorithm algorithm;
+    ITopologyRoutingRepository &routingRepo = repo;
+    TopologySnapshotRebuilder rebuilder(view, routingRepo, algorithm);
+    DS_ASSERT_OK(rebuilder.RebuildFromCommittedTopology());
+
+    std::shared_ptr<const RoutingSnapshot> snapshot;
+    DS_ASSERT_OK(view.GetSnapshot(snapshot));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->Version(), VERSION_1);
+    EXPECT_FALSE(snapshot->Empty());
+}
+
+TEST(PlacementRuntimeTest, TopologySnapshotRebuilderRejectsStaleCommittedTopologyEvent)
+{
+    FakeTopologyRepository repo;
+    RoutingView view;
+    HashAlgorithm algorithm;
+    ITopologyRoutingRepository &routingRepo = repo;
+    TopologySnapshotRebuilder rebuilder(view, routingRepo, algorithm);
+
+    CoordinationEvent version2Event;
+    DS_ASSERT_OK(MakeTopologyPutEvent(MakeTopologyDescriptor(VERSION_2), version2Event));
+    DS_ASSERT_OK(rebuilder.ApplyCommittedTopologyEvent(version2Event));
+
+    CoordinationEvent version1Event;
+    DS_ASSERT_OK(MakeTopologyPutEvent(MakeTopologyDescriptor(VERSION_1), version1Event));
+    DS_ASSERT_OK(rebuilder.ApplyCommittedTopologyEvent(version1Event));
+
+    std::shared_ptr<const RoutingSnapshot> snapshot;
+    DS_ASSERT_OK(view.GetSnapshot(snapshot));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->Version(), VERSION_2);
+}
+
+TEST(PlacementRuntimeTest, TopologySnapshotRebuilderIgnoresSubKeyEvent)
+{
+    FakeCoordinationBackend store;
+    TopologyRepository repo(store);
+    RoutingView view;
+    HashAlgorithm algorithm;
+    TopologySnapshotRebuilder rebuilder(view, repo, algorithm);
+
+    CoordinationEvent topologyEvent;
+    DS_ASSERT_OK(MakeTopologyPutEvent(MakeTopologyDescriptor(VERSION_1), topologyEvent));
+    DS_ASSERT_OK(rebuilder.ApplyCommittedTopologyEvent(topologyEvent));
+
+    auto subkey = TopologyKeyHelper::CommittedTopologyKey() + "/notify/worker-a";
+    DS_ASSERT_OK(rebuilder.ApplyCommittedTopologyEvent(
+        MakeRawEvent(CoordinationEventType::PUT, subkey, "not-a-topology-payload", VERSION_2)));
+
+    std::shared_ptr<const RoutingSnapshot> snapshot;
+    DS_ASSERT_OK(view.GetSnapshot(snapshot));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->Version(), VERSION_1);
+}
+
 TEST(PlacementRuntimeTest, MembershipEndpointViewResolveMissing)
 {
     MembershipEndpointView endpointView;
@@ -497,7 +574,7 @@ TEST(PlacementRuntimeTest, RoutingSnapshotTopologyFacts)
     EXPECT_EQ(snapshot.ActiveTopologyNodeIds().size(), 1ul);
 
     std::string standbyTopologyNodeId;
-    EXPECT_TRUE(snapshot.GetStandbyTopologyNodeId(WORKER_A, standbyTopologyNodeId).IsOk());
+    EXPECT_TRUE(snapshot.GetNextTopologyNodeId(WORKER_A, standbyTopologyNodeId).IsOk());
     EXPECT_EQ(standbyTopologyNodeId, WORKER_B);
 }
 
@@ -577,6 +654,42 @@ TEST(PlacementRuntimeTest, LocateMetaOwnerRequireAvailableTarget)
     RouteDecision decision;
     RouteOptions options;
     options.requireAvailableTarget = true;
+    auto status = locator.LocateMetaOwner(key, options, nullptr, decision);
+    EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
+}
+
+TEST(PlacementRuntimeTest, CentralizedMasterAllowsUnconfirmedDirectoryTarget)
+{
+    const std::string key = "centralized-master-startup-key";
+    auto directory = std::make_shared<PlacementDirectory>();
+    const auto masterAddress = MakeAddr(3333);
+    directory->Publish(MakeCentralizedMasterPlacementSnapshot(masterAddress, WorkerAvailability::UNCONFIRMED));
+    WorkerLocator locator(nullptr, directory);
+
+    RouteDecision decision;
+    RouteOptions options;
+    options.centralizedMode = true;
+    options.requireAvailableTarget = true;
+    options.masterAddress = masterAddress;
+    DS_ASSERT_OK(locator.LocateMetaOwner(key, options, nullptr, decision));
+    EXPECT_EQ(decision.ownerNodeId, masterAddress.ToString());
+    EXPECT_EQ(decision.ownerEndpoint.address, masterAddress);
+    EXPECT_EQ(decision.ownerEndpoint.availability, WorkerAvailability::UNCONFIRMED);
+}
+
+TEST(PlacementRuntimeTest, CentralizedMasterRejectsNotReadyDirectoryTarget)
+{
+    const std::string key = "centralized-master-not-ready-key";
+    auto directory = std::make_shared<PlacementDirectory>();
+    const auto masterAddress = MakeAddr(3333);
+    directory->Publish(MakeCentralizedMasterPlacementSnapshot(masterAddress, WorkerAvailability::NOT_READY));
+    WorkerLocator locator(nullptr, directory);
+
+    RouteDecision decision;
+    RouteOptions options;
+    options.centralizedMode = true;
+    options.requireAvailableTarget = true;
+    options.masterAddress = masterAddress;
     auto status = locator.LocateMetaOwner(key, options, nullptr, decision);
     EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
 }

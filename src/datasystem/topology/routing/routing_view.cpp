@@ -32,7 +32,7 @@ namespace datasystem {
 namespace topology {
 namespace {
 
-bool IsKnownWorkerState(TopologyNodeState state)
+bool IsKnownNodeState(TopologyNodeState state)
 {
     switch (state) {
         case TopologyNodeState::INITIAL:
@@ -66,22 +66,21 @@ Status BuildRoutingSnapshotFacts(const TopologyDescriptor &topology, ITopologyRo
     facts.nodeOrder.reserve(topology.members.size());
     std::unordered_set<TopologyNodeId> nodeIds;
     nodeIds.reserve(topology.members.size());
-    for (const auto &worker : topology.members) {
-        CHECK_FAIL_RETURN_STATUS(!worker.nodeId.empty(), K_INVALID, "topology worker id is empty");
-        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(worker.nodeId).second, K_INVALID,
-                                 "topology worker id is duplicated");
-        CHECK_FAIL_RETURN_STATUS(IsKnownWorkerState(worker.state), K_INVALID, "topology worker state is invalid");
-        facts.validTopologyNodeIds.emplace(worker.nodeId);
-        facts.nodeOrder.emplace_back(worker.nodeId);
-        if (worker.state == TopologyNodeState::ACTIVE) {
-            facts.activeTopologyNodeIds.emplace(worker.nodeId);
+    for (const auto &member : topology.members) {
+        CHECK_FAIL_RETURN_STATUS(!member.nodeId.empty(), K_INVALID, "topology node id is empty");
+        CHECK_FAIL_RETURN_STATUS(nodeIds.insert(member.nodeId).second, K_INVALID, "topology node id is duplicated");
+        CHECK_FAIL_RETURN_STATUS(IsKnownNodeState(member.state), K_INVALID, "topology node state is invalid");
+        facts.validTopologyNodeIds.emplace(member.nodeId);
+        facts.nodeOrder.emplace_back(member.nodeId);
+        if (member.state == TopologyNodeState::ACTIVE) {
+            facts.activeTopologyNodeIds.emplace(member.nodeId);
         }
     }
 
     std::vector<TransferTaskRecord> transferTasks;
     RETURN_IF_NOT_OK(repository.ListTransferTaskRecords({}, transferTasks));
     for (const auto &task : transferTasks) {
-        // Backend task records are the migration-time authority. A worker may observe a transfer task before the
+        // Backend task records are the migration-time authority. A member may observe a transfer task before the
         // matching committed topology event, so keep non-stale hints even when the local topology version lags.
         if (task.targetTopologyVersion < topology.version) {
             continue;
@@ -136,6 +135,16 @@ void RoutingView::Publish(std::shared_ptr<const RoutingSnapshot> snapshot)
     snapshot_ = std::move(snapshot);
 }
 
+bool RoutingView::PublishIfNotOlder(std::shared_ptr<const RoutingSnapshot> snapshot)
+{
+    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    if (snapshot_ != nullptr && snapshot != nullptr && snapshot->Version() < snapshot_->Version()) {
+        return false;
+    }
+    snapshot_ = std::move(snapshot);
+    return true;
+}
+
 Status RoutingView::ApplyCommittedTopology(ITopologyRoutingRepository &repository, const IRoutingAlgorithm &algorithm)
 {
     TopologyDescriptor topology;
@@ -143,7 +152,7 @@ Status RoutingView::ApplyCommittedTopology(ITopologyRoutingRepository &repositor
     RETURN_IF_NOT_OK(repository.GetCommittedTopology(topology, revision));
     std::shared_ptr<const RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(BuildRoutingSnapshotFromTopology(topology, repository, algorithm, snapshot));
-    Publish(std::move(snapshot));
+    (void)PublishIfNotOlder(std::move(snapshot));
     return Status::OK();
 }
 
@@ -161,7 +170,7 @@ Status RoutingView::ApplyCommittedTopologyEvent(ITopologyRoutingRepository &repo
     }
     std::shared_ptr<const RoutingSnapshot> snapshot;
     RETURN_IF_NOT_OK(BuildRoutingSnapshotFromTopology(typed.topology, repository, algorithm, snapshot));
-    Publish(std::move(snapshot));
+    (void)PublishIfNotOlder(std::move(snapshot));
     return Status::OK();
 }
 

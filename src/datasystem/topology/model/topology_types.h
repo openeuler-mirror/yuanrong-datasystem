@@ -140,6 +140,61 @@ struct TaskNotify {
     std::vector<TaskId> taskIds;
 };
 
+enum class TopologyChangeKind {
+    NONE,
+    FIRST_INIT,
+    SCALE_OUT,
+    ACTIVE_SCALE_IN,
+    PASSIVE_FAILURE,
+    ORDERLY_CLUSTER_SHUTDOWN,
+    ACTIVATE_PENDING,
+};
+
+struct TopologyReconcileRequest {
+    std::vector<TopologyNodeId> readyNodeIds;
+    std::vector<TopologyNodeId> orderlyLeavingNodeIds;
+    std::vector<TopologyNodeId> failedNodeIds;
+    bool hasUnfinishedTasks{ false };
+};
+
+struct TopologyReconcileResult {
+    TopologyChangeKind kind{ TopologyChangeKind::NONE };
+    Revision committedRevision{ 0 };
+    int64_t committedVersion{ 0 };
+    uint64_t createdTransferTasks{ 0 };
+    uint64_t createdRecoveryTasks{ 0 };
+    uint64_t updatedNotifies{ 0 };
+    Status status;
+    std::vector<std::string> diagnostics;
+};
+
+struct TopologyTaskSummary {
+    uint64_t unfinishedTransferTasks{ 0 };
+    uint64_t unfinishedRecoveryTasks{ 0 };
+};
+
+struct LocalTopologySnapshot {
+    TopologyDescriptor topology;
+    Revision topologyRevision{ 0 };
+    TopologyTaskSummary taskSummary;
+    std::string digest;
+};
+
+struct PeerStateSnapshot {
+    TopologyNodeId nodeId;
+    int64_t topologyVersion{ 0 };
+    Revision topologyRevision{ 0 };
+    TopologyTaskSummary taskSummary;
+    bool backendAvailable{ false };
+    bool ready{ false };
+    std::string digest;
+};
+
+struct DegradedStartupDecision {
+    bool accepted{ false };
+    std::string reason;
+};
+
 struct TransferTaskRecord {
     TaskId taskId;
     Revision taskRevision{ 0 };
@@ -164,6 +219,17 @@ struct RecoveryTaskRecord {
     int64_t targetTopologyVersion{ 0 };
     TaskTerminalStatus status{ TaskTerminalStatus::RUNNING };
     std::vector<TokenRange> ranges;
+};
+
+struct TopologyChangePlan {
+    TopologyChangeKind kind{ TopologyChangeKind::NONE };
+    TopologyDescriptor expectedTopology;
+    Revision expectedRevision{ 0 };
+    TopologyDescriptor nextTopology;
+    std::vector<TransferTaskRecord> transferTasks;
+    std::vector<RecoveryTaskRecord> recoveryTasks;
+    std::vector<TaskNotify> notifies;
+    std::vector<std::string> diagnostics;
 };
 
 struct TaskProgressUpdate {
