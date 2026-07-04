@@ -339,14 +339,14 @@ ds_cc_library(
 ds_cc_library(
     name = "worker",
     srcs = [
-        "worker.cpp",
+        "data_worker.cpp",
         "worker_sched_runtime_linux.cpp",
     ],
     hdrs = [
-        "worker.h",
         "worker_sched_runtime.h",
     ],
     deps = [
+        "//include/datasystem:headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/encrypt:common_encrypt",
         "//src/datasystem/common/flags:ds_flags",
@@ -466,6 +466,7 @@ cc_shared_library(
         "//src/datasystem/worker:worker_oc_server",
         "//src/datasystem/worker:worker_cli",
         "//src/datasystem/worker:worker_flags",
+        "@com_google_protobuf//upb:wire",
     ],
     user_link_flags = [
         "-Wl,-rpath,$$ORIGIN",
@@ -474,6 +475,7 @@ cc_shared_library(
     visibility = ["//visibility:public"],
     deps = [
         ":worker_main",
+        "@com_google_protobuf//upb:wire",
     ] + select({
         "//:enable_pipeline_h2d": [
             "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",

@@ -18,8 +18,8 @@
  * Description: Public API for KVCache Worker.
  *              This header has zero internal dependencies.
  */
-#ifndef DATASYSTEM_WORKER_H
-#define DATASYSTEM_WORKER_H
+#ifndef DATASYSTEM_DATA_WORKER_H
+#define DATASYSTEM_DATA_WORKER_H
 
 #include <atomic>
 #include <memory>
@@ -34,23 +34,23 @@ namespace datasystem {
 class DynamicFlagConfig;
 
 namespace worker {
-
 class WorkerOCServer;
+}
 
-struct WorkerOptions {
+struct DataWorkerOptions {
     // Absolute path to worker_config.json file.
     std::string configFilePath;
 };
 
-class Worker {
+class DataWorker {
 public:
-    ~Worker();
+    ~DataWorker();
 
-    Worker& operator=(const Worker&) = delete;
-    Worker(const Worker&) = delete;
+    DataWorker& operator=(const DataWorker&) = delete;
+    DataWorker(const DataWorker&) = delete;
 
     /// @brief Get the singleton instance.
-    static Worker *GetInstance();
+    static DataWorker *GetInstance();
 
     /// @brief Process-mode startup (command-line arguments).
     /// @details Internally parses argc/argv, blocks until termination signal or Stop() is called.
@@ -63,7 +63,7 @@ public:
     /// @details Reads and parses the JSON config file, blocks until termination signal or Stop() is called.
     /// @param options Startup options containing the config file path.
     /// @return K_OK on normal exit; error code otherwise.
-    Status InitAndRun(const WorkerOptions &options);
+    Status InitAndRun(const DataWorkerOptions &options);
 
     /// @brief Embedded-mode initialization.
     /// @details Initializes without blocking. Caller manages lifecycle.
@@ -104,12 +104,11 @@ private:
     /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
     Status DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel);
 
-    Worker() = default;
-    std::unique_ptr<WorkerOCServer> worker_{nullptr};
+    DataWorker() = default;
+    std::unique_ptr<worker::WorkerOCServer> worker_{nullptr};
     std::atomic<bool> started_{false};
     std::mutex initMutex_;
 };
 
-}  // namespace worker
 }  // namespace datasystem
-#endif  // DATASYSTEM_WORKER_H
+#endif  // DATASYSTEM_DATA_WORKER_H

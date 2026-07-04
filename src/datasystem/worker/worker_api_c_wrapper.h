@@ -27,7 +27,7 @@
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/worker.h"
+#include "datasystem/data_worker.h"
 #include "datasystem/worker/worker_service_impl.h"
 
 #ifdef __cplusplus

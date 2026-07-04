@@ -23,7 +23,7 @@ set(WORKER_SRCS
         worker_liveness_check.cpp
         worker_cli.cpp
         worker_flags.cpp
-        worker.cpp
+        data_worker.cpp
         worker_api_c_wrapper.cpp
         worker_sched_runtime_linux.cpp
         )
@@ -78,7 +78,7 @@ if (ENABLE_PERF)
     list(APPEND WORKER_DEPEND_LIBS perf_posix_protos)
 endif ()
 
-set_source_files_properties(worker.cpp PROPERTIES
+set_source_files_properties(data_worker.cpp PROPERTIES
         COMPILE_DEFINITIONS "GIT_HASH=\"${GIT_HASH}\";GIT_BRANCH=\"${GIT_BRANCH}\"")
 
 add_library(datasystem_worker_static STATIC ${WORKER_SRCS})
