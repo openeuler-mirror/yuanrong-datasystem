@@ -92,6 +92,19 @@ DS_DEFINE_uint32(stderrthreshold, 2,
                  "log messages at or above this level are copied to stderr in "
                  "addition to logfiles.  This flag obsoletes --alsologtostderr.");
 DS_DEFINE_int32_dynamic(minloglevel, 0, "Messages below this level are not logged.");
+
+static bool ValidateMinLogLevel(const char *flagName, int32_t value)
+{
+    if (value < 0 || value >= NUM_SEVERITIES) {
+        LOG(ERROR) << FormatString("The value of %s flag is %d, which must be between 0 and %d (INFO=0, WARNING=1, "
+                                   "ERROR=2, FATAL=3).",
+                                   flagName, value, NUM_SEVERITIES - 1);
+        return false;
+    }
+    return true;
+}
+
+DS_DEFINE_validator(minloglevel, &ValidateMinLogLevel);
 DS_DEFINE_uint32(log_async_queue_size, DEFAULT_LOG_ASYNC_QUEUE_SIZE, "Size of async logger's message queue.");
 DS_DEFINE_bool(log_only_write_info_file, DEFAULT_LOG_ONLY_WRITE_INFO_FILE,
                "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR "
