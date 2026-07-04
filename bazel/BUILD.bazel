@@ -60,6 +60,7 @@ datasystem_sdk_tree(
     cmake_config = [":cmake_config_files"],
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
+    libworker = "//:libdatasystem_worker_shared_file",
 )
 
 datasystem_cmake_config(

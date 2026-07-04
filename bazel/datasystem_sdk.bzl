@@ -22,13 +22,15 @@ set -euo pipefail
 out_dir="$1"
 build_tpl="$2"
 libdatasystem="$3"
-out_tar="$4"
-header_count="$5"
-shift 5
+libworker="$4"
+out_tar="$5"
+header_count="$6"
+shift 6
 
 mkdir -p "$out_dir/cpp/lib"
 cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
 cp -f "$libdatasystem" "$out_dir/cpp/lib/libdatasystem.so"
+cp -f "$libworker" "$out_dir/cpp/lib/libdatasystem_worker.so"
 
 # Copy headers (header_count pairs of src,rel)
 i=0
@@ -65,12 +67,13 @@ tar_name="$(basename "$out_tar")"
         out_dir.path,
         ctx.file.build_tpl.path,
         ctx.file.libdatasystem.path,
+        ctx.file.libworker.path,
         out_tar.path,
         str(len(header_args) // 2),
     ] + header_args + cmake_args
 
     inputs = depset(
-        [ctx.file.build_tpl, ctx.file.libdatasystem],
+        [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker],
         transitive = [depset(ctx.files.headers), depset(ctx.files.cmake_config)],
     )
 
@@ -91,6 +94,7 @@ datasystem_sdk_tree = rule(
         "headers": attr.label_list(allow_files = True, mandatory = True),
         "build_tpl": attr.label(allow_single_file = True, mandatory = True),
         "libdatasystem": attr.label(allow_single_file = True, mandatory = True),
+        "libworker": attr.label(allow_single_file = True, mandatory = True),
         "cmake_config": attr.label_list(allow_files = True, default = []),
     },
 )

@@ -9,6 +9,11 @@ cc_import(
     shared_library = "lib/libdatasystem.so",
 )
 
+cc_import(
+    name = "datasystem_worker_shared",
+    shared_library = "lib/libdatasystem_worker.so",
+)
+
 cc_library(
     name = "headers",
     hdrs = glob(["**/*.h"]),
@@ -19,6 +24,14 @@ cc_library(
     name = "datasystem_sdk",
     deps = [
         ":datasystem_shared",
+        ":headers",
+    ],
+)
+
+cc_library(
+    name = "datasystem_worker_sdk",
+    deps = [
+        ":datasystem_worker_shared",
         ":headers",
     ],
 )

@@ -19,16 +19,15 @@
  */
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/worker/worker.h"
+#include "datasystem/data_worker.h"
 
 using namespace datasystem;
-using namespace datasystem::worker;
 
 int main(int argc, char **argv)
 {
-    auto rc = Worker::GetInstance()->InitAndRun(argc, argv);
+    auto rc = DataWorker::GetInstance()->InitAndRun(argc, argv);
     if (rc.IsError()) {
-        LOG(ERROR) << "Worker failed: " << rc.ToString();
+        LOG(ERROR) << "DataWorker failed: " << rc.ToString();
         return -1;
     }
     return 0;
