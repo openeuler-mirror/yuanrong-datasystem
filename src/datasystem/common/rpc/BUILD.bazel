@@ -223,6 +223,16 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "brpc_factory",
+    srcs = ["brpc_factory.cpp"],
+    hdrs = ["brpc_factory.h"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
     name = "brpc_stream_close_helper",
     srcs = ["brpc_stream_close_helper.cpp"],
     hdrs = ["brpc_stream_close_helper.h"],
