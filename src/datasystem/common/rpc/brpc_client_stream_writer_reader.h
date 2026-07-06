@@ -34,6 +34,7 @@
 #define DATASYSTEM_COMMON_RPC_BRPC_CLIENT_STREAM_WRITER_READER_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -194,7 +195,15 @@ public:
         }
 
         std::unique_lock<std::mutex> lock(readMtx_);
-        readCond_.wait(lock, [this] { return readReady_ || readError_ || streamEnd_; });
+        // Bound the wait so a peer crash / network partition cannot block the calling
+        // bthread forever (which would exhaust the bthread pool under nested RPC load).
+        // 30s > kStreamCloseTimeoutSec(5s), well below typical client upper-layer deadlines.
+        if (!readCond_.wait_for(lock, std::chrono::seconds(kStreamReadTimeoutSec),
+            [this] { return readReady_ || readError_ || streamEnd_; })) {
+            LOG(ERROR) << "Stream read timed out after " << kStreamReadTimeoutSec
+                       << "s, streamId=" << streamId_;
+            RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "Stream read timeout");
+        }
 
         if (readError_) {
             RETURN_STATUS(StatusCode::K_RPC_CANCELLED, "Stream error during read");
