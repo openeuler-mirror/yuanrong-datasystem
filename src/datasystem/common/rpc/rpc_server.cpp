@@ -122,6 +122,12 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     // worker pool can be exhausted by concurrent nested RPCs -> Get RPCs queue
     // but never dispatch. Bump num_threads so handlers always find a free worker.
     options.num_threads = FLAGS_brpc_server_num_threads;
+    // Bound concurrent in-flight RPCs so a slow handler (e.g. Publish large object
+    // synchronously calling master RPC) cannot queue unlimited bthreads -> OOM ->
+    // systemd restart. The flag defaults to 128 (num_threads * 2); set it to 0 to
+    // disable the limit (brpc treats 0 as unlimited). When exceeded, brpc returns
+    // ELIMIT to the client immediately, which the caller can retry on another worker.
+    options.max_concurrency = FLAGS_brpc_max_concurrency;
     butil::EndPoint ep;
     if (!addr.empty()) {
         butil::str2ip(addr.c_str(), &ep.ip);
