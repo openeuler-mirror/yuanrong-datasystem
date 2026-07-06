@@ -333,6 +333,7 @@ WorkerOCServer::~WorkerOCServer()
     brpcClientWorkerScAdapter_.reset();
     brpcWorkerWorkerScAdapter_.reset();
     brpcMasterWorkerScAdapter_.reset();
+    brpcCoordinatorWatchAdapter_.reset();
     objCacheClientWorkerSvc_.reset();
     objCacheWorkerTransSvc_.reset();
     streamCacheWorkerWorkerSvc_.reset();
@@ -425,12 +426,18 @@ Status WorkerOCServer::InitWorkerWorkerTransportService()
 Status WorkerOCServer::InitCoordinatorWatchService()
 {
     RETURN_IF_NOT_OK(coordinatorWatchSvc_->Init());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
-    cfg.udsEnabled_ = false;
-    builder_.AddService(coordinatorWatchSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        brpcCoordinatorWatchAdapter_ =
+            std::make_unique<coordinator::CoordinatorWatchServiceBrpcAdapter>(*coordinatorWatchSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcCoordinatorWatchAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
+        cfg.numStreamSockets_ = 0;
+        cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+        cfg.udsEnabled_ = false;
+        builder_.AddService(coordinatorWatchSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 

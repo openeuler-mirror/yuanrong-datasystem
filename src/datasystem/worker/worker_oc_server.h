@@ -65,6 +65,7 @@
 #include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/worker_stream.brpc.pb.h"
+#include "datasystem/protos/coordinator.brpc.pb.h"
 // .brpc.pb.h headers above pull in <brpc/controller.h>/<brpc/stream.h> which
 // override LOG/VLOG/DLOG via butil/logging.h. Re-include log.h to restore
 // datasystem's spdlog-based macros.
@@ -656,6 +657,7 @@ private:
     std::unique_ptr<ClientWorkerSCServiceBrpcAdapter> brpcClientWorkerScAdapter_{ nullptr };
     std::unique_ptr<WorkerWorkerSCServiceBrpcAdapter> brpcWorkerWorkerScAdapter_{ nullptr };
     std::unique_ptr<MasterWorkerSCServiceBrpcAdapter> brpcMasterWorkerScAdapter_{ nullptr };
+    std::unique_ptr<coordinator::CoordinatorWatchServiceBrpcAdapter> brpcCoordinatorWatchAdapter_{ nullptr };
     std::future<Status> clientWorkerCommonSvcStatus_;
     // Object cache rpc service for worker request.
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };
