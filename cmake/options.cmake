@@ -15,4 +15,7 @@ option(BUILD_HETERO_GPU "Build GPU (CUDA) heterogeneous support" OFF)
 
 # pipeline h2d
 option(BUILD_PIPLN_H2D "Build os pipeline h2d" OFF)
-
+if(BUILD_PIPLN_H2D)
+    message(STATUS "BUILD_PIPLN_H2D is temporarily disabled; forcing BUILD_PIPLN_H2D=OFF")
+    set(BUILD_PIPLN_H2D OFF CACHE BOOL "Build os pipeline h2d" FORCE)
+endif()

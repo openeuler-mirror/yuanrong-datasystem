@@ -835,6 +835,9 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
     workerApi_[next] = candidateWorkerApi;
     listenWorker_[next] = candidateListenWorker;
     currentNode_ = next;
+    if (mmapManager_ != nullptr) {
+        mmapManager_->CleanInvalidMmapTable();
+    }
     // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
     // otherwise it is still the only recovery path.
     if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()
@@ -883,6 +886,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
         LOG(WARNING) << FormatString("[Switch] Fast transport init failed for worker(%s), with status: %s",
                                      standbyWorker.ToString(), rc.ToString());
     }
+
     if (!WaitStandbyWorkerReady(candidateWorkerApi)) {
         LOG(ERROR) << FormatString("[Switch] client %s wait for worker %s ready failed", GetClientId(),
                                    candidateWorkerApi->hostPort_.ToString());

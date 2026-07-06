@@ -102,6 +102,13 @@ function is_on() {
   fi
 }
 
+function normalize_build_options() {
+  if is_on "${BUILD_PIPLN_H2D}"; then
+    echo -e "-- [Warning] Pipeline H2D is temporarily disabled. Ignoring -T on."
+    BUILD_PIPLN_H2D="off"
+  fi
+}
+
 function check_number() {
   local number_check
   number_check='^([0-9]+)$'
