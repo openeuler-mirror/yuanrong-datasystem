@@ -109,9 +109,8 @@ void CleanupWorkerWorkerOcRpcChannel(
     std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> &clientApi,
     std::shared_ptr<WorkerRemoteWorkerOCApi> &workerStub, Status rc, const std::string &stage)
 {
-    LOG(WARNING) << "PipelineH2D remote get " << stage
-                 << " failed. Clean worker-worker OC rpc channel to avoid reusing stale ZMQ route. address=" << address
-                 << ", rc=" << rc.ToString();
+    LOG(WARNING) << PIPLN_LOG_PREFIX" Remote get " << stage << " failed: address=" << address
+                 << ", error=" << rc.ToString() << ". Clean RPC channel.";
 
     // Drop current per-call stream and shared stub before removing the cached stub.
     // Otherwise RpcStubCacheMgr::Remove may fail because the cached stub is still held by this request.
@@ -120,10 +119,10 @@ void CleanupWorkerWorkerOcRpcChannel(
 
     auto removeRc = RpcStubCacheMgr::Instance().Remove(hostAddr, StubType::WORKER_WORKER_OC_SVC);
     if (removeRc.IsError()) {
-        LOG(WARNING) << "Remove cached WORKER_WORKER_OC_SVC rpc stub failed, address=" << address
-                     << ", removeRc=" << removeRc.ToString();
+        LOG(WARNING) << PIPLN_LOG_PREFIX" Remove RPC stub failed: address=" << address
+                     << ", error=" << removeRc.ToString();
     } else {
-        LOG(WARNING) << "Remove cached WORKER_WORKER_OC_SVC rpc stub success, address=" << address;
+        LOG(WARNING) << PIPLN_LOG_PREFIX" Remove RPC stub success: address=" << address;
     }
 }
 }  // namespace

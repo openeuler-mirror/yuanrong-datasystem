@@ -122,8 +122,6 @@ CudaRTLibLoader *CudaRTLibLoader::Instance()
 void CudaRTLibLoader::Load()
 {
     LibLoaderBase::Load();
-    DLSYM_FUNC_OBJ(cudaSetDevice, handle_);
-    DLSYM_FUNC_OBJ(cudaDeviceReset, handle_);
     DLSYM_FUNC_OBJ(cudaIpcOpenMemHandle, handle_);
     DLSYM_FUNC_OBJ(cudaStreamCreateWithFlags, handle_);
     DLSYM_FUNC_OBJ(cudaEventCreate, handle_);
@@ -142,8 +140,6 @@ void CudaRTLibLoader::Load()
 void CudaRTLibLoader::UnLoad()
 {
     LibLoaderBase::UnLoad();
-    DLSYM_FUNC_OBJ_DESTROY(cudaSetDevice);
-    DLSYM_FUNC_OBJ_DESTROY(cudaDeviceReset);
     DLSYM_FUNC_OBJ_DESTROY(cudaIpcOpenMemHandle);
     DLSYM_FUNC_OBJ_DESTROY(cudaStreamCreateWithFlags);
     DLSYM_FUNC_OBJ_DESTROY(cudaStreamDestroy);

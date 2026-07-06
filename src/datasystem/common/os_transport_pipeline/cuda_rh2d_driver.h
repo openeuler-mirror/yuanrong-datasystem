@@ -46,30 +46,17 @@ public:
     Status WaitIO() override;
     Status Release() override;
 
-    static Status LoadGpuIds();
     static Status RegisterHostMemory(void *ptr, size_t size);
     static void UnRegisterHostMemory(void *ptr);
-    static void SwitchToAndGetGpuId(const std::string &uuid);
-    static std::unordered_map<std::string, int32_t> &GetDevIdMap();
 
 private:
-    Status CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const std::string &funcName);
     bool UseExternalStream() const;
     cudaEvent_t GetSelfEvent(bool createIfNotExists);
     void RemoveSelfEvent();
     void RemoveSelfStream();
-    Status ResetContext();
-    struct PinnedHostMemoryInfo {
-        void *ptr = nullptr;
-        size_t size = 0;
-    };
 
-    static inline bool inited_ = false;
-    static inline std::shared_mutex initMutex_;
-    static inline int currentDevId_ = -1;
     cudaStream_t stream_ = nullptr;
     cudaEvent_t event_ = nullptr;
-    static std::unordered_map<std::string, int32_t> uuidToDevIdMap_;
 };
 }  // namespace OsXprtPipln
 
@@ -104,10 +91,6 @@ public:
     {
         return Status::OK();
     }
-    static Status LoadGpuIds()
-    {
-        return Status::OK();
-    }
     static Status RegisterHostMemory(void *ptr, size_t size)
     {
         (void)ptr;
@@ -118,14 +101,6 @@ public:
     {
         (void)ptr;
     }
-    static void SwitchToAndGetGpuId(const std::string &uuid)
-    {
-        (void)uuid;
-    }
-    static std::unordered_map<std::string, int32_t> GetDevIdMap()
-    {
-        return std::unordered_map<std::string, int32_t>();
-    };
 };
 }  // namespace OsXprtPipln
 

@@ -106,9 +106,14 @@ Status ChunkManager::AddKey(const std::string &key, uint32_t reqId, const DevShm
     }
 
     auto &reqInfo = reqInfos_[reqId];
-    VLOG(2) << "Add Rh2d Key " << key << " reqId " << reqId;
+    // Record start time for performance analysis
+    reqInfo.startTimeMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    VLOG(1) << PIPLN_LOG_PREFIX " Request started: key=" << key << ", reqId=" << reqId;
     RETURN_IF_NOT_OK(BaseRH2DDriver::GetDriver(reqId, devInfo, isClient_, reqInfo.driver));
     reqInfo.key = key;
+    reqInfo.reqId = reqId;
 
     keyToReqIdMap_[key] = reqId;
     if (index != -1)
@@ -120,8 +125,8 @@ Status ChunkManager::AddKey(const std::string &key, uint32_t reqId, const DevShm
 void ChunkManager::AddReqIdMap(uint32_t serverReqId, uint32_t clientReqId)
 {
     if (reqInfos_.find(serverReqId) == reqInfos_.end()) {
-        LOG(WARNING) << "map server " << serverReqId << " -> client " << clientReqId
-                     << " failed, worker reqId is not found";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " Map reqId failed: serverReqId=" << serverReqId
+                     << " -> clientReqId=" << clientReqId << ", server reqId not found";
     }
     reqIdMap_[serverReqId] = clientReqId;
 }
@@ -133,8 +138,8 @@ void ChunkManager::RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueCon
         [this](uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize) {
             std::shared_lock<std::shared_mutex> l(this->releaseMutex, std::try_to_lock);
             if (!l.owns_lock()) {
-                LOG(WARNING) << "chunk manager is released, ignore consume chunk ("
-                             << ChunkTag::DebugString(chunkTag, chunkSize) << ")";
+                LOG(WARNING) << PIPLN_LOG_PREFIX " ChunkManager released, ignore chunk: "
+                             << ChunkTag::DebugString(chunkTag, chunkSize);
                 return;
             }
             this->DoPiplnStep2_ChunkConsume(reqId, dataSrc, chunkTag, chunkSize);
@@ -148,14 +153,14 @@ void ChunkManager::DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, C
 {
     auto it = reqInfos_.find(reqId);
     if (it == reqInfos_.end()) {
-        LOG(WARNING) << "reqId is not registered, ignore consume chunk(" << ChunkTag::DebugString(chunkTag, chunkSize)
-                     << ")";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " ReqId not registered, ignore chunk: reqId=" << reqId
+                     << ", chunk=" << ChunkTag::DebugString(chunkTag, chunkSize);
         return;
     }
     auto &info = it->second;
     if (info.IsCanceledOrDone()) {
-        LOG(WARNING) << "request is canceled, ignore consume chunk(" << ChunkTag::DebugString(chunkTag, chunkSize)
-                     << ")";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " Request canceled, ignore chunk: key=" << info.key << ", reqId=" << reqId
+                     << ", chunk=" << ChunkTag::DebugString(chunkTag, chunkSize);
         return;
     }
 
@@ -166,26 +171,32 @@ void ChunkManager::DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, C
     } else {
         dataOffset = chunkSize * chunkTag.chunkId;
     }
+    info.RecordFirstChunkElapse();
     info.receivedChunks++;
+    info.receivedChunksDetail.Reserve(chunkTag.chunkId + 1);
+    info.receivedChunksDetail.Set(chunkTag.chunkId);
 
     dataSrc += dataOffset;
     PIPLN_DEBUG_LOG_DATA_RAW("Before SubmitIO", info.key, reqId, dataSrc, chunkSize);
     Status rc = DoPiplnStep3_SubmitIO(info, reinterpret_cast<void *>(dataSrc), chunkSize, dataOffset);
-    LOG_IF_ERROR(rc, "submit io for chunk failed (" + ChunkTag::DebugString(chunkTag, chunkSize) + ")");
+    LOG_IF_ERROR(rc, PIPLN_LOG_PREFIX " SubmitIO failed: key=" + info.key + ", reqId=" + std::to_string(reqId)
+                         + ", chunk=" + ChunkTag::DebugString(chunkTag, chunkSize));
     if (rc.IsError()) {
         info.failedChunkId = chunkTag.chunkId;
         MarkCancelOrDone(reqId, false /* isDone */);  // prevent following chunks
-    } else if (info.totalChunks == info.receivedChunks) {
+    } else if (info.totalChunks != 0 && info.totalChunks <= info.receivedChunks
+               && info.receivedChunksDetail.IsAllSet()) {
         MarkCancelOrDone(reqId, true /* isDone */);  // is done
     } else if (ChunkTag::IsLastChunk(chunkTag) && chunkTag.chunkId == 0) {
-        VLOG(1) << "received " << (info.receivedChunks - 1)
-                << " chunks from worker2 and worker1 triggered sending one total chunk again";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " Worker2 chunk failed, worker1 retries: key=" << info.key
+                     << ", receivedChunks=" << (info.receivedChunks - 1);
         /**
          * if some chunk from remote worker2 failed, worker1 may fetch data
          * from other node and trigger local sending total chunk again.
          * hack here for this condition
          */
         info.receivedChunks = 1;
+        info.receivedChunksDetail.Resize(1);
         MarkCancelOrDone(reqId, true /* isDone */);  // is done
     }
 }
@@ -206,7 +217,7 @@ void ChunkManager::RegisterPipelineProducer(std::shared_ptr<PipelineRH2DQueuePro
 Status ChunkManager::DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(pipelineProducer_ != nullptr, StatusCode::K_RUNTIME_ERROR,
-                                         "pipelineProducer_ is null");
+                                         PIPLN_LOG_PREFIX " pipelineProducer_ is null");
 
     VLOG(2) << "DoPiplnStep2_ChunkProduce: " << ChunkTag::DebugString(chunkTag);
     if (reqIdMap_.find(chunkTag.reqId) == reqIdMap_.end()) {
@@ -225,6 +236,8 @@ Status ChunkManager::DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag)
         info.totalChunks = chunkTag.chunkId + 1;
     }
     info.receivedChunks++;
+    info.receivedChunksDetail.Reserve(chunkTag.chunkId + 1);
+    info.receivedChunksDetail.Set(chunkTag.chunkId);
     const uint64_t objectSize = info.objectSize != 0 ? info.objectSize : info.driver->targetSize;
     const uint32_t actualChunkSize = ChunkTag::ResolveChunkSize(chunkTag, objectSize);
 
@@ -234,13 +247,18 @@ Status ChunkManager::DoPiplnStep2_ChunkProduce(const ChunkTag &chunkTag)
     // shmfd and shmoffset is set in DoPiplnStep1_StartReceiver
     PipelineRH2DMsg msg{ (int32_t)actualChunkSize, info.driver->GetShmFd(), info.driver->GetShmSize(),
                          info.driver->GetShmOffset(), newTag };
+    // Log when last chunk is produced (chunk level -> VLOG(2))
+    if (ChunkTag::IsLastChunk(chunkTag)) {
+        VLOG(2) << PIPLN_LOG_PREFIX " All chunks produced: key=" << info.key << ", reqId=" << chunkTag.reqId
+                << ", chunks=" << info.totalChunks;
+    }
     VLOG(2) << "before ProduceOne serverReqId " << chunkTag.reqId << " clientReqId " << newTag.reqId << " key "
             << info.key;
     Status rc = pipelineProducer_->ProduceOne(queueId_, msg);
     if (rc.IsError()) {
         if (info.failedChunkId == -1) {
-            LOG(WARNING) << "produce chunk failed queueId " << queueId_ << " chunk(" << ChunkTag::DebugString(chunkTag)
-                         << ") detail:" << rc.GetMsg();
+            LOG(WARNING) << PIPLN_LOG_PREFIX " Produce chunk failed: key=" << info.key << ", queueId=" << queueId_
+                         << ", chunk=" << ChunkTag::DebugString(chunkTag) << ", error=" << rc.GetMsg();
             info.failedChunkId = chunkTag.chunkId;
         }
         MarkCancelOrDone(chunkTag.reqId, false /* isDone */);
@@ -265,10 +283,12 @@ Status ChunkManager::GetReqId(const std::string &key, uint32_t &reqId)
 bool ChunkManager::CheckIsRequestSuccess(uint32_t reqId)
 {
     auto info = GetReqInfo(reqId);
-    bool success = (info->totalChunks != 0 && info->totalChunks == info->receivedChunks && info->failedChunkId == -1);
+    bool success = (info->totalChunks != 0 && info->failedChunkId == -1 && info->receivedChunksDetail.IsAllSet());
     if (!success) {
-        LOG(WARNING) << "unsuccess request key: " << info->key << " totalChunk:" << info->totalChunks
-                     << " receivedChunks:" << info->receivedChunks << " failedChunkId:" << info->failedChunkId;
+        LOG(WARNING) << PIPLN_LOG_PREFIX " Request incomplete: key=" << info->key
+                     << ", totalChunks=" << info->totalChunks << ", received=" << info->receivedChunks
+                     << ", failedChunkId=" << info->failedChunkId
+                     << ", unreceived chunks:" << info->receivedChunksDetail.DebugUnsetString();
     }
     return success;
 }
@@ -282,7 +302,7 @@ int ChunkManager::DoPiplnStep1_ReceiveCallback(void *arg)
     ChunkManager *mgr = nullptr;
     auto it = reqIdToChkMgrMap_.find(tag.reqId);
     if (it == reqIdToChkMgrMap_.end()) {
-        LOG(WARNING) << "no reqId to ChunkManager map, ignore produce chunk (" << ChunkTag::DebugString(tag) << ")";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " No reqId map, ignore chunk: chunk=" << ChunkTag::DebugString(tag);
         reqIdToChkMgrMapMutex_.unlock();
         return -1;
     }
@@ -293,12 +313,13 @@ int ChunkManager::DoPiplnStep1_ReceiveCallback(void *arg)
         std::shared_lock<std::shared_mutex> l(mgr->releaseMutex, std::try_to_lock);
         reqIdToChkMgrMapMutex_.unlock();
         if (!l.owns_lock()) {
-            LOG(WARNING) << "chunk manager maybe released, ignore produce chunk (" << ChunkTag::DebugString(tag) << ")";
+            LOG(WARNING) << PIPLN_LOG_PREFIX " ChunkManager maybe released, ignore chunk: chunk="
+                         << ChunkTag::DebugString(tag);
             return -1;
         }
         Status rc = mgr->DoPiplnStep2_ChunkProduce(tag);
         if (rc.IsError()) {
-            LOG_IF_ERROR(rc, "produce chunk failed for " + ChunkTag::DebugString(tag));
+            LOG_IF_ERROR(rc, PIPLN_LOG_PREFIX " Produce chunk failed: chunk=" + ChunkTag::DebugString(tag));
             return -1;
         }
     }
@@ -365,7 +386,19 @@ ReqInfo *ChunkManager::GetReqInfoByIndex(int32_t keyIndex)
 
 static void OsLogCallback(int level, const char *msg)
 {
-    datasystem::LogMessage((datasystem::LogSeverity)level, __FILE__, __LINE__).Stream() << msg;
+    // verbose log level is INFO
+    static int mask = 0xff;
+    static int debugLevel = (-1) & mask;
+    int logLevel = level & mask;
+    int vLevel = (level >> 8) & mask;
+    if (logLevel == debugLevel) {
+        if (FLAGS_v < vLevel) {
+            return;
+        }
+        logLevel = 0;
+    }
+
+    datasystem::LogMessage((datasystem::LogSeverity)logLevel, __FILE__, __LINE__).Stream() << msg;
 }
 
 Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, urma_jfce_t *jfce, uint32_t jettySize,
@@ -381,27 +414,11 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
 
     DO_LOAD_OS_TRANSPORT();
 
-    if (needCuda) {
-#ifndef PIPLN_USE_MOCK
-        DO_LOAD_DYNLIB(CudaRTLibLoader);
-        if (!IS_VALID_DYNFUNC(CudaRTLibLoader, cudaSetDevice)) {
-            DO_UNLOAD_OS_TRANSPORT();
-            return Status(StatusCode::K_NOT_FOUND, "failed to load CudaRTLibLoader");
-        }
-
-        Status loadRet = CudaRH2DDriver::LoadGpuIds();
-        if (loadRet.IsError()) {
-            LOG(ERROR) << "failed to LoadGpuIds:" + loadRet.GetMsg();
-        } else {
-            for (auto &it : CudaRH2DDriver::GetDevIdMap()) {
-                LOG(INFO) << "find gpu id " << it.second << " uuid: " << it.first;
-            }
-        }
-#endif
-    }
-
     int ret;
-    CALL_OS_XPRT_FUNC(ret, DoLogReg, FLAGS_minloglevel, OsLogCallback);
+    // if minloglevel is INFO, hack it to DEBUG level
+    // FLAGS_v will control debug verbose level in OsLogCallback
+    int libLogLevel = (FLAGS_minloglevel == 0) ? -1 : FLAGS_minloglevel;
+    CALL_OS_XPRT_FUNC(ret, DoLogReg, libLogLevel, OsLogCallback);
     CALL_OS_XPRT_FUNC(ret, DoInit, ctx, &cfg, &osPiplnH2DHandle_);
     if (ret == 0) {
         return Status::OK();
@@ -409,7 +426,7 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
         osPiplnH2DHandle_ = nullptr;
         DO_UNLOAD_OS_TRANSPORT();
         DO_UNLOAD_DYNLIB(CudaRTLibLoader);
-        LOG(ERROR) << "os_transport_init ret: " << ret;
+        LOG(ERROR) << PIPLN_LOG_PREFIX " os_transport_init failed: ret=" << ret;
         return Status(StatusCode::K_INVALID, "Failed to init os pipeline h2d environments");
     }
 
@@ -463,6 +480,10 @@ Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)
     if (ret) {
         return Status(StatusCode::K_RUNTIME_ERROR, "os_transport_send " + std::to_string(reqId) + " failed");
     }
+
+    // trick CheckIsRequestSuccess to be success, because we cannot get chunk number from os_transport_send now.
+    info->totalChunks = 1;
+    info->receivedChunks = 1;
     return Status::OK();
 }
 
@@ -476,26 +497,29 @@ Status ChunkManager::WaitPiplnStep12Done()
             bool done = info.second.WaitCancelOrDone(remainingTimeMs);
             if (!done && !info.second.IsCanceled()) {
                 MarkCancelOrDone(info.first, false /* isDone */);
-                LOG_AND_SET_FIRST_ERROR(K_RPC_DEADLINE_EXCEEDED,
-                                        "pipeline rh2d timeout while waiting client notify queue for request "
-                                            + std::to_string(info.first) + ", key=" + info.second.key);
+                LOG_AND_SET_FIRST_ERROR(K_RPC_DEADLINE_EXCEEDED, PIPLN_LOG_PREFIX " Client wait queue timeout: reqId="
+                                                                     + std::to_string(info.first)
+                                                                     + ", key=" + info.second.key);
             }
         } else {
             // worker wait step 1,2 done
             task_sync_t *syncHandle = (task_sync_t *)info.second.syncHandle;
             if (syncHandle) {
                 info.second.syncHandle = nullptr;
-                int ret;
+                LOG(WARNING) << PIPLN_LOG_PREFIX
+                "wait_and_free_sync_timeout is not found, fallback to wait_and_free_sync without timeout";
                 datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
-                CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
+
+                int ret;
+                CALL_OS_XPRT_FUNC(ret, DoWait, osPiplnH2DHandle_, syncHandle);
                 if (ret == 0) {
                     MarkCancelOrDone(info.first, true /* isDone */);
                 } else {
                     MarkCancelOrDone(info.first, false /* isDone */);
                     LOG_AND_SET_FIRST_ERROR(
                         K_RPC_DEADLINE_EXCEEDED,
-                        "pipeline rh2d timeout or failed while waiting os_transport tasks for request "
-                            + std::to_string(info.first) + ", key=" + info.second.key + ", ret=" + std::to_string(ret));
+                        PIPLN_LOG_PREFIX " Worker wait os_transport timeout/failed: reqId=" + std::to_string(info.first)
+                            + ", key=" + info.second.key + ", ret=" + std::to_string(ret));
                 }
             }
         }
@@ -507,15 +531,15 @@ Status ChunkManager::DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmF
                                                     size_t srcSize)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(pipelineProducer_ != nullptr, StatusCode::K_RUNTIME_ERROR,
-                                         "pipelineProducer_ is null");
+                                         PIPLN_LOG_PREFIX " pipelineProducer_ is null");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         reqIdMap_.find(reqId) != reqIdMap_.end(), StatusCode::K_RUNTIME_ERROR,
-        "server reqId " + std::to_string(reqId) + " has no client reqId map, ignore this chunk.");
+        PIPLN_LOG_PREFIX " server reqId " + std::to_string(reqId) + " has no client reqId map, ignore this chunk.");
     auto clientReqId = reqIdMap_[reqId];
 
     auto it = reqInfos_.find(reqId);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(it != reqInfos_.end(), StatusCode::K_NOT_FOUND,
-                                         "no requestid " + std::to_string(reqId));
+                                         PIPLN_LOG_PREFIX " no requestid " + std::to_string(reqId));
     auto &info = it->second;
 
     // local chunk produce maybe triggered before
@@ -532,15 +556,15 @@ Status ChunkManager::DoPiplnStep2_ProduceLocalChunk(uint32_t reqId, int32_t shmF
     info.driver->SetShmFd(shmFd);
     info.driver->SetShmSize(shmSize);
     info.driver->SetShmOffset(shmOffset);
-    VLOG(1) << "DoPiplnStep2_ProduceLocalChunk: " << ChunkTag::DebugString(tag, info.driver->GetShmSize())
-            << " serverReqId " << reqId << " key " << info.key;
+    VLOG(1) << PIPLN_LOG_PREFIX " DoPiplnStep2_ProduceLocalChunk: "
+            << ChunkTag::DebugString(tag, info.driver->GetShmSize()) << " serverReqId " << reqId << " key " << info.key;
     PipelineRH2DMsg msg{ (int32_t)srcSize, info.driver->GetShmFd(), info.driver->GetShmSize(),
                          info.driver->GetShmOffset(), tag };
     Status ret = pipelineProducer_->ProduceOne(queueId_, msg);
     if (ret.IsError()) {
         info.failedChunkId = 0;
-        LOG_IF_ERROR(ret, "failed to produce local chunk for " + std::to_string(reqId) + " client reqId "
-                              + std::to_string(clientReqId));
+        LOG_IF_ERROR(ret, PIPLN_LOG_PREFIX " failed to produce local chunk for " + std::to_string(reqId)
+                              + " client reqId " + std::to_string(clientReqId));
         MarkCancelOrDone(reqId, false /* isDone */);
     } else {
         info.doneStep = PIPLN_DONE_TWO_STEP;
@@ -570,7 +594,8 @@ Status ChunkManager::WaitAll()
     for (auto &req : reqInfos_) {
         Status ret = req.second.driver->WaitIO();
         if (ret.IsError()) {
-            LOG_AND_SET_FIRST_ERROR(K_IO_ERROR, req.second.key + " IO failed:" + ret.GetMsg());
+            LOG_AND_SET_FIRST_ERROR(K_IO_ERROR, PIPLN_LOG_PREFIX " cudaMemcpyAsync failed: key=" + req.second.key
+                                                    + ", error=" + ret.GetMsg());
         } else {
             (void)CheckIsRequestSuccess(req.first);
         }
@@ -582,7 +607,7 @@ Status ChunkManager::WaitAll()
 void ChunkManager::DebugPrintAllPipelineStatus()
 {
     for (auto &it : reqInfos_) {
-        LOG(ERROR) << "reqId " << it.first << " " << it.second.DebugString();
+        LOG(INFO) << "reqId " << it.first << " " << it.second.DebugString();
     }
 }
 
@@ -625,12 +650,22 @@ void ChunkManager::MarkCancelOrDone(const std::string &key, bool isDone)
 void ChunkManager::MarkCancelOrDone(uint32_t reqId, bool isDone)
 {
     ReqInfo *info = GetReqInfo(reqId);
+    // Calculate elapsed time for performance analysis
+    int64_t elapsedMs = 0;
+    if (info->startTimeMs > 0) {
+        elapsedMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count()
+            - info->startTimeMs;
+    }
     if (reqIdMap_.find(reqId) == reqIdMap_.end()) {
-        VLOG(1) << (isDone ? "done " : "cancel") << " key " << info->key << " reqId " << reqId << " receive Chunk "
-                << info->receivedChunks;
+        VLOG(1) << PIPLN_LOG_PREFIX " Request " << (isDone ? "completed" : "canceled") << ": key=" << info->key
+                << ", reqId=" << reqId << ", chunks=" << info->receivedChunks << "/" << info->totalChunks
+                << ", elapsed=" << elapsedMs << "ms";
     } else {
-        VLOG(1) << (isDone ? "done " : "cancel") << " key " << info->key << " reqId " << reqId << " clientReqId "
-                << reqIdMap_[reqId] << " receive Chunk " << info->receivedChunks;
+        VLOG(1) << PIPLN_LOG_PREFIX " Request " << (isDone ? "completed" : "canceled") << ": key=" << info->key
+                << ", reqId=" << reqId << ", clientReqId=" << reqIdMap_[reqId] << ", chunks=" << info->receivedChunks
+                << "/" << info->totalChunks << ", elapsed=" << elapsedMs << "ms";
     }
     {
         std::lock_guard<std::mutex> lock(info->promiseMutex);
@@ -660,7 +695,7 @@ bool ChunkManager::DoPiplnStep1_ReceiveUrmaEventHook(urma_cr_t *cr)
     }
     uint32_t low = (uint32_t)cr->user_ctx;
     uint32_t high = (uint32_t)(cr->user_ctx >> 32);
-    VLOG(1) << "RH2D:DoPiplnStep1_ReceiveUrmaEventHook " << ret << " cr.user_ctx high:" << high << " low:" << low;
+    VLOG(2) << "RH2D:DoPiplnStep1_ReceiveUrmaEventHook " << ret << " cr.user_ctx high:" << high << " low:" << low;
     if (ret == -1)
         return false;
     return true;
@@ -696,6 +731,22 @@ void ReqInfo::Cancel()
 void ReqInfo::Done()
 {
     canceledOrDonePromise.set_value(true);
+}
+
+void ReqInfo::RecordFirstChunkElapse()
+{
+    // Log when first chunk arrives for performance analysis (chunk level -> VLOG(2))
+    if (receivedChunks == 0) {
+        int64_t elapsedMs = 0;
+        if (startTimeMs > 0) {
+            elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count()
+                        - startTimeMs;
+        }
+        VLOG(2) << PIPLN_LOG_PREFIX " First chunk arrived: key=" << key << ", reqId=" << reqId
+                << ", elapsed=" << elapsedMs << "ms";
+    }
 }
 
 bool ReqInfo::WaitCancelOrDone()

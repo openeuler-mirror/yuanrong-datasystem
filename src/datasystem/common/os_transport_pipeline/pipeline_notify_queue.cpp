@@ -262,11 +262,11 @@ Status PipelineRH2DQueueConsumer::RegisterHostMemory(int workerFd, void *ptr, si
 
     auto ret = CudaRH2DDriver::RegisterHostMemory(ptr, size);
     if (ret.IsError()) {
-        VLOG(1) << "RegisterHostMemory failed, worker fd: " << workerFd << " ptr " << ptr << "(size:" << size
-                << ") reason: " << ret.GetMsg();
+        LOG(WARNING) << PIPLN_LOG_PREFIX " cudaHostRegister failed: fd=" << workerFd << ", size=" << size
+                     << ", error=" << ret.GetMsg();
         return ret;
     } else {
-        VLOG(2) << "Pipeline RH2D cudaHostRegister success, worker fd: " << workerFd << " ptr " << ptr
+        VLOG(1) << "Pipeline RH2D cudaHostRegister success, worker fd: " << workerFd << " ptr " << ptr
                 << "(size:" << size << ")";
         pinnedHostMemories_.emplace(workerFd, PinnedHostMemoryInfo{ ptr, size });
         return Status::OK();
@@ -278,21 +278,15 @@ void PipelineRH2DQueueConsumer::ConsumeOne(uint8_t *element)
     PipelineRH2DMsg *msg = (PipelineRH2DMsg *)(element);
     VLOG(2) << "start ConsumeOne " << msg->DebugString() << " chunkSize " << msg->chunkSize;
     if (msg->shmFd <= 0 || msg->shmSize == 0) {
-        LOG(WARNING) << "RH2D: Pipeline RH2D invaild shm msg, skip!";
+        LOG(WARNING) << PIPLN_LOG_PREFIX " Invalid shm msg, skip!";
         return;
     }
     auto shmUnit = std::make_shared<ShmUnitInfo>(msg->shmFd, msg->shmSize);
     // convert fd to local pointer, see LookupUnitsAndMmapFd
     Status rc = converter_->operator()(shmUnit);
     if (rc.IsError()) {
-        LOG(ERROR) << "Pipeline RH2D mmap shm failed: " << rc.ToString() << ", " << msg->DebugString();
+        LOG(ERROR) << PIPLN_LOG_PREFIX " mmap shm failed: " << rc.ToString() << ", msg=" << msg->DebugString();
         return;
-    }
-
-    // Fallback for data shm arenas created after RegisterClient. This call is idempotent for an already pinned fd.
-    rc = RegisterHostMemory(msg->shmFd, shmUnit->GetPointer(), msg->shmSize);
-    if (rc.IsError()) {
-        LOG(ERROR) << "Pipeline RH2D cudaHostRegister failed: " << rc.ToString() << ", " << msg->DebugString();
     }
 
     uint64_t dataSrc = (uint64_t)shmUnit->GetPointer() + msg->shmOffset;
@@ -301,7 +295,7 @@ void PipelineRH2DQueueConsumer::ConsumeOne(uint8_t *element)
         std::lock_guard<std::mutex> l(mutex_);
         auto it = msgHandlers_.find(msg->chunkTag.reqId);
         if (it == msgHandlers_.end()) {
-            LOG(WARNING) << "no callback for " << msg->chunkTag.reqId << ", ignore it";
+            LOG(WARNING) << PIPLN_LOG_PREFIX " No callback for reqId=" << msg->chunkTag.reqId << ", ignore msg";
             return;
         }
         handler = it->second;
@@ -322,15 +316,15 @@ void PipelineRH2DQueueConsumer::ConsumerLoop()
         }
         if (futexRc.IsError()) {
             if (futexRc.GetCode() == K_UNKNOWN_ERROR) {
-                LOG(ERROR) << "Get result from wait queue empty : " << futexRc.ToString();
+                LOG(ERROR) << PIPLN_LOG_PREFIX " Wait queue error: " << futexRc.ToString();
             } else {
-                VLOG(1) << "Futex wait timeout, no input pipeline rh2d msg in " << timeoutStruct.tv_nsec << " seconds.";
+                LOG(WARNING) << PIPLN_LOG_PREFIX " Wait msg timeout: no msg in " << timeoutStruct.tv_nsec << " seconds";
             }
             continue;
         }
         auto ret = queue_->WriteLock();
         if (ret.IsError()) {
-            LOG_IF_ERROR(ret, "PipelineRH2DQueueConsumer Failed to add write lock");
+            LOG_IF_ERROR(ret, PIPLN_LOG_PREFIX " PipelineRH2DQueueConsumer Failed to add write lock");
             continue;
         }
         {
@@ -346,7 +340,8 @@ void PipelineRH2DQueueConsumer::ConsumerLoop()
                 ptrdiff_t offset;
                 ShmKey id;
                 queue_->GetQueueShmUnit(fd, mmapSize, offset, id);
-                LOG(ERROR) << "consume pipeline rh2d msg failed fd:" << fd << " offset:" << offset;
+                LOG(WARNING) << PIPLN_LOG_PREFIX " poped no queue msg: fd=" << fd << ", offset=" << offset
+                             << ", shmId:" << id;
                 continue;
             } else {
                 VLOG(2) << "popped " << popSize << " pipeline rh2d msg.";

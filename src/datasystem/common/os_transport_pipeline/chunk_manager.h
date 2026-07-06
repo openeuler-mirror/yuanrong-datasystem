@@ -31,10 +31,13 @@
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_types.h"
 #include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
+#include "datasystem/common/util/dyn_bitmap.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 namespace OsXprtPipln {
 
+using datasystem::DummyRWLock;
+using datasystem::DynBitmap;
 using datasystem::Status;
 using datasystem::StatusCode;
 
@@ -95,21 +98,26 @@ struct ReqInfo {
     bool IsCanceled();
     void Cancel();
     void Done();
+    void RecordFirstChunkElapse();
 
     std::string DebugString();
 
     int32_t receivedChunks = 0;
     int32_t totalChunks = 0;
     int32_t failedChunkId = -1;
+    DynBitmap<DummyRWLock> receivedChunksDetail;
     void *syncHandle = nullptr;
     std::string key;
     std::shared_ptr<BaseRH2DDriver> driver;
+    // For performance tracking: request start time (in milliseconds)
+    int64_t startTimeMs = 0;
     // For worker-side remote pipeline receive, this is the real object payload size for the current request.
     // BaseRH2DDriver::targetSize is reused as shmSize on worker side after SetShmSize(), so it must not be
     // used to recover the last chunk's real size.
     uint64_t objectSize = 0;
     int shmFd;
     int shmOffset;
+    uint32_t reqId;
     /**
      * @brief step before doneStep is all done canceled
      * step1: worker2 -> worker1

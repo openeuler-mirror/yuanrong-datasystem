@@ -729,7 +729,6 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
         rc = InitClientWorkerConnect(enableHeartbeat, false, connectTimeoutMs);
     }
     RETURN_IF_NOT_OK(rc);
-    OsXprtPipln::SwitchToAndGetGpuId(deviceId_);
     LogClientConfigInitSnapshot();
     return Status::OK();
 }
@@ -853,7 +852,7 @@ void ObjectClientImpl::ProcessWorkerLost()
         return mmapManager_->LookupUnitsAndMmapFd("", shmUnitInfo);
     });
     if (rc2.IsError()) {
-        LOG(ERROR) << "[Reconnect] Failed to prepare for pipelineRh2dQueue:" << rc2.ToString();
+        LOG(ERROR) << PIPLN_LOG_PREFIX" Reconnect: InitQueue failed: " << rc2.ToString();
         return;
     }
     listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
@@ -2803,10 +2802,10 @@ std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPip
                 PROCESS_FAILED_KEY("SetShmObjectBuffer failed");
             } else {
                 OsXprtPipln::ChunkTag tag{
+                    .reqId = reqId,
                     .chunkType = OsXprtPipln::ChunkTag::lastChunkTag,
                     .chunkId = 0,
-                    .chunkSize = buffer->GetSize() > OsXprtPipln::ChunkTag::chunkSize2MB ? 1UL : 0UL,
-                    .reqId = reqId,
+                    .chunkSize = buffer->GetSize() > OsXprtPipln::ChunkTag::chunkSize2MB ? 1UL : 0UL
                 };
                 chunkManager->DoPiplnStep2_ChunkConsume(reqId, reinterpret_cast<uint64_t>(buffer->ImmutableData()),
                                                         tag, buffer->GetSize());
@@ -2835,7 +2834,7 @@ Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, Pi
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
 
     if (recvRc.IsError()) {
-        LOG(WARNING) << "PipelineRH2D failed, last error: " << recvRc.GetMsg();
+        LOG(WARNING) << PIPLN_LOG_PREFIX" Pipeline failed, last error: " << recvRc.GetMsg();
     }
 
     if (rsp.objects_size() == 0) {

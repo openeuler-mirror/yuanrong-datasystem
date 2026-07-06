@@ -24,7 +24,7 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_common_api.h"
 
 namespace OsXprtPipln {
-DEFINE_HOOK(Status HoleOnePiplnRH2DQueue(uint32_t &queueId));
+DEFINE_HOOK(Status HoldOnePiplnRH2DQueue(uint32_t &queueId));
 
 DEFINE_HOOK(Status ReleaseAvailableQueue(uint32_t queueId));
 }  // namespace OsXprtPipln
