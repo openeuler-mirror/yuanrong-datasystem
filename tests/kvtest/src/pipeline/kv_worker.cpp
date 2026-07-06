@@ -219,6 +219,8 @@ void KVWorker::PipelineLoop(int threadId) {
         ctx.param.writeMode = WriteMode::NONE_L2_CACHE_EVICT;
         ctx.param.ttlSecond = cfg_.ttlSeconds;
         ctx.verifyFailCount = &metrics_.VerifyFailCounter();
+        ctx.verifyCfg = BuildVerifyConfig(cfg_.verifyLevel, cfg_.verifySampleBytes,
+                                          cfg_.verifySampleStepBytes, cfg_.verifyFailOp);
         ctx.metrics = &metrics_;
 
         bool allOk = ExecutePipeline(pipelineOps_, ctx, metrics_,

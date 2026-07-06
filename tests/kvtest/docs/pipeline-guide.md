@@ -256,20 +256,79 @@ NUMA 节点绑定（同时绑定 CPU + 本地内存，需 `libnuma`）：
 
 ---
 
-## 4. 测试验证清单
+## 4. Get 数据校验
 
-### 4.1 基础写入测试
+`getBuffer` / `mGet` / `cacheGetOrCreate` 命中分支在 Get 返回后对数据做校验。校验级别通过 `verify` 配置块控制，**默认 `size` 级别保持与历史行为一致**（仅比对大小，不使操作失败）。
+
+### 4.1 校验级别
+
+| `verify.level` | 校验内容 | CPU 开销 | 适用场景 |
+|----------------|---------|---------|---------|
+| `off` | 不校验 | 0 | 仅测吞吐，不在意正确性 |
+| `size`（默认） | `buf.GetSize() == expected` | ~1 次比较 | 默认基线，与历史行为一致 |
+| `sample` | size + 首段/尾段/中间均匀采样段内容比对 | 数十 µs/MB（取决于 `sample_bytes`/`sample_step`） | 大对象生产级正确性巡检 |
+| `full` | size + 全量逐字节比对 | ~1 ms/MB（memcpy 量级） | 端到端数据完整性验收 |
+
+### 4.2 采样参数
+
+仅在 `level=sample` 时生效：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `verify.sample_bytes` | `"4KB"` | 每个采样段长度 |
+| `verify.sample_step` | `"1MB"` | 采样段起始间隔（1MB 对象约采样 3 段：首、中、尾） |
+
+采样策略：始终覆盖首段 `[0, sample_bytes)` 和尾段 `[size-sample_bytes, size)`，中间每隔 `sample_step` 取一段。8MB 对象 + 默认参数约扫描 12KB（< 0.2%）。
+
+### 4.3 失败处理
+
+```json
+{"verify": {"level": "sample", "fail_op": true}}
+```
+
+- `fail_op=false`（默认）：校验失败时 `verify_fail` 计数 +1 并打印 `SLOG_WARN`，但**操作仍计为成功**（与历史一致，不污染成功率基线）。
+- `fail_op=true`：校验失败时操作**计为失败**（Fail +1），同时 `verify_fail` 也 +1，便于在指标层区分"RPC 失败"与"数据损坏"。
+
+> **注意（行为变更）：** `cacheGetOrCreate` 命中分支此前不做任何校验；启用默认 `size` 级别后会开始检查大小并在不匹配时打印告警。命中率统计不受影响（key 存在即计为 hit），仅多出 `verify_fail` 计数与日志。
+
+### 4.4 配置示例
+
+端到端内容验收（采样）：
+```json
+{
+  "verify": {"level": "sample", "sample_bytes": "4KB", "sample_step": "1MB", "fail_op": true}
+}
+```
+
+完全校验（小对象 / 验收场景）：
+```json
+{
+  "data_sizes": ["4KB", "64KB"],
+  "verify": {"level": "full", "fail_op": true}
+}
+```
+
+关闭校验（纯吞吐压测）：
+```json
+{"verify": {"level": "off"}}
+```
+
+---
+
+## 5. 测试验证清单
+
+### 5.1 基础写入测试
 - [ ] `setStringView` pipeline 正常写入，QPS 接近 target_qps
 - [ ] `getBuffer` 读取成功，数据大小校验通过
 - [ ] Summary 文件生成，数据与 CSV 一致
 
-### 4.2 多实例部署测试
+### 5.2 多实例部署测试
 - [ ] Writer + Reader 正常启动和通信
 - [ ] Reader 收到预热通知后开始读取
 - [ ] 跨节点 getBuffer 指标反映远端读取
 - [ ] 无操作失败（Fail = 0）
 
-### 4.3 Worker 端验证
+### 5.3 Worker 端验证
 - [ ] Worker access.log 记录所有操作
 - [ ] GET 延迟 p99 < 预期阈值（1MB 对象通常 < 1ms）
 - [ ] PUBLISH 延迟 p99 < 预期阈值

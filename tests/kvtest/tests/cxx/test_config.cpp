@@ -752,3 +752,89 @@ TEST(LoadConfig_BenchmarkWithAffinity) {
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
 }
+
+// --- verify config ---
+
+TEST(LoadConfig_Verify_Default) {
+    auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.verifyLevel, std::string("size"));
+    ASSERT_EQ(cfg.verifySampleBytes, 4096ULL);
+    ASSERT_EQ(cfg.verifySampleStepBytes, 1024ULL * 1024);
+    ASSERT_FALSE(cfg.verifyFailOp);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_FullWithFailOp) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"full","fail_op":true}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.verifyLevel, std::string("full"));
+    ASSERT_TRUE(cfg.verifyFailOp);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_SampleSizeStrings) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"sample","sample_bytes":"8KB","sample_step":"512KB"}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.verifyLevel, std::string("sample"));
+    ASSERT_EQ(cfg.verifySampleBytes, 8192ULL);
+    ASSERT_EQ(cfg.verifySampleStepBytes, 512ULL * 1024);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_SampleSizeInts) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"sample","sample_bytes":2048,"sample_step":65536}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.verifySampleBytes, 2048ULL);
+    ASSERT_EQ(cfg.verifySampleStepBytes, 65536ULL);
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_OffLevel) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"off"}
+    })");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.verifyLevel, std::string("off"));
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_BadLevelRejected) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"strict"}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_Verify_ZeroSampleBytesRejected) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "verify":{"level":"sample","sample_bytes":0}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
+    std::remove(path.c_str());
+}

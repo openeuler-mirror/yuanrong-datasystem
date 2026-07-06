@@ -101,6 +101,12 @@ struct Config {
     // Mixed workload fields
     double setRatio = 0.5;
     MixedKeyStrategy mixedKeyStrategy = MixedKeyStrategy::SAME_KEYS;
+    // Data verification (pipeline/cache get paths). Default preserves legacy
+    // behavior: size-only check that does not fail the op.
+    std::string verifyLevel = "size";              // off | size | sample | full
+    uint64_t verifySampleBytes = 4096;             // per-segment sample length
+    uint64_t verifySampleStepBytes = 1024 * 1024;  // distance between sample segment starts
+    bool verifyFailOp = false;                     // true = verify failure fails the op
 };
 
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024

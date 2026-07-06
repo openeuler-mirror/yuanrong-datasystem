@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor CPU and memory usage of a process by name."""
+"""Monitor CPU, memory, and file-descriptor usage of a process by name."""
 
 import argparse
 import atexit
@@ -48,6 +48,21 @@ def read_proc_statm(pid):
         return None
 
 
+def read_proc_fd_count(pid):
+    """Count open file descriptors from /proc/<pid>/fd.
+
+    Each directory entry is a symlink named after an FD number, so the entry
+    count equals the open-FD count. Returns None when the directory cannot be
+    read (process exited, or caller lacks permission; common when monitoring
+    a process owned by another user); callers should treat None as 'FD
+    unavailable for this sample' rather than 0.
+    """
+    try:
+        return len(os.listdir(f"/proc/{pid}/fd"))
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
 def format_mb(bytes_val):
     return f"{bytes_val / (1024 * 1024):.1f}"
 
@@ -86,7 +101,7 @@ def _daemonize():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor process CPU and memory usage")
+    parser = argparse.ArgumentParser(description="Monitor process CPU, memory, and file-descriptor usage")
     parser.add_argument("-p", "--process", help="Process name to find and monitor")
     parser.add_argument("--pid", type=int, help="Monitor specific PID directly")
     parser.add_argument("-i", "--interval", type=float, default=1, help="Sample interval in seconds (default: 1)")
@@ -116,7 +131,7 @@ def main():
             output_path = os.path.join(script_dir, args.output)
         else:
             output_path = args.output
-        outfile = open(output_path, "w", buffering=1)
+        outfile = open(output_path, "a", buffering=1)
         atexit.register(outfile.close)
         out = outfile
     else:
@@ -138,6 +153,7 @@ def main():
 
     samples_cpu = []
     samples_mem = []
+    samples_fd = []
     prev_cpu = read_proc_stat(pid)
     prev_time = time.monotonic()
     start_time = prev_time
@@ -160,9 +176,10 @@ def main():
         now = time.monotonic()
         cpu_ticks = read_proc_stat(pid)
         rss_bytes = read_proc_statm(pid)
+        fd_count = read_proc_fd_count(pid)
 
         if cpu_ticks is None or rss_bytes is None:
-            emit(f"[{time.strftime('%H:%M:%S')}] Process exited")
+            emit(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] Process exited")
             break
 
         dt = now - prev_time
@@ -175,9 +192,12 @@ def main():
 
         samples_cpu.append(cpu_pct)
         samples_mem.append(mem_mb)
+        if fd_count is not None:
+            samples_fd.append(fd_count)
 
-        ts = time.strftime("%H:%M:%S")
-        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB")
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        fd_str = f" FD={fd_count}" if fd_count is not None else ""
+        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB{fd_str}")
 
         prev_cpu = cpu_ticks
         prev_time = now
@@ -191,6 +211,10 @@ def main():
         avg_mem = sum(samples_mem) / len(samples_mem)
         peak_mem = max(samples_mem)
         emit(f"MEM  avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
+    if samples_fd:
+        avg_fd = sum(samples_fd) / len(samples_fd)
+        peak_fd = max(samples_fd)
+        emit(f"FD   avg={avg_fd:.0f} peak={peak_fd}")
 
 
 if __name__ == "__main__":

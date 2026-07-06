@@ -920,6 +920,22 @@ def cmd_gen_config(args):
     if args.numa_node >= 0:
         cfg['numa_node'] = args.numa_node
 
+    # Data verification (pipeline/cache get paths). Only emit the verify block
+    # when at least one option differs from the default, to keep generated
+    # configs minimal and to preserve the legacy "size, no fail_op" baseline
+    # when the user passes no verify flags.
+    verify = {}
+    if args.verify_level != 'size':
+        verify['level'] = args.verify_level
+    if args.verify_sample_bytes != '4KB':
+        verify['sample_bytes'] = args.verify_sample_bytes
+    if args.verify_sample_step != '1MB':
+        verify['sample_step'] = args.verify_sample_step
+    if args.verify_fail_op:
+        verify['fail_op'] = True
+    if verify:
+        cfg['verify'] = verify
+
     # Mode-specific config fields
     if mode == 'benchmark':
         cfg['test_mode'] = args.test_mode
@@ -1067,6 +1083,20 @@ def _add_gen_config_args(p):
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
     p.add_argument('--numa-node', type=int, default=-1,
                    help='NUMA node to bind (default: -1, disabled); requires libnuma')
+    # Data verification (pipeline/cache get paths)
+    p.add_argument('--verify-level',
+                   choices=['off', 'size', 'sample', 'full'], default='size',
+                   help='Get data verification level: off/size/sample/full '
+                        '(default: size). Pipeline/Cache modes only')
+    p.add_argument('--verify-sample-bytes', default='4KB',
+                   help='Per-segment sample length for level=sample (default: 4KB). '
+                        'Supports KB/MB/GB suffix')
+    p.add_argument('--verify-sample-step', default='1MB',
+                   help='Distance between sample segment starts for level=sample '
+                        '(default: 1MB). Supports KB/MB/GB suffix')
+    p.add_argument('--verify-fail-op', action='store_true',
+                   help='Verify failure fails the op (counts as Fail). '
+                        'Default: only verify_fail counter + warn log')
 
 
 def main():

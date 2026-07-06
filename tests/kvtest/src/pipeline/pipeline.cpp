@@ -15,7 +15,7 @@ static bool OpSetStringView(PipelineContext &ctx, double &latencyMs) {
 }
 
 // getBuffer: client->Get(key, Optional<Buffer>&)
-// On success, verify data size and content.
+// On success, verify data per ctx.verifyCfg (off/size/sample/full).
 static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     Optional<Buffer> optBuf;
     bool ok = Measure([&]() {
@@ -23,12 +23,22 @@ static bool OpGetBuffer(PipelineContext &ctx, double &latencyMs) {
     }, latencyMs);
     if (!ok || !optBuf) return false;
 
-    // Verify size only (skip content check to save CPU)
-    int64_t bufSize = optBuf->GetSize();
-    if (static_cast<uint64_t>(bufSize) != ctx.size) {
-        SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
-                  << " expected=" << ctx.size << " got=" << bufSize);
+    VerifyFailReason reason = VerifyFailReason::NONE;
+    bool vok = VerifyBuffer(optBuf->ImmutableData(),
+                            static_cast<uint64_t>(optBuf->GetSize()),
+                            ctx.size, ctx.senderId, ctx.verifyCfg, &reason);
+    if (!vok) {
+        if (reason == VerifyFailReason::SIZE) {
+            SLOG_WARN("getBuffer size mismatch: key=" << ctx.key
+                      << " expected=" << ctx.size
+                      << " got=" << optBuf->GetSize());
+        } else {
+            SLOG_WARN("getBuffer content mismatch: key=" << ctx.key
+                      << " level=" << static_cast<int>(ctx.verifyCfg.level)
+                      << " senderId=" << ctx.senderId);
+        }
         if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+        if (ctx.verifyCfg.failOp) return false;
     }
     return true;
 }
@@ -116,20 +126,33 @@ static bool OpMGet(PipelineContext &ctx, double &latencyMs) {
         return ctx.client->Get(ctx.batchKeys, ctx.batchResults);
     }, latencyMs);
     if (!ok) return false;
+    bool anyFail = false;
     for (size_t i = 0; i < ctx.batchResults.size(); i++) {
-        if (ctx.batchResults[i]) {
-            int64_t bufSize = ctx.batchResults[i]->GetSize();
-            if (static_cast<uint64_t>(bufSize) != ctx.size) {
-                SLOG_WARN("mGet size mismatch: key=" << ctx.batchKeys[i]
-                          << " expected=" << ctx.size << " got=" << bufSize);
-                if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
-            }
-        } else {
+        if (!ctx.batchResults[i]) {
             SLOG_WARN("mGet missing result: key=" << ctx.batchKeys[i]);
             if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+            if (ctx.verifyCfg.failOp) anyFail = true;
+            continue;
+        }
+        VerifyFailReason reason = VerifyFailReason::NONE;
+        bool vok = VerifyBuffer(ctx.batchResults[i]->ImmutableData(),
+                                static_cast<uint64_t>(ctx.batchResults[i]->GetSize()),
+                                ctx.size, ctx.senderId, ctx.verifyCfg, &reason);
+        if (!vok) {
+            if (reason == VerifyFailReason::SIZE) {
+                SLOG_WARN("mGet size mismatch: key=" << ctx.batchKeys[i]
+                          << " expected=" << ctx.size
+                          << " got=" << ctx.batchResults[i]->GetSize());
+            } else {
+                SLOG_WARN("mGet content mismatch: key=" << ctx.batchKeys[i]
+                          << " level=" << static_cast<int>(ctx.verifyCfg.level)
+                          << " senderId=" << ctx.senderId);
+            }
+            if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+            if (ctx.verifyCfg.failOp) anyFail = true;
         }
     }
-    return true;
+    return !anyFail;
 }
 
 // cacheGetOrCreate: Get first, if miss → CreateBuffer + MemoryCopy + SetBuffer
@@ -151,7 +174,27 @@ static bool OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
     ctx.metrics->Record(kOpGetBuffer, getLat, hit, ctx.size);
 
     if (hit && optBuf) {
+        // Verify the cached payload. Previously the hit path did no check at
+        // all. A corrupted hit still counts as a cache hit (the key was
+        // present) but, with failOp=true, fails the op for success-rate stats.
+        VerifyFailReason reason = VerifyFailReason::NONE;
+        bool vok = VerifyBuffer(optBuf->ImmutableData(),
+                                static_cast<uint64_t>(optBuf->GetSize()),
+                                ctx.size, ctx.senderId, ctx.verifyCfg, &reason);
+        if (!vok) {
+            if (reason == VerifyFailReason::SIZE) {
+                SLOG_WARN("cacheGetOrCreate size mismatch on hit: key=" << ctx.key
+                          << " expected=" << ctx.size
+                          << " got=" << optBuf->GetSize());
+            } else {
+                SLOG_WARN("cacheGetOrCreate content mismatch on hit: key=" << ctx.key
+                          << " level=" << static_cast<int>(ctx.verifyCfg.level)
+                          << " senderId=" << ctx.senderId);
+            }
+            if (ctx.verifyFailCount) (*ctx.verifyFailCount)++;
+        }
         ctx.metrics->RecordCacheHit();
+        if (!vok && ctx.verifyCfg.failOp) return false;
         return true;
     }
 

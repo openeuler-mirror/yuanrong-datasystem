@@ -4,6 +4,7 @@
 #include <datasystem/object/buffer.h>
 #include <datasystem/utils/optional.h>
 #include <datasystem/utils/string_view.h>
+#include "data_pattern.h"
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -31,6 +32,7 @@ struct PipelineContext {
     std::vector<std::shared_ptr<datasystem::Buffer>> batchBuffers;
     std::vector<datasystem::Optional<datasystem::Buffer>> batchResults;
     std::atomic<uint64_t> *verifyFailCount = nullptr;
+    VerifyConfig verifyCfg;
     class MetricsCollector *metrics = nullptr;
 };
 
