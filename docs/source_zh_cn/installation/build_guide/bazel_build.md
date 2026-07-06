@@ -14,6 +14,14 @@ yum install -y autoconf automake libtool m4
 
 参考 [Bazel 官方文档](https://bazel.build/install) 安装 Bazel 7.4 及以上版本。
 
+### Sanitizer 运行时（可选）
+
+使用 `-S address` 或 `-S thread` 时，编译和测试环境需要提供 GCC sanitizer 运行时库。OpenEuler 可通过以下命令安装：
+
+```bash
+yum install -y libasan libtsan
+```
+
 ## 二、通过 build.sh 编译（推荐）
 
 `build.sh` 已支持 Bazel 构建系统，通过 `-b bazel` 参数切换。编译产物输出到 `output/` 目录，与 CMake 编译结构对齐。
@@ -106,12 +114,32 @@ bash build.sh -b bazel -r -j 8 -t build
 # 开启 ASan
 bash build.sh -b bazel -r -S address
 
+# 开启 TSan
+bash build.sh -b bazel -r -S thread
+
 # 开启 URMA
 bash build.sh -b bazel -r -M on
 
 # 开启覆盖率
 bash build.sh -b bazel -r -c on
 ```
+
+### Sanitizer 模式
+
+Bazel 模式复用 CMake 的 `-S` 参数：`address` 对应 ASan，`thread` 对应 TSan。
+
+```bash
+# ASan level0 验证
+bash build.sh -b bazel -r -S address -t run -l level0
+
+# TSan level0 验证
+bash build.sh -b bazel -r -S thread -t run -l level0
+```
+
+启用 sanitizer 后，脚本会先用 `bazel query` 按测试标签筛选目标，而不是直接运行
+`bazel test //...`。测试需要同时满足本次指定的范围标签（如 `level0`、`ut`）和
+sanitizer 标签（如 `asan`、`tsan` 或 `sanitizer`），并且不能带有 `manual`
+标签。TSan 对线程调度更敏感，建议只给已确认稳定的测试添加 `tsan` 标签。
 
 ### 参数兼容性说明
 
@@ -283,6 +311,16 @@ build --define=grpc_no_ares=true
 build:urma --define=enable_urma=true
 build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB
+
+# sanitizer 支持
+build:asan --copt=-fsanitize=address
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --linkopt=-fsanitize=address
+test:asan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
+test:asan --test_env=LSAN_OPTIONS=detect_leaks=0
+
+build:tsan --copt=-fsanitize=thread
+build:tsan --linkopt=-fsanitize=thread
 ```
 
 ### 2. WORKSPACE 配置

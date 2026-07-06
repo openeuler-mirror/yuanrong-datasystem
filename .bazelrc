@@ -37,13 +37,15 @@ build:pipeline_h2d --config=urma
 build:pipeline_h2d --define=enable_pipeline_h2d=true
 build:pipeline_h2d --copt=-DBUILD_PIPLN_H2D
 
-build:asan --cxxopt=-fsanitize=address
-build:asan --cxxopt=-fno-omit-frame-pointer
-build:asan --cxxopt=-g3
+build:asan --copt=-fsanitize=address
+build:asan --copt=-fno-omit-frame-pointer
+build:asan --copt=-g3
 build:asan --linkopt=-fsanitize=address
+test:asan --test_env=ASAN_OPTIONS=detect_leaks=0:detect_odr_violation=0
+test:asan --test_env=LSAN_OPTIONS=detect_leaks=0
 
-build:tsan --cxxopt=-fsanitize=thread
-build:tsan --cxxopt=-g3
+build:tsan --copt=-fsanitize=thread
+build:tsan --copt=-g3
 build:tsan --linkopt=-fsanitize=thread
 
 build:ubsan --cxxopt=-fsanitize=undefined

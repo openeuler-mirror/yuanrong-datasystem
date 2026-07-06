@@ -275,6 +275,7 @@ ds_cc_test(
 ds_cc_test(
     name = "uuid_test",
     srcs = ["uuid_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
     deps = [
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/common/util:wait_post",
