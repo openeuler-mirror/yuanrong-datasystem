@@ -71,6 +71,7 @@ ds_cc_library(
     ],
     deps = [
         ":client_worker_base_api",
+        "//src/datasystem/common/rpc:brpc_factory",
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",

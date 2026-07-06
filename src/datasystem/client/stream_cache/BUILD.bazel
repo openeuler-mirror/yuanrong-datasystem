@@ -17,6 +17,7 @@ ds_cc_library(
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:mmap_manager",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/stream_cache:stream_data_page",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/protos:stream_posix_brpc",

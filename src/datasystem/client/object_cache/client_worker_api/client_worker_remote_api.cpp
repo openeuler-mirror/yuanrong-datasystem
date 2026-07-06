@@ -36,6 +36,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -192,12 +193,12 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
     }
     if (FLAGS_use_brpc) {
         HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
-        auto channel = std::make_shared<brpc::Channel>();
-        brpc::ChannelOptions opts;
-        opts.timeout_ms = requestTimeoutMs;
-        opts.connect_timeout_ms = connectTimeoutMs;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel->Init(brpcAddr.ToString().c_str(), &opts) == 0,
-                                             StatusCode::K_RPC_UNAVAILABLE,
+        BrpcChannelConfig cfg;
+        cfg.endpoint = brpcAddr.ToString();
+        cfg.timeout_ms = requestTimeoutMs;
+        cfg.connect_timeout_ms = connectTimeoutMs;
+        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
                                              FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
         (void)WaitForBrpcSocketAvailable(brpcAddr);
         auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
@@ -291,14 +292,14 @@ void ClientWorkerRemoteApi::RecreateOCStub()
         stubTimeout = std::min(clientDeadTimeoutMs_, static_cast<uint64_t>(requestTimeoutMs_));
     }
     if (FLAGS_use_brpc) {
-        auto newChannel = std::make_shared<brpc::Channel>();
-        brpc::ChannelOptions opts;
-        opts.timeout_ms = requestTimeoutMs_;
-        opts.connect_timeout_ms = stubTimeout;
         HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
-        int rc = newChannel->Init(brpcAddr.ToString().c_str(), &opts);
-        if (rc != 0) {
-            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, rc=" << rc;
+        BrpcChannelConfig cfg;
+        cfg.endpoint = brpcAddr.ToString();
+        cfg.timeout_ms = requestTimeoutMs_;
+        cfg.connect_timeout_ms = stubTimeout;
+        std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
+        if (newChannel == nullptr) {
+            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
             return;
         }
         (void)WaitForBrpcSocketAvailable(brpcAddr);

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 
 #include <mutex>
@@ -233,12 +234,22 @@ Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_
 {
     CHECK_FAIL_RETURN_STATUS(brpcChannel == nullptr, K_RUNTIME_ERROR, "brpc channel is not nullptr");
     HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
-    brpcChannel = std::make_shared<brpc::Channel>();
-    brpc::ChannelOptions opts;
-    opts.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
-    opts.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel->Init(brpcAddr.ToString().c_str(), &opts) == 0, K_RPC_UNAVAILABLE,
+    BrpcChannelConfig cfg;
+    cfg.endpoint = brpcAddr.ToString();
+    cfg.connect_timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    cfg.timeout_ms = FLAGS_node_timeout_s * TO_MILLISECOND;
+    // These channels carry worker<->worker / worker<->master mesh traffic
+    // (WORKER_WORKER_OC_SVC, WORKER_MASTER_OC_SVC, etc.). The circuit breaker
+    // is designed for client->server fan-out where isolating a bad endpoint is
+    // a net win. In a dense worker mesh, a healthy peer under momentary back-
+    // pressure (eviction/rebalance) can trip the breaker and get isolated,
+    // amplifying the failure. Disable it on internal mesh channels; client
+    // paths (client_worker_*) keep the default-on breaker.
+    cfg.enable_circuit_breaker = false;
+    auto channel = BrpcChannelFactory::Create(cfg);
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, K_RPC_UNAVAILABLE,
                                          FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+    brpcChannel = std::move(channel);
     return Status::OK();
 }
 

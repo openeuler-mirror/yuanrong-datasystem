@@ -410,6 +410,7 @@ ds_cc_library(
         "rpc_stub_cache_mgr.h",
     ],
     deps = [
+        ":brpc_factory",
         ":rpc_message",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
