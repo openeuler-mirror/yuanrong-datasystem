@@ -180,6 +180,21 @@ public:
     Status RegisterHostMemory(void *data, uint64_t dataSize);
 
     /**
+     * @brief Pre-register local device memory regions for RemoteH2D/HCCS transfers.
+     * @param[in] data Device memory addresses.
+     * @param[in] dataSize Sizes of the device memory regions.
+     * @return Status of the call.
+     */
+    Status PreRegisterDeviceMemory(const std::vector<void *> &data, const std::vector<uint64_t> &dataSize);
+
+    /**
+     * @brief Release pre-registered local device memory regions for RemoteH2D/HCCS transfers.
+     * @param[in] data Device memory addresses passed to PreRegisterDeviceMemory.
+     * @return Status of the call.
+     */
+    Status UnregisterDeviceMemory(const std::vector<void *> &data);
+
+    /**
      * @brief Initialization helper.
      * @return Status of the call.
      */

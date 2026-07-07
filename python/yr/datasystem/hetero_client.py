@@ -245,6 +245,35 @@ class HeteroClient:
             raise RuntimeError(status.to_string())
         return failed_keys
 
+    def pre_register_device_memory(self, dev_ptrs: list, sizes: list) -> None:
+        """
+        Pre-register device memory ranges for remote H2D.
+
+        Args:
+            dev_ptrs(list): The start addresses of the device memory ranges.
+            sizes(list): The sizes of the device memory ranges in bytes.
+
+        Raises:
+            RuntimeError: Raise a runtime error if failing to pre-register the device memory.
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [["dev_ptrs", dev_ptrs, list],
+                ["sizes", sizes, list]]
+        validator.check_args_types(args)
+        if not dev_ptrs or not sizes:
+            raise RuntimeError(r"The input of dev_ptrs and sizes should not be empty")
+        if len(dev_ptrs) != len(sizes):
+            raise RuntimeError(r"The size of dev_ptrs and sizes does not match")
+        for i, dev_ptr in enumerate(dev_ptrs):
+            validator.check_args_types([["dev_ptr", dev_ptr, int]])
+            validator.check_param_range("dev_ptrs[{}]".format(i), dev_ptr, 1, validator.UINT64_MAX_SIZE)
+        for i, size in enumerate(sizes):
+            validator.check_args_types([["size", size, int]])
+            validator.check_param_range("sizes[{}]".format(i), size, 1, validator.UINT64_MAX_SIZE)
+        status = self._client.pre_register_device_memory(dev_ptrs, sizes)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+
     def mset_d2h(self, keys: list, data_blob_list: list, set_param: SetParam = SetParam()) -> None:
         """
         Write the data of the device to the host. If the BLOB of the device contains multiple memory addresses,

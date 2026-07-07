@@ -19,6 +19,7 @@
 
 #include "rh2d_transport_strategy.h"
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -32,10 +33,12 @@
 
 namespace datasystem {
 
+enum class HixlMemoryMode { BUFFER_POOL, ROCE_DIRECT, FABRIC_MEM };
+
 class HCCSTransport : public RH2DTransportStrategy {
 public:
     HCCSTransport() = default;
-    ~HCCSTransport() override = default;
+    ~HCCSTransport() override;
 
     Status Init(const std::vector<int32_t> &deviceIds) override;
     Status GetConnectionIdentity(std::string *identity) override;
@@ -43,6 +46,8 @@ public:
     Status Disconnect(const std::string &remoteIdentity) override;
     Status DisconnectAll() override;
     Status RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *segInfo) override;
+    Status PreRegisterDeviceMemory(const std::vector<void *> &addrs, const std::vector<uint64_t> &sizes) override;
+    Status UnregisterDeviceMemory(const std::vector<void *> &addrs) override;
     Status ImportRemoteAddressInfo(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg) override;
     Status ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
                         std::shared_ptr<aclrtStream> stream) override;
@@ -52,7 +57,27 @@ public:
     void SetLocalEndpoint(const std::string &ep, bool isClient = false);
 
 private:
+    struct RegisteredDeviceMemory {
+        uintptr_t addr;
+        uint64_t size;
+        ::hixl::MemHandle handle;
+    };
+
+    struct RegisteredHostMemory {
+        int32_t devId;
+        uintptr_t addr;
+        uint64_t size;
+        ::hixl::MemHandle handle;
+    };
+
     Status InitializeSingleDevice(int32_t devId, const std::string &bufferPool);
+    Status RegisterDeviceMemoryLocked(uintptr_t addr, uint64_t size);
+    Status ReleaseDeviceMemoryLocked(uintptr_t addr);
+    bool HasRegisteredDeviceMemoryLocked(uintptr_t addr, uint64_t size) const;
+    bool HasRegisteredHostMemoryLocked(int32_t devId, uintptr_t addr, uint64_t size) const;
+    void ClearRegisteredDeviceMemory();
+    void ClearRegisteredHostMemory();
+    bool IsHixlRoceDirectMode() const;
 
     // Per-device HIXL engines: devId -> engine
     std::map<int32_t, std::unique_ptr<::hixl::Hixl>> engines_;
@@ -65,9 +90,13 @@ private:
     // Next engine index for round-robin identity selection
     std::atomic<unsigned int> nextEngineIndex_{ 0 };
     bool initialized_ = false;
+    HixlMemoryMode hixlMemoryMode_ = HixlMemoryMode::BUFFER_POOL;
     std::unordered_set<std::string> activeEndpoints_;
     std::mutex connMutex_;
-    std::mutex transferMutex_;  // serialize TransferSync calls
+    // Serializes HIXL TransferSync and the lifetime of cached HIXL registrations.
+    std::mutex transferMutex_;
+    std::vector<RegisteredDeviceMemory> registeredDeviceMemories_;
+    std::vector<RegisteredHostMemory> registeredHostMemories_;
 };
 
 }  // namespace datasystem

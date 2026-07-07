@@ -70,7 +70,8 @@ public:
      *
      * For RoCE, heartbeatCallback must point to a std::function<int()> that
      * the driver can set and that manager will invoke for heartbeats.
-     * For HCCS buffer-pool, calls Hixl::Connect eagerly; MEM_DEVICE destinations are registered later in ScatterBatch.
+     * For HIXL/HCCS, calls Hixl::Connect eagerly; MEM_DEVICE destinations are registered later in ScatterBatch
+     * unless they were pre-registered by the client.
      */
     virtual Status Connect(const std::string &remoteIdentity, P2pKind kind,
                            std::function<int()> *heartbeatCallback) = 0;
@@ -103,10 +104,38 @@ public:
      * @return Status of the call.
      *
      * - RoCE: calls DSP2PRegisterHostMem.
-     * - HCCS buffer-pool: intentionally skips source host registration; segInfo is zeroed. HIXL routes
+     * - HIXL/HCCS buffer-pool: intentionally skips source host registration; segInfo is zeroed. HIXL routes
      *   unregistered remote host addresses through its internal buffer-pool relay.
+     * - HIXL ROCE direct: registers the worker source host buffer with HIXL before Connect.
      */
     virtual Status RegisterMemory(void *addr, uint64_t size, P2pSegmentInfo *segInfo) = 0;
+
+    /**
+     * @brief Pre-register local device memory for HCCS/HIXL transfers.
+     * @param[in] addrs Device memory addresses.
+     * @param[in] sizes Sizes of memory regions.
+     * @return Status of the call.
+     *
+     * - RoCE: no-op. RoCE registers/imports remote host segments instead.
+     * - HCCS: registers MEM_DEVICE once and keeps the handle until this memory is unregistered or transport teardown.
+     */
+    virtual Status PreRegisterDeviceMemory(const std::vector<void *> &addrs, const std::vector<uint64_t> &sizes)
+    {
+        (void)addrs;
+        (void)sizes;
+        return Status::OK();
+    }
+
+    /**
+     * @brief Release pre-registered local device memory for HCCS/HIXL transfers.
+     * @param[in] addrs Starting addresses passed to PreRegisterDeviceMemory.
+     * @return Status of the call.
+     */
+    virtual Status UnregisterDeviceMemory(const std::vector<void *> &addrs)
+    {
+        (void)addrs;
+        return Status::OK();
+    }
 
     /**
      * @brief Import remote memory/segment address information.
@@ -115,7 +144,7 @@ public:
      * @return Status of the call.
      *
      * - RoCE: Uses seg.name() as the segment descriptor; calls DSP2PImportHostSegment.
-     * - HCCS: no-op; the remote address is carried inline by P2pScatterEntry::ddrBuf at transfer time.
+     * - HIXL/HCCS: no-op; the remote address is carried inline by P2pScatterEntry::ddrBuf at transfer time.
      */
     virtual Status ImportRemoteAddressInfo(const std::string &remoteEndpoint, const RemoteHostSegmentPb &seg) = 0;
 
@@ -134,8 +163,8 @@ public:
      * - RoCE: calls DSP2PScatterBatchFromRemoteHostMem, uses provided stream.
      *         Implementation splits large batches to respect FFTS context limit
      *         (max 16384 blobs per batch).
-     * - HCCS: registers local destinations as MEM_DEVICE on first sight (keyed by address),
-     *         then issues Hixl::TransferSync(READ) in chunks of 4096 ops.
+     * - HCCS: uses explicitly pre-registered MEM_DEVICE ranges when available. Otherwise it temporarily registers
+     *         local destinations for the transfer, then issues Hixl::TransferSync(READ) in chunks.
      */
     virtual Status ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
                                 std::shared_ptr<aclrtStream> stream) = 0;

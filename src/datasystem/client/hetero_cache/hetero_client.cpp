@@ -100,6 +100,13 @@ Status HeteroClient::MGetH2D(const std::vector<std::string> &keys, const std::ve
     return impl_->MGetH2D(keys, devBlobList, failedKeys, subTimeoutMs);
 }
 
+Status HeteroClient::PreRegisterDeviceMemory(const std::vector<void *> &devPtrs, const std::vector<uint64_t> &sizes)
+{
+    RETURN_IF_NOT_OK(HeteroClient::IsCompileWithHetero());
+    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+    return impl_->PreRegisterDeviceMemory(devPtrs, sizes);
+}
+
 Status HeteroClient::MSetD2H(const std::vector<std::string> &keys, const std::vector<DeviceBlobList> &devBlobList,
                              const SetParam &setParam)
 {
