@@ -17,12 +17,12 @@ int main()
     datasystem::TransferEngine owner(ownerBackend);
     datasystem::TransferEngine requester(requesterBackend);
 
-    auto rc = owner.Initialize("127.0.0.1:65051", "ascend", "npu:0");
+    auto rc = owner.Initialize("127.0.0.1:65051", "p2p", "npu:0");
     if (rc.IsError()) {
         TE_LOG_ERROR << "owner initialize failed: " << rc.ToString();
         return EXIT_FAILURE;
     }
-    rc = requester.Initialize("127.0.0.1:65052", "ascend", "npu:2");
+    rc = requester.Initialize("127.0.0.1:65052", "p2p", "npu:2");
     if (rc.IsError()) {
         TE_LOG_ERROR << "requester initialize failed: " << rc.ToString();
         return EXIT_FAILURE;

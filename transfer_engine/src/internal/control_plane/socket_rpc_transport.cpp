@@ -157,10 +157,24 @@ Result ConnectTo(const std::string &host, uint16_t port, int *fd)
     return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "connect failed");
 }
 
-Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, int *listenFd)
+namespace {
+
+void LogListenSocketFailure(ListenSocketFailureLogLevel failureLogLevel, const char *operation,
+                            const std::string &host, uint16_t port, int errorNo)
 {
-    TE_CHECK_PTR_OR_RETURN(listenFd);
-    *listenFd = -1;
+    if (failureLogLevel == ListenSocketFailureLogLevel::kVlog1) {
+        TE_VLOG_1 << operation << " failed, host=" << host << ", port=" << port << ", errno=" << errorNo;
+        return;
+    }
+    TE_LOG_ERROR << operation << " failed, host=" << host << ", port=" << port << ", errno=" << errorNo;
+}
+
+}  // namespace
+
+Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, int &listenFd,
+                          ListenSocketFailureLogLevel failureLogLevel)
+{
+    listenFd = -1;
     TE_CHECK_OR_RETURN(backlog > 0, ErrorCode::kInvalid, "backlog should be positive");
 
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -176,16 +190,16 @@ Result CreateListenSocket(const std::string &host, uint16_t port, int backlog, i
         return addrRc;
     }
     if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-        TE_LOG_ERROR << "bind failed, host=" << host << ", port=" << port << ", errno=" << errno;
+        LogListenSocketFailure(failureLogLevel, "bind", host, port, errno);
         ::close(fd);
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "bind failed");
     }
     if (::listen(fd, backlog) != 0) {
-        TE_LOG_ERROR << "listen failed, host=" << host << ", port=" << port << ", errno=" << errno;
+        LogListenSocketFailure(failureLogLevel, "listen", host, port, errno);
         ::close(fd);
         return TE_MAKE_STATUS(ErrorCode::kRuntimeError, "listen failed");
     }
-    *listenFd = fd;
+    listenFd = fd;
     return Result::OK();
 }
 

@@ -6,6 +6,7 @@
 #include <string>
 #include "tools/env.h"
 #include "tools/logging.h"
+#include "tools/tools.h"
 #include "external/hccl_network_pub.h"
 #include "runtime/dev.h"
 #include "external/adapter_rts_common.h"
@@ -92,21 +93,51 @@ Status RdmaAgent::getDeviceIpv4(union hccp_ip_addr *ipv4Addr)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "rdma agent is not initialized");
     }
 
+    p2p::LogInfo(std::string("RdmaAgent::getDeviceIpv4 begin, logic_device_id=") + std::to_string(devId) +
+                 ", phy_id=" + std::to_string(phyId) +
+                 ", nic_deployment=" + std::to_string(static_cast<int>(nicDeployment)));
     unsigned int num = 0;
     struct ra_get_ifattr ifAttr{};
     ifAttr.phy_id = phyId;
     ifAttr.nic_position = static_cast<int>(nicDeployment);
     ifAttr.is_all = false;
-    CHECK_STATUS(RaGetIfNumWrapper(&ifAttr, &num));
+    Status ifNumRc = RaGetIfNumWrapper(&ifAttr, &num);
+    if (!ifNumRc.IsSuccess()) {
+        p2p::LogError(std::string("RdmaAgent::getDeviceIpv4 query interface count failed, logic_device_id=") +
+                      std::to_string(devId) + ", phy_id=" + std::to_string(phyId) +
+                      ", reason=" + ifNumRc.ToString());
+        return ifNumRc;
+    }
+    if (num == 0) {
+        std::string msg = "NPU network interface not found, logic_device_id=" + std::to_string(devId) +
+                          ", phy_id=" + std::to_string(phyId) +
+                          ", hint: verify the NPU device is exposed to the container and its RoCE network is "
+                          "configured";
+        p2p::LogError(std::string("RdmaAgent::getDeviceIpv4 failed, reason=") + msg);
+        return Status::Error(ErrorCode::NOT_FOUND, msg);
+    }
 
     struct interface_info interface_infos[num];
-    CHECK_STATUS(RaGetIfaddrsWrapper(&ifAttr, interface_infos, &num));
+    Status ifAddrRc = RaGetIfaddrsWrapper(&ifAttr, interface_infos, &num);
+    if (!ifAddrRc.IsSuccess()) {
+        p2p::LogError(std::string("RdmaAgent::getDeviceIpv4 query interface addresses failed, logic_device_id=") +
+                      std::to_string(devId) + ", phy_id=" + std::to_string(phyId) +
+                      ", interface_count=" + std::to_string(num) + ", reason=" + ifAddrRc.ToString());
+        return ifAddrRc;
+    }
     for (int i = 0; i < num; i++) {
         if (interface_infos[i].family == AF_INET) {
             ipv4Addr->addr = interface_infos[i].ifaddr.ip.addr;
+            p2p::LogInfo(std::string("RdmaAgent::getDeviceIpv4 success, logic_device_id=") +
+                         std::to_string(devId) + ", phy_id=" + std::to_string(phyId) +
+                         ", npu_ip=" + in_addr_to_string(ipv4Addr->addr));
             return Status::Success();
         }
     }
 
-    return Status::Error(ErrorCode::NOT_FOUND, "IPv4 device IP not found");
+    std::string msg = "NPU IPv4 address not found, logic_device_id=" + std::to_string(devId) +
+                      ", phy_id=" + std::to_string(phyId) + ", interface_count=" + std::to_string(num) +
+                      ", hint: configure a valid NPU RoCE IPv4 address on this device";
+    p2p::LogError(std::string("RdmaAgent::getDeviceIpv4 failed, reason=") + msg);
+    return Status::Error(ErrorCode::NOT_FOUND, msg);
 }

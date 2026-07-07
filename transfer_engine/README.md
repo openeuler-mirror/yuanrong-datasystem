@@ -24,6 +24,44 @@ dist/*.whl
 from yr.datasystem import TransferEngine, Result, ErrorCode
 ```
 
+## Backend and HIXL Route Selection
+
+TransferEngine selects the data-plane backend in this order:
+
+1. `TRANSFER_ENGINE_BACKEND=p2p|hixl`, when set.
+2. An explicit `protocol` value: `"p2p"` selects P2P-Transfer; `"hixl"`, `"d2d_hixl"`, or `"hccs_hixl"`
+   selects HIXL.
+3. An empty `protocol` or `"ascend"` selects HIXL when that backend was compiled, otherwise P2P.
+
+When HIXL is selected, `TRANSFER_ENGINE_HIXL_ROUTE` accepts `auto`, `hccs`, or `roce` and defaults to `auto`.
+This value is a TransferEngine peer-consistency policy: both peers must use the same value. TransferEngine does not pass
+it to HIXL as an endpoint filter. HIXL generates and matches endpoints as follows on the supported Atlas A2/A3 path:
+
+- With `HCCL_INTRA_ROCE_ENABLE=1`, HIXL keeps or generates only RoCE endpoints, so the connection uses RoCE.
+- Otherwise, HIXL normally advertises both device RoCE and HCCS endpoints. If both peers have the same
+  `net_instance_id`, HIXL prefers HCCS and falls back to a mutually available RoCE endpoint. If their
+  `net_instance_id` values differ, HIXL does not consider HCCS and selects a mutually available RoCE endpoint.
+- HIXL derives `net_instance_id` from the SuperPod ID on Atlas A3 and from the local host IP on Atlas A2.
+
+Use the following settings on both peers to make the route intent explicit:
+
+```bash
+# Force HIXL to advertise and use RoCE endpoints only.
+export TRANSFER_ENGINE_BACKEND=hixl
+export TRANSFER_ENGINE_HIXL_ROUTE=roce
+export HCCL_INTRA_ROCE_ENABLE=1
+
+# Declare an expected HCCS route and reject a peer with a different TransferEngine route policy. HIXL still selects
+# HCCS only when both peers are in the same network instance and have a mutually available HCCS endpoint.
+export TRANSFER_ENGINE_BACKEND=hixl
+export TRANSFER_ENGINE_HIXL_ROUTE=hccs
+unset HCCL_INTRA_ROCE_ENABLE
+```
+
+Setting only `TRANSFER_ENGINE_HIXL_ROUTE=roce` does not force HIXL to remove HCCS endpoints; use
+`HCCL_INTRA_ROCE_ENABLE=1` as shown above. Likewise, `TRANSFER_ENGINE_HIXL_ROUTE=hccs` is not itself an HIXL endpoint
+filter. TransferEngine rejects `hccs` together with `HCCL_INTRA_ROCE_ENABLE=1` because those settings conflict.
+
 ## 3. API Reference
 
 `TransferEngine`:
@@ -35,7 +73,9 @@ engine = TransferEngine()
 Methods:
 
 1. `initialize(local_hostname: str, protocol: str, device_name: str) -> Result`
-   `protocol` is currently not validated. `device_name` must match `npu:${device_id}`.
+   An empty `protocol` or `"ascend"` selects HIXL by default when the HIXL backend is compiled; builds without HIXL
+   fall back to P2P. Use `"p2p"` or `"hixl"` to select a backend explicitly. `TRANSFER_ENGINE_BACKEND=p2p|hixl`
+   overrides `protocol`. `device_name` must match `npu:${device_id}`.
 2. `register_memory(buffer_addr_regisrterch: int, length: int) -> Result`
 3. `batch_register_memory(buffer_addrs: list[int], lengths: list[int]) -> Result`
 4. `unregister_memory(buffer_addr_regisrterch: int) -> Result`

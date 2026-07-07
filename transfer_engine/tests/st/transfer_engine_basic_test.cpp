@@ -211,9 +211,9 @@ Result RunInProcessTransferCase(bool registerOwnerMemory, ErrorCode *requesterCo
     auto requesterBackend = std::make_shared<MockDataPlaneBackend>(sharedState);
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
-    TE_RETURN_IF_ERROR(owner.Initialize("127.0.0.1:" + std::to_string(ownerPort), "ascend",
+    TE_RETURN_IF_ERROR(owner.Initialize("127.0.0.1:" + std::to_string(ownerPort), "p2p",
                                         "npu:" + std::to_string(ownerDeviceId)));
-    TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "ascend",
+    TE_RETURN_IF_ERROR(requester.Initialize("127.0.0.1:" + std::to_string(requesterPort), "p2p",
                                             "npu:" + std::to_string(requesterDeviceId)));
 
     if (registerOwnerMemory) {
@@ -1233,8 +1233,8 @@ TEST(TransferEngineBasicTest, SyncReadSameDeviceMockOk)
     auto requesterBackend = std::make_shared<MockDataPlaneBackend>(sharedState);
     TransferEngine owner(ownerBackend);
     TransferEngine requester(requesterBackend);
-    ASSERT_TRUE(owner.Initialize("127.0.0.1:58051", "ascend", "npu:0").IsOk());
-    ASSERT_TRUE(requester.Initialize("127.0.0.1:58052", "ascend", "npu:0").IsOk());
+    ASSERT_TRUE(owner.Initialize("127.0.0.1:58051", "p2p", "npu:0").IsOk());
+    ASSERT_TRUE(requester.Initialize("127.0.0.1:58052", "p2p", "npu:0").IsOk());
     ASSERT_TRUE(owner.RegisterMemory(reinterpret_cast<uintptr_t>(src.data()), src.size()).IsOk());
 
     Result rc = BatchReadOne(&requester, "127.0.0.1", 58051, reinterpret_cast<uintptr_t>(src.data()),

@@ -3,6 +3,8 @@
  */
 #include "npu/RdmaSocket.h"
 #include "npu/RaWrapper.h"
+#include "tools/logging.h"
+#include "tools/tools.h"
 #include <thread>
 #include <unistd.h>
 
@@ -123,6 +125,11 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
         return Status::Error(ErrorCode::NOT_SUPPORTED, "socket has not been initialized yet");
     }
 
+    p2p::LogInfo(std::string("RdmaSocket::waitReady begin, phy_id=") + std::to_string(phyId) +
+                 ", role=" + std::to_string(static_cast<int>(socketRole)) +
+                 ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                 ", timeout_ms=" + std::to_string(timeOutMs) +
+                 (timeOutMs == 0 ? ", timeout_disabled=true" : ""));
     auto startTime = std::chrono::steady_clock::now();
     auto timeOutDuration = std::chrono::milliseconds(timeOutMs);
 
@@ -130,12 +137,24 @@ Status RdmaSocket::waitReady(uint32_t timeOutMs)
     while (socketStatus != RdmaSocketStatus::SOCKET_CONNECTED) {
         auto currentTime = std::chrono::steady_clock::now();
         if (timeOutMs > 0 && currentTime - startTime >= timeOutDuration) {
-            return Status::Error(ErrorCode::TIMEOUT, "Timeout waiting for socket to connect.");
+            std::string msg = "Timeout waiting for RoCE socket to connect, phy_id=" + std::to_string(phyId) +
+                              ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                              ", timeout_ms=" + std::to_string(timeOutMs);
+            p2p::LogError(std::string("RdmaSocket::waitReady failed, reason=") + msg);
+            return Status::Error(ErrorCode::TIMEOUT, msg);
         }
 
-        CHECK_STATUS(this->getSocketStatus(&socketStatus));
+        Status statusRc = this->getSocketStatus(&socketStatus);
+        if (!statusRc.IsSuccess()) {
+            p2p::LogError(std::string("RdmaSocket::waitReady query status failed, phy_id=") +
+                          std::to_string(phyId) + ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr) +
+                          ", reason=" + statusRc.ToString());
+            return statusRc;
+        }
     }
 
+    p2p::LogInfo(std::string("RdmaSocket::waitReady success, phy_id=") + std::to_string(phyId) +
+                 ", local_npu_ip=" + in_addr_to_string(roceDevInfo.local_ip.addr));
     return Status::Success();
 }
 

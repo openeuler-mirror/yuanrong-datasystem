@@ -18,6 +18,7 @@ namespace {
 
 constexpr size_t kMaxPendingRpcConnections = 4096;
 constexpr int kServerSocketTimeoutSec = 30;
+constexpr int K_LISTEN_SOCKET_BACKLOG = 128;
 
 }  // namespace
 
@@ -89,7 +90,7 @@ Result SocketControlServer::Start(const std::string &host, uint16_t port, std::s
     TE_CHECK_OR_RETURN(workerThreads > 0, ErrorCode::kInvalid, "worker_threads should be positive");
 
     int fd = -1;
-    TE_RETURN_IF_ERROR(CreateListenSocket(host, port, 128, &fd));
+    TE_RETURN_IF_ERROR(CreateListenSocket(host, port, K_LISTEN_SOCKET_BACKLOG, fd));
 
     listenFd_ = fd;
     workerCount_ = workerThreads;

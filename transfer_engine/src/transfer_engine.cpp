@@ -37,6 +37,11 @@ constexpr int32_t kDefaultRpcThreads = 8;
 constexpr int32_t K_MAX_HIXL_GENERATION_RETRY = 2;
 constexpr uint64_t K_MAX_TCP_PORT = 65535;
 constexpr uint64_t K_DECIMAL_BASE = 10;
+#ifdef TRANSFER_ENGINE_ENABLE_HIXL
+constexpr const char *K_DEFAULT_BACKEND_KIND = "hixl";
+#else
+constexpr const char *K_DEFAULT_BACKEND_KIND = "p2p";
+#endif
 
 std::string ToLowerAscii(std::string value)
 {
@@ -83,7 +88,11 @@ Result ResolveBackendKind(const std::string &protocol, std::string &backendKind)
     }
 
     const std::string protocolLower = ToLowerAscii(protocol);
-    if (protocolLower.empty() || protocolLower == "ascend" || protocolLower == "p2p") {
+    if (protocolLower.empty() || protocolLower == "ascend") {
+        backendKind = K_DEFAULT_BACKEND_KIND;
+        return Result::OK();
+    }
+    if (protocolLower == "p2p") {
         backendKind = "p2p";
         return Result::OK();
     }
