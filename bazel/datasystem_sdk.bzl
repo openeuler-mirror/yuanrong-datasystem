@@ -16,64 +16,79 @@ def _datasystem_sdk_tree_impl(ctx):
         cmake_args.append(cmake_file.path)
         cmake_args.append(cmake_file.basename)
 
+    has_coordinator = ctx.attr.libcoordinator != None
+    if has_coordinator:
+        coordinator_path = ctx.file.libcoordinator.path
+    else:
+        coordinator_path = ""
+
     command = """
-set -euo pipefail
+	set -euo pipefail
 
-out_dir="$1"
-build_tpl="$2"
-libdatasystem="$3"
-libworker="$4"
-out_tar="$5"
-header_count="$6"
-shift 6
+	out_dir="$1"
+	build_tpl="$2"
+	libdatasystem="$3"
+	libworker="$4"
+	libcoordinator="$5"
+	out_tar="$6"
+	header_count="$7"
+	shift 7
 
-mkdir -p "$out_dir/cpp/lib"
-cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
-cp -f "$libdatasystem" "$out_dir/cpp/lib/libdatasystem.so"
-cp -f "$libworker" "$out_dir/cpp/lib/libdatasystem_worker.so"
+	mkdir -p "$out_dir/cpp/lib"
+	cp -f "$build_tpl" "$out_dir/cpp/BUILD.bazel"
+	cp -f "$libdatasystem" "$out_dir/cpp/lib/libdatasystem.so"
+	cp -f "$libworker" "$out_dir/cpp/lib/libdatasystem_worker.so"
+	if [ -n "$libcoordinator" ] && [ -f "$libcoordinator" ]; then
+	    cp -f "$libcoordinator" "$out_dir/cpp/lib/libdatasystem_coordinator.so"
+	fi
 
-# Copy headers (header_count pairs of src,rel)
-i=0
-while [ "$i" -lt "$header_count" ] && [ "$#" -ge 2 ]; do
-  src="$1"
-  rel="$2"
-  shift 2
-  i=$((i + 1))
-  mkdir -p "$out_dir/cpp/include/datasystem/$(dirname "$rel")"
-  cp -f "$src" "$out_dir/cpp/include/datasystem/$rel"
-done
+	# Copy headers (header_count pairs of src,rel)
+	i=0
+	while [ "$i" -lt "$header_count" ] && [ "$#" -ge 2 ]; do
+	  src="$1"
+	  rel="$2"
+	  shift 2
+	  i=$((i + 1))
+	  mkdir -p "$out_dir/cpp/include/datasystem/$(dirname "$rel")"
+	  cp -f "$src" "$out_dir/cpp/include/datasystem/$rel"
+	done
 
-# Copy cmake config files (remaining pairs)
-cmake_dir="$out_dir/cpp/lib/cmake/Datasystem"
-mkdir -p "$cmake_dir"
-while [ "$#" -ge 2 ]; do
-  src="$1"
-  name="$2"
-  shift 2
-  cp -f "$src" "$cmake_dir/$name"
-done
+	# Copy cmake config files (remaining pairs)
+	cmake_dir="$out_dir/cpp/lib/cmake/Datasystem"
+	mkdir -p "$cmake_dir"
+	while [ "$#" -ge 2 ]; do
+	  src="$1"
+	  name="$2"
+	  shift 2
+	  cp -f "$src" "$cmake_dir/$name"
+	done
 
-parent_dir="$(dirname "$out_dir")"
-base_name="$(basename "$out_dir")"
-tar_name="$(basename "$out_tar")"
-(
-  cd "$parent_dir"
-  rm -f "$tar_name"
-  tar -cf "$tar_name" "$base_name"
-)
-"""
+	parent_dir="$(dirname "$out_dir")"
+	base_name="$(basename "$out_dir")"
+	tar_name="$(basename "$out_tar")"
+	(
+	  cd "$parent_dir"
+	  rm -f "$tar_name"
+	  tar -cf "$tar_name" "$base_name"
+	)
+	"""
 
     all_args = [
         out_dir.path,
         ctx.file.build_tpl.path,
         ctx.file.libdatasystem.path,
         ctx.file.libworker.path,
+        coordinator_path,
         out_tar.path,
         str(len(header_args) // 2),
     ] + header_args + cmake_args
 
+    inputs_list = [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker]
+    if has_coordinator:
+        inputs_list.append(ctx.file.libcoordinator)
+
     inputs = depset(
-        [ctx.file.build_tpl, ctx.file.libdatasystem, ctx.file.libworker],
+        inputs_list,
         transitive = [depset(ctx.files.headers), depset(ctx.files.cmake_config)],
     )
 
@@ -95,6 +110,7 @@ datasystem_sdk_tree = rule(
         "build_tpl": attr.label(allow_single_file = True, mandatory = True),
         "libdatasystem": attr.label(allow_single_file = True, mandatory = True),
         "libworker": attr.label(allow_single_file = True, mandatory = True),
+        "libcoordinator": attr.label(allow_single_file = True, mandatory = False),
         "cmake_config": attr.label_list(allow_files = True, default = []),
     },
 )

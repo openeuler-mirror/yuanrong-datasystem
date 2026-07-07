@@ -435,7 +435,122 @@ bazel build //:my_worker
 
 产物为 `bazel-bin/my_worker`，全静态链接，不依赖外部 `.so`。
 
-## 六、CMake find_package 集成
+## 六、源码编译安装 Coordinator
+
+### 1. bazelrc 默认选项
+
+```text
+common --enable_bzlmod=false   # 关闭 bzlmod
+build --cxxopt=-std=c++17    # 使用 c++17编译
+# 关闭 RDMA 支持
+build --cxxopt=-DDISABLE_RDMA
+# 去掉grpc部分功能和依赖
+build --define=grpc_no_xds=true
+build --define=grpc_no_binder=true
+build --define=grpc_no_ares=true
+# urma 支持
+build:urma --define=enable_urma=true
+build:urma --copt=-DUSE_URMA
+build:urma --copt=-DURMA_OVER_UB
+```
+
+### 2. WORKSPACE 配置
+
+```python
+workspace(name = "my_coordinator_project")
+
+local_repository(
+    name = "yuanrong-datasystem",
+    path = "/path/to/yuanrong-datasystem",
+)
+
+load("@yuanrong-datasystem//bazel:ds_deps.bzl", "ds_deps", "setup_grpc")
+load("@yuanrong-datasystem//bazel:ascend_configure.bzl", "ascend_configure")
+
+ds_deps()
+ascend_configure(name = "local_ascend")
+
+load("@com_google_googleapis//:repository_rules.bzl", "switched_rules_by_language")
+switched_rules_by_language(
+    name = "com_google_googleapis_imports",
+    cc = True,
+    go = False,
+    grpc = True,
+    java = False,
+    python = False,
+)
+
+setup_grpc()
+
+load("@com_github_grpc_grpc//third_party/py:python_configure.bzl", "python_configure")
+python_configure(name = "local_config_python")
+
+load("@rules_python//python:repositories.bzl", "py_repositories")
+py_repositories()
+```
+
+### 3. BUILD 添加 Coordinator 依赖关系
+
+依赖关系添加：`@yuanrong-datasystem//src/datasystem/coordinator:coordinator_server`
+
+```python
+cc_binary(
+    name = "my_coordinator",
+    srcs = [
+        "my_main.cpp",
+    ],
+    deps = [
+        "@yuanrong-datasystem//src/datasystem/coordinator:coordinator_server",
+    ],
+)
+```
+
+### 4. C++ 代码
+
+```cpp
+#include "datasystem/coordinator_server.h"
+#include <cstdio>
+
+int main(int argc, char **argv) {
+    auto status = datasystem::CoordinatorServer::GetInstance()->InitAndRun();
+    if (status.IsError()) {
+        fprintf(stderr, "Coordinator InitAndRun failed: %s\n", status.ToString().c_str());
+        return -1;
+    }
+    printf("Coordinator exited normally\n");
+    return 0;
+}
+```
+
+### 5. 配置文件启动方式
+
+```cpp
+#include "datasystem/coordinator_server.h"
+#include <cstdio>
+
+int main() {
+    datasystem::CoordinatorOptions options;
+    options.configFilePath = "/path/to/coordinator_config.json";
+
+    auto status = datasystem::CoordinatorServer::GetInstance()->InitAndRun(options);
+    if (status.IsError()) {
+        fprintf(stderr, "Coordinator InitAndRun failed: %s\n", status.ToString().c_str());
+        return -1;
+    }
+    printf("Coordinator exited normally\n");
+    return 0;
+}
+```
+
+### 6. 编译命令
+
+```bash
+bazel build //:my_coordinator
+```
+
+产物为 `bazel-bin/my_coordinator`，全静态链接，不依赖外部 `.so`。
+
+## 七、CMake find_package 集成
 
 Bazel 编译的 SDK 同时提供 CMake 配置文件，支持通过 `find_package` 集成：
 

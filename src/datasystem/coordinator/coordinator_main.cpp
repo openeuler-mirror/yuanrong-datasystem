@@ -15,58 +15,17 @@
  */
 
 /**
- * Description: Lightweight coordinator server entrypoint.
+ * Description: Coordinator server entrypoint.
  */
-#include <chrono>
-#include <condition_variable>
-#include <csignal>
-#include <mutex>
-
-#include "datasystem/common/log/log.h"
-#include "datasystem/common/signal/signal.h"
 #include "datasystem/common/flags/flags.h"
-#include "datasystem/common/util/status_helper.h"
-#include "datasystem/coordinator/coordinator_server.h"
-
-namespace datasystem {
-std::condition_variable g_termSignalCv;
-namespace {
-constexpr int CHECK_EVERY_MS = 1000;
-
-void SignalHandler(int signum)
-{
-    (void)signum;
-    g_exitFlag = 1;
-    g_termSignalCv.notify_all();
-}
-
-void WaitForTermSignal()
-{
-    std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
-    while (!IsTermSignalReceived()) {
-        g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
-                                [] { return IsTermSignalReceived(); });
-    }
-}
-
-Status RunCoordinator()
-{
-    coordinator::CoordinatorServer server;
-    RETURN_IF_NOT_OK(server.Init());
-    RETURN_IF_NOT_OK(server.Start());
-    WaitForTermSignal();
-    return server.Shutdown();
-}
-}  // namespace
-}  // namespace datasystem
+#include "datasystem/common/log/log.h"
+#include "datasystem/coordinator_server.h"
 
 int main(int argc, char **argv)
 {
-    signal(SIGTERM, datasystem::SignalHandler);
-    signal(SIGINT, datasystem::SignalHandler);
     datasystem::ParseCommandLineFlags(argc, argv);
 
-    auto rc = datasystem::RunCoordinator();
+    auto rc = datasystem::CoordinatorServer::GetInstance()->InitAndRun();
     if (rc.IsError()) {
         LOG(ERROR) << "Coordinator runtime error: " << rc.ToString();
         return -1;
