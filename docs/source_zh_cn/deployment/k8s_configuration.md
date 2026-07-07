@@ -280,7 +280,7 @@ global:
 | global.log.logLevel | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | global.log.logAsync | bool | `true` | 是否开启异步刷新日志功能 |
 | global.log.logAsyncQueueSize | int | `65536` | 异步日志的消息队列大小 |
-| global.log.logCompress | bool | `true` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
+| global.log.logCompress | bool | `false` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
 | global.log.logBufSecs | int | `10` | 日志消息的最大缓冲时间（以秒为单位） |
 | global.log.logFilename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | global.log.logRetentionDay | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
@@ -295,6 +295,8 @@ global:
 | global.log.slowLogProcessSlowerThan | uint64 | `2000` | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
 | global.log.slowLogRpcSlowerThan | uint64 | `5000` | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
+> **升级提示**：`global.log.logCompress` 默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `global.log.logCompress: true`；同时建议根据不压缩场景重新评估 `global.log.maxLogFileNum` 和 `global.log.maxLogSize` 的容量设置。
+
 **样例**：
 ```yaml
 global:
@@ -308,8 +310,8 @@ global:
     logRetentionDay: 0
     logAsync: true
     logBufSecs: 10
-    # 开启日志压缩功能，历史日志将被压缩成gzip格式节约磁盘空间
-    logCompress: true
+    # 默认关闭日志压缩功能，可设置为 true 将历史日志压缩成gzip格式节约磁盘空间
+    logCompress: false
     # 日志前缀名，配置为 'openeuler_datasystem'
     logFilename: "openeuler_datasystem"
 ```

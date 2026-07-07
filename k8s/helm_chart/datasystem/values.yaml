@@ -146,7 +146,7 @@ global:
     logBufSecs: 10
     # Compress old log files in .gz format.
     # This parameter takes effect only when the size of the generated log is greater than max log size.
-    logCompress: true
+    logCompress: false
     # Request log sample rate per trace [0.0-1.0]. Leave empty (null) to use default (1.0 = all logs pass).
     # When ONLY this field is set, access and diagnostic rates are automatically derived
     # (access = request * 3, diagnostic = request * 4, capped at 1.0).

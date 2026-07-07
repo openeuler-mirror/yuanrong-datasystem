@@ -21,9 +21,14 @@
 #include "datasystem/common/flags/flag_manager.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <regex>
+#include <sstream>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "common.h"
 #include "datasystem/common/util/file_util.h"
@@ -32,6 +37,59 @@ DS_DECLARE_string(worker_address);
 
 namespace datasystem {
 namespace ut {
+namespace {
+constexpr int kMaxConfigSearchDepth = 8;
+
+std::string FindRepoFile(const std::string &relativePath)
+{
+    const char *repoRoot = std::getenv("DATASYSTEM_REPO_ROOT");
+    if (repoRoot != nullptr && repoRoot[0] != '\0') {
+        auto candidate = JoinPath(repoRoot, relativePath);
+        std::ifstream input(candidate);
+        if (input.good()) {
+            return candidate;
+        }
+    }
+
+    std::string prefix;
+    for (int depth = 0; depth < kMaxConfigSearchDepth; ++depth) {
+        auto candidate = prefix + relativePath;
+        std::ifstream input(candidate);
+        if (input.good()) {
+            return candidate;
+        }
+        prefix += "../";
+    }
+    return "";
+}
+
+void ExpectJsonConfigValue(const std::string &relativePath, const std::string &key, const std::string &expectedValue)
+{
+    auto path = FindRepoFile(relativePath);
+    ASSERT_FALSE(path.empty()) << relativePath;
+
+    std::ifstream input(path);
+    ASSERT_TRUE(input.good()) << path;
+    nlohmann::json config;
+    input >> config;
+
+    ASSERT_TRUE(config.contains(key)) << path;
+    ASSERT_TRUE(config.at(key).contains("value")) << path;
+    EXPECT_EQ(config.at(key).at("value").get<std::string>(), expectedValue) << path;
+}
+
+void ExpectLineMatches(const std::string &relativePath, const std::regex &expectedLine)
+{
+    auto path = FindRepoFile(relativePath);
+    ASSERT_FALSE(path.empty()) << relativePath;
+
+    std::ifstream input(path);
+    ASSERT_TRUE(input.good()) << path;
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    EXPECT_TRUE(std::regex_search(buffer.str(), expectedLine)) << path;
+}
+}  // namespace
 
 class FlagManagerConfigTest : public CommonTest {
 public:
@@ -118,6 +176,15 @@ TEST_F(FlagManagerConfigTest, ConfigWithNoValueFieldIsSkipped)
     auto path = WriteTempConfig(R"({"key_without_value": {"desc": "no value field"}})");
     EXPECT_FALSE(FlagManager::GetInstance()->ParseConfigFile(path, errMsg));
     EXPECT_NE(errMsg.find("no valid flags"), std::string::npos);
+}
+
+TEST_F(FlagManagerConfigTest, DefaultConfigTemplatesDisableLogCompression)
+{
+    ExpectJsonConfigValue("cli/deploy/conf/worker_config.json", "log_compress", "false");
+    ExpectJsonConfigValue("cli/deploy/conf/coordinator_config.json", "log_compress", "false");
+    ExpectJsonConfigValue("k8s_deployment/helm_chart/worker.config", "log_compress", "false");
+    const std::regex logCompressFalseLine(R"((^|\n)\s*logCompress:\s*false\s*($|\n))");
+    ExpectLineMatches("k8s/helm_chart/datasystem/values.yaml", logCompressFalseLine);
 }
 
 }  // namespace ut

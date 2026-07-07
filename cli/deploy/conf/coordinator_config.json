@@ -52,7 +52,7 @@
     "description": "Enable asynchronous writing to log files."
   },
   "log_compress": {
-    "value": "true",
+    "value": "false",
     "description": "Compress old log files in .gz format when generated log size exceeds max_log_size."
   },
   "logbufsecs": {

@@ -431,7 +431,7 @@ TransferEngine reuses the same patched `libds-spdlog.so` ABI but constructs its 
 | --- | --- | --- | --- | --- |
 | `log_monitor` | gflag | runtime gflag | enables access and monitor flush paths | observability may partially disappear while service logic continues |
 | `max_log_file_num` | gflag or env override | default `5` in `logging.cpp` for normal path | limits retained files per severity family | too small loses history; too large grows disk usage |
-| `log_compress` | gflag or env override | default `true` | compresses rotated log files | changes CPU cost, file collector behavior, and file suffix expectations |
+| `log_compress` | gflag or env override | default `false` | compresses rotated log files | changes CPU cost, file collector behavior, and file suffix expectations |
 | `log_retention_day` | gflag or env override | default `0` meaning no age-based prune | age-based deletion | may violate audit expectations or exhaust disk if unset |
 | `max_log_size` | gflag or env override | default `100` in `logging.cpp` for normal path, client env override available | rotation threshold in MB | alters file count, tailing behavior, and compression cadence |
 | `log_async` | gflag or env override | default `true` | enables async ordinary log writing | can reorder failure perception under stress or drop oldest messages on overflow policy |
