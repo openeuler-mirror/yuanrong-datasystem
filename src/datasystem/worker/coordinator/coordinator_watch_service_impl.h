@@ -22,12 +22,13 @@
 
 #include <utility>
 
+#include "datasystem/protos/coordinator.irpc.pb.h"
 #include "datasystem/protos/coordinator.service.rpc.pb.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace coordinator {
-class CoordinatorWatchServiceImpl : public CoordinatorWatchService {
+class CoordinatorWatchServiceImpl : public CoordinatorWatchService, public ICoordinatorWatchService {
 public:
     explicit CoordinatorWatchServiceImpl(HostPort localAddress) : CoordinatorWatchService(std::move(localAddress))
     {

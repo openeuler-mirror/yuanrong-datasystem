@@ -24,6 +24,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
+        "//src/datasystem/protos:coordinator_brpc",
     ],
 )
 

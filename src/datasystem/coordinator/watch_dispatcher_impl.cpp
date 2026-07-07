@@ -25,6 +25,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/coordinator.stub.rpc.pb.h"
+#include "datasystem/protos/coordinator.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace coordinator {
@@ -69,8 +70,6 @@ Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcher
 
     std::shared_ptr<RpcStubBase> rpcStub;
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(watcherHostPort, StubType::COORDINATOR_WORKER_SVC, rpcStub));
-    auto stub = std::dynamic_pointer_cast<CoordinatorWatchService_Stub>(rpcStub);
-    RETURN_RUNTIME_ERROR_IF_NULL(stub);
 
     EventReqPb req;
     req.set_watch_id(watchId);
@@ -85,6 +84,13 @@ Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcher
     RpcOptions opts;
     opts.SetTimeout(GetWatchNotifyRpcTimeoutMs());
     EventRspPb rsp;
+    if (FLAGS_use_brpc) {
+        auto brpcStub = std::dynamic_pointer_cast<CoordinatorWatchService_BrpcGenericStub>(rpcStub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+        return brpcStub->HandleEvent(opts, req, rsp);
+    }
+    auto stub = std::dynamic_pointer_cast<CoordinatorWatchService_Stub>(rpcStub);
+    RETURN_RUNTIME_ERROR_IF_NULL(stub);
     return stub->HandleEvent(opts, req, rsp);
 }
 }  // namespace coordinator
