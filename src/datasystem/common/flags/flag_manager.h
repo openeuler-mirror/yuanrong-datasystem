@@ -398,6 +398,8 @@ private:
 
     std::map<void *, Flag *> flagPtrMap_;
 
+    std::map<void *, void *> pendingValidators_;
+
     std::map<std::string, std::string> errorFlags_;
 
     std::map<std::string, std::string> unknownFlags_;

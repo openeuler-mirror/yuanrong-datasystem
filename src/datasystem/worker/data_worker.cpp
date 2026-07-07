@@ -457,6 +457,7 @@ Status DataWorker::InitAndRun(int argc, char **argv)
         flags.SetValidateSpecial(WorkerFlagValidateSpecial);
         FlagInfoMap defaultGflagMap = flags.GetAllFlagsToMap();
         FLAGS_logfile_mode = 0640;
+        LinkCommonFlagsValidators();
         ParseCommandLineFlags(argc, argv);
         if (cli::HandleCli()) {
             SignalHandler(0);
@@ -494,6 +495,7 @@ Status DataWorker::InitAndRun(const DataWorkerOptions &options)
         FlagInfoMap defaultGflagMap = flags.GetAllFlagsToMap();
         FLAGS_logfile_mode = 0640;
 
+        LinkCommonFlagsValidators();
         std::string errMsg;
         CHECK_FAIL_RETURN_STATUS(
             FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg),

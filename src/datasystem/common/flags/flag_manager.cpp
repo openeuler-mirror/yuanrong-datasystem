@@ -764,6 +764,16 @@ void FlagManager::RegisterFlag(const std::string &name, FlagType type, const std
         ugly_exit(1);
     }
     (void)flagPtrMap_.emplace(currentVal, &pair.first->second);
+    auto pit = pendingValidators_.find(currentVal);
+    if (pit != pendingValidators_.end()) {
+        if (pit->second != nullptr && pair.first->second.validator_ == nullptr) {
+            pair.first->second.validator_ = pit->second;
+            if (pair.first->second.currentVal_ != nullptr) {
+                (void)pair.first->second.IsValidate(pair.first->second.currentVal_);
+            }
+        }
+        pendingValidators_.erase(pit);
+    }
 }
 
 bool FlagManager::RegisterValidator(void *flag, void *func)
@@ -771,8 +781,8 @@ bool FlagManager::RegisterValidator(void *flag, void *func)
     std::lock_guard<std::mutex> l(mutex_);
     auto it = flagPtrMap_.find(flag);
     if (it == flagPtrMap_.end()) {
-        ReportError("WARNING: Ignore register validator for flag: no flag found\n");
-        return false;
+        pendingValidators_[flag] = func;
+        return true;
     } else if (func == it->second->validator_) {
         return true;
     } else if (func != nullptr && it->second->validator_ != nullptr) {
