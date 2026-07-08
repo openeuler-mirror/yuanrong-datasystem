@@ -63,6 +63,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_factory_test",
+    srcs = ["brpc_factory_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:brpc_factory",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_async_context_test",
     srcs = ["brpc_async_context_test.cpp"],
     deps = [
