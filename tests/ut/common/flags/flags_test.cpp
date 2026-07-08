@@ -690,6 +690,21 @@ TEST_F(FlagsTest, ParseCommandLineFlagsClearsErrorStateOnRetry)
     ASSERT_EQ(FLAGS_str_flag, "retry_ok");
 }
 
+TEST_F(FlagsTest, PendingValidatorAttachedWhenFlagRegisteredLater)
+{
+    static int32_t testVal = 42;
+    static int32_t testDefault = 42;
+    auto validator = +[](const char *, int32_t v) { return v > 0; };
+    ASSERT_TRUE(RegisterValidator(&testVal, validator));
+    FlagManager::GetInstance()->RegisterFlag("test_pending_val_flag", FLAG_INT32, "test", __FILE__,
+                                             &testVal, &testDefault, false);
+    std::string errMsg;
+    EXPECT_FALSE(FlagManager::GetInstance()->FindAndAssignFlagValue("test_pending_val_flag", "0", errMsg));
+    EXPECT_EQ(testVal, 42);
+    EXPECT_TRUE(FlagManager::GetInstance()->FindAndAssignFlagValue("test_pending_val_flag", "100", errMsg));
+    EXPECT_EQ(testVal, 100);
+}
+
 TEST_F(FlagsTest, TestSetValue)
 {
     const char *argv[] = { "./program", "-bool_flag",       "true",      "-uint32_flag=64",      "--int32_flag",

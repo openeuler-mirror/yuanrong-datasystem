@@ -229,3 +229,9 @@ DS_DEFINE_validator(etcd_address, &Validator::ValidateEtcdAddresses);
 DS_DEFINE_validator(request_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(access_sample_rate, &ValidateSampleRateRange);
 DS_DEFINE_validator(diagnostic_sample_rate, &ValidateSampleRateRange);
+
+namespace datasystem {
+void LinkCommonFlagsValidators()
+{
+}
+}  // namespace datasystem

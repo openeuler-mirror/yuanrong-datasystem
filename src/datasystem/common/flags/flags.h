@@ -182,6 +182,14 @@ bool ParseCommandLineFlags(const EmbeddedConfig &config, std::string &errMsg);
 bool ParseCommandLineFlags(const KVClientConfig &config, std::string &errMsg);
 
 /**
+ * @brief Linker anchor to force retention of common_flags_validate.cpp.
+ *
+ * Ensures DS_DEFINE_validator static initializers are not discarded by the
+ * linker when dynamic_flag_config is linked as a static library.
+ */
+void LinkCommonFlagsValidators();
+
+/**
  * @brief Check whether a flag was explicitly specified.
  * @param[in] name Flag name.
  * @return True if the flag was explicitly set via argv, EmbeddedConfig, or KVClientConfig.

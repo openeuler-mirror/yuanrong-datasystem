@@ -39,6 +39,7 @@ FlagsMonitor *FlagsMonitor::GetInstance()
 
 FlagsMonitor::FlagsMonitor() : flagConfig_(), monitorThread_(), stop_(false), isStarted_(false)
 {
+    LinkCommonFlagsValidators();
 }
 
 FlagsMonitor::~FlagsMonitor()

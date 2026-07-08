@@ -388,6 +388,12 @@ bool DynamicFlagConfig::CommitSamplerFlagsTransaction(
         LOG(ERROR) << FormatString("LogSampler batch commit failed, retaining previous sampler config");
         return false;
     }
+    for (const auto &kv : candidates) {
+        OperationLogger::Instance().LogConfigChanged(kv.first, prevVals[kv.first], kv.second);
+    }
+    LOG(INFO) << FormatString("Sampler flags updated: request=%g access=%g diagnostic=%g",
+                              updatedCfg.requestSampleRate, updatedCfg.accessSampleRate,
+                              updatedCfg.diagnosticSampleRate);
     return true;
 }
 
