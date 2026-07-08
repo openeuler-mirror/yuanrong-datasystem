@@ -27,6 +27,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/format.h"
@@ -53,7 +54,7 @@ public:
      */
     ClientInfo(int32_t socketFd, ClientKey clientId, bool uniqueCount, bool shmEnabled = true,
                std::string tenantId = "", bool enableCrossNode = false, const std::string &podName = "",
-               std::string deviceId = "")
+               std::string deviceId = "", CompatibilityVersion compatibilityVersion = {})
         : socketFd_(socketFd),
           clientId_(std::move(clientId)),
           uniqueCount_(uniqueCount),
@@ -62,7 +63,8 @@ public:
           tenantId_(std::move(tenantId)),
           enableCrossNode_(enableCrossNode),
           podName_(podName),
-          deviceId_(std::move(deviceId))
+          deviceId_(std::move(deviceId)),
+          compatibilityVersion_(compatibilityVersion)
     {
     }
 
@@ -261,6 +263,11 @@ public:
         return removable_.load(std::memory_order_relaxed);
     }
 
+    const CompatibilityVersion &GetCompatibilityVersion() const
+    {
+        return compatibilityVersion_;
+    }
+
 private:
     std::mutex mutex_;
     int32_t socketFd_;
@@ -281,6 +288,7 @@ private:
     std::atomic<bool> removable_{ false };
     const std::string podName_;
     const std::string deviceId_;
+    const CompatibilityVersion compatibilityVersion_;
 };
 
 }  // namespace worker

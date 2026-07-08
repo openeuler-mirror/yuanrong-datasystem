@@ -43,6 +43,7 @@
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/util/net_util.h"
@@ -60,7 +61,9 @@
 // PIMPL: brpc types are forward-declared so headers that include this
 // file (e.g. Python extension) do not transitively pull in brpc/glib.
 // The full types are included in the .cpp files only.
-namespace brpc { class Channel; }
+namespace brpc {
+class Channel;
+}
 namespace datasystem {
 class WorkerService_BrpcGenericStub;
 }
@@ -150,6 +153,11 @@ struct ClientWorkerCommonApiAttribute {
         return invokeCount_.load(std::memory_order_relaxed) > 0;
     }
 
+    CompatibilityVersion WorkerCompatibilityVersion() const
+    {
+        return workerCompatibilityVersion_;
+    }
+
     uint64_t InvokeCount() const
     {
         return invokeCount_.load(std::memory_order_relaxed);
@@ -176,6 +184,10 @@ struct ClientWorkerCommonApiAttribute {
     std::atomic<uint32_t> workerVersion_{ 0 };
     uint32_t lockId_{ 0 };
     std::string workerId_;  // The ID of worker.
+    // Compatibility version reported by the worker. Missing or invalid worker replies fall back to the fixed baseline.
+    CompatibilityVersion workerCompatibilityVersion_{
+        CompatibilityManager::Instance().GetBaselineCompatibilityVersion()
+    };
     HostPort hostPort_;
     bool isUseStandbyWorker_ = false;
     int64_t heartBeatIntervalMs_{ MIN_HEARTBEAT_INTERVAL_MS };

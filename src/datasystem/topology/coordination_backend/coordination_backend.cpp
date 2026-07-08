@@ -23,6 +23,7 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
 
@@ -223,6 +224,7 @@ Status CoordinationBackend::InitKeepAlive(const std::string &tableName, const st
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
     keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
+    keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
     if (!isStoreAvailableWhenStart) {
         keepAliveValue_.lifecycleState = MemberLifecycleState::DOWNGRADE_RESTARTING;
     } else if (isRestart) {

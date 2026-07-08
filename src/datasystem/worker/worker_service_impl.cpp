@@ -37,6 +37,7 @@
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rpc/rpc_constants.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -256,13 +257,19 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     CheckClientGitHash(req.git_hash());
     const auto &version = req.version();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckClientVersion(version), "worker check client version failed");
+    CompatibilityVersion compatibilityVersion;
+    if (!req.compatibility_version().empty()) {
+        LOG_IF_ERROR(CompatibilityVersion::FromString(req.compatibility_version(), compatibilityVersion),
+                     "worker parse compatibility version failed");
+    }
     uint32_t lockId = 0;
     uint32_t pipelineQueueId = OsXprtPipln::INVALID_PIPLN_QUEUE_ID;
     auto shmEnabled = req.shm_enabled();
     int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
     bool supportMultiShmRefCount = req.support_multi_shm_ref_count();
     LOG(INFO) << "Register client: " << clientId << ", pod: " << req.pod_name() << ", version: " << version
-              << ", socket fd: " << socketFd << ", shmEnabled: " << shmEnabled << ", tenantId: " << tenantId
+              << ", compatibility version: " << compatibilityVersion.ToString() << ", socket fd: " << socketFd
+              << ", shmEnabled: " << shmEnabled << ", tenantId: " << tenantId
               << ", enable cross node: " << req.enable_cross_node() << ", reconnect client: " << remainClient
               << ", heartbeat: " << req.heartbeat_enabled() << ", supportMultiShmRefCount: " << supportMultiShmRefCount;
     INJECT_POINT("WorkerServiceImpl.RegisterClient.AboveAddClient");
@@ -273,7 +280,8 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     if (req.heartbeat_enabled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
             worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
-                               supportMultiShmRefCount, req.device_id(), lockId, &pipelineQueueId),
+                               supportMultiShmRefCount, req.device_id(), compatibilityVersion, lockId,
+                               &pipelineQueueId),
             "worker add client failed");
     }
     // After executing "AddClient", the server fd will be bound to the client and released when the client loses
@@ -298,7 +306,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetExclConnSockPath(exclusiveConnSockPath),
                                          "worker process get exclusive connection socket path failed");
     }
-    
+
     rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);
@@ -306,6 +314,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_worker_start_id(workerStartId_);
     rsp.set_shm_threshold(FLAGS_oc_shm_transfer_threshold_kb * KB);
     rsp.set_worker_uuid(workerUuid_);
+    rsp.set_worker_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     rsp.set_standby_worker(GetStandbyWorker());
     rsp.set_node_timeout_s(FLAGS_node_timeout_s);
     rsp.set_store_fd(fd);

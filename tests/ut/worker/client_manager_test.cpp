@@ -39,11 +39,9 @@ using namespace datasystem::worker;
 
 namespace datasystem {
 namespace ut {
-class ClientInfoTest : public CommonTest {
-};
+class ClientInfoTest : public CommonTest {};
 
-class ClientManagerTest : public CommonTest {
-};
+class ClientManagerTest : public CommonTest {};
 
 TEST_F(ClientInfoTest, TestInvalid)
 {
@@ -199,7 +197,7 @@ TEST_F(ClientManagerTest, TestRunCallbackByUDSHeartbeat)
     int socketFd = sockFd.GetFd();
 
     // Manager a client and register a callback
-    ASSERT_TRUE(clientMgr.AddClient(clientId, true, socketFd, "", "", "", "", lockId));
+    ASSERT_TRUE(clientMgr.AddClient(clientId, true, socketFd, "", "", "", "", CompatibilityVersion(), lockId));
     bool called = false;
     auto callback = [&called]() {
         LOG(INFO) << "run callback";
@@ -228,7 +226,7 @@ TEST_F(ClientManagerTest, DISABLED_TestRunCallbackByRPCHeartbeat)
     auto clientId = ClientKey::Intern("clientId");
 
     // Manager a client and register a callback
-    ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", "", "", "", lockId));
+    ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", "", "", "", CompatibilityVersion(), lockId));
     std::atomic<bool> called{ false };
     auto callback = [&called]() {
         LOG(INFO) << "run callback";
@@ -245,14 +243,14 @@ TEST_F(ClientManagerTest, DISABLED_TestRunCallbackByRPCHeartbeat)
 
 TEST_F(ClientManagerTest, TestAddClientFailed)
 {
-    FLAGS_max_client_num = 10; // max client num is 10.
+    FLAGS_max_client_num = 10;  // max client num is 10.
     ClientManager &clientMgr = ClientManager::Instance();
     DS_ASSERT_OK(clientMgr.Init());
     auto clientId = ClientKey::Intern(GetBytesUuid());
     uint32_t lockId;
-    DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
-    for (int i = 0; i < 20; i++) { // retry num is 20
-        auto status = clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId);
+    DS_ASSERT_OK(clientMgr.AddClient(clientId, true, -1, "", true, "", "", CompatibilityVersion(), lockId));
+    for (int i = 0; i < 20; i++) {  // retry num is 20
+        auto status = clientMgr.AddClient(clientId, true, -1, "", true, "", "", CompatibilityVersion(), lockId);
         ASSERT_TRUE(status.GetMsg().find("Failed to insert client") != std::string::npos) << status.GetMsg();
     }
 }
@@ -266,20 +264,21 @@ TEST_F(ClientManagerTest, TestMaxClientNumOnlyCountsShmEnabled)
     // Setting shmEnabled to true will consume lockId quota.
     auto shmClientId1 = ClientKey::Intern("shm_client_1");
     uint32_t lockId1 = 0;
-    DS_ASSERT_OK(clientMgr.AddClient(shmClientId1, true, -1, "", true, "", "", lockId1));
+    DS_ASSERT_OK(clientMgr.AddClient(shmClientId1, true, -1, "", true, "", "", CompatibilityVersion(), lockId1));
     ASSERT_NE(lockId1, 0u);
 
     auto shmClientId2 = ClientKey::Intern("shm_client_2");
     uint32_t lockId2 = 0;
-    auto rc = clientMgr.AddClient(shmClientId2, true, -1, "", true, "", "", lockId2);
+    auto rc = clientMgr.AddClient(shmClientId2, true, -1, "", true, "", "", CompatibilityVersion(), lockId2);
     ASSERT_TRUE(rc.IsError());
     ASSERT_TRUE(rc.GetMsg().find("Client number upper to the limit") != std::string::npos) << rc.ToString();
 
     // Setting shmEnabled to false should not consume lockId quota and must return lockId=0.
     for (int i = 0; i < 10; ++i) {
         auto nonShmClientId = ClientKey::Intern("non_shm_client_" + std::to_string(i));
-        uint32_t nonShmLockId = 123; // Ensure it will be covered
-        DS_ASSERT_OK(clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", nonShmLockId));
+        uint32_t nonShmLockId = 123;  // Ensure it will be covered
+        DS_ASSERT_OK(
+            clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", CompatibilityVersion(), nonShmLockId));
         ASSERT_EQ(nonShmLockId, 0u);
     }
 }
@@ -291,11 +290,11 @@ TEST_F(ClientManagerTest, TestClientShmEnabled)
 
     uint32_t lockId = 0;
     auto shmClientId = ClientKey::Intern(GetBytesUuid());
-    DS_ASSERT_OK(clientMgr.AddClient(shmClientId, true, -1, "", true, "", "", lockId));
+    DS_ASSERT_OK(clientMgr.AddClient(shmClientId, true, -1, "", true, "", "", CompatibilityVersion(), lockId));
     ASSERT_TRUE(clientMgr.ClientShmEnabled(shmClientId));
 
     auto nonShmClientId = ClientKey::Intern(GetBytesUuid());
-    DS_ASSERT_OK(clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", lockId));
+    DS_ASSERT_OK(clientMgr.AddClient(nonShmClientId, false, -1, "", true, "", "", CompatibilityVersion(), lockId));
     ASSERT_FALSE(clientMgr.ClientShmEnabled(nonShmClientId));
     ASSERT_FALSE(clientMgr.ClientShmEnabled(ClientKey::Intern(GetBytesUuid())));
 }
@@ -308,11 +307,11 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
     uint32_t lockId;
     for (size_t i = 0; i < count; ++i) {
         auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
-        ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
+        ASSERT_TRUE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", CompatibilityVersion(), lockId));
     }
     for (size_t i = 0; i < count; ++i) {
         auto clientId = ClientKey::Intern("client_id" + std::to_string(i));
-        ASSERT_FALSE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", lockId));
+        ASSERT_FALSE(clientMgr.AddClient(clientId, true, -1, "", true, "", "", CompatibilityVersion(), lockId));
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count);
 
@@ -356,6 +355,24 @@ TEST_F(ClientManagerTest, TestRemovableClientCount)
         clientMgr.RemoveClient(clientId);
     }
     ASSERT_EQ(clientMgr.GetClientCount(), count - decrCount);
+}
+TEST_F(ClientManagerTest, AddClientStoresCompatibilityVersion)
+{
+    auto &manager = ClientManager::Instance();
+    ClientKey clientId = ClientKey::Intern("compatibility-client");
+    uint32_t lockId = 0;
+    constexpr int32_t socketFd = -1;
+    const std::string tenantId = "tenant-a";
+    const std::string podName = "pod-a";
+    const std::string deviceId = "device-a";
+    CompatibilityVersion compatibilityVersion(1, 0, 0);
+
+    DS_ASSERT_OK(
+        manager.AddClient(clientId, false, socketFd, tenantId, false, podName, deviceId, compatibilityVersion, lockId));
+    auto clientInfo = manager.GetClientInfo(clientId);
+    ASSERT_NE(clientInfo, nullptr);
+    EXPECT_EQ(clientInfo->GetCompatibilityVersion(), compatibilityVersion);
+    manager.RemoveClient(clientId);
 }
 }  // namespace ut
 }  // namespace datasystem

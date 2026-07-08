@@ -1,12 +1,12 @@
 load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility=["//visibility:public"])
 
 # Topology tests common fake store.
 ds_cc_test_library(
-    name = "topology_test_common",
-    hdrs = ["fake_coordination_backend.h"],
-    deps = [
+    name="topology_test_common",
+    hdrs=["fake_coordination_backend.h"],
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/topology/coordination_backend:coordination_backend",
@@ -14,20 +14,20 @@ ds_cc_test_library(
 )
 
 ds_cc_test_library(
-    name = "topology_testing",
-    srcs = [
+    name="topology_testing",
+    srcs=[
         "testing/fake_topology_change_requester.cpp",
         "testing/fake_topology_repository.cpp",
         "testing/fake_membership_view.cpp",
         "testing/topology_test_utils.cpp",
     ],
-    hdrs = [
+    hdrs=[
         "testing/fake_topology_change_requester.h",
         "testing/fake_topology_repository.h",
         "testing/fake_membership_view.h",
         "testing/topology_test_utils.h",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/kvstore:kv_store",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/topology:topology",
@@ -35,9 +35,9 @@ ds_cc_test_library(
 )
 
 ds_cc_test(
-    name = "topology_repository_test",
-    srcs = ["topology_repository_test.cpp"],
-    deps = [
+    name="topology_repository_test",
+    srcs=["topology_repository_test.cpp"],
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/topology:topology",
         "//src/datasystem/protos:hash_ring_cc_proto",
@@ -48,9 +48,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_key_helper_test",
-    srcs = ["topology_key_helper_test.cpp"],
-    deps = [
+    name="topology_key_helper_test",
+    srcs=["topology_key_helper_test.cpp"],
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
@@ -58,18 +58,18 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "hash_ring_v2_schema_test",
-    srcs = ["hash_ring_v2_schema_test.cpp"],
-    deps = [
+    name="hash_ring_v2_schema_test",
+    srcs=["hash_ring_v2_schema_test.cpp"],
+    deps=[
         "//src/datasystem/protos:hash_ring_cc_proto",
         "//tests/ut:ut_common",
     ],
 )
 
 ds_cc_test(
-    name = "cluster_registry_test",
-    srcs = ["cluster_registry_test.cpp"],
-    deps = [
+    name="cluster_registry_test",
+    srcs=["cluster_registry_test.cpp"],
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/topology:topology",
@@ -79,11 +79,12 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "cluster_membership_test",
-    srcs = ["cluster_membership_test.cpp"],
-    deps = [
+    name="cluster_membership_test",
+    srcs=["cluster_membership_test.cpp"],
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_test_common",
@@ -91,9 +92,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "membership_view_test",
-    srcs = ["membership_view_test.cpp"],
-    deps = [
+    name="membership_view_test",
+    srcs=["membership_view_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//src/datasystem/common/util:status_helper",
         "//tests/ut:ut_common",
@@ -101,36 +102,36 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "algorithm_catalog_test",
-    srcs = ["algorithm_catalog_test.cpp"],
-    deps = [
+    name="algorithm_catalog_test",
+    srcs=["algorithm_catalog_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
     ],
 )
 
 ds_cc_test(
-    name = "route_policy_engine_test",
-    srcs = ["route_policy_engine_test.cpp"],
-    deps = [
+    name="route_policy_engine_test",
+    srcs=["route_policy_engine_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
     ],
 )
 
 ds_cc_test(
-    name = "hash_algorithm_test",
-    srcs = ["hash_algorithm_test.cpp"],
-    deps = [
+    name="hash_algorithm_test",
+    srcs=["hash_algorithm_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
     ],
 )
 
 ds_cc_test(
-    name = "placement_runtime_test",
-    srcs = ["placement_runtime_test.cpp"],
-    deps = [
+    name="placement_runtime_test",
+    srcs=["placement_runtime_test.cpp"],
+    deps=[
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
@@ -139,9 +140,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_fake_integration_test",
-    srcs = ["topology_fake_integration_test.cpp"],
-    deps = [
+    name="topology_fake_integration_test",
+    srcs=["topology_fake_integration_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_testing",
@@ -149,9 +150,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_engine_test",
-    srcs = ["topology_engine_test.cpp"],
-    deps = [
+    name="topology_engine_test",
+    srcs=["topology_engine_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_test_common",
@@ -160,9 +161,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_control_loop_test",
-    srcs = ["topology_control_loop_test.cpp"],
-    deps = [
+    name="topology_control_loop_test",
+    srcs=["topology_control_loop_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_testing",
@@ -170,9 +171,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_degraded_startup_test",
-    srcs = ["topology_degraded_startup_test.cpp"],
-    deps = [
+    name="topology_degraded_startup_test",
+    srcs=["topology_degraded_startup_test.cpp"],
+    deps=[
         "//src/datasystem/common/util:file_util",
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
@@ -181,9 +182,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_task_executor_test",
-    srcs = ["topology_task_executor_test.cpp"],
-    deps = [
+    name="topology_task_executor_test",
+    srcs=["topology_task_executor_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_testing",
@@ -191,9 +192,9 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "topology_memory_scale_module_test",
-    srcs = ["topology_memory_scale_module_test.cpp"],
-    deps = [
+    name="topology_memory_scale_module_test",
+    srcs=["topology_memory_scale_module_test.cpp"],
+    deps=[
         "//src/datasystem/topology:topology",
         "//tests/ut:ut_common",
         "//tests/ut/topology:topology_testing",
@@ -201,8 +202,8 @@ ds_cc_test(
 )
 
 test_suite(
-    name = "all_topology_tests",
-    tests = [
+    name="all_topology_tests",
+    tests=[
         "algorithm_catalog_test",
         "cluster_membership_test",
         "cluster_registry_test",

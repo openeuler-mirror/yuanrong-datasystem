@@ -23,10 +23,53 @@
 #include <mutex>
 #include <utility>
 
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace topology {
+namespace {
+
+CompatibilityVersion ParseMemberCompatibilityVersion(const std::string &compatibilityVersionText)
+{
+    if (compatibilityVersionText.empty()) {
+        return CompatibilityManager::Instance().GetBaselineCompatibilityVersion();
+    }
+    CompatibilityVersion compatibilityVersion;
+    auto rc = CompatibilityVersion::FromString(compatibilityVersionText, compatibilityVersion);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Treat invalid worker compatibility version as baseline, status=" << rc.ToString();
+        return CompatibilityManager::Instance().GetBaselineCompatibilityVersion();
+    }
+    return compatibilityVersion;
+}
+
+bool IsClusterCompatibilityVersionParticipant(MemberLifecycleState state)
+{
+    return state == MemberLifecycleState::READY;
+}
+
+CompatibilityVersion ComputeClusterCompatibilityVersion(const MembershipSnapshot &snapshot)
+{
+    bool hasMember = false;
+    CompatibilityVersion clusterCompatibilityVersion =
+        CompatibilityManager::Instance().GetBaselineCompatibilityVersion();
+    for (const auto &entry : snapshot.members) {
+        const auto &record = entry.second;
+        if (!IsClusterCompatibilityVersionParticipant(record.lifecycleState)) {
+            continue;
+        }
+        auto memberCompatibilityVersion = ParseMemberCompatibilityVersion(record.capability.compatibilityVersion);
+        if (!hasMember || memberCompatibilityVersion < clusterCompatibilityVersion) {
+            clusterCompatibilityVersion = memberCompatibilityVersion;
+            hasMember = true;
+        }
+    }
+    return clusterCompatibilityVersion;
+}
+
+}  // namespace
 
 ClusterMembership::ClusterMembership(IClusterRegistry &registry, TopologyNodeId localNodeId)
     : registry_(registry), localNodeId_(std::move(localNodeId))
@@ -54,6 +97,7 @@ Status ClusterMembership::Rebuild()
         PublishSnapshot(nullptr, MembershipRuntimeState::DEGRADED);
         return rc;
     }
+    CompatibilityManager::Instance().UpdateClusterCompatibilityVersion(ComputeClusterCompatibilityVersion(listed));
     PublishSnapshot(std::make_shared<MembershipSnapshot>(std::move(listed)), MembershipRuntimeState::READY);
     return Status::OK();
 }
@@ -151,17 +195,21 @@ MembershipRuntimeState ClusterMembership::RuntimeState() const
 
 Status ClusterMembership::ApplyMembershipEvent(const MembershipWatchEvent &event)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr && state_ == MembershipRuntimeState::READY, K_NOT_READY,
-                             "membership snapshot is not ready");
-    auto next = std::make_shared<MembershipSnapshot>(*snapshot_);
-    next->revision = event.revision;
-    if (event.type == MembershipWatchEventType::DELETED) {
-        next->members.erase(event.nodeId);
-    } else {
-        next->members[event.record.nodeId] = event.record;
+    std::shared_ptr<MembershipSnapshot> next;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr && state_ == MembershipRuntimeState::READY, K_NOT_READY,
+                                 "membership snapshot is not ready");
+        next = std::make_shared<MembershipSnapshot>(*snapshot_);
+        next->revision = event.revision;
+        if (event.type == MembershipWatchEventType::DELETED) {
+            next->members.erase(event.nodeId);
+        } else {
+            next->members[event.record.nodeId] = event.record;
+        }
+        snapshot_ = next;
     }
-    snapshot_ = std::move(next);
+    CompatibilityManager::Instance().UpdateClusterCompatibilityVersion(ComputeClusterCompatibilityVersion(*next));
     return Status::OK();
 }
 

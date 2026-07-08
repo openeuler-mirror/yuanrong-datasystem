@@ -50,6 +50,7 @@
 #include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/fd_pass.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -104,16 +105,15 @@ const char *ShmEnableTypeName(ShmEnableType type)
 namespace client {
 std::string FormatUrmaSwitchWindowStats(const std::string &clientId, const std::string &workerAddress,
                                         const UrmaSuccessRateTracker &tracker,
-                                        const UrmaSuccessRateTracker::WindowStats &windowStats,
-                                        uint64_t windowLengthMs)
+                                        const UrmaSuccessRateTracker::WindowStats &windowStats, uint64_t windowLengthMs)
 {
-    return FormatString("[Switch] URMA data-plane settled window, client id: %s, worker address: %s, "
-                        "success: %llu, failure: %llu, total: %llu, success rate ratio: %g, min sample count: %u, "
-                        "window length ms: %llu, backoff level: %u, next allowed switch time ms: %llu",
-                        clientId, workerAddress, windowStats.successCount, windowStats.failureCount,
-                        windowStats.totalCount, FLAGS_urma_failover_success_rate_ratio,
-                        FLAGS_urma_failover_min_sample_count, windowLengthMs, tracker.GetBackoffLevel(),
-                        tracker.GetNextAllowedSwitchTimeMs());
+    return FormatString(
+        "[Switch] URMA data-plane settled window, client id: %s, worker address: %s, "
+        "success: %llu, failure: %llu, total: %llu, success rate ratio: %g, min sample count: %u, "
+        "window length ms: %llu, backoff level: %u, next allowed switch time ms: %llu",
+        clientId, workerAddress, windowStats.successCount, windowStats.failureCount, windowStats.totalCount,
+        FLAGS_urma_failover_success_rate_ratio, FLAGS_urma_failover_min_sample_count, windowLengthMs,
+        tracker.GetBackoffLevel(), tracker.GetNextAllowedSwitchTimeMs());
 }
 
 namespace {
@@ -121,13 +121,30 @@ void MaybeApplyLogSampleConfig(const LogSampleConfigPb &config, const std::strin
 {
     auto result = LogSampler::Instance().UpdateConfigFromProto(config);
     if (result == LogSampler::ConfigUpdateResult::INVALID) {
-        LOG(ERROR) << FormatString(
-            "Illegal LogSampleConfigPb from %s: request_ppm=%u access_ppm=%u diagnostic_ppm=%u",
-            source, config.request_sample_ppm(), config.access_sample_ppm(), config.diagnostic_sample_ppm());
+        LOG(ERROR) << FormatString("Illegal LogSampleConfigPb from %s: request_ppm=%u access_ppm=%u diagnostic_ppm=%u",
+                                   source, config.request_sample_ppm(), config.access_sample_ppm(),
+                                   config.diagnostic_sample_ppm());
     } else if (result == LogSampler::ConfigUpdateResult::CHANGED) {
-        LOG(INFO) << FormatString("Applied log sample config from %s: enabled=%s",
-                                  source, config.enabled() ? "true" : "false");
+        LOG(INFO) << FormatString("Applied log sample config from %s: enabled=%s", source,
+                                  config.enabled() ? "true" : "false");
     }
+}
+
+CompatibilityVersion ParseWorkerCompatibilityVersionOrCurrent(const std::string &compatibilityVersionText,
+                                                              const std::string &source)
+{
+    auto baseline = CompatibilityManager::Instance().GetBaselineCompatibilityVersion();
+    if (compatibilityVersionText.empty()) {
+        return baseline;
+    }
+    CompatibilityVersion workerCompatibilityVersion;
+    auto rc = CompatibilityVersion::FromString(compatibilityVersionText, workerCompatibilityVersion);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("Parse worker compatibility version from %s failed, use baseline: %s", source,
+                                     rc.ToString());
+        return baseline;
+    }
+    return workerCompatibilityVersion;
 }
 }  // namespace
 
@@ -269,6 +286,7 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     req.set_enable_exclusive_connection(false);
     req.set_pod_name(Logging::PodName());
     req.set_device_id(deviceId_);
+    req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RegisterClientRspPb rsp;
     Status status;
@@ -280,6 +298,8 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
     shmThreshold_ = rsp.shm_threshold();
     workerId_ = rsp.worker_uuid();
+    workerCompatibilityVersion_ =
+        ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "local worker register");
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
     SetHeartbeatProperties(timeoutMs, rsp);
@@ -333,7 +353,7 @@ Status ClientWorkerRemoteCommonApi::Init(int32_t requestTimeoutMs, int32_t conne
     // so both SDK (Python + C++) and worker processes pick it up at startup.
     // Accepted values: "1", "true", "TRUE" → brpc; any other value → ZMQ.
     LOG_FIRST_N(INFO, 1) << "SDK: FLAGS_use_brpc=" << FLAGS_use_brpc
-                          << " (from DATASYSTEM_USE_BRPC env or gflag default)";
+                         << " (from DATASYSTEM_USE_BRPC env or gflag default)";
 
     CHECK_FAIL_RETURN_STATUS(
         connectTimeoutMs >= RPC_MINIMUM_TIMEOUT, StatusCode::K_INVALID,
@@ -370,7 +390,8 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         cfg.timeout_ms = timeoutMs;
         cfg.connect_timeout_ms = timeoutMs;
         brpcChannel_ = BrpcChannelFactory::Create(cfg);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
             FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
         // brpc Channel::Init() is non-blocking — health check runs periodically.
         // Wait for the TCP connection to establish before returning.
@@ -487,8 +508,7 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
                             socketFd);
 }
 
-Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t remainingMs,
-                                                    GetSocketPathRspPb &reply)
+Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t remainingMs, GetSocketPathRspPb &reply)
 {
     GetSocketPathReqPb req;
     RETURN_IF_NOT_OK(SetToken(req));
@@ -718,6 +738,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
         return Status::OK();
     });
 #endif
+    req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     RegisterClientRspPb rsp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     LOG(INFO) << "Start to send rpc to register client to worker, shm enable: " << IsShmEnable()
@@ -779,8 +800,8 @@ void ClientWorkerRemoteCommonApi::RecordUrmaDataPlaneResult(bool success)
         }
         return;
     }
-    LOG(INFO) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_,
-                                             windowStats, clientDeadTimeoutMs_)
+    LOG(INFO) << FormatUrmaSwitchWindowStats(clientId_, hostPort_.ToString(), urmaSuccessRateTracker_, windowStats,
+                                             clientDeadTimeoutMs_)
               << ", switch trigger: true";
     if (urmaDataPlaneFailureCallback_ == nullptr || !urmaDataPlaneFailureCallback_()) {
         LOG(ERROR) << "[Switch] Submit URMA data-plane failure worker switch failed, client id: " << clientId_
@@ -1004,6 +1025,8 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
     uint32_t workerVersion = workerVersion_.fetch_add(1, std::memory_order_relaxed) + 1;
     shmThreshold_ = rsp.shm_threshold();
     workerId_ = rsp.worker_uuid();
+    workerCompatibilityVersion_ =
+        ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "remote worker register");
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
     exclusiveConnSockPath_ = rsp.exclusive_conn_sockpath();

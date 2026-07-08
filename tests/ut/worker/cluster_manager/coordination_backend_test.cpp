@@ -11,6 +11,7 @@
 
 #include "etcd/api/mvccpb/kv.pb.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/protos/coordinator.pb.h"
 #include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/worker/cluster_manager/cluster_constants.h"
@@ -216,6 +217,8 @@ TEST(CoordinationBackendTest, StoresWorkerServiceInfoProto)
     ASSERT_TRUE(info.ParseFromString(kvs.front().value));
     EXPECT_GT(info.timestamp(), 0);
     EXPECT_EQ(info.state(), coordinator::WorkerServiceInfoPb::READY);
+    EXPECT_EQ(info.compatibility_version(),
+              CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
 }
 
 TEST(CoordinationBackendTest, RollsBackRegisteredWatchesWhenLaterWatchFails)

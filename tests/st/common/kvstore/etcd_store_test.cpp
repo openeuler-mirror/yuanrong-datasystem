@@ -32,6 +32,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
+#include "datasystem/common/kvstore/etcd/member_service_info.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/util/ssl_authorization.h"
 #include "datasystem/common/util/strings_util.h"
@@ -54,6 +55,15 @@ DS_DECLARE_string(etcd_passphrase_path);
 
 namespace datasystem {
 namespace st {
+namespace {
+Status GetMemberStateString(const std::string &value, std::string &state)
+{
+    topology::MemberServiceInfo memberInfo;
+    RETURN_IF_NOT_OK(topology::MemberServiceInfo::FromString(value, memberInfo));
+    return topology::MemberLifecycleStateToString(memberInfo.state, state);
+}
+}  // namespace
+
 class EtcdStoreTest : public ExternalClusterTest {
 protected:
     EtcdStoreTest() : db_(nullptr), tableCreated_(false)
@@ -308,9 +318,9 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     std::string value;
     rc = db_->Get(tableName_, key1, value);
     DS_EXPECT_OK(rc);
-    auto pos = value.find(";");
-    EXPECT_TRUE(pos != std::string::npos);
-    EXPECT_EQ(value.substr(pos + 1), "start");
+    std::string state;
+    DS_EXPECT_OK(GetMemberStateString(value, state));
+    EXPECT_EQ(state, "start");
 
     // wait for lease timeout of 10000ms
     std::this_thread::sleep_for(std::chrono::milliseconds(10000));
@@ -319,9 +329,8 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     std::string value2;
     rc = db_->Get(tableName_, key1, value2);
     DS_EXPECT_OK(rc);
-    pos = value2.find(";");
-    EXPECT_TRUE(pos != std::string::npos);
-    EXPECT_EQ(value2.substr(pos + 1), "start");
+    DS_EXPECT_OK(GetMemberStateString(value2, state));
+    EXPECT_EQ(state, "start");
     EXPECT_EQ(value, value2);
 
     // wait for lease timeout of 20000ms
@@ -330,9 +339,8 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     // Read the KV pair again. The KV pair should not be deleted due to keep alive operation.
     rc = db_->Get(tableName_, key1, value2);
     DS_EXPECT_OK(rc);
-    pos = value2.find(";");
-    EXPECT_TRUE(pos != std::string::npos);
-    EXPECT_EQ(value2.substr(pos + 1), "start");
+    DS_EXPECT_OK(GetMemberStateString(value2, state));
+    EXPECT_EQ(state, "start");
     EXPECT_EQ(value, value2);
 }
 

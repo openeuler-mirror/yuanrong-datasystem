@@ -31,6 +31,7 @@
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/status_helper.h"
 
 #ifdef WITH_TESTS
@@ -81,7 +82,8 @@ public:
      */
     virtual Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                              bool enableCrossNode, const std::string &podName, bool supportMultiShmRefCount,
-                             std::string deviceId, uint32_t &lockId, uint32_t *pipelineQueueId = nullptr) = 0;
+                             std::string deviceId, const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
+                             uint32_t *pipelineQueueId = nullptr) = 0;
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.

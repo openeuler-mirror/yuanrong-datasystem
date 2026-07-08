@@ -72,11 +72,13 @@ Status ClientManager::Init()
     return heartbeatEventLoop_->Init();
 }
 
-Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount, const std::string &tenantId)
+Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount, const std::string &tenantId,
+                                const CompatibilityVersion &compatibilityVersion)
 {
     LOG(INFO) << "Add client info, socketFd:" << socketFd << ", clientId:" << clientId << ", tenantId:" << tenantId;
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
-    auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, true, tenantId);
+    auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, true, tenantId, false, "", "",
+                                                   compatibilityVersion);
     return tbbClientTable_.emplace(clientId, std::move(clientInfo))
                ? Status::OK()
                : Status(StatusCode::K_RUNTIME_ERROR, FormatString("Failed to insert client %s to table", clientId));
@@ -84,7 +86,8 @@ Status ClientManager::AddClient(const ClientKey &clientId, int socketFd, bool un
 
 Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
                                 bool enableCrossNode, const std::string &podName, std::string deviceId,
-                                uint32_t &lockId, uint32_t *pipelineQueueId)
+                                const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
+                                uint32_t *pipelineQueueId)
 {
     // Ensure callers never observe a stale lockId on failure paths.
     lockId = 0;
@@ -95,7 +98,7 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     bool uniqueCount = true;
     auto clientInfo = std::make_shared<ClientInfo>(socketFd, clientId, uniqueCount, shmEnabled, tenantId,
-                                                   enableCrossNode, podName, std::move(deviceId));
+                                                   enableCrossNode, podName, std::move(deviceId), compatibilityVersion);
     clientInfo->SetLockId(lockId);
 
     // allocate pipeline queue

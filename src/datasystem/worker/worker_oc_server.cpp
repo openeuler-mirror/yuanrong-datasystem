@@ -1151,8 +1151,7 @@ Status WorkerOCServer::Init()
     RETURN_IF_NOT_OK(ConstructClusterInfo(clusterInfo));
     LOG(INFO) << "The msg in cluster info: " << clusterInfo.ToString();
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo, false),
-                                     "etcd cluster manager init failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->Init(clusterInfo, false), "etcd cluster manager init failed");
     LOG(INFO) << "etcd cluster management initialized.";
     if (masterAddr_.Empty()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(masterAddr_.ParseString(FLAGS_master_address),
@@ -1177,8 +1176,7 @@ Status WorkerOCServer::Init()
     }
     // Publish keepalive to etcd only after brpc is listening so peers can
     // reach us immediately when they see the etcd event.
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->StartKeepAlive(),
-                                     "Failed to start cluster keepalive");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->StartKeepAlive(), "Failed to start cluster keepalive");
     RETURN_IF_NOT_OK(InitSlotRecovery());
 
     HashRingEvent::DataMigrationReady::GetInstance().AddSubscriber(WORKER_OC_SERVER, [this]() {
@@ -2097,11 +2095,13 @@ void WorkerOCServer::AfterClientLostHandler(const ClientKey &clientId)
 
 Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd,
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
-                                 bool supportMultiShmRefCount, std::string deviceId, uint32_t &lockId,
+                                 bool supportMultiShmRefCount, std::string deviceId,
+                                 const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
                                  uint32_t *pipelineQueueId)
 {
     RETURN_IF_NOT_OK(ClientManager::Instance().AddClient(clientId, shmEnabled, socketFd, tenantId, enableCrossNode,
-                                                         podName, std::move(deviceId), lockId, pipelineQueueId));
+                                                         podName, std::move(deviceId), compatibilityVersion, lockId,
+                                                         pipelineQueueId));
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }

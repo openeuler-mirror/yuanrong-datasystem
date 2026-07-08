@@ -157,7 +157,7 @@ Important nuance:
 
 ### Lease Keepalive And Worker Liveness
 
-1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `WorkerServiceInfo` with timestamp, service state, optional host id, and optional compatibility version.
+1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `WorkerServiceInfo` with timestamp, service state, optional host id, and the local worker compatibility version.
 2. Initial states are `start`, `restart`, or `d_rst`; after the first successful write, later automatic writes use `recover`.
 3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table key with that lease, then runs the keepalive loop.
 4. `EtcdKeepAlive::Run` periodically sends `LeaseKeepAlive` requests after `LivenessHealthCheckEvent` notifications.
