@@ -61,6 +61,7 @@ datasystem_sdk_tree(
     headers = ["//include/datasystem:headers_srcs"],
     libdatasystem = "//:libdatasystem_file",
     libworker = "//:libdatasystem_worker_shared_file",
+    libcoordinator = "//:libdatasystem_coordinator_shared_file",
 )
 
 datasystem_cmake_config(
@@ -180,6 +181,7 @@ py_wheel(
         "//:cpp_template_files",
         "//:datasystem_worker_file",
         "//:libdatasystem_worker_shared_file",
+        "//:libdatasystem_coordinator_shared_file",
         "//:dockerentry_daemonset_files",
         "//:dockerentry_deployment_files",
         "//:dsbench_file",

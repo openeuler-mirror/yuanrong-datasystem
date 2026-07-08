@@ -17,7 +17,15 @@
 #include "datasystem/coordinator/coordinator_service_impl.h"
 
 #include "datasystem/common/coordinator/key_value_entry.h"
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
+
+DS_DEFINE_uint64(coordinator_rpc_stub_cache_size, 2048, "Maximum coordinator RPC stub cache size.");
 
 namespace datasystem {
 namespace coordinator {
@@ -45,6 +53,67 @@ void FillKeyValuePb(const KeyValueEntry &entry, KeyValue *kv)
     kv->set_mod_revision(entry.modRevision);
 }
 }  // namespace
+
+CoordinatorServiceImpl::CoordinatorServiceImpl(const HostPort &localAddress)
+    : CoordinatorService(localAddress), coordinatorAddr_(localAddress)
+{
+}
+
+Status CoordinatorServiceImpl::Init()
+{
+    Logging::GetInstance()->Start("datasystem_coordinator");
+
+    // RPC authentication setup
+    RpcCredential cred;
+    RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
+    builder_.SetCredential(cred);
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_coordinator_rpc_stub_cache_size, coordinatorAddr_));
+
+    // Build the internal component tree
+    memStore_ = std::make_shared<MemoryKvStore>();
+    watchRegistry_ = std::make_shared<WatchRegistry>();
+    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get());
+    clock_ = std::make_shared<SteadyClockReal>();
+    ttlManager_ = std::make_shared<TtlManager>(clock_);
+    store_ = std::make_shared<CoordinatorStore>(memStore_, watchRegistry_, watchDispatcher_, ttlManager_);
+
+    // Configure RPC service settings
+    RpcServiceCfg cfg;
+    cfg.numRegularSockets_ = FLAGS_rpc_thread_num;
+    cfg.numStreamSockets_ = 0;
+    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
+    cfg.udsEnabled_ = false;
+
+    builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
+    builder_.AddService(this, cfg);
+    return Status::OK();
+}
+
+Status CoordinatorServiceImpl::Start()
+{
+    RETURN_IF_NOT_OK(builder_.Init(rpcServer_));
+    RETURN_IF_NOT_OK(builder_.BuildAndStart(rpcServer_));
+    LOG(INFO) << "datasystem coordinator started at " << coordinatorAddr_.ToString();
+    return Status::OK();
+}
+
+Status CoordinatorServiceImpl::Shutdown()
+{
+    LOG(INFO) << "Coordinator process executing a shutdown.";
+    if (rpcServer_ != nullptr) {
+        rpcServer_->Shutdown();
+        rpcServer_.reset();
+    }
+    // Reset in reverse dependency order
+    store_.reset();
+    ttlManager_.reset();
+    clock_.reset();
+    watchDispatcher_.reset();
+    watchRegistry_.reset();
+    memStore_.reset();
+    LOG(INFO) << "Coordinator shutdown success.";
+    return Status::OK();
+}
 
 Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 {

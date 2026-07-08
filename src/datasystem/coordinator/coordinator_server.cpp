@@ -14,76 +14,133 @@
  * limitations under the License.
  */
 
-#include "datasystem/coordinator/coordinator_server.h"
+#include "datasystem/coordinator_server.h"
 
+#include <chrono>
+#include <condition_variable>
+#include <csignal>
+#include <mutex>
+
+#include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/log/logging.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_channel.h"
-#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/signal/signal.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/coordinator/coordinator_service_impl.h"
 
 DS_DECLARE_string(coordinator_address);
-DS_DEFINE_uint64(coordinator_rpc_stub_cache_size, 2048, "Maximum coordinator RPC stub cache size.");
 
 namespace datasystem {
-namespace coordinator {
+
+std::condition_variable g_termSignalCv;
+
+namespace {
+
+constexpr int CHECK_EVERY_MS = 1000;
+
+void SignalHandler(int signum)
+{
+    (void)signum;
+    g_exitFlag = 1;
+    g_termSignalCv.notify_all();
+}
+
+}  // namespace
+
+CoordinatorServer::~CoordinatorServer()
+{
+    if (service_) {
+        service_->Shutdown();
+        service_.reset();
+    }
+}
+
+CoordinatorServer *CoordinatorServer::GetInstance()
+{
+    static CoordinatorServer instance;
+    return &instance;
+}
+
+Status CoordinatorServer::InitAndRun()
+{
+    {
+        std::lock_guard<std::mutex> lock(initMutex_);
+        if (isStarted_.load()) {
+            return Status(K_INVALID, "CoordinatorServer already started");
+        }
+
+        RETURN_IF_NOT_OK(Init());
+        auto rc = Start();
+        if (rc.IsError()) {
+            Shutdown();
+            return rc;
+        }
+
+        isStarted_.store(true);
+    }
+
+    LOG(INFO) << "Coordinator started successfully";
+
+    RunEventLoop();  // blocks until termination signal or Stop()
+
+    return Shutdown();
+}
+
+Status CoordinatorServer::InitAndRun(const CoordinatorOptions &options)
+{
+    std::string errMsg;
+    CHECK_FAIL_RETURN_STATUS(
+        FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg),
+        K_INVALID, FormatString("Parse config file %s error: %s", options.configFilePath, errMsg));
+    return InitAndRun();
+}
+
+Status CoordinatorServer::Stop()
+{
+    LOG(INFO) << "CoordinatorServer::Stop() called, requesting shutdown";
+    g_exitFlag = 1;
+    g_termSignalCv.notify_all();
+    return Status::OK();
+}
+
 Status CoordinatorServer::Init()
 {
-    CHECK_FAIL_RETURN_STATUS(!FLAGS_coordinator_address.empty(), K_INVALID,
-                             "The coordinator_address must be specified when starting coordinator.");
-    RETURN_IF_NOT_OK(coordinatorAddr_.ParseString(FLAGS_coordinator_address));
+    (void)signal(SIGPIPE, SIG_IGN);
+    (void)signal(SIGINT, SignalHandler);
+    (void)signal(SIGTERM, SignalHandler);
 
-    Logging::GetInstance()->Start("datasystem_coordinator");
+    HostPort coordinatorAddr;
+    RETURN_IF_NOT_OK(coordinatorAddr.ParseString(FLAGS_coordinator_address));
 
-    RpcCredential cred;
-    RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
-    builder_.SetCredential(cred);
-    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_coordinator_rpc_stub_cache_size, coordinatorAddr_));
-
-    memStore_ = std::make_shared<MemoryKvStore>();
-    watchRegistry_ = std::make_shared<WatchRegistry>();
-    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get());
-    clock_ = std::make_shared<SteadyClockReal>();
-    ttlManager_ = std::make_shared<TtlManager>(clock_);
-    store_ = std::make_shared<CoordinatorStore>(memStore_, watchRegistry_, watchDispatcher_, ttlManager_);
-    coordinatorService_ = std::make_unique<CoordinatorServiceImpl>(coordinatorAddr_, store_);
-
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = FLAGS_rpc_thread_num;
-    cfg.numStreamSockets_ = 0;
-    cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
-    cfg.udsEnabled_ = false;
-
-    builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
-    builder_.AddService(coordinatorService_.get(), cfg);
-    return Status::OK();
+    service_ = std::make_unique<coordinator::CoordinatorServiceImpl>(coordinatorAddr);
+    return service_->Init();
 }
 
 Status CoordinatorServer::Start()
 {
-    RETURN_IF_NOT_OK(builder_.Init(rpcServer_));
-    RETURN_IF_NOT_OK(builder_.BuildAndStart(rpcServer_));
-    LOG(INFO) << "datasystem coordinator started at " << coordinatorAddr_.ToString();
-    return Status::OK();
+    return service_->Start();
 }
 
 Status CoordinatorServer::Shutdown()
 {
     LOG(INFO) << "Coordinator process executing a shutdown.";
-    if (rpcServer_ != nullptr) {
-        rpcServer_->Shutdown();
-        rpcServer_.reset();
+    if (service_) {
+        service_->Shutdown();
+        service_.reset();
     }
-    coordinatorService_.reset();
-    store_.reset();
-    ttlManager_.reset();
-    clock_.reset();
-    watchDispatcher_.reset();
-    watchRegistry_.reset();
-    memStore_.reset();
     LOG(INFO) << "Coordinator shutdown success.";
     return Status::OK();
 }
-}  // namespace coordinator
+
+void CoordinatorServer::RunEventLoop()
+{
+    std::unique_lock<std::mutex> termSignalLock(g_termSignalMutex);
+    while (!IsTermSignalReceived()) {
+        g_termSignalCv.wait_for(termSignalLock, std::chrono::milliseconds(CHECK_EVERY_MS),
+                                [] { return IsTermSignalReceived(); });
+    }
+
+    LOG(INFO) << "Coordinator received termination signal, shutting down";
+}
+
 }  // namespace datasystem

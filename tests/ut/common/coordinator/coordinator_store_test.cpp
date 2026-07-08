@@ -220,8 +220,9 @@ protected:
 
 TEST_F(CoordinatorStoreTest, CoordinatorServiceForwardsStoreOperationsAndMarksLeader)
 {
-    auto store = std::shared_ptr<CoordinatorStore>(store_.release());
-    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18480), store);
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18480));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
 
     coordinator::PutReqPb putReq;
     putReq.set_key("/svc/key");

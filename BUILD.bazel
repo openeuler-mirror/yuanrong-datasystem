@@ -368,6 +368,16 @@ copy_file(
     ],
 )
 
+# --- Coordinator shared library ---
+copy_file(
+    name = "libdatasystem_coordinator_shared_file",
+    src = "//src/datasystem/coordinator:datasystem_coordinator_shared",
+    out = "yr/datasystem/lib/libdatasystem_coordinator.so",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
 # --- Strip for libds_client_py.so ---
 genrule(
     name = "libds_client_py_sym",
