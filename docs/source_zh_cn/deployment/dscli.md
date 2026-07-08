@@ -778,7 +778,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | v | int | `0` | 是 | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | log_async | bool | `true` | 否 | 是否开启异步刷新日志功能 |
 | log_async_queue_size | int | `65536` | 否 | 异步日志的消息队列最大容量（消息条数） |
-| log_compress | bool | `true` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
+| log_compress | bool | `false` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 否 | 日志消息最多缓冲时长（以秒为单位） |
 | log_filename | string | `""` | 否 | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
@@ -806,6 +806,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | minloglevel | int | `0` | 是 | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | logfile_mode | int | `416` | 否 | 设置日志文件模式/权限，值为八进制数 |
 | enable_perf_trace_log | bool | `false` | 否 | 是否打开性能trace日志 |
+
+> **升级提示**：日志压缩默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `log_compress` 为 `true`；同时建议根据不压缩场景重新评估 `max_log_file_num` 和 `max_log_size` 的容量设置。
 
 #### 二级缓存相关配置
 

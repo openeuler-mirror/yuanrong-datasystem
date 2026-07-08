@@ -394,7 +394,7 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
     EnvGuard envGuard({
         { MAX_LOG_SIZE_ENV, "200" },
         { MAX_LOG_FILE_NUM_ENV, "7" },
-        { LOG_COMPRESS_ENV, "false" },
+        { LOG_COMPRESS_ENV, "true" },
         { LOG_V, "3" },
         { MIN_LOG_LEVEL, "2" },
         { LOG_RETENTION_DAY_ENV, "5" },
@@ -411,7 +411,7 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
     Status status = KVClientConfig::Builder()
                         .MaxLogSize(100)
                         .MaxLogFileNum(5)
-                        .LogCompress(true)
+                        .LogCompress(false)
                         .VLogLevel(0)
                         .MinLogLevel(0)
                         .LogRetentionDay(0)
@@ -432,7 +432,7 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
 
     EXPECT_EQ(FLAGS_max_log_size, 100u);
     EXPECT_EQ(FLAGS_max_log_file_num, 5u);
-    EXPECT_TRUE(FLAGS_log_compress);
+    EXPECT_FALSE(FLAGS_log_compress);
     EXPECT_EQ(FLAGS_v, 0);
     EXPECT_EQ(FLAGS_minloglevel, 0);
     EXPECT_EQ(FLAGS_log_retention_day, 0u);

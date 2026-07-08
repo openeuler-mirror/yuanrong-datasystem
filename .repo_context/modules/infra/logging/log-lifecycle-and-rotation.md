@@ -84,6 +84,10 @@
   - `DATASYSTEM_MIN_LOG_LEVEL`
   - `DATASYSTEM_LOG_MONITOR_ENABLE`
   - `DATASYSTEM_LOG_ONLY_WRITE_INFO_FILE`
+- Verified in `logging.cpp`, `cli/deploy/conf/*.json`, and Helm values:
+  - `log_compress` defaults to disabled in the runtime flag and shipped worker/coordinator deployment templates.
+  - client-side `DATASYSTEM_LOG_COMPRESS` is only used when `log_compress` was not explicitly supplied through
+    command-line style flags or `KVClientConfig`.
 - Verified in `provider.cpp`:
   - the early worker log prefix resolves the pod identifier from `POD_IP`, then `POD_NAME`, then `HOSTNAME`
 - Verified in `logging.cpp` and `file_util.cpp`:

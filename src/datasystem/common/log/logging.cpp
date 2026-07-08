@@ -341,7 +341,7 @@ void Logging::InitClientBasicConfig()
         FLAGS_max_log_file_num = GetUint32FromEnv(MAX_LOG_FILE_NUM_ENV.c_str(), DEFAULT_MAX_LOG_FILE_NUM);
     }
 
-    if (FLAGS_log_compress == DEFAULT_LOG_COMPRESS) {
+    if (!WasCommandLineFlagSpecified("log_compress")) {
         FLAGS_log_compress = GetBoolFromEnv(LOG_COMPRESS_ENV.c_str(), DEFAULT_CLIENT_LOG_COMPRESS);
     }
 
