@@ -32,7 +32,7 @@ Status StOCServiceImpl::GetMasterGRefTable(const GRefTableReqPb &req, GRefTableR
 {
     (void)req;
     std::unordered_map<std::string, std::vector<std::string>> refTable;
-    auto dbName = metadataManagerHolder_->GetCurrentWorkerUuid();
+
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     Status rc = metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager);
     RETURN_OK_IF_TRUE(rc.IsError());

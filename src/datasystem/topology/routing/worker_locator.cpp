@@ -72,11 +72,11 @@ Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &obje
     if (options.centralizedMode) {
         RouteDecision route;
         RETURN_IF_NOT_OK(LocateCentralizedMaster(objectKeys.front(), options, route));
-        const auto metaAddrInfo = route.ToMetaAddrInfo();
+        const auto masterAddr = route.OwnerAddress();
         for (const auto &objectKey : objectKeys) {
             route.keyHash = MurmurHash3_32(objectKey);
             decision.perKeyDecision.emplace(objectKey, route);
-            decision.groupsByEndpoint[metaAddrInfo].emplace_back(objectKey);
+            decision.groupsByEndpoint[masterAddr].emplace_back(objectKey);
         }
         return Status::OK();
     }
@@ -98,7 +98,7 @@ Status WorkerLocator::LocateMetaOwnersBatch(const std::vector<std::string> &obje
             continue;
         }
         decision.perKeyDecision.emplace(objectKey, route);
-        decision.groupsByEndpoint[route.ToMetaAddrInfo()].emplace_back(objectKey);
+        decision.groupsByEndpoint[route.OwnerAddress()].emplace_back(objectKey);
     }
     return Status::OK();
 }

@@ -191,10 +191,10 @@ public:
 
 protected:
     /**
-     * @brief Get the current db name.
-     * @return std::string The db name.
+     * @brief Get the current worker id.
+     * @return std::string The worker id.
      */
-    std::string GetDbName();
+    std::string GetWorkerId();
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager

@@ -28,7 +28,6 @@
 
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/master/meta_addr_info.h"
 
 namespace datasystem {
 namespace topology {
@@ -119,18 +118,15 @@ struct RouteDecision {
     std::string ownerNodeId;
     MemberEndpoint ownerEndpoint;
 
-    MetaAddrInfo ToMetaAddrInfo() const
+    const HostPort &OwnerAddress() const
     {
-        MetaAddrInfo info;
-        info.SetAddress(ownerEndpoint.address);
-        info.SetDbName(ownerNodeId);
-        return info;
+        return ownerEndpoint.address;
     }
 };
 
 struct BatchRouteDecision {
     int64_t routingVersion = -1;
-    std::unordered_map<MetaAddrInfo, std::vector<std::string>> groupsByEndpoint;
+    std::unordered_map<HostPort, std::vector<std::string>> groupsByEndpoint;
     std::unordered_map<std::string, RouteDecision> perKeyDecision;
     std::unordered_map<std::string, Status> perKeyFailure;
     bool hasPartialFailure = false;

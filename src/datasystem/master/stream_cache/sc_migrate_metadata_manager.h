@@ -85,7 +85,7 @@ public:
         std::vector<std::string> streamNames;
         std::vector<std::string> failedStreamNames;
         std::string destAddr;
-        std::string destDbName;
+        std::string destWorkerId;
     };
     SCMigrateMetadataManager(const SCMigrateMetadataManager &other) = delete;
     SCMigrateMetadataManager(SCMigrateMetadataManager &&other) = delete;
@@ -118,14 +118,14 @@ public:
 
     /**
      * @brief Migrate data by hash range
-     * @param[in] dbName The rocksdb name.
+     * @param[in] workerId The worker id.
      * @param[in] dest Destination address of the migration.
-     * @param[in] destDbName The dest rocksdb name.
+     * @param[in] destWorkerId The dest worker id.
      * @param[in] ranges The stream names to be migrated.
      * @param[in] isNetworkRecovery True if under network recovery scenario.
      * @return Status of the call.
      */
-    Status MigrateByRanges(const std::string &dbName, const std::string &dest, const std::string &destDbName,
+    Status MigrateByRanges(const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
                            const worker::HashRange &ranges, bool isNetworkRecovery);
 
     /**
@@ -139,12 +139,12 @@ public:
 
     /**
      * @brief Obtaining the Data Migration Result
-     * @param[in] dbName The rocksdb name.
+     * @param[in] workerId The worker id.
      * @param[in] destination Destination address of the migration.
      * @param[out] failedStreams Failed stream names.
      * @return Status of the call.
      */
-    Status GetMigrateMetadataResult(const std::string &dbName, const std::string &destination,
+    Status GetMigrateMetadataResult(const std::string &workerId, const std::string &destination,
                                     std::vector<std::string> &failedStreams);
 
 private:
@@ -214,7 +214,7 @@ private:
 #ifdef WITH_TESTS
     friend class ::datasystem::ut::SCMigrateMetadataManagerTest;
 #endif
-    
+
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
     ClusterManager *cm_{ nullptr };

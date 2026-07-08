@@ -73,17 +73,17 @@ Status SCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
         SC_MIGRATE_METADATA_MANAGER,
-        [this](const std::string &dbName, const std::string &dest, const std::string &destDbName,
+        [this](const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
                const worker::HashRange &ranges, bool isNetworkRecovery) {
-            return MigrateByRanges(dbName, dest, destDbName, ranges, isNetworkRecovery);
+            return MigrateByRanges(workerId, dest, destWorkerId, ranges, isNetworkRecovery);
         });
     auto migrateByTask = [this](const TransferTask &task) {
         return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
     };
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::MIGRATE_SCALE_UP_METADATA, SC_MIGRATE_METADATA_MANAGER, migrateByTask);
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, SC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
+                                                    SC_MIGRATE_METADATA_MANAGER, migrateByTask);
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
+                                                    SC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -97,31 +97,28 @@ void SCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
     HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(SC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::MIGRATE_SCALE_UP_METADATA, SC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, SC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
+                                                       SC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
+                                                       SC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 
-Status SCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, const std::string &dest,
-                                                 const std::string &destDbName, const worker::HashRange &ranges,
+Status SCMigrateMetadataManager::MigrateByRanges(const std::string &workerId, const std::string &dest,
+                                                 const std::string &destWorkerId, const worker::HashRange &ranges,
                                                  bool isNetworkRecovery)
 {
-    (void)dbName;
+    (void)workerId;
     CHECK_FAIL_RETURN_STATUS(cm_ != nullptr, K_RUNTIME_ERROR, "SCMigrateMetadataManager has not inited.");
 
     std::shared_ptr<master::SCMetadataManager> scMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
-                                     "dbName not exists");
+                                     "workerId not exists");
     MigrateMetaInfo info;
     info.destAddr = dest;
-    info.destDbName = destDbName;
+    info.destWorkerId = destWorkerId;
     scMetadataManager->GetMetasMatch(
-        [this, ranges](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey);
-        },
-        info.streamNames);
+        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.streamNames);
 
     return MigrateMetaDataWithRetry(scMetadataManager, info, isNetworkRecovery);
 }
@@ -146,7 +143,7 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info, bool isNetworkRecovery)
 {
     int timeInterval = 500;
-    INJECT_POINT("SCMigrateMetadataManager.MigrateMetaDataWithRetry.interval", [&timeInterval] (int interval) {
+    INJECT_POINT("SCMigrateMetadataManager.MigrateMetaDataWithRetry.interval", [&timeInterval](int interval) {
         timeInterval = interval;
         return Status::OK();
     });
@@ -195,8 +192,8 @@ Status SCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::S
         LOG(ERROR) << "Submit migrate task failed: " << status.GetMsg();
         return status;
     }
-    auto dbName = scMetadataManager->GetDbName();
-    status = GetMigrateMetadataResult(dbName, info.destAddr, info.failedStreamNames);
+    auto workerId = scMetadataManager->GetWorkerId();
+    status = GetMigrateMetadataResult(workerId, info.destAddr, info.failedStreamNames);
     if (status.IsError()) {
         LOG(ERROR) << "GetMigrateMetadataResult failed. " << status.GetMsg();
     }
@@ -206,7 +203,7 @@ Status SCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::S
 Status SCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info)
 {
-    auto futureKey = std::make_pair(info.destAddr, scMetadataManager->GetDbName());
+    auto futureKey = std::make_pair(info.destAddr, scMetadataManager->GetWorkerId());
     TbbFutureThreadTable::accessor accessor;
     if (futureThread_.find(accessor, futureKey)) {
         RETURN_STATUS(
@@ -224,10 +221,10 @@ Status SCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     return Status::OK();
 }
 
-Status SCMigrateMetadataManager::GetMigrateMetadataResult(const std::string &dbName, const std::string &destination,
+Status SCMigrateMetadataManager::GetMigrateMetadataResult(const std::string &workerId, const std::string &destination,
                                                           std::vector<std::string> &failedStreams)
 {
-    auto futureKey = std::make_pair(destination, dbName);
+    auto futureKey = std::make_pair(destination, workerId);
     TbbFutureThreadTable::accessor accessor;
     auto found = futureThread_.find(accessor, futureKey);
     CHECK_FAIL_RETURN_STATUS(found, StatusCode::K_RUNTIME_ERROR, "Can't find async future.");
@@ -242,7 +239,7 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info)
 {
     LOG(INFO) << "Start migrate metadata. destination:" << info.destAddr
-              << ", source dbName:" << scMetadataManager->GetDbName() << ", dest dbName:" << info.destDbName
+              << ", source workerId:" << scMetadataManager->GetWorkerId() << ", dest workerId:" << info.destWorkerId
               << ", stream count:" << info.streamNames.size();
 
     std::unique_ptr<MasterMasterSCApi> api;
@@ -262,7 +259,7 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
     std::vector<std::string> failedStreams;
     s = MigrateMetadataForScaleout(scMetadataManager, api, info.streamNames, failedStreams);
     LOG(INFO) << "Final migrate metadata. destination: " << info.destAddr
-              << ", source dbName:" << scMetadataManager->GetDbName() << ", dest dbName:" << info.destDbName
+              << ", source workerId:" << scMetadataManager->GetWorkerId() << ", dest workerId:" << info.destWorkerId
               << ", stream count: " << info.streamNames.size() << ", failed stream count: " << failedStreams.size()
               << ", status: " << s.ToString();
     return make_pair(s, failedStreams);

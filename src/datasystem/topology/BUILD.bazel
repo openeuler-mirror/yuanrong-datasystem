@@ -126,7 +126,6 @@ ds_cc_library(
         "//src/datasystem/common/util:meta_route_tool_header",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/master:meta_addr_info",
         "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/protos:hash_ring_cc_proto",
         ":membership_value_codec",

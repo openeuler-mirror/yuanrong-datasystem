@@ -44,15 +44,6 @@
 namespace datasystem {
 namespace worker {
 
-struct MigrateScaleDownInfo {
-    std::string destWorker = "";
-    std::string destPrimaryReplicaAddress = "";
-    HashRange ranges = {};
-};
-
-// {destDbName: {destPrimaryReplicaAddress, {recoverHashRanges}}}
-using ScaleDownMigrationTaskInfo = std::unordered_map<std::string, MigrateScaleDownInfo>;
-
 class HashRingTaskExecutor {
 public:
     HashRingTaskExecutor(const std::string &workerAddr, const std::string &workerUuid,
@@ -192,39 +183,11 @@ private:
         const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
 
     /**
-     * @brief Recover meta and data of fault worker from replica.
-     * @param[in] recorverDbName need recover db name.
-     * @param[in] removeNode The target node to remove.
-     */
-    void RecoverMetaAndDataOfFaultWorkerByStandbyMaster(
-        const std::string &scaleDownWorkerDbName,
-        const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
-
-    /**
-     * @brief Submit scale down migrate task.
-     * @param[in] scaleDownWorkerDbName scale down worker db name.
-     * @param[in] recoverDbPrimaryReplicaAddr recover db primary replica addr.
-     * @param[in] recoverDbPrimaryDbName recover db primary db name
-     * @param[in] recoverRanges recover ranges
-     * @param[in] isVoluntary is voluntary node scale down or not.
-     */
-    void SubmitScaleDownMigrateTask(
-        const MigrateScaleDownInfo &info, const std::string &recoverDbName, const std::string &scaleDownWorkerDbName,
-        const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode);
-
-    /**
      * @brief Get unfinished hash ranges of current worker from changeNodePb.
      * @param[in] changeNode The changeNodePb.
      * @return Hash ranges.
      */
     HashRange GetWorkHashRangeFromChangeNodePb(const ChangeNodePb &changeNode);
-
-    /**
-     * @brief Get the Work Hash Range From Change Node Pb By Db Name object
-     * @param[in] changeNode The changeNodePb.
-     * @return ScaleDownMigrationTaskInfo
-     */
-    ScaleDownMigrationTaskInfo GetWorkHashRangeFromChangeNodePbByDbName(const ChangeNodePb &changeNodePb);
 
     /**
      * @brief Clear data without meta.

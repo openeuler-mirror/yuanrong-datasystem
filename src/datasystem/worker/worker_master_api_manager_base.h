@@ -48,11 +48,10 @@ public:
         CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
                                  "ClusterManager is empty, get WorkerMasterApi failed");
         Timer timer;
-        MetaAddrInfo metaAddrInfo;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->LocateMetaOwner(id, true, metaAddrInfo),
+        HostPort masterHostAddress;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->LocateMetaOwner(id, true, masterHostAddress),
                                          "LocateMetaOwner failed");
         GetWorkerTimeCost().Append("Get master address", timer.ElapsedMilliSecond());
-        auto masterHostAddress = metaAddrInfo.GetAddress();
 
         VLOG(1) << FormatString("Get masterHostAddress:[%s] for identifier:[%s]", masterHostAddress.ToString(), id);
         return GetWorkerMasterApi(masterHostAddress, api);
@@ -123,10 +122,7 @@ public:
         CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
                                  "ClusterManager is empty, get WorkerMasterApi failed");
         HostPort destAddr;
-        [[maybe_unused]] std::string dbName;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            clusterManager->GetPrimaryReplicaLocationByAddr(masterAddress, destAddr, dbName),
-            "GetPrimaryReplicaLocationByAddr failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(destAddr.ParseString(masterAddress), "Parse masterAddress failed");
         return GetWorkerMasterApi(destAddr, api);
     }
 

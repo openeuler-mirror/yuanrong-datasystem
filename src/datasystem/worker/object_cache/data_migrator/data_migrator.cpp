@@ -106,14 +106,14 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
         objKeysGrpByMaster.clear();
-        MetaAddrInfo info;
-        (void)objKeysGrpByMaster.emplace(info, objectKeys);
+        HostPort emptyMaster;
+        (void)objKeysGrpByMaster.emplace(emptyMaster, objectKeys);
         return Status::OK();
     });
     std::string standbyWorker;
     (void)clusterManager_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
-        auto workerAddr = addr.GetAddress();
+        auto workerAddr = addr;
         if (workerAddr == localAddress_ && !standbyWorker.empty()) {
             LOG_IF_ERROR(workerAddr.ParseString(standbyWorker), "[Migrate Data] Parse worker address failed");
             INJECT_POINT_NO_RETURN("DataMigrator.AllowLocalWorker",
@@ -271,9 +271,10 @@ bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateD
 
     int retryCount = ++sameNodeRetryCounts[slot];
     if (retryCount > maxSameNodeRetryCount) {
-        LOG(WARNING) << FormatString("[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop "
-                                     "retry on node %s",
-                                     slot, maxSameNodeRetryCount, result.address);
+        LOG(WARNING) << FormatString(
+            "[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop "
+            "retry on node %s",
+            slot, maxSameNodeRetryCount, result.address);
         return true;
     }
 
@@ -400,9 +401,9 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
     }
 
     RETURN_IF_NOT_OK(clusterManager_->CheckConnection(workerAddr));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
-                                                           remoteWorkerStub),
-                                     "[Migrate Data] Create remote worker api failed.");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_, remoteWorkerStub),
+        "[Migrate Data] Create remote worker api failed.");
     return Status::OK();
 }
 

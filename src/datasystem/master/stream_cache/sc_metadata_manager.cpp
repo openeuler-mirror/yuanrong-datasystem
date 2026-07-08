@@ -61,13 +61,13 @@ bool EnableSCService()
 
 SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
                                      std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm,
-                                     RocksStore *rocksStore, const std::string &dbName)
+                                     RocksStore *rocksStore, const std::string &workerId)
     : MetadataRedirectHelper(cm),
       masterAddress_(masterHostPort),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      dbName_(dbName),
-      eventName_(SC_METADATA_MANAGER + dbName)
+      workerId_(workerId),
+      eventName_(SC_METADATA_MANAGER + workerId)
 {
     streamMetaStore_ = std::make_shared<RocksStreamMetaStore>(rocksStore);
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
@@ -85,7 +85,7 @@ void SCMetadataManager::Shutdown()
         return;
     }
     exitFlag_->store(true);
-    LOG(INFO) << "Start shutdown ScMetadataManager for " << dbName_;
+    LOG(INFO) << "Start shutdown ScMetadataManager for " << workerId_;
     if (!EnableSCService()) {
         return;
     }
@@ -93,8 +93,7 @@ void SCMetadataManager::Shutdown()
     StartClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     ClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     HashRingEvent::RecoverMetaRanges::GetInstance().RemoveSubscriber(eventName_);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_);
     // Stop async reconciliation pool FIRST to prevent new brpc streaming
     // RPCs (e.g., CheckMetadataImpl -> QueryMetadata) from being created
     // while the notification manager is shutting down.  This avoids
@@ -142,9 +141,7 @@ Status SCMetadataManager::Init()
         [this](const worker::HashRange &extraRanges) { return RecoverMetadataOfFaultyWorker(extraRanges); });
     TaskActionRegistry::GetInstance().AddSubscriber(
         TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_,
-        [this](const TransferTask &task) {
-            return RecoverMetadataOfFaultyWorker(task.placementScope.ranges);
-        });
+        [this](const TransferTask &task) { return RecoverMetadataOfFaultyWorker(task.placementScope.ranges); });
     LOG(INFO) << FormatString("[%s] Initialize success", LogPrefix());
     return Status::OK();
 }

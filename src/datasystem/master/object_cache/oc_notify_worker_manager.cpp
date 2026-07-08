@@ -354,15 +354,13 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
     }
 }
 
-Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb,
-                                                               const worker::HashRange &extraRanges)
+Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb, const worker::HashRange &extraRanges)
 {
     std::vector<std::pair<std::string, std::string>> cacheInvalids;
     if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, extraRanges,
-                                      cacheInvalids),
-            "Load meta from etcd into memory failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX,
+                                                                   ASYNC_WORKER_OP_TABLE, extraRanges, cacheInvalids),
+                                         "Load meta from etcd into memory failed.");
         for (const auto &iter : cacheInvalids) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(ASYNC_WORKER_OP_TABLE, iter.first, iter.second));
         }
@@ -876,7 +874,7 @@ Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &worker
 
 Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKey, UpdateObjectInfoPb *objectInfoPb)
 {
-    auto& shard = ocMetadataManager_->GetShardFor(objectKey);
+    auto &shard = ocMetadataManager_->GetShardFor(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
     TbbMetaTable ::const_accessor accessor;
     if (!shard.table.find(accessor, objectKey)) {
@@ -980,7 +978,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
         toBeChanged.clear();
         for (auto &it : needReselectPrimary) {
             std::string newPrimaryCopy;
-            auto& shard = ocMetadataManager_->GetShardFor(it.first);
+            auto &shard = ocMetadataManager_->GetShardFor(it.first);
             std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
             TbbMetaTable::accessor accessor;
             if (ocMetadataManager_->ReselectPrimaryCopy(it.first, it.second, accessor, newPrimaryCopy).IsOk()) {
@@ -1072,8 +1070,8 @@ void OCNotifyWorkerManager::DecNestedRefs(const std::string &workerAddr, const s
     LOG(INFO) << "DecNestedRefs end. workerAddr:" << workerAddr;
 }
 
-Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAddr, const std::string &dbName,
-                                                    const std::string &workerAddr, RequestMetaFromWorkerRspPb &rsp)
+Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAddr, const std::string &workerAddr,
+                                                    RequestMetaFromWorkerRspPb &rsp)
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckWorkerIsHealthy(workerAddr),
                                      "Worker is offline to make the rpc call RequestMetaFromWorker");
@@ -1082,7 +1080,6 @@ Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAdd
                                      "Could not get MasterWorkerOCApi for the given worker address");
     RequestMetaFromWorkerReqPb req;
     req.set_address(masterAddr);
-    req.set_db_name(dbName);
     Status rc =
         RetryOnRPCError([&masterWorkerApi, &req, &rsp]() { return masterWorkerApi->RequestMetaFromWorker(req, rsp); });
     if (rc.IsError()) {

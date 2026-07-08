@@ -38,7 +38,6 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 
@@ -289,7 +288,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
 
 WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPublishImpl::BuildCreateMultiMetaResult(
     const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::CreateMultiMetaReqPb &req,
-    const MetaAddrInfo &masterAddrInfo)
+    const HostPort &masterAddr)
 {
     CreateMultiMetaRspPb rsp;
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
@@ -301,10 +300,10 @@ WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPubli
             rsp.add_failed_object_keys(meta.object_key());
         }
     }
-    return CreateMultiMetaResult{ rc, rsp, masterAddrInfo };
+    return CreateMultiMetaResult{ rc, rsp, masterAddr };
 }
 
-Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vector<HostPort> &masterAddrs,
                                                                 std::vector<master::CreateMultiMetaReqPb> &reqs,
                                                                 std::vector<CreateMultiMetaResult> &respRes)
 {
@@ -321,21 +320,20 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
     std::vector<std::future<CreateMultiMetaResult>> futures;
     CreateMultiMetaResult lastRc;
     for (size_t i = 0; i < masterAddrs.size(); i++) {
-        auto &masterAddrInfo = masterAddrs[i];
+        auto &masterAddr = masterAddrs[i];
         auto &req = reqs[i];
-        auto func = [this, &masterAddrInfo, &req, remainingUs, dispatchTime, &traceId] {
+        auto func = [this, &masterAddr, &req, remainingUs, dispatchTime, &traceId] {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
-            const auto &masterAddr = masterAddrInfo.GetAddress();
             std::shared_ptr<WorkerMasterOCApi> api;
             auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
             if (rc.IsError()) {
-                return CreateMultiMetaResult{ rc, {}, masterAddrInfo };
+                return CreateMultiMetaResult{ rc, {}, masterAddr };
             }
             auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
             if (initRc.IsError()) {
-                return CreateMultiMetaResult{ initRc, {}, masterAddrInfo };
+                return CreateMultiMetaResult{ initRc, {}, masterAddr };
             }
-            return BuildCreateMultiMetaResult(api, req, masterAddrInfo);
+            return BuildCreateMultiMetaResult(api, req, masterAddr);
         };
         if (i == masterAddrs.size() - 1) {
             // using current thread handle the last task.
@@ -381,15 +379,15 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const auto &objGroup = grouped.groups;
     // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
     // refuse to process all objects, which is very inefficient.
-    CHECK_FAIL_RETURN_STATUS(
-        grouped.failures.empty(), K_RPC_UNAVAILABLE,
-        "Getting master api failed. ObjectKey: " + grouped.failures.begin()->first);
+    CHECK_FAIL_RETURN_STATUS(grouped.failures.empty(), K_RPC_UNAVAILABLE,
+                             "Getting master api failed. ObjectKey: " + grouped.failures.begin()->first);
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
 
-    std::vector<MetaAddrInfo> addrs;
+    std::vector<HostPort> addrs;
     addrs.reserve(objGroup.size());
     std::vector<CreateMultiMetaReqPb> createReqs(objGroup.size());
     int idx = 0;
+    // Group by metadata owner HostPort. The current topology has one worker per HostPort.
     for (const auto &[masterAddr, objInfos] : objGroup) {
         auto &req = createReqs[idx];
         addrs.emplace_back(masterAddr);
@@ -412,7 +410,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
             totalResp.add_failed_object_keys(failedId);
         }
         LOG_IF_ERROR(respRes[index].rc, "Get error with createMeta");
-        for (const auto &obj : objGroup.at(respRes[index].metaAddrInfo)) {
+        for (const auto &obj : objGroup.at(respRes[index].masterAddr)) {
             versions[obj.second] = resp.version();
         }
         if (resp.has_last_rc() && static_cast<StatusCode>(resp.last_rc().error_code()) != StatusCode::K_OK) {

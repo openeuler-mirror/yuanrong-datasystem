@@ -68,7 +68,7 @@ public:
 
     Status Init(MetadataManagerHolderParam param);
 
-    Status EnsureLocalMetadataManager(const std::string &dbName);
+    Status EnsureLocalMetadataManager(const std::string &workerId);
 
     const std::string &GetCurrentWorkerUuid()
     {
@@ -99,7 +99,7 @@ public:
     }
 
 protected:
-    virtual Status CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore,
+    virtual Status CreateMetaManager(const std::string &workerId, RocksStore *objectRocksStore,
                                      RocksStore *streamRocksStore);
 
     bool CheckMetaEmpty();

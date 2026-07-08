@@ -281,7 +281,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMasterId) {
-        HostPort masterAddr = item.first.GetAddress();
+        HostPort masterAddr = item.first;
         std::vector<std::string> &currentNeedDeleteObjectKey = item.second;
         LOG(INFO) << "Delete all copy meta from master: " << masterAddr
                   << ", objects: " << VectorToString(currentNeedDeleteObjectKey);
@@ -312,7 +312,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
                                                              redirectInfo.change_meta_ids().end() };
                 redirectDeleteReq.set_address(localAddress_.ToString());
                 HostPort redirectMasterAddr;
-                RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
+                RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
                 std::shared_ptr<WorkerMasterOCApi> redirectWorkerMasterApi =
                     workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
                 CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,

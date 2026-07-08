@@ -50,7 +50,7 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/master/meta_addr_info.h"
+
 #include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
@@ -74,19 +74,20 @@ struct ClusterInfo {
 class ClusterManager {
 public:
     struct MetaOwnerKeyGroups {
-        std::unordered_map<MetaAddrInfo, std::vector<std::string>> groups;
+        // Metadata owner grouping is keyed by worker HostPort. The current topology has one worker per HostPort.
+        std::unordered_map<HostPort, std::vector<std::string>> groups;
         std::unordered_map<std::string, Status> failures;
 
         /**
          * @brief Appends failed route keys to a group to preserve legacy empty-master handling.
-         * @param[in] metaAddrInfo Destination group. Defaults to empty master.
+         * @param[in] masterAddr Destination group. Defaults to empty master.
          */
-        void AppendFailuresToGroup(const MetaAddrInfo &metaAddrInfo = MetaAddrInfo())
+        void AppendFailuresToGroup(const HostPort &masterAddr = HostPort())
         {
             if (failures.empty()) {
                 return;
             }
-            auto &keys = groups[metaAddrInfo];
+            auto &keys = groups[masterAddr];
             keys.reserve(keys.size() + failures.size());
             for (const auto &failure : failures) {
                 keys.emplace_back(failure.first);
@@ -95,7 +96,7 @@ public:
     };
 
     struct MetaOwnerIndexedKeyGroups {
-        std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>> groups;
+        std::unordered_map<HostPort, std::vector<std::pair<std::string, size_t>>> groups;
         std::unordered_map<std::string, Status> failures;
     };
 
@@ -227,14 +228,14 @@ public:
      * @brief Locate the metadata owner endpoint for one object key via the placement read path.
      * @param[in] objKey Business object key.
      * @param[in] requireAvailableTarget Whether the owner must be READY in the local placement directory.
-     * @param[out] metaAddrInfo Resolved owner endpoint and worker id as a MetaAddrInfo.
+     * @param[out] masterAddr Resolved owner endpoint address.
      * @return K_OK on success; K_NOT_READY if no routing snapshot or facade is available; K_NOT_FOUND if the owner
      * endpoint is absent; K_RPC_UNAVAILABLE when requireAvailableTarget rejects a non-READY owner.
      *
      * Centralized mode is derived from the cluster manager state. This method only reads local immutable snapshots
      * and must not perform repository/backend IO, CAS, or task scan.
      */
-    Status LocateMetaOwner(const std::string &objKey, bool requireAvailableTarget, MetaAddrInfo &metaAddrInfo);
+    Status LocateMetaOwner(const std::string &objKey, bool requireAvailableTarget, HostPort &masterAddr);
 
     /**
      * @brief Evaluate whether the local node should serve or redirect one object key via the placement read path.
@@ -500,27 +501,26 @@ public:
     /**
      * @brief Gets master address for object key and checks if connection is successful
      * @param[in] objKey Object key
-     * @param[out] metaAddrInfo for the objectKey
+     * @param[out] masterAddr for the objectKey
      * @return Status
      */
-    Status GetMetaAddress(const std::string &objKey, MetaAddrInfo &metaAddrInfo);
+    Status GetMetaAddress(const std::string &objKey, HostPort &masterAddr);
 
     /**
      * @brief Gets object keys that master is not connected
-     * @param[in] metaAddrInfos Master info and it's object keys
+     * @param[in] masterAddrs Master address and its object keys
      * @param[out] objectKeys the objectKeys
      */
-    void GetObjectKeysFromNotConnectedMaster(
-        const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &metaAddrInfos,
-        std::unordered_set<std::string> &objectKeys);
+    void GetObjectKeysFromNotConnectedMaster(const std::unordered_map<HostPort, std::vector<std::string>> &masterAddrs,
+                                             std::unordered_set<std::string> &objectKeys);
 
     /**
      * @brief Gets master address for object key
      * @param[in] objKey Object key
-     * @param[out] metaAddrInfo for the objectKey
+     * @param[out] masterAddr for the objectKey
      * @return Status
      */
-    Status GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo);
+    Status GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr);
 
     /**
      * @brief Locate metadata owners for a batch of keys via the placement read path.
@@ -546,28 +546,10 @@ public:
      * @brief Get the primary replica location by object key.
      * @param[in] objectKey The object key.
      * @param[out] masterAddr The meta address.
-     * @param[out] dbName The db name.
+     * @param[out] workerId The worker id.
      * @return Status of this call
      */
-    Status GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr,
-                                                std::string &dbName);
-
-    /**
-     * @brief Get the primary replica location by address.
-     * @param[in] address The worker address.
-     * @param[out] masterAddr The meta address.
-     * @param[out] dbName The db name.
-     * @return Status of this call
-     */
-    Status GetPrimaryReplicaLocationByAddr(const std::string &address, HostPort &masterAddr, std::string &dbName);
-
-    /**
-     * @brief Get the primary replica db name of specific worker.
-     * @param[in] address The worker address.
-     * @param[out] dbNames The db name list.
-     * @return Status
-     */
-    Status GetPrimaryReplicaDbNames(const HostPort &address, std::vector<std::string> &dbNames);
+    Status GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr);
 
     /**
      * @brief Get worker address by uuid.
@@ -897,7 +879,7 @@ protected:
      * @brief Resolves one key from a batch route decision.
      */
     Status ResolveBatchRouteForKey(const std::string &objectKey, const Status &batchRc,
-                                   const topology::BatchRouteDecision &decision, MetaAddrInfo &metaAddrInfo) const;
+                                   const topology::BatchRouteDecision &decision, HostPort &masterAddr) const;
 
     /**
      * @brief Publish an immutable R0 placement directory snapshot from hash-ring worker facts and cluster node state.

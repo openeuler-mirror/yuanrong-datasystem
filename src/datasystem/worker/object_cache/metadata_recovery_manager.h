@@ -29,7 +29,6 @@
 
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
@@ -103,7 +102,7 @@ private:
         std::vector<std::string> failedIds;
     };
 
-    using GroupedByMaster = std::unordered_map<MetaAddrInfo, std::vector<std::string>>;
+    using GroupedByMaster = std::unordered_map<HostPort, std::vector<std::string>>;
     using GroupItem = GroupedByMaster::value_type;
 
     GroupedByMaster BuildGroupedByMaster(const std::vector<std::string> &objectKeys,
@@ -118,16 +117,15 @@ private:
     void LogRecoverySummary(const RecoverySummary &summary, const std::string &prefix) const;
 
     bool FillRecoveredMeta(const std::string &objectKey, ObjectMetaPb &metadata) const;
-    bool InitRecoverApi(const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys, HostPort &addr,
+    bool InitRecoverApi(const HostPort &masterAddr, const std::vector<std::string> &objectKeys, HostPort &addr,
                         std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, DispatchResult &result) const;
     void HandleFillMetaFailure(const std::string &objectKey, DispatchResult &result) const;
-    void SendRecoverBatch(const MetaAddrInfo &metaAddrInfo, const HostPort &addr,
+    void SendRecoverBatch(const HostPort &masterAddr, const HostPort &addr,
                           const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                           master::PushMetaToMasterReqPb &req, std::vector<std::string> &batchObjectKeys,
                           DispatchResult &result) const;
-    DispatchResult SendRecoverRequest(const MetaAddrInfo &metaAddrInfo,
-                                      const std::vector<std::string> &objectKeys) const;
-    DispatchResult SendRecoverRequest(const MetaAddrInfo &metaAddrInfo, const std::vector<ObjectMetaPb> &metas) const;
+    DispatchResult SendRecoverRequest(const HostPort &masterAddr, const std::vector<std::string> &objectKeys) const;
+    DispatchResult SendRecoverRequest(const HostPort &masterAddr, const std::vector<ObjectMetaPb> &metas) const;
 
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;

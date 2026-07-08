@@ -105,9 +105,8 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
 {
     auto ocMetaManager = std::make_shared<master::OCMetadataManager>(akSkManager_, nullptr, nullptr, nullptr,
-                                                                     "127.0.0.1:900", nullptr, "dbName");
-    auto manager =
-        std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
+                                                                     "127.0.0.1:900", nullptr, "workerId");
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
 
     BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _)).WillRepeatedly(Return(Status::OK()));
     std::string newPrimaryCopy = "127.0.0.1:902";

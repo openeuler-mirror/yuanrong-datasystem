@@ -510,38 +510,6 @@ HashRange HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePb(const ChangeNod
     return targetRanges;
 }
 
-ScaleDownMigrationTaskInfo HashRingTaskExecutor::GetWorkHashRangeFromChangeNodePbByDbName(
-    const ChangeNodePb &changeNode)
-{
-    ScaleDownMigrationTaskInfo infos;
-    for (auto &range : changeNode.changed_ranges()) {
-        if (range.finished()) {
-            continue;
-        }
-        HostPort hashRangeRecoverDbAddr;
-        std::string hashRangeRecoverDbName;
-        // wait retry?
-        if (HashRingEvent::GetDbPrimaryLocation::GetInstance()
-                .NotifyAll(range.workerid(), hashRangeRecoverDbAddr, hashRangeRecoverDbName)
-                .IsError()) {
-            LOG(ERROR) << "get primary db addr failed";
-            continue;
-        }
-        if (range.from() < range.end()) {
-            infos[hashRangeRecoverDbName].destPrimaryReplicaAddress = hashRangeRecoverDbAddr.ToString();
-            infos[hashRangeRecoverDbName].ranges.emplace_back(range.from(), range.end());
-        } else if (range.from() > range.end()) {
-            infos[hashRangeRecoverDbName].destPrimaryReplicaAddress = hashRangeRecoverDbAddr.ToString();
-            infos[hashRangeRecoverDbName].ranges.emplace_back(range.from(), UINT32_MAX);
-            infos[hashRangeRecoverDbName].ranges.emplace_back(0, range.end());
-        } else {
-            continue;
-        }
-        infos[hashRangeRecoverDbName].destWorker = range.workerid();
-    }
-    return infos;
-}
-
 void HashRingTaskExecutor::RecoverMetaAndDataOfFaultWorker(
     const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode)
 {
@@ -551,74 +519,6 @@ void HashRingTaskExecutor::RecoverMetaAndDataOfFaultWorker(
     auto status = HashRingEvent::RecoverMetaRanges::GetInstance().NotifyAll(hashRanges);
     HASH_RING_LOG_IF_ERROR(status, "[dfx]recover not success");
     INJECT_POINT("SubmitScaleDownTask.delay", [](uint32_t delay_s) { sleep(delay_s); });
-}
-
-void HashRingTaskExecutor::RecoverMetaAndDataOfFaultWorkerByStandbyMaster(
-    const std::string &scaleDownWorkerDbName,
-    const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode)
-{
-    std::vector<std::future<void>> tasks;
-    auto recoverMigrateTaskInfos = GetWorkHashRangeFromChangeNodePbByDbName(removeNode.second);
-    for (const auto &recoverMigrateTaskInfo : recoverMigrateTaskInfos) {
-        SubmitScaleDownMigrateTask(recoverMigrateTaskInfo.second, recoverMigrateTaskInfo.first, scaleDownWorkerDbName,
-                                   removeNode);
-    }
-    return;
-}
-
-void HashRingTaskExecutor::SubmitScaleDownMigrateTask(
-    const MigrateScaleDownInfo &info, const std::string &recoverDbName, const std::string &scaleDownWorkerDbName,
-    const google::protobuf::Map<std::basic_string<char>, datasystem::ChangeNodePb>::value_type &removeNode)
-{
-    auto func = [scaleDownWorkerDbName, info, recoverDbName, removeNode](
-                    const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool & /* retry */) {
-        HashRingPb oldRing;
-        if (!oldRing.ParseFromString(oldValue)) {
-            return Status(K_RUNTIME_ERROR, "Failed to parse HashRingPb from string");
-        }
-        HashRingPb ringAfterClear = oldRing;
-        auto nodePb = ringAfterClear.mutable_del_node_info()->find(removeNode.first);
-        if (nodePb == ringAfterClear.mutable_del_node_info()->end()) {
-            LOG(ERROR) << "cant find del node info for :" << removeNode.first;
-            return Status(K_RUNTIME_ERROR, "Failed to get del node info");
-        }
-        bool allFinished = true;
-        for (auto &changePb : *nodePb->second.mutable_changed_ranges()) {
-            if (changePb.workerid() == info.destWorker) {
-                changePb.set_finished(true);
-                continue;
-            } else if (!changePb.finished()) {
-                allFinished = false;
-            }
-        }
-        if (allFinished) {
-            ringAfterClear.mutable_del_node_info()->erase(removeNode.first);
-            ringAfterClear.mutable_workers()->erase(removeNode.first);
-        }
-        google::protobuf::util::MessageDifferencer differencer;
-        differencer.set_repeated_field_comparison(google::protobuf::util::MessageDifferencer::AS_SET);
-        if (differencer.Compare(oldRing, ringAfterClear)) {
-            VLOG(1) << "Not responsible for the scale down of " << removeNode.first << ", no need to modify";
-            return Status::OK();
-        }
-        newValue = std::make_unique<std::string>(ringAfterClear.SerializeAsString());
-        VLOG(1) << "After mark del_node_info finished: " << MapToString(ringAfterClear.del_node_info());
-        return Status::OK();
-    };
-    auto traceId = GetStringUuid();
-    LOG(INFO) << "Start scale down migrate task with traceId " + traceId;
-    scaleThreadPool_->Execute([this, info, recoverDbName, removeNode, scaleDownWorkerDbName, func, traceId]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        HASH_RING_LOG_IF_ERROR(
-            HashRingEvent::MigrateRanges::GetInstance().NotifyAll(scaleDownWorkerDbName, info.destPrimaryReplicaAddress,
-                                                                  recoverDbName, info.ranges, false),
-            "scale down migrate task failed");
-        RetryHashRingTaskUntil([this, &func]() {
-            auto status = clusterStore_->CAS(HASHRING_TABLE, "", func);
-            HASH_RING_LOG_IF_ERROR(status, "Mark failed.");
-            return status;
-        });
-    });
 }
 
 Status HashRingTaskExecutor::VoluntaryRecoveryAsyncTask(const HashRingPb &oldRing,

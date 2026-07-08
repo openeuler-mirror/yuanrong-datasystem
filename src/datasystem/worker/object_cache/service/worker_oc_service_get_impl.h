@@ -101,8 +101,7 @@ public:
      * @param[in] dataSize The warmup object data size.
      * @return Status of the call.
      */
-    Status WarmupGetObjectFromRemoteWorker(const std::string &address, const std::string &objectKey,
-                                           uint64_t dataSize);
+    Status WarmupGetObjectFromRemoteWorker(const std::string &address, const std::string &objectKey, uint64_t dataSize);
 
     /**
      * @brief Get data from L2Cache for primary copy.
@@ -180,9 +179,7 @@ public:
     {
         asyncUpdateLocationManager_ = std::make_unique<AsyncUpdateLocationManager>();
         return asyncUpdateLocationManager_->Init(
-            [this](UpdateLocationTask &&task) {
-                return this->AsyncUpdateLocationFunc(std::move(task));
-                });
+            [this](UpdateLocationTask &&task) { return this->AsyncUpdateLocationFunc(std::move(task)); });
     };
 
     /**
@@ -248,9 +245,8 @@ private:
      * @param[out] retryParams The objectKey that need clear objects.
      */
     void GroupSendCreateMultiCopyMeta(
-        std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
-        std::vector<UpdateLocationParam> &params,
-        std::vector<UpdateLocationParam> &retryParams,
+        std::unordered_map<HostPort, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
+        std::vector<UpdateLocationParam> &params, std::vector<UpdateLocationParam> &retryParams,
         std::unordered_map<std::string, uint64_t> &clearMetaKeys,
         std::unordered_map<std::string, uint64_t> &clearObjectKeys);
 
@@ -274,7 +270,8 @@ private:
      * @param[in] entries The entries.
      */
     void BatchUpdateLocationHelper(const std::vector<std::string> &successIds,
-        const std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<ReadKey, LockedEntity> &entries);
+                                   const std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                   std::map<ReadKey, LockedEntity> &entries);
 
     /**
      * @brief Batch update location helper function.
@@ -322,9 +319,9 @@ private:
      * @param[out] lastRc The last error status if any redirect query failed.
      * @return Status of the call.
      */
-    Status QueryObjectLocationsFromRedirectMaster(
-        const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
-        std::unordered_map<std::string, master::ObjectLocationInfoPb> &result, Status &lastRc);
+    Status QueryObjectLocationsFromRedirectMaster(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos,
+                                                  std::unordered_map<std::string, master::ObjectLocationInfoPb> &result,
+                                                  Status &lastRc);
 
     /**
      * @brief Process a get request from client.
@@ -922,10 +919,11 @@ private:
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The objects whose metadata fails to be queried.
      */
-    void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(
-        const std::unordered_set<std::string> &routeFailedObjectKeys,
-        std::unordered_set<std::string> &&objectKeysNotExist, const std::unordered_set<std::string> &objectKeysPuzzled,
-        std::vector<master::QueryMetaInfoPb> &queryMetas, std::vector<std::string> &absentObjectKeys);
+    void ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(const std::unordered_set<std::string> &routeFailedObjectKeys,
+                                                        std::unordered_set<std::string> &&objectKeysNotExist,
+                                                        const std::unordered_set<std::string> &objectKeysPuzzled,
+                                                        std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                                        std::vector<std::string> &absentObjectKeys);
 
     void HandleGetFailureHelper(const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> &entry,
                                 bool isInsert);
@@ -954,8 +952,7 @@ private:
     Status TryReconnectRemoteWorker(const std::string &endPoint, Status &lastResult);
 
     Status ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req, std::set<ReadKey> objectsNeedGetRemote,
-                                          QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp,
-                                          uint64_t &migratedBytes);
+                                          QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp, uint64_t &migratedBytes);
 
     Status ProcessRemoteGetInNotificationImpl(
         std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,

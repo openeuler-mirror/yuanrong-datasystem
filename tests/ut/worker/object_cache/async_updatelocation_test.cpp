@@ -50,7 +50,7 @@ public:
 
 class OCMetadataManagerHelper : public master::OCMetadataManager {
 public:
-    using OCMetadataManager::OCMetadataManager; // Inherit base class constructors
+    using OCMetadataManager::OCMetadataManager;  // Inherit base class constructors
 
     Status CallRecoverObjectLocations(
         const std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> &objLocMap)
@@ -58,7 +58,8 @@ public:
         return RecoverObjectLocations(objLocMap);
     }
 
-    Status CallLoadObjectLocations(bool isFromRocksdb,
+    Status CallLoadObjectLocations(
+        bool isFromRocksdb,
         std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> &objLocMap)
     {
         return LoadObjectLocations(isFromRocksdb, objLocMap);
@@ -73,7 +74,7 @@ public:
     }
 
     Status GetObjectKeyAckState(const std::string &objectKey, const std::string &workerAddress,
-                                    master::AckState &ackState)
+                                master::AckState &ackState)
     {
         master::TbbMetaTable::accessor accessor;
         LOG(INFO) << "get the object key " << objectKey;
@@ -97,7 +98,7 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
     AsyncUpdateLocationManager manager = AsyncUpdateLocationManager();
     manager.Init(AsyncUpdateLocationFunc);
     std::string objectKey = "test_object_key";
-    UpdateLocationParam param = {objectKey, 1, 1};
+    UpdateLocationParam param = { objectKey, 1, 1 };
     UpdateLocationTask task = UpdateLocationTask(param);
     Status status = manager.AddTask(std::move(task));
     ASSERT_TRUE(status.IsOk());
@@ -108,12 +109,12 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
     threads.reserve(maxVersion);
     for (int i = 0; i < maxVersion; i++) {
         threads.emplace_back([&manager, objectKey, i]() {
-        for (int j = 0; j < loopCount; ++j) {
-            UpdateLocationParam param = {objectKey+std::to_string(i), static_cast<uint64_t>(i) + 1, 1};
-            UpdateLocationTask task = UpdateLocationTask(param);
-            Status status = manager.AddTask(std::move(task));
-            ASSERT_TRUE(status.IsOk());
-        }
+            for (int j = 0; j < loopCount; ++j) {
+                UpdateLocationParam param = { objectKey + std::to_string(i), static_cast<uint64_t>(i) + 1, 1 };
+                UpdateLocationTask task = UpdateLocationTask(param);
+                Status status = manager.AddTask(std::move(task));
+                ASSERT_TRUE(status.IsOk());
+            }
         });
     }
 
@@ -126,7 +127,7 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
 TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
 {
     auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(akSkManager_, rocksStore_.get(), nullptr, nullptr,
-                                                                     "127.0.0.1:900", nullptr, "locationDbName", false);
+                                                                   "127.0.0.1:900", nullptr, "locationWorkerId", false);
     DS_ASSERT_OK(objectStore_->Init());
     std::string key1 = "test_object_key1";
     std::string key2 = "test_object_key2";
@@ -136,9 +137,9 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
     std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> objLocMap;
 
     // validate the load location with AddObjectLocations and UNACK
-    std::unordered_map<std::string, std::string> keyLocations = {{key1, worker1}, {key2, worker1}};
+    std::unordered_map<std::string, std::string> keyLocations = { { key1, worker1 }, { key2, worker1 } };
     objectStore_->AddObjectLocations(keyLocations, "0");
-    inject::Set("OCMetadataManager.GetValidWorkersInHashRing", "return(127.0.0.1:2001)"); // return worker1
+    inject::Set("OCMetadataManager.GetValidWorkersInHashRing", "return(127.0.0.1:2001)");  // return worker1
     std::this_thread::sleep_for(std::chrono::seconds(1));
     ocMetaManager->CallLoadObjectLocations(true, objLocMap);
     ocMetaManager->InsertObjectKey(key1);
@@ -154,7 +155,7 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
     // validate the load location with AddObjectLocation and ACK,
     // this can cover the old version location stored in the rocksdb.
     objLocMap.clear();
-    inject::Set("OCMetadataManager.GetValidWorkersInHashRing", "return(127.0.0.1:2002)"); // return worker2
+    inject::Set("OCMetadataManager.GetValidWorkersInHashRing", "return(127.0.0.1:2002)");  // return worker2
     objectStore_->AddObjectLocation(key3, worker2, "");
     std::this_thread::sleep_for(std::chrono::seconds(1));
     ocMetaManager->CallLoadObjectLocations(true, objLocMap);

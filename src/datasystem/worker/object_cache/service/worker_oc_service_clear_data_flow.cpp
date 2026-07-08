@@ -36,7 +36,6 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
@@ -99,8 +98,7 @@ void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, St
         }
     }
     for (const auto &kv : summaries) {
-        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count
-                  << ", status: " << kv.first
+        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count << ", status: " << kv.first
                   << ", sample object keys: " << VectorToString(kv.second.sampleObjectKeys);
     }
 }
@@ -108,10 +106,8 @@ void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, St
 std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     ClusterManager *clusterManager,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-    const MetaAddrInfo &metaAddrInfo, const std::vector<std::string> &objectKeys,
-    std::unordered_set<std::string> &failedIds)
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
 {
-    HostPort masterAddr = metaAddrInfo.GetAddress();
     if (masterAddr.Empty()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();
@@ -141,7 +137,7 @@ ClearDataReqPb BuildClearDataReq(const worker::HashRange &ranges)
     }
     return req;
 }
-}
+}  // namespace
 
 WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
@@ -163,13 +159,11 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
         SubmitClearDataAsync(BuildClearDataReq(ranges), ranges);
         return Status::OK();
     };
-    HashRingEvent::LocalClearDataWithoutMeta::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_CLEAR_DATA_FLOW, submitClearData);
+    HashRingEvent::LocalClearDataWithoutMeta::GetInstance().AddSubscriber(WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
+                                                                          submitClearData);
     TaskActionRegistry::GetInstance().AddSubscriber(
         TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META, WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
-        [submitClearData](const TransferTask &task) {
-            return submitClearData(task.placementScope.ranges);
-        });
+        [submitClearData](const TransferTask &task) { return submitClearData(task.placementScope.ranges); });
 }
 
 WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
@@ -178,13 +172,13 @@ WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
         exitFlag_->store(true);
     }
     HashRingEvent::LocalClearDataWithoutMeta::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META, WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META,
+                                                       WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
     clearDataThreadPool_.reset();
 }
 
-void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &req,
-                                                        const worker::HashRange &clearRanges, uint64_t retryTimes)
+void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
+                                                        uint64_t retryTimes)
 {
     if (clearDataThreadPool_ == nullptr) {
         LOG(ERROR) << "ClearData thread pool is nullptr, skip clear data.";
@@ -222,8 +216,7 @@ Status WorkerOcServiceClearDataFlow::ClearObject(const ClearDataReqPb &req)
 }
 
 void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqPb &req,
-                                                             const worker::HashRange &clearRanges,
-                                                             uint64_t retryTimes,
+                                                             const worker::HashRange &clearRanges, uint64_t retryTimes,
                                                              const ClearDataRetryIds &retryIds)
 {
     if (clearDataThreadPool_ == nullptr) {
@@ -250,8 +243,7 @@ void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqP
     });
 }
 
-void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req,
-                                                       const worker::HashRange &clearRanges,
+void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
                                                        const ClearDataRetryIds &retryIds, uint64_t retryTimes)
 {
     TimerQueue::TimerImpl timer;
@@ -268,8 +260,7 @@ void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req
                  "Add retry ClearData timer failed");
 }
 
-Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req,
-                                                       std::vector<std::string> &matchObjIds)
+Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req, std::vector<std::string> &matchObjIds)
 {
     bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
     auto selectionRequest = MetadataRecoverySelector::BuildSelectionRequest(req, includeL2CacheIds);
@@ -292,14 +283,12 @@ Status WorkerOcServiceClearDataFlow::ClearDataImpl(const ClearDataReqPb &req, Cl
     return Status::OK();
 }
 
-void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
-                                                      const ClearDataRetryIds &retryIds,
+void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req, const ClearDataRetryIds &retryIds,
                                                       ClearDataRetryIds &nextRetryIds)
 {
-    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: "
-              << retryIds.clearFailedIds.size() << ", increase failed object size: "
-              << retryIds.increaseFailedIds.size() << ", recover app ref failed object size: "
-              << retryIds.recoverAppRefFailedIds.size();
+    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: " << retryIds.clearFailedIds.size()
+              << ", increase failed object size: " << retryIds.increaseFailedIds.size()
+              << ", recover app ref failed object size: " << retryIds.recoverAppRefFailedIds.size();
     std::vector<std::string> retryClearObjectKeys{ retryIds.clearFailedIds.begin(), retryIds.clearFailedIds.end() };
     (void)req;
     ClearMatchedObjects(retryClearObjectKeys, nextRetryIds);
@@ -311,9 +300,10 @@ void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
     RetryRecoverMasterAppRef(retryRecoverAppRefObjectKeys, nextRetryIds);
 }
 
-void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(
-    const std::vector<std::string> &objectKeys, master::CheckObjectDataLocationReqPb &req,
-    std::vector<std::string> &requestObjectKeys, std::unordered_set<std::string> &failedIds) const
+void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(const std::vector<std::string> &objectKeys,
+                                                                  master::CheckObjectDataLocationReqPb &req,
+                                                                  std::vector<std::string> &requestObjectKeys,
+                                                                  std::unordered_set<std::string> &failedIds) const
 {
     req.set_address(localAddress_);
     req.set_redirect(true);

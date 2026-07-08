@@ -244,7 +244,7 @@ private:
             if (!rsp.infos().empty() && !rsp.ref_is_moving()) {
                 for (auto &info : rsp.infos()) {
                     HostPort newMetaAddr;
-                    RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(info.redirect_meta_address(), newMetaAddr));
+                    RETURN_IF_NOT_OK(newMetaAddr.ParseString(info.redirect_meta_address()));
                     LOG(INFO) << "obj ref has been migrated to the new master: " << newMetaAddr.ToString();
                     workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
                     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,

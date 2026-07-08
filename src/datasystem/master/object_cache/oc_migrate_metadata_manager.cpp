@@ -58,17 +58,17 @@ Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
 
     HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
         OC_MIGRATE_METADATA_MANAGER,
-        [this](const std::string &dbName, const std::string &dest, const std::string &destDbName,
+        [this](const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
                const worker::HashRange &ranges, bool isNetworkRecovery) {
-            return MigrateByRanges(dbName, dest, destDbName, ranges, isNetworkRecovery);
+            return MigrateByRanges(workerId, dest, destWorkerId, ranges, isNetworkRecovery);
         });
     auto migrateByTask = [this](const TransferTask &task) {
         return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
     };
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::MIGRATE_SCALE_UP_METADATA, OC_MIGRATE_METADATA_MANAGER, migrateByTask);
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, OC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
+                                                    OC_MIGRATE_METADATA_MANAGER, migrateByTask);
+    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
+                                                    OC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -82,15 +82,15 @@ void OCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
     HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(OC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::MIGRATE_SCALE_UP_METADATA, OC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(
-        TransferTaskType::MIGRATE_VOLUNTARY_METADATA, OC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
+                                                       OC_MIGRATE_METADATA_MANAGER);
+    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
+                                                       OC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 
-Status OCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, const std::string &dest,
-                                                 const std::string &destDbName, const worker::HashRange &ranges,
+Status OCMigrateMetadataManager::MigrateByRanges(const std::string &workerId, const std::string &dest,
+                                                 const std::string &destWorkerId, const worker::HashRange &ranges,
                                                  bool isNetworkRecovery)
 {
     CHECK_FAIL_RETURN_STATUS(cm_ != nullptr, K_RUNTIME_ERROR, "OCMigrateMetadataManager has not inited.");
@@ -98,23 +98,20 @@ Status OCMigrateMetadataManager::MigrateByRanges(const std::string &dbName, cons
     for (const auto &range : ranges) {
         rangesStr += "[" + std::to_string(range.first) + ", " + std::to_string(range.second) + "], ";
     }
-    LOG(INFO) << "migrate task excute, src db name : " << dbName << " , address: " << localHostPort_.ToString()
-              << ", to dest workerAddr: " << dest << ", dest db name: " << destDbName << ", ranges: " << rangesStr;
+    LOG(INFO) << "migrate task excute, src worker id : " << workerId << " , address: " << localHostPort_.ToString()
+              << ", to dest workerAddr: " << dest << ", dest worker id: " << destWorkerId << ", ranges: " << rangesStr;
     INJECT_POINT("MigrateByRanges.Delay");
     std::vector<std::string> objRefToBeMigrated;
     std::vector<std::string> remoteClientIds;
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
-                                     "dbName not exists");
+                                     "workerId not exists");
     MigrateMetaInfo info;
     info.destAddr = dest;
-    info.destDbName = destDbName;
+    info.destWorkerId = destWorkerId;
     info.ranges = ranges;
     ocMetadataManager->GetMetasMatch(
-        [this, ranges](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey);
-        },
-        info.objectKeys);
+        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.objectKeys);
 
     return MigrateMetaDataWithRetry(ocMetadataManager, info, isNetworkRecovery);
 }
@@ -188,8 +185,8 @@ Status OCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::O
         LOG(ERROR) << "Submit migrate task failed: " << status.GetMsg();
         return status;
     }
-    auto dbName = ocMetadataManager->GetDbName();
-    status = GetMigrateMetadataResult(dbName, info.destAddr, info.failedIds);
+    auto workerId = ocMetadataManager->GetWorkerId();
+    status = GetMigrateMetadataResult(workerId, info.destAddr, info.failedIds);
     if (status.IsError()) {
         LOG(ERROR) << "GetMigrateMetadataResult failed. " << status.GetMsg();
     }
@@ -199,7 +196,7 @@ Status OCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::O
 Status OCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, MigrateMetaInfo &info)
 {
-    auto futureKey = std::make_pair(info.destAddr, ocMetadataManager->GetDbName());
+    auto futureKey = std::make_pair(info.destAddr, ocMetadataManager->GetWorkerId());
     TbbFutureThreadTable::accessor accessor;
     if (futureThread_.find(accessor, futureKey)) {
         RETURN_STATUS(
@@ -217,10 +214,10 @@ Status OCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     return Status::OK();
 }
 
-Status OCMigrateMetadataManager::GetMigrateMetadataResult(const std::string &dbName, const std::string &destination,
+Status OCMigrateMetadataManager::GetMigrateMetadataResult(const std::string &workerId, const std::string &destination,
                                                           std::vector<std::string> &failedObjectKeys)
 {
-    auto futureKey = std::make_pair(destination, dbName);
+    auto futureKey = std::make_pair(destination, workerId);
     TbbFutureThreadTable::accessor accessor;
     auto found = futureThread_.find(accessor, futureKey);
     CHECK_FAIL_RETURN_STATUS(found, StatusCode::K_RUNTIME_ERROR, "Can't find async future.");
@@ -235,7 +232,7 @@ std::pair<Status, std::vector<std::string>> OCMigrateMetadataManager::AsyncMigra
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, MigrateMetaInfo &info)
 {
     LOG(INFO) << "Start migrate metadata. destination:" << info.destAddr
-              << ", source dbName:" << ocMetadataManager->GetDbName() << ", dest dbName:" << info.destDbName
+              << ", source workerId:" << ocMetadataManager->GetWorkerId() << ", dest workerId:" << info.destWorkerId
               << ", object count:" << info.objectKeys.size();
 
     std::unique_ptr<MasterMasterOCApi> api;
@@ -254,7 +251,7 @@ std::pair<Status, std::vector<std::string>> OCMigrateMetadataManager::AsyncMigra
     std::vector<std::string> failedIds;
     s = MigrateMetadataForScaleout(ocMetadataManager, api, info, failedIds);
     LOG(INFO) << "Final migrate metadata. destination:" << info.destAddr
-              << ", source dbName:" << ocMetadataManager->GetDbName() << ", object count:" << info.objectKeys.size()
+              << ", source workerId:" << ocMetadataManager->GetWorkerId() << ", object count:" << info.objectKeys.size()
               << ", failed object count:" << failedIds.size() << ", s=" << s.ToString();
     return make_pair(s, failedIds);
 }
@@ -391,10 +388,7 @@ void OCMigrateMetadataManager::FillRemoteClientIds(const std::shared_ptr<master:
 {
     std::vector<std::string> migrationClientIds;
     ocMetadataManager->GetRemoteClientIdsMatch(
-        [this, ranges](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey);
-        },
-        migrationClientIds);
+        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, migrationClientIds);
     for (auto &remoteClientId : migrationClientIds) {
         ocMetadataManager->FillClientIdRefsForMigration(remoteClientId, destAddr, req.add_client_id_refs());
     }
@@ -406,10 +400,7 @@ void OCMigrateMetadataManager::FillSubscribeInfos(const std::shared_ptr<master::
     std::vector<std::string> subObjs;
     std::vector<SubscribeInfoPb> subInfos;
     ocMetadataManager->GetSubscibeInfoMatch(
-        [this, ranges](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey);
-        },
-        subObjs);
+        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, subObjs);
     ocMetadataManager->FillSubMetas(subObjs, subInfos);
     *req.mutable_sub_metas() = { subInfos.begin(), subInfos.end() };
 }
@@ -474,10 +465,7 @@ void OCMigrateMetadataManager::GetAndFillMigrateDeviceMetaInfo(
 {
     std::vector<std::string> migrationKeys;
     ocMetadataManager->GetDeviceOcManager()->GetDeviceMetasMatch(
-        [this, ranges](const std::string &objKey) {
-            return cm_->IsInRange(ranges, objKey);
-        },
-        migrationKeys);
+        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, migrationKeys);
     if (migrationKeys.size() > 0) {
         ocMetadataManager->GetDeviceOcManager()->FillDeviceMetas(req);
     }
@@ -504,9 +492,7 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
         count += (static_cast<uint64_t>(req.remote_client_ids_size()) + static_cast<uint64_t>(req.sub_metas_size()));
     }
 
-    auto matchFunc = [this, ranges = info.ranges](const std::string &objKey) {
-        return cm_->IsInRange(ranges, objKey);
-    };
+    auto matchFunc = [this, ranges = info.ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); };
 
     std::unordered_set<std::string> allKeys;
     // migrate objs only have ref.

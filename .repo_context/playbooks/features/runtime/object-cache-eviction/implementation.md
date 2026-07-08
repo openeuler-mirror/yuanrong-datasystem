@@ -179,7 +179,7 @@ Use this section when implementing the formal primary end-life lane plan.
   - enqueue failure, pending full, or thread-pool submit exception returns an error so the main loop re-adds the key;
 - Lane behavior:
   - drain a bounded snapshot from the primary end-life queue, optionally using a short internal flush window such as 10 ms to aggregate nearby submissions;
-  - group drained keys by `MetaAddrInfo` / master using `GroupObjKeysByMasterHostPortWithStatus()` or equivalent; same-master keys must be sent together up to the internal batch limit, while different masters must be split into separate requests;
+  - group drained keys by `HostPort` / master using `GroupKeysByMetaOwner()` or equivalent; same-master keys must be sent together up to the internal batch limit, while different masters must be split into separate requests;
   - classify grouping errors per key: `K_RPC_UNAVAILABLE` as master/connection unavailable and `K_NOT_FOUND` as route/meta-address unavailable; grouping failures do not send RPC and must not erase local objects;
   - before RPC, acquire object WLock with fixed short retry for `K_TRY_AGAIN`; use source constants such as
     `PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3` and `PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1`;

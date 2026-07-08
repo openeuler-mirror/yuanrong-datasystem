@@ -154,9 +154,9 @@ public:
         const std::unordered_set<std::string> &objectKeys)
     {
         ClusterManager::MetaOwnerKeyGroups result;
-        MetaAddrInfo info(HostPort("127.0.0.1:18481"), "");
+        HostPort masterAddr("127.0.0.1:18481");
         std::vector<std::string> vec{ objectKeys.begin(), objectKeys.end() };
-        result.groups.emplace(info, std::move(vec));
+        result.groups.emplace(masterAddr, std::move(vec));
         return result;
     }
 
@@ -184,7 +184,7 @@ TEST(ClusterManagerMetaOwnerKeyGroupsTest, AppendFailuresToGroupDoesNotCreateEmp
     grouped.failures.emplace(failedKey, Status(K_NOT_FOUND, "route failed"));
     grouped.AppendFailuresToGroup();
     ASSERT_EQ(grouped.groups.size(), size_t(1));
-    auto iter = grouped.groups.find(MetaAddrInfo());
+    auto iter = grouped.groups.find(HostPort());
     ASSERT_NE(iter, grouped.groups.end());
     EXPECT_THAT(iter->second, ElementsAre(failedKey));
 }
@@ -296,8 +296,8 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
 {
     LOG(INFO) << "Test query objects meta meets rpc error";
-    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups(ClusterManager::*)(
-                       const std::unordered_set<std::string> &)) & ClusterManager::GroupKeysByMetaOwner,
+    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups (ClusterManager::*)(
+                       const std::unordered_set<std::string> &))&ClusterManager::GroupKeysByMetaOwner,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort));
@@ -332,14 +332,14 @@ ClusterManager::MetaOwnerKeyGroups MigrateDataServiceTest::MockGroupObjKeysByMas
     size_t batch = 3;
     for (const auto &id : objectKeys) {
         if (count < size / batch) {
-            MetaAddrInfo info(HostPort("127.0.0.1:18481"), "");
-            result.groups[info].emplace_back(id);
+            HostPort masterAddr("127.0.0.1:18481");
+            result.groups[masterAddr].emplace_back(id);
         } else if (count < (size / batch * 2)) {
-            MetaAddrInfo info(HostPort("127.0.0.1:18482"), "");
-            result.groups[info].emplace_back(id);
+            HostPort masterAddr("127.0.0.1:18482");
+            result.groups[masterAddr].emplace_back(id);
         } else {
-            MetaAddrInfo info(HostPort("127.0.0.1:18483"), "");
-            result.groups[info].emplace_back(id);
+            HostPort masterAddr("127.0.0.1:18483");
+            result.groups[masterAddr].emplace_back(id);
         }
         count++;
     }
@@ -389,8 +389,8 @@ Status MigrateDataServiceTest::PureQueryMeta(const std::shared_ptr<worker::Worke
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterBasicFunction)
 {
     LOG(INFO) << "Test query meta from master basic function";
-    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups(ClusterManager::*)(
-                       const std::unordered_set<std::string> &)) & ClusterManager::GroupKeysByMetaOwner,
+    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups (ClusterManager::*)(
+                       const std::unordered_set<std::string> &))&ClusterManager::GroupKeysByMetaOwner,
                    (_))
         .Times(1)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2));
@@ -402,13 +402,6 @@ TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterBasicFunction)
     std::shared_ptr<WorkerRemoteMasterOCApi> remoteApi =
         std::make_shared<WorkerRemoteMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"), nullptr);
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::GetWorkerMasterApi, (_)).Times(6).WillRepeatedly(Return(remoteApi));
-
-    BINEXPECT_CALL(&WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr, (_, _))
-        .Times(3)
-        .WillRepeatedly(Invoke([](const std::string &srcAddr, HostPort &destAddr) {
-            destAddr.ParseString(srcAddr);
-            return Status::OK();
-        }));
 
     std::unordered_set<std::string> objectKeys;
     uint64_t count = 300;
@@ -548,7 +541,6 @@ class MigrateL2DataServiceTest : public MigrateDataServiceTest {};
 
 TEST_F(MigrateL2DataServiceTest, TestMigrateL2Data)
 {
-    
 }
 
 TEST_F(MigrateDataServiceTest, UsesInjectedRateController)
