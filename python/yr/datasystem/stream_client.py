@@ -39,8 +39,7 @@ class StreamClient:
                  access_key="",
                  secret_key="",
                  token: str = '',
-                 tenant_id="",
-                 enable_exclusive_connection=False):
+                 tenant_id=""):
         """ Constructor of the StreamClient class
 
         Args:
@@ -53,10 +52,6 @@ class StreamClient:
             secret_key(str): The secret key for AK/SK authorize.
             token(str): A string used for authentication.
             tenant_id(str): The tenant ID.
-            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-            the system will throw a request exception.
         """
 
         if isinstance(token, str):
@@ -66,7 +61,7 @@ class StreamClient:
         if isinstance(secret_key, str):
             secret_key = str.encode(secret_key)
         self._client = ds.StreamClient(host, port, client_public_key, client_private_key, server_public_key, access_key,
-                                       secret_key, token, tenant_id, enable_exclusive_connection)
+                                       secret_key, token, tenant_id)
 
     def init(self):
         """ Init a stream client to connect to a worker.

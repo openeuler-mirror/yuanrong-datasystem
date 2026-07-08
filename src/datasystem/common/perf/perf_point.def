@@ -573,6 +573,8 @@ PERF_KEY_DEF(ZMQ_SVC_TO_ROUTER)
 PERF_KEY_DEF(ZMQ_ROUTER_TO_SVC)
 PERF_KEY_DEF(ZMQ_FRONTEND_TO_IOSVC)
 PERF_KEY_DEF(ZMQ_PAYLOAD_TRANSFER)
+// DEPRECATED: exclusive connection feature removed; slot retained to keep X-macro
+// enum values stable for historical perf log compatibility. Do not repurpose this slot.
 PERF_KEY_DEF(ZMQ_STUB_TO_EXCL_CONN)
 PERF_KEY_DEF(ZMQ_REQUEST_SIZE_AFTER_SERIALIZE)
 PERF_KEY_DEF(ZMQ_REQUEST_SIZE_BEFORE_DESERIALIZE)

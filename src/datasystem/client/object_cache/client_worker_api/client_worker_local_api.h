@@ -62,14 +62,13 @@ public:
     std::shared_ptr<IClientWorkerApi> CloneWith(
         HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
         SensitiveValue token = "", Signature *signature = nullptr, std::string tenantId = "",
-        bool enableCrossNodeConnection = false, bool enableExclusiveConnection = false,
+        bool enableCrossNodeConnection = false,
         std::shared_ptr<::datasystem::client::EmbeddedClientWorkerApi> api = nullptr,
         void *worker = nullptr) const override
     {
         (void)cred;
         (void)token;
         (void)tenantId;
-        (void)enableExclusiveConnection;
         return std::make_shared<ClientWorkerLocalApi>(std::move(hostPort), std::move(api), worker, heartbeatType,
                                                       signature, enableCrossNodeConnection);
     };

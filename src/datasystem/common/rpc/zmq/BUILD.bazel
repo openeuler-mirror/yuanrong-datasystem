@@ -27,7 +27,6 @@ ds_cc_library(
     deps = [
         ":zmq_stream_base",
         "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/rpc/zmq:exclusive_conn_mgr",
         "//src/datasystem/common/rpc/zmq:rpc_service_method",
         "//src/datasystem/common/rpc/zmq:zmq_msg_decoder",
         "//src/datasystem/common/rpc/zmq:zmq_msg_queue",
@@ -56,37 +55,17 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "work_agent2",
-    srcs = [
-        "work_agent.cpp",
-    ],
-    hdrs = [
-        "work_agent.h",
-    ],
-    deps = [
-        ":zmq_msg_decoder",
-        ":zmq_service",
-        "//src/datasystem/common/perf:common_perf",
-        "//src/datasystem/common/rpc:unix_sock_fd",
-        "//src/datasystem/common/util:thread_pool",
-    ],
-)
-
-ds_cc_library(
     name = "zmq_service",
     srcs = [
-        "work_agent.cpp",
         "zmq_server_impl.cpp",
         "zmq_service.cpp",
     ],
     hdrs = [
-        "work_agent.h",
         "zmq_server_impl.h",
         "zmq_service.h",
     ],
     deps = [
         ":rpc_service_method",
-        #":work_agent",
         ":zmq_common",
         ":zmq_epoll",
         ":zmq_msg_decoder",
@@ -395,22 +374,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "exclusive_conn_mgr",
-    srcs = [
-        "exclusive_conn_mgr.cpp",
-    ],
-    hdrs = [
-        "exclusive_conn_mgr.h",
-    ],
-    deps = [
-        ":zmq_msg_decoder",
-        "//src/datasystem/common/log:log_base",
-        "//src/datasystem/common/rpc:unix_sock_fd",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)
-
-ds_cc_library(
     name = "zmq_client_stream_base",
     srcs = [
         "zmq_client_stream_base.cpp",
@@ -419,7 +382,6 @@ ds_cc_library(
         "zmq_client_stream_base.h",
     ],
     deps = [
-        ":exclusive_conn_mgr",
         ":rpc_service_method",
         ":zmq_msg_decoder",
         ":zmq_msg_queue",

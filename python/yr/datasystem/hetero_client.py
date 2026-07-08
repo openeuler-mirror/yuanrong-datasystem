@@ -91,10 +91,6 @@ class HeteroClient:
         enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
         req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
         connect_timeout_ms.
-        enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-        datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-        `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-        the system will throw a request exception.
         enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
     Raises:
@@ -115,7 +111,6 @@ class HeteroClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        enable_exclusive_connection=False,
         enable_remote_h2d=False
     ):
         """Constructor of the HeteroClient class
@@ -134,10 +129,6 @@ class HeteroClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
-            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-            the system will throw a request exception.
             enable_remote_h2d(bool): Whether the remote h2d feature is enabled or not, default off.
 
         Raises:
@@ -155,7 +146,6 @@ class HeteroClient:
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
-            ["enable_exclusive_connection", enable_exclusive_connection, bool],
             ["enable_remote_h2d", enable_remote_h2d, bool],
         ]
         validator.check_args_types(args)
@@ -172,7 +162,6 @@ class HeteroClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
-            enable_exclusive_connection,
             enable_remote_h2d
         )
 

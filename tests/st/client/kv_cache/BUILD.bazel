@@ -130,13 +130,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "kv_cache_exclusive_client_test",
-    srcs = ["kv_cache_exclusive_client_test.cpp"],
-    tags = ["manual"],
-    deps = KV_COMMON_DEPS,
-)
-
-ds_cc_test(
     name = "kv_cache_existence_opt_test",
     srcs = ["kv_cache_existence_opt_test.cpp"],
     tags = ["manual"],

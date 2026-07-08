@@ -433,7 +433,7 @@ public:
                                          HeartbeatType heartbeatType = HeartbeatType::RPC_HEARTBEAT,
                                          SensitiveValue token = "", Signature *signature = nullptr,
                                          std::string tenantId = "", bool enableCrossNodeConnection = false,
-                                         bool enableExclusiveConnection = false, std::string deviceId = "");
+                                         std::string deviceId = "");
 
     virtual ~ClientWorkerRemoteCommonApi();
 
@@ -545,7 +545,6 @@ protected:
     std::unique_ptr<ClientAccessToken> clientAccessToken_;
     int32_t rpcTimeoutMs_{ 0 };
     uint64_t fastTransportMemSize_{ 0 };
-    bool enableExclusiveConnection_{ false };
     struct RecvClientFdState {
         std::unique_ptr<WaitPost> recvPageWaitPost{ nullptr };
         std::unique_ptr<WaitPost> recvPageNotify{ nullptr };
@@ -562,9 +561,6 @@ protected:
         }
     };
     RecvClientFdState recvClientFdState_;
-    static std::atomic<int32_t> exclusiveIdGen_;
-    std::optional<int32_t> exclusiveId_;
-    std::string exclusiveConnSockPath_;
     uint32_t shmWorkerPort_{ 0 };
     // First URMA handshake pool and retry pool are separated to avoid mixing responsibilities.
     std::unique_ptr<ThreadPool> urmaHandshakePool_{ nullptr };

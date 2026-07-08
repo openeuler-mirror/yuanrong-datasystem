@@ -127,8 +127,6 @@ dscli stop --worker_address "${WORKER_IP}:31501"
 ```bash
 export PYTHONHASHSEED=0
 export DS_WORKER_ADDR="${WORKER_IP}:31501"
-# 可选（默认 0）
-export DS_ENABLE_EXCLUSIVE_CONNECTION=0
 # 远端 H2D（R2HD）开关
 export DS_ENABLE_REMOTE_H2D=0
 ```

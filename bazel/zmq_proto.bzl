@@ -191,7 +191,6 @@ def zmq_cc_proto_library(
             #@yuanrong-datasystem"//src/datasystem/common/rdma:fast_transport_manager_wrapper",
             "@yuanrong-datasystem//src/datasystem/common/rpc:rpc_unary_client_impl",
             "@yuanrong-datasystem//src/datasystem/common/rpc/zmq:zmq_unary_client_impl",
-            "@yuanrong-datasystem//src/datasystem/common/rpc/zmq:exclusive_conn_mgr",
             "@yuanrong-datasystem//src/datasystem/common/rpc/zmq:zmq_client_stream_base",
             "@yuanrong-datasystem//src/datasystem/common/shared_memory:common_shared_memory",
             "@yuanrong-datasystem//src/datasystem/common/rpc/zmq:zmq_stub_impl",

@@ -65,7 +65,6 @@ public:
         ASSERT_TRUE(workerIndex < cluster_->GetWorkerNum());
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
         connectOptions = { .host = workerAddress.Host(), .port = workerAddress.Port(), .connectTimeoutMs = timeoutMs };
-        connectOptions.enableExclusiveConnection = true;
         connectOptions.token = token;
     }
 

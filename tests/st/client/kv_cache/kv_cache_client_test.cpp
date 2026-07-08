@@ -1073,7 +1073,7 @@ TEST_F(KVCacheClientTest, DeleteDeadLock)
 TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 3000);
+    InitTestKVClient(0, client, 60000, false, 3000);
     std::string objectKey1 = NewObjectKey();
 
     uint64_t size = 20 * 1024 * 1024;

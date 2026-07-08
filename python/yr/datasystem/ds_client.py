@@ -42,7 +42,6 @@ class DsClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        enable_exclusive_connection=False,
         service_discovery=None
     ):
         """Constructor of the DsClient class
@@ -62,10 +61,6 @@ class DsClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
-            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-            the system will throw a request exception.
             service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
                 If provided, the client will use service discovery to find worker addresses instead of
                 using the provided host and port.
@@ -118,8 +113,7 @@ class DsClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
-            req_timeout_ms,
-            enable_exclusive_connection
+            req_timeout_ms
         )
         self._hetero_client = HeteroClient(
             host,
@@ -133,8 +127,7 @@ class DsClient:
             secret_key,
             tenant_id,
             enable_cross_node_connection,
-            req_timeout_ms,
-            enable_exclusive_connection
+            req_timeout_ms
         )
         self._object_client = ObjectClient(
             host,
@@ -147,8 +140,7 @@ class DsClient:
             access_key,
             secret_key,
             tenant_id,
-            req_timeout_ms,
-            enable_exclusive_connection
+            req_timeout_ms
         )
 
     def init(self):

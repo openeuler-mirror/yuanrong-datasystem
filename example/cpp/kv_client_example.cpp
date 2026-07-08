@@ -72,7 +72,6 @@ static int BuildConnectOptions(int argc, char *argv[], ConnectOptions &connectOp
                     .clientPublicKey = param.clientPublicKey,
                     .clientPrivateKey = param.clientPrivateKey,
                     .serverPublicKey = param.serverPublicKey };
-    connectOpts.enableExclusiveConnection = false;
     return SUCCESS;
 }
 

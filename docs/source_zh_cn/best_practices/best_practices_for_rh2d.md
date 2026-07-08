@@ -483,7 +483,6 @@ vllm-ascend样例命令（调整自`[PATCH] Implement yuanrong backend`内容）
 ```bash
 export PYTHONHASHSEED=0
 export DS_WORKER_ADDR="${WORKER_IP}:31501"
-export DS_ENABLE_EXCLUSIVE_CONNECTION=0
 # 启用client侧RH2D功能，默认为0表示不启用
 export DS_ENABLE_REMOTE_H2D=1
 

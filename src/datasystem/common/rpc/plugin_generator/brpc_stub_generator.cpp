@@ -288,18 +288,10 @@ void RpcGenerator::ImplementBrpcGenericStubOtherFuncDef(io::Printer &printer, co
         "Status $stub$::GetInitStatus() {\n"
         "    return stub_->GetInitStatus();\n"
         "}\n";
-    const std::string setExclusiveConnInfo =
-        "void $stub$::SetExclusiveConnInfo(const std::optional<int32_t> &exclusiveId,\n"
-        "                                   const std::string &sockPath) {\n"
-        "    (void)exclusiveId;\n"
-        "    (void)sockPath;\n"
-        "    // brpc does not support exclusive connections, no-op\n"
-        "}\n";
     printer.Print(vars, forgetRequest.c_str());
     printer.Print(vars, isPeerAlive.c_str());
     printer.Print(vars, cacheSession.c_str());
     printer.Print(vars, getInitStatus.c_str());
-    printer.Print(vars, setExclusiveConnInfo.c_str());
 }
 
 // ============================================================================

@@ -55,7 +55,7 @@ message RegisterClientReqPb {
     string tenant_id = 8;
     bool enable_cross_node = 9;
     string pod_name = 10;
-    bool enable_exclusive_connection = 11;
+    reserved 11;  // was enable_exclusive_connection, removed (exclusive-conn feature)
     bool support_multi_shm_ref_count = 12;
     string device_id = 13;
     string compatibility_version = 14;
@@ -90,7 +90,7 @@ message RegisterClientRspPb {
     repeated string available_workers = 18;
     bool enable_p2p_transfer = 19;
     uint64 client_reconnect_wait_s = 20;
-    string exclusive_conn_sockpath = 21;
+    reserved 21;  // was exclusive_conn_sockpath, removed (exclusive-conn feature)
     bool support_multi_shm_ref_count = 22;
     FastTransportMode fast_transport_mode = 23;
     LogSampleConfigPb log_sample_config = 24;

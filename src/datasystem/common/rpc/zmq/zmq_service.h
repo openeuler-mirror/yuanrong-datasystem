@@ -47,14 +47,12 @@
 #include "datasystem/common/util/queue/queue.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/rpc/zmq/work_agent.h"
 
 namespace datasystem {
 typedef MsgQueRef<ZmqMetaMsgFrames, ZmqMetaMsgFrames> ZmqServerMsgQueRef;
 typedef MsgQueMgr<ZmqMetaMsgFrames, ZmqMetaMsgFrames> ZmqServerMsgMgr;
 typedef decltype(epoll_event::events) EventsVal;
 class SockEventService;
-class WorkAgent;
 /**
  * @brief An abstract class for RPC service.
  * The ZMQ plugin will generate a subclass, and the user will supply the virtual method implementation.
@@ -114,12 +112,6 @@ public:
     auto GetEventFd() const
     {
         return outfd_;
-    }
-
-    Status GetExclConnSockPath(std::string &sockPath)
-    {
-        sockPath = exclSockPath_;
-        return Status::OK();
     }
 
     Status ServiceRequest(MetaPb &&meta, ZmqMsgFrames &&msgs);
@@ -264,7 +256,6 @@ private:
     void AddRoute(MetaPb &meta, int fd);
     void DeleteRoute(int fd);
     Status InitThreadPool();
-    Status SendErrorMaxExclusive(WorkAgent *workAgent, const ThreadPool::ThreadPoolUsage &poolUsage);
 
     std::unique_ptr<ThreadPool> thrdPool_{ nullptr };
     std::map<int32_t, std::shared_ptr<WorkerCB>> workerCBs_;
@@ -282,14 +273,12 @@ private:
     int outfd_;             // For replyQueue_.
     int infd_;              // For rqQueue_.
     int tcpfd_;             // If bypass ZmqServiceImpl
-    int exclListenFd_;
     HostPort tcpHostPort_;  // If bypass ZmqServiceImpl
     std::atomic<int64_t> nextWorker_;
     std::atomic<bool> globalInterrupt_;
     bool streamSupport_;
     bool multiDestinations_;
     std::vector<std::string> sockPath_;
-    std::string exclSockPath_;
     bool unlinkSocketPathOnExit_;
     bool tcpDirect_;
     std::shared_ptr<ZmqServerMsgMgr> backendMgr_{ nullptr };
@@ -302,9 +291,6 @@ private:
     WriterPrefRWLock routeMux_;
     std::map<std::string, std::set<int>> routes_;
     std::map<int, std::string> fdToGateway_;
-
-    std::vector<std::unique_ptr<WorkAgent>> workAgents_;
-    std::unique_ptr<ThreadPool> workAgentThreadPool_ { nullptr };
 };
 
 }  // namespace datasystem

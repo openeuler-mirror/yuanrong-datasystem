@@ -42,13 +42,11 @@ DS_DECLARE_string(unix_domain_socket_dir);
 
 namespace datasystem {
 
-static const int MAX_EXCLUSIVE_CONNECTIONS_LIMIT = 128;
 ZmqService::ZmqService()
     : proxy_(nullptr),
       outfd_(ZMQ_NO_FILE_FD),
       infd_(ZMQ_NO_FILE_FD),
       tcpfd_(ZMQ_NO_FILE_FD),
-      exclListenFd_(ZMQ_NO_FILE_FD),
       nextWorker_(0),
       globalInterrupt_(false),
       streamSupport_(false),
@@ -90,15 +88,6 @@ ZmqService::~ZmqService()
     if (payloadBank_ != nullptr) {
         payloadBank_.reset();
     }
-    for (auto &agent : workAgents_) {
-        try {
-            agent->Stop();
-            agent->CloseSocket();
-        } catch (const std::exception &e) {
-            VLOG(ERROR) << "A work agent got an exception during Stop(): " << e.what();
-        }
-    }
-    workAgentThreadPool_.reset();
 }
 
 Status ZmqService::CreateWorkerCBs()
@@ -207,19 +196,6 @@ Status ZmqService::BindUnixPath()
         sockPath_.emplace_back(sockPath);
     }
 
-    // create a exclusive connection listener fd.
-    sockaddr_un addr{};
-    auto exclSockPath = FormatString("%s/%s", path, "exclusiveConn");
-    unlink(exclSockPath.data());
-    UnixSockFd tempsockfd;
-    RETURN_IF_NOT_OK(tempsockfd.CreateUnixSocket());
-    RETURN_IF_NOT_OK(UnixSockFd::SetUpSockPath(exclSockPath, addr));
-    RETURN_IF_NOT_OK(tempsockfd.BindUds(addr, RPC_SOCK_MODE));
-    RETURN_IF_NOT_OK(tempsockfd.SetNonBlocking());
-    exclListenFd_ = tempsockfd.GetFd();
-    RETURN_IF_NOT_OK(AddListenFd(exclListenFd_));
-    sockPath_.emplace_back(exclSockPath);
-    exclSockPath_ = exclSockPath;
     return Status::OK();
 }
 
@@ -1231,73 +1207,21 @@ Status ZmqService::FrontendToBackend(int fd, const EventType type, ZmqMetaMsgFra
     return Status::OK();
 }
 
-Status ZmqService::SendErrorMaxExclusive(WorkAgent *workAgent, const ThreadPool::ThreadPoolUsage &poolUsage)
-{
-    ZmqMetaMsgFrames inMsg;
-    ZmqMsgFrames replyMsg;
-    ZmqMetaMsgFrames outMsg;
-    Status rcForClient(K_NO_SPACE, "There are too many exclusive connections in use. Connection failed.");
-
-    // Even though this is a failure path, parse the incoming request anyway for debugging purpose to align
-    // the exclusive connection name with the client side based on the meta data.
-    RETURN_IF_NOT_OK(workAgent->ClientToService(inMsg));
-    MetaPb &meta = inMsg.first;
-
-    LOG(ERROR) << FormatString("No space for exclusive connection %s. (activeAgents/maxAgents) : (%d/%d)",
-                               meta.gateway_id(), poolUsage.runningTasksNum + poolUsage.waitingTaskNum,
-                               poolUsage.maxThreadNum);
-
-    replyMsg.push_back(std::move(StatusToZmqMessage(rcForClient)));
-    outMsg.first = std::move(meta);
-    outMsg.second = std::move(replyMsg);
-
-    RETURN_IF_NOT_OK(workAgent->ServiceToClient(outMsg));
-    return Status::OK();
-}
-
 Status ZmqService::ProcessAccept(int listenFd)
 {
     bool isTcp = (listenFd == tcpfd_);
     UnixSockFd listenSockFd(listenFd);
     UnixSockFd connectedSockFd;
     RETURN_IF_NOT_OK(listenSockFd.Accept(connectedSockFd));
-    if (listenFd == exclListenFd_) {
-        if (!workAgentThreadPool_) {
-            int maxWorkAgents = MAX_EXCLUSIVE_CONNECTIONS_LIMIT;
-
-            INJECT_POINT_NO_RETURN("ZmqService.ProcessAccept.FakeFullPool", [&maxWorkAgents](int32_t fakeMax) {
-                maxWorkAgents = fakeMax;
-                LOG(INFO) << "Testcase injection has faked the max work agents to: " << maxWorkAgents;
-            });
-
-            RETURN_IF_EXCEPTION_OCCURS(workAgentThreadPool_ = std::make_unique<ThreadPool>(1, maxWorkAgents));
-        }
-
-        // grab the pool usage stats for debug purposes
-        ThreadPool::ThreadPoolUsage currentPoolUsage = workAgentThreadPool_->GetThreadPoolUsage();
-        auto newAgent = std::make_unique<WorkAgent>(connectedSockFd, this, !isTcp);
-        auto ptr = newAgent.get();
-        // Invoke the thread to execute the WorkAgent and perform the request logic.
-        // If we cannot get a thread for the agent, use this agent locally here in this thread to help send the
-        // error message back to the client.
-        if (!workAgentThreadPool_->ExecuteNoWait([this, ptr, currentPoolUsage] { ptr->Run(currentPoolUsage); })) {
-            RETURN_IF_NOT_OK(SendErrorMaxExclusive(ptr, currentPoolUsage));
-            ptr->CloseSocket();
-            return Status::OK();
-        }
-        workAgents_.push_back(std::move(newAgent));
-    } else {
-        // Make it non-blocking
-        RETURN_IF_NOT_OK(connectedSockFd.SetNonBlocking());
-        if (isTcp) {
-            RETURN_IF_NOT_OK(connectedSockFd.SetNoDelay());
-        }
-        // Assign it to the next io service
-        RETURN_IF_NOT_OK(io_->AddFd(this, connectedSockFd.GetFd(), !isTcp));
-        VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Spawn %s connection %d for service %s", isTcp ? "tcp" : "uds",
-                                                connectedSockFd.GetFd(), serviceName_);
+    // Make it non-blocking
+    RETURN_IF_NOT_OK(connectedSockFd.SetNonBlocking());
+    if (isTcp) {
+        RETURN_IF_NOT_OK(connectedSockFd.SetNoDelay());
     }
-
+    // Assign it to the next io service
+    RETURN_IF_NOT_OK(io_->AddFd(this, connectedSockFd.GetFd(), !isTcp));
+    VLOG(RPC_KEY_LOG_LEVEL) << FormatString("Spawn %s connection %d for service %s", isTcp ? "tcp" : "uds",
+                                            connectedSockFd.GetFd(), serviceName_);
     return Status::OK();
 }
 
