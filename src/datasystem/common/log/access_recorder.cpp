@@ -63,6 +63,7 @@ static AccessKeyType gKeyTypes[] = {
 
 bool IsCurrentRequestLogSampled(AccessKeyType type)
 {
+    // Same semantics as LogSampler::IsOutsideRequestTrace() — keep in sync
     if (type == AccessKeyType::REQUEST_OUT || !Trace::Instance().IsRequestLogTrace()) {
         return false;
     }

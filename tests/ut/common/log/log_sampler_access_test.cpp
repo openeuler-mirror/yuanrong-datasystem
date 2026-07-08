@@ -133,29 +133,25 @@ TEST_F(LogSamplerAccessTest, AccessPerEventSampling)
     EXPECT_NEAR(ratio, 0.5, 0.05);
 }
 
-// ShouldRecordAccess: no request context → per-event sampling only
-TEST_F(LogSamplerAccessTest, NoRequestContextAccess)
+// LS-007b: Background access bypasses sampler unconditionally — no request context, all rates=0.0
+TEST_F(LogSamplerAccessTest, NoRequestContextAccessBypassSampler)
 {
-    EnableSampler(0.5, 0.5, 1.0);
-    LogSampler::Instance().SetSaltForTest(42);
+    EnableSampler(0.0, 0.0, 0.0);
 
-    // No TraceGuard → no request context
     EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
 
-    // IsCurrentRequestSampledIn returns false → access per-event sampling
-    int hits = 0;
-    constexpr int kNumCalls = 1000;
-    for (int i = 0; i < kNumCalls; ++i) {
-        if (LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
-            ++hits;
-        }
-    }
+    // ShouldRecordAccess: CLIENT/ACCESS/REQUEST_OUT all bypass sampler
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_POSIX_CREATE));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_ETCD_PUT));
 
-    double ratio = static_cast<double>(hits) / kNumCalls;
-    EXPECT_NEAR(ratio, 0.5, 0.05);
+    // ShouldRecordAccessType: all types bypass sampler
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::CLIENT));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::ACCESS));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::REQUEST_OUT));
 }
 
-// ShouldRecordAccessType: CLIENT/ACCESS per-event
+// ShouldRecordAccessType: CLIENT/ACCESS per-event (with request context)
 TEST_F(LogSamplerAccessTest, ShouldRecordAccessTypeClientAccess)
 {
     EnableSampler(0.0, 0.5, 1.0);
@@ -180,6 +176,21 @@ TEST_F(LogSamplerAccessTest, ShouldRecordAccessTypeClientAccess)
     double accessRatio = static_cast<double>(accessHits) / kNumCalls;
     EXPECT_NEAR(clientRatio, 0.5, 0.05);
     EXPECT_NEAR(accessRatio, 0.5, 0.05);
+}
+
+// LS-007b: LOG_SAMPLE_NONE receiving side — background cross-node RPC access bypass
+TEST_F(LogSamplerAccessTest, LogSampleNoneReceivingSideAccessBypass)
+{
+    EnableSampler(0.0, 0.0, 0.0);
+    LogSampler::Instance().SetSaltForTest(0);
+
+    // Simulate full cross-node path: background thread → LOG_SAMPLE_NONE → receiving side
+    TraceGuard guard = Trace::Instance().SetTraceNewID("bg_thread_trace");
+    EXPECT_FALSE(Trace::Instance().IsRequestLogTrace());
+
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_POSIX_GINCREASEREF));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::CLIENT));
+    EXPECT_TRUE(LogSampler::Instance().ShouldRecordAccessType(AccessKeyType::ACCESS));
 }
 
 // GetAccessKeyType: correct mapping

@@ -235,9 +235,8 @@ bool LogSampler::ShouldCreateRuntimeLog(LogSeverity severity, bool isPlog)
     if (kind == LogSampleKind::REQUEST) {
         if (snap->config.requestRate.ppm == 0) {
             auto &trace = Trace::Instance();
-            if (trace.IsRequestLogTrace()) {
-                trace.SetRequestSampleDecision(true, false);
-            }
+            // ClassifyRuntime returned REQUEST → IsRequestLogTrace() guaranteed true
+            trace.SetRequestSampleDecision(true, false);
             return false;
         }
         return IsCurrentRequestSampledIn(snap->config.requestRate);
@@ -255,8 +254,7 @@ bool LogSampler::ShouldCreateRuntimeLog(LogSeverity severity, bool isPlog)
         return false;
     }
 
-    uint64_t traceHash = Trace::Instance().IsRequestLogTrace()
-        ? Trace::Instance().GetCachedHash() : uint64_t(0);
+    uint64_t traceHash = Trace::Instance().GetCachedHash();
     return ShouldSampleEvent(traceHash, kind, rate);
 }
 
@@ -300,8 +298,7 @@ LogSampleKind LogSampler::ClassifyRuntime(LogSeverity severity, bool isPlog) con
     if (severity == LogSeverity::FATAL) {
         return LogSampleKind::BYPASS;
     }
-    auto &trace = Trace::Instance();
-    if (!trace.IsRequestLogTrace()) {
+    if (IsOutsideRequestTrace()) {
         return LogSampleKind::BYPASS;
     }
     if (isPlog || severity == LogSeverity::ERROR || severity == LogSeverity::WARNING) {
@@ -339,14 +336,17 @@ bool LogSampler::ShouldRecordAccess(AccessRecorderKey key)
         return true;
     }
 
+    if (IsOutsideRequestTrace()) {
+        return true;
+    }
+
     if (IsCurrentRequestSampledIn(snap->config.requestRate)) {
         return true;
     }
     if (snap->config.accessRate.ppm == 0) {
         return false;
     }
-    uint64_t traceHash = Trace::Instance().IsRequestLogTrace()
-        ? Trace::Instance().GetCachedHash() : uint64_t(0);
+    uint64_t traceHash = Trace::Instance().GetCachedHash();
     return ShouldSampleEvent(traceHash, LogSampleKind::ACCESS, snap->config.accessRate);
 }
 
@@ -363,14 +363,18 @@ bool LogSampler::ShouldRecordAccessType(AccessKeyType type)
     if (accessRate.ppm == kSamplePpmBase) {
         return true;
     }
+
+    if (IsOutsideRequestTrace()) {
+        return true;
+    }
+
     if (IsCurrentRequestSampledIn(snap->config.requestRate)) {
         return true;
     }
     if (accessRate.ppm == 0) {
         return false;
     }
-    uint64_t traceHash = Trace::Instance().IsRequestLogTrace()
-        ? Trace::Instance().GetCachedHash() : uint64_t(0);
+    uint64_t traceHash = Trace::Instance().GetCachedHash();
     return ShouldSampleEvent(traceHash, LogSampleKind::ACCESS, accessRate);
 }
 
