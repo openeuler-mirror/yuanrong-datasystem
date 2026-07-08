@@ -37,6 +37,11 @@ namespace datasystem {
 /// Shared by brpc client streaming adapters to bound destructor wait time.
 inline constexpr int kStreamCloseTimeoutSec = 5;
 
+/// Timeout (seconds) for a single Stream Read wait. Bounds the readCond_ wait so
+/// a peer crash / network partition cannot block the calling bthread forever and
+/// exhaust the bthread pool under nested RPC load. Must be > kStreamCloseTimeoutSec.
+inline constexpr int kStreamReadTimeoutSec = 30;
+
 /**
  * @brief Try to extract an embedded Status from a brpc response protobuf.
  *
