@@ -3463,8 +3463,8 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                                                    readParams[index].size, bufferPtr);
             }
         } else if (isNoShm) {
-            status = SetNoShmObjectBufferWithMetric(objectKey, rsp.payload_info(j), version, payloads, ubBufferInfos,
-                                                    bufferPtr);
+            status = SetNoShmObjectBufferWithMetric(objectKey, rsp.payload_info(j), version, payloads,
+                                                    ubBufferInfos, bufferPtr);
             j++;
         } else {
             RETURN_STATUS(K_UNKNOWN_ERROR, "Object key does not match with GetRspPb");
@@ -3479,6 +3479,23 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
     return Status::OK();
 }
 
+Status ObjectClientImpl::SetNoShmObjectBufferWithMetric(const std::string &objectKey,
+                                                        const GetRspPb::PayloadInfoPb &payloadInfo,
+                                                        uint32_t version, std::vector<RpcMessage> &payloads,
+                                                        const std::unordered_map<std::string,
+                                                            std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos,
+                                                        std::shared_ptr<Buffer> &bufferPtr)
+{
+    uint64_t dataSize = static_cast<uint64_t>(payloadInfo.data_size());
+    auto it = ubBufferInfos.find(objectKey);
+    if (it != ubBufferInfos.end()) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, dataSize);
+        return Buffer::CreateBuffer(it->second, shared_from_this(), bufferPtr);
+    }
+    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, dataSize);
+    return SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, bufferPtr);
+}
+
 Status ObjectClientImpl::SetRemoteHostObjectBuffer(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
                                                    uint32_t version, std::shared_ptr<Buffer> &buffer)
 {
@@ -3491,22 +3508,6 @@ Status ObjectClientImpl::SetRemoteHostObjectBuffer(const std::string &objectKey,
     auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, info.data_size(), info.metadata_size(), param,
                                            info.is_seal(), version, {}, nullptr, nullptr, hostInfo);
     return Buffer::CreateBuffer(bufferInfo, shared_from_this(), buffer);
-}
-
-Status ObjectClientImpl::SetNoShmObjectBufferWithMetric(const std::string &objectKey,
-                                                        const GetRspPb::PayloadInfoPb &payloadInfo,
-                                                        uint32_t version, std::vector<RpcMessage> &payloads,
-                                                        const std::unordered_map<std::string,
-                                                            std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos,
-                                                        std::shared_ptr<Buffer> &bufferPtr)
-{
-    auto it = ubBufferInfos.find(objectKey);
-    if (it != ubBufferInfos.end()) {
-        METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, static_cast<uint64_t>(payloadInfo.data_size()));
-        return Buffer::CreateBuffer(it->second, shared_from_this(), bufferPtr);
-    }
-    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, static_cast<uint64_t>(payloadInfo.data_size()));
-    return SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, bufferPtr);
 }
 
 Status ObjectClientImpl::SetNonShmObjectBuffer(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo,
