@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -56,13 +57,12 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs,
         ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
     if (FLAGS_use_brpc) {
         HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
-        brpcChannel_ = std::make_unique<brpc::Channel>();
-        brpc::ChannelOptions opts;
-        opts.timeout_ms = requestTimeoutMs;
-        opts.connect_timeout_ms = connectTimeoutMs;
-        opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            brpcChannel_->Init(brpcAddr.ToString().c_str(), &opts) == 0, StatusCode::K_RPC_UNAVAILABLE,
+        BrpcChannelConfig cfg;
+        cfg.endpoint = brpcAddr.ToString();
+        cfg.timeout_ms = requestTimeoutMs;
+        cfg.connect_timeout_ms = connectTimeoutMs;
+        brpcChannel_ = BrpcChannelFactory::Create(cfg);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
             FormatString("Failed to init brpc channel to %s for ClientWorkerSCService", brpcAddr.ToString()));
         // Wait for brpc health check to establish TCP connection.
         (void)WaitForBrpcSocketAvailable(brpcAddr);

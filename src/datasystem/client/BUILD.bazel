@@ -104,6 +104,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/client:embedded_client_worker_api",
         "//src/datasystem/client:urma_success_rate_tracker",
+        "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
