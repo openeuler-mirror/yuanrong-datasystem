@@ -520,11 +520,32 @@ Status UrmaConnection::ImportRemoteSeg(const UrmaImportSegmentPb &importSegmentI
         }
     });
 
-    UrmaSeg remoteSegment;
-    RETURN_IF_NOT_OK(remoteSegment.FromProto(importSegmentInfo.seg()));
-    LOG(INFO) << "import remote seg info: " << remoteSegment.ToString() << ", client_id:" << urmaJfrInfo_.clientId;
+    std::unique_ptr<char[]> segCtxBuf;
+    UrmaSeg urmaSeg;
+    urma_seg_t *remoteSegment = nullptr;
+    if (importSegmentInfo.has_seg_ctx() && !importSegmentInfo.seg_ctx().seg_blob().empty()) {
+        const auto &segBlob = importSegmentInfo.seg_ctx().seg_blob();
+        if (segBlob.size() < sizeof(urma_seg_t)) {
+            RETURN_STATUS(K_RUNTIME_ERROR,
+                          FormatString("Invalid delegated seg blob size=%zu", segBlob.size()));
+        }
+        segCtxBuf = std::make_unique<char[]>(segBlob.size());
+        if (memcpy_s(segCtxBuf.get(), segBlob.size(), segBlob.data(), segBlob.size()) != EOK) {
+            RETURN_STATUS(K_RUNTIME_ERROR, "Failed to copy delegated seg blob");
+        }
+        remoteSegment = reinterpret_cast<urma_seg_t *>(segCtxBuf.get());
+        LOG(INFO) << "[URMA_CONNECT] Import remote seg using delegated context, va=" << remoteSegment->ubva.va
+                  << ", length=" << segBlob.size() << ", client_id:" << urmaJfrInfo_.clientId;
+    } else {
+        RETURN_IF_NOT_OK(urmaSeg.FromProto(importSegmentInfo.seg()));
+        remoteSegment = &urmaSeg.raw;
+        LOG(INFO) << "[URMA_CONNECT] Import remote seg using legacy handshake, va=" << remoteSegment->ubva.va
+                  << ", client_id:" << urmaJfrInfo_.clientId;
+    }
+    LOG(INFO) << "import remote seg info: " << UrmaSeg::ToString(*remoteSegment)
+              << ", client_id:" << urmaJfrInfo_.clientId;
     RETURN_IF_NOT_OK(
-        UrmaRemoteSegment::Import(context, urmaToken, importSegmentFlag, remoteSegment.raw, accessor->second));
+        UrmaRemoteSegment::Import(context, urmaToken, importSegmentFlag, *remoteSegment, accessor->second));
     needErase = false;
     return Status::OK();
 }

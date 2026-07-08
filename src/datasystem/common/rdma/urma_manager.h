@@ -248,6 +248,16 @@ public:
     Status GetOrCreateLocalJetty(const std::string &key, uint32_t &jettyId, JettyType jettyType = JettyType::SEND);
 
     /**
+     * @brief Get an existing local Jetty for a given connection key.
+     * @param[in] key Connection key (remote address or client id).
+     * @param[out] jetty Shared pointer to the existing Jetty.
+     * @param[in] jettyType Jetty type.
+     * @return Status of the call.
+     */
+    Status GetLocalJetty(const std::string &key, std::shared_ptr<UrmaJetty> &jetty,
+                         JettyType jettyType = JettyType::SEND);
+
+    /**
      * @brief Register segment
      * @param[in] segAddress Starting address of the segment
      * @param[in] segSize Size of the segment

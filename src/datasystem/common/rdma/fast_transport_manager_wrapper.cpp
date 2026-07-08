@@ -307,8 +307,23 @@ Status ConstructHandshakePb(const std::string &senderAddr, UrmaHandshakeReqPb &r
         // Get or create a local Jetty for this target node (reused across reconnections).
         uint32_t jettyId = 0;
         RETURN_IF_NOT_OK(mgr.GetOrCreateLocalJetty(senderAddr, jettyId, JettyType::RECV));
+        std::shared_ptr<UrmaJetty> localRecvJetty;
+        RETURN_IF_NOT_OK(mgr.GetLocalJetty(senderAddr, localRecvJetty, JettyType::RECV));
         auto localInfo = mgr.GetLocalUrmaInfo();
         localInfo.jfrId = jettyId;
+
+        urma_rjetty_t *rjetty = nullptr;
+        uint32_t rjettyLen = 0;
+        urma_status_t urmaStatus = ds_urma_get_rjetty(localRecvJetty->Raw(), &rjetty, &rjettyLen);
+        if (rjetty != nullptr) {
+            localInfo.rjettyBuf.assign(reinterpret_cast<const char *>(rjetty), rjettyLen);
+            ds_urma_put_rjetty(rjetty);
+            LOG(INFO) << "[URMA_CONNECT] Got delegated rjetty context, length=" << rjettyLen;
+        } else {
+            LOG(WARNING) << "[URMA_CONNECT] Failed to get delegated rjetty context, status=" << urmaStatus
+                         << ", fallback to legacy handshake";
+        }
+
         localInfo.ToProto(req);
         if (!mgr.GetClientId().empty()) {
             req.set_client_id(mgr.GetClientId());

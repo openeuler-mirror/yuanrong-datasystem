@@ -35,6 +35,8 @@ struct UrmaJfrInfo {
     HostPort localAddress;
     std::string uniqueInstanceId;
     std::string clientId;
+    // Opaque blob returned by urma_get_rjetty(); non-empty means delegated connection context is available.
+    std::string rjettyBuf;
 
     std::string ToString() const;
 
@@ -49,6 +51,9 @@ struct UrmaJfrInfo {
         proto.mutable_address()->set_host(localAddress.Host());
         proto.mutable_address()->set_port(localAddress.Port());
         proto.set_urma_instance_id(uniqueInstanceId);
+        if (!rjettyBuf.empty()) {
+            proto.mutable_rjetty_info()->set_rjetty_blob(rjettyBuf);
+        }
     }
 
     template <class Proto>
@@ -64,6 +69,9 @@ struct UrmaJfrInfo {
         localAddress = HostPort(proto.address().host(), proto.address().port());
         uniqueInstanceId = proto.urma_instance_id();
         clientId = proto.client_id();
+        if (proto.has_rjetty_info()) {
+            rjettyBuf = proto.rjetty_info().rjetty_blob();
+        }
         return Status::OK();
     }
 };
