@@ -85,4 +85,5 @@ DS_DECLARE_uint64(client_slow_log_process_slower_than);
 DS_DECLARE_uint64(client_slow_log_rpc_slower_than);
 DS_DECLARE_bool(use_brpc);
 DS_DECLARE_int32(brpc_server_num_threads);
+DS_DECLARE_int32(brpc_max_concurrency);
 #endif  // DATASYSTEM_COMMON_FLAGS_COMMON_FLAGS_H
