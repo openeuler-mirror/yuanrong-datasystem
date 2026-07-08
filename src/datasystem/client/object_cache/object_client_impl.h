@@ -921,6 +921,23 @@ private:
                             std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedObjectKey,
                             const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
                                 &ubBufferInfos = {});
+
+    /**
+     * @brief Fill in buffer for non-shm cases, and accumulate read-bytes metrics by transport (URMA/TCP).
+     * @param[in] objectKey The object key of the cache object.
+     * @param[in] payloadInfo The protobuf object info.
+     * @param[in] version Object version.
+     * @param[in] payloads The read buffers.
+     * @param[in] ubBufferInfos URMA buffer candidates keyed by object key; a hit selects the URMA path.
+     * @param[out] bufferPtr The object buffer.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status SetNoShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::PayloadInfoPb &payloadInfo,
+                                          uint32_t version, std::vector<RpcMessage> &payloads,
+                                          const std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>>
+                                              &ubBufferInfos,
+                                          std::shared_ptr<Buffer> &bufferPtr);
+
     /**
      * @brief Fill in buffer for non-shm cases.
      * @param[in] objectKey The object key of the cache object.
