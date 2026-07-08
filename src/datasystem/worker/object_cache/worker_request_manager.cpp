@@ -510,7 +510,6 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
                                        readSize, metaSize, srcChipId, dstChipId, true, eventKeys);
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
-            METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, readSize);
             METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
             GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
             SetNoShmObjectInfoPb(objectKeyUri, objectIndex, objectInfo, *payloadInfo);
@@ -574,7 +573,6 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
         }
     }
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
-    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, readSize);
     METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
     auto lastIndex = outPayloads.size();
     GetRspPb::PayloadInfoPb *payloadInfo = resp.add_payload_info();
