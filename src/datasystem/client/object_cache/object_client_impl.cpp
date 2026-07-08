@@ -1218,6 +1218,10 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToLocalS
             .IsError()) {
         return StandbySwitchAttemptResult::CONTINUE;
     }
+    Status rc = localWorkerApi->TryFastTransportAfterHeartbeat();
+    if (rc.IsError()) {
+        LOG(WARNING) << "[Switch] URMA handshake failed: " << rc.ToString();
+    }
     // Declared outside the lock so the old listener's destructor (which joins its heartbeat
     // thread) runs after switchNodeMutex_ is released; otherwise it can deadlock against
     // ProcessWorkerLost waiting on the same mutex.
