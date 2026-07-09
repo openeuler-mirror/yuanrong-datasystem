@@ -34,6 +34,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/trace_attachment.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 
 namespace datasystem {
 
@@ -92,10 +93,24 @@ public:
             channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
             if (cntl.Failed()) {
                 Status embedded = TryExtractStatusFromResponse(response_);
+                const auto &errorText = cntl.ErrorText();
+                VLOG(1)
+                    << "[BRPC_UNARY_READ_FAILED] method="
+                    << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
+                    << ", errorCode=" << cntl.ErrorCode()
+                    << ", containsDsErr=" << (errorText.find("\x01" "DS_ERR:") != std::string::npos)
+                    << ", embeddedStatus=" << embedded.ToString()
+                    << ", localSide=" << cntl.local_side() << ", remoteSide=" << cntl.remote_side()
+                    << ", errorTextLen=" << errorText.size()
+                    << ", errorText=" << FormatStringForLog(errorText);
+                VLOG(kBrpcDetailLogLevel)
+                    << "[BRPC_UNARY_READ_FAILED_DETAIL] method="
+                    << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
+                    << ", timeoutMs=" << timeoutMs_ << ", responseDebug=" << response_.ShortDebugString();
                 if (embedded.IsError()) {
                     return embedded;
                 }
-                return TryExtractStatusFromControllerError(cntl.ErrorText(), cntl.ErrorCode());
+                return TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
             }
             responseAttachment_ = std::move(cntl.response_attachment());
             pb.CopyFrom(response_);
