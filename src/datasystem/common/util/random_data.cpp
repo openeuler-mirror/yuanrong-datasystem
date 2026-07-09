@@ -83,7 +83,13 @@ size_t RandomData::GetRandomIndex(size_t containerSize)
 uint64_t RandomData::GetRandomSeed()
 {
     static auto hostHash = std::hash<const char *>()(std::getenv("HOSTNAME"));
-    static auto pidHash = std::hash<std::size_t>()(getpid());
+    // Read the live pid on every call (NOT a cached static). GetRandomSeed is
+    // used to (re)seed the UUID mt19937, including the re-seed that
+    // GetBytesUuid() triggers after detecting a fork (its thread_local pid
+    // cache mismatched the live pid); a cached static would hand the forked
+    // child the parent's pid and let the child reproduce the parent's UUID
+    // sequence.
+    auto pidHash = std::hash<std::size_t>()(getpid());
     static thread_local auto tidHash = std::hash<std::thread::id>()(std::this_thread::get_id());
     uint64_t systemClock = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
     uint64_t highResClock = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());

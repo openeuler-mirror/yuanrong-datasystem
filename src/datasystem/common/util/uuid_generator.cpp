@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <random>
+#include <unistd.h>
 
 #include <securec.h>
 
@@ -35,6 +36,24 @@ namespace datasystem {
 std::string GetBytesUuid()
 {
     static thread_local std::mt19937 gen(RandomData::GetRandomSeed());
+    // fork() leaves the child with the parent's already-initialized gen (mt19937
+    // state + the static-init guard), so without intervention the child would
+    // continue the parent's sequence and likely reproduce a UUID the parent is
+    // about to emit. Detect the fork by comparing the live pid against the one
+    // cached when this thread's gen was last (re)seeded: fork() changes the
+    // child's live pid, but the child inherits the parent's cached value, so a
+    // mismatch on the next call means a fork happened since the last seed ->
+    // re-seed from a fresh entropy source (which reads the child's live pid) so
+    // the child diverges. Updating the cached pid afterwards keeps arbitrary
+    // nesting (grandchild forks again -> pid changes again) fork-safe. This is
+    // per-thread and lock-free; no global pthread_atfork registration or
+    // process-wide state is needed.
+    static thread_local pid_t observedPid = ::getpid();
+    pid_t curPid = ::getpid();
+    if (curPid != observedPid) {
+        gen.seed(RandomData::GetRandomSeed());
+        observedPid = curPid;
+    }
     uint8_t random[UUID_SIZE];
     std::uniform_int_distribution<> dist(0, UINT8_MAX);
     for (size_t i = 0; i < UUID_SIZE; i++) {
