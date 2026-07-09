@@ -46,6 +46,7 @@ namespace datasystem {
 namespace ut {
 namespace {
 constexpr uint64_t MB = 1024ul * 1024ul;
+constexpr uint64_t TASK_TIMEOUT_MS = 60'000;
 const HostPort LOCAL_ADDR("127.0.0.1", 31501);
 const HostPort MASTER_ADDR("127.0.0.1", 31500);
 const std::string TARGET_ADDR = "127.0.0.1:31502";
@@ -59,7 +60,8 @@ master::RebalanceTaskPb MakeTask(const std::string &taskId, uint64_t maxBytes)
     task.set_max_bytes(maxBytes);
     auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     task.set_create_time_ms(nowMs);
-    task.set_deadline_ms(nowMs + 60 * 1000);
+    task.set_timeout_ms(TASK_TIMEOUT_MS);
+    task.set_deadline_ms(nowMs + TASK_TIMEOUT_MS);
     return task;
 }
 }  // namespace
@@ -371,6 +373,8 @@ TEST_F(RebalanceExecutorTest, SubmitExpiredTaskReportsExpiredAndClearsRunningSta
 {
     InstallHooks({}, {});
     auto task = MakeTask("expired-task", 10);
+    task.set_create_time_ms(0);
+    task.set_timeout_ms(0);
     task.set_deadline_ms(static_cast<uint64_t>(GetSteadyClockTimeStampMs()) - 1);
 
     executor_->Submit(task);
@@ -385,6 +389,26 @@ TEST_F(RebalanceExecutorTest, SubmitExpiredTaskReportsExpiredAndClearsRunningSta
     EXPECT_TRUE(migratedObjectKeys_.empty());
     EXPECT_FALSE(executor_->IsRunningForTest());
     EXPECT_TRUE(executor_->GetRunningTaskIdForTest().empty());
+}
+
+// Verifies that worker-side expiry is based on the relative timeout assigned by master. The raw master deadline may be
+// smaller than the source worker's steady-clock value on another host, but the task must still execute.
+TEST_F(RebalanceExecutorTest, SubmitUsesTimeoutAsSourceLocalDeadline)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+    auto task = MakeTask("relative-timeout-task", 10);
+    task.set_create_time_ms(1);
+    task.set_deadline_ms(1);
+    task.set_timeout_ms(TASK_TIMEOUT_MS);
+
+    executor_->Submit(task);
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(reports_[0].migratedBytes, uint64_t(10));
+    EXPECT_EQ(migrateIndex_, size_t(1));
 }
 
 // Verifies duplicate-source protection. When the source worker is already running another task, a new task is rejected

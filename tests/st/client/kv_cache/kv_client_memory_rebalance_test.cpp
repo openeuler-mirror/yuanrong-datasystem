@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -52,10 +53,12 @@ constexpr int HASH_RING_TIMEOUT_MS = 60'000;
 constexpr int SHORT_WAIT_MS = 3'000;
 constexpr int POLL_INTERVAL_MS = 100;
 constexpr int WORKER_RECEIVE_RING_DELAY_MS = 1'000;
+constexpr int64_t SOURCE_CLOCK_OFFSET_MS = 86'400'000;
 constexpr char SCALE_UP_CASE_NAME[] = "ScaleUpNewWorkerParticipatesInRebalance";
 constexpr char USAGE_GAP_BELOW_THRESHOLD_CASE_NAME[] = "UsageGapBelowThresholdDoesNotDispatchTask";
 constexpr char MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME[] = "UsageRateUsesMemoryLimitForSourceThreshold";
-
+constexpr char SOURCE_CLOCK_OFFSET_CASE_NAME[] = "SourceClockOffsetUsesRelativeTaskTimeout";
+constexpr char DISABLED_TEST_PREFIX[] = "DISABLED_";
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
 const std::string TARGET_MIGRATE_POINT = "worker.migrate_service.return";
 const std::string TARGET_MEMORY_AVAILABLE_POINT = "worker.migrate_service.memory_available";
@@ -63,6 +66,7 @@ const std::string ASSIGN_TASK_POINT = "MemoryRebalanceScheduler.AssignTask";
 const std::string EXPIRE_TASK_POINT = "MemoryRebalanceScheduler.ExpireTask";
 const std::string REPLACE_PRIMARY_POINT = "OCMetadataManager.ReplacePrimary";
 const std::string REPORT_RESULT_POINT = "MasterOCServiceImpl.ReportRebalanceResult";
+const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryCheck.addOffsetMs";
 
 struct ObjectBatch {
    std::vector<std::string> keys;
@@ -74,20 +78,22 @@ std::vector<uint32_t> AllWorkers()
    return { WORKER0, WORKER1, WORKER2 };
 }
 
-bool IsScaleUpCase()
+bool IsCurrentTestName(const std::string &expectedName)
 {
    std::string caseName;
    std::string name;
    GetCurTestName(caseName, name);
-   return name == SCALE_UP_CASE_NAME;
+   return name == expectedName || name == std::string(DISABLED_TEST_PREFIX) + expectedName;
+}
+
+bool IsScaleUpCase()
+{
+   return IsCurrentTestName(SCALE_UP_CASE_NAME);
 }
 
 bool IsUsageGapBelowThresholdCase()
 {
-   std::string caseName;
-   std::string name;
-   GetCurTestName(caseName, name);
-   return name == USAGE_GAP_BELOW_THRESHOLD_CASE_NAME;
+   return IsCurrentTestName(USAGE_GAP_BELOW_THRESHOLD_CASE_NAME);
 }
 
 bool IsMemoryLimitSourceThresholdCase()
@@ -98,14 +104,24 @@ bool IsMemoryLimitSourceThresholdCase()
    return name == MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME;
 }
 
+bool IsSourceClockOffsetCase()
+{
+   return IsCurrentTestName(SOURCE_CLOCK_OFFSET_CASE_NAME);
+}
+
 std::string BuildRebalanceInjectActions()
 {
-   return "NodeSelector.setInterval:call(200);"
-          "ResourceManager.setInterval:call(200);"
-          "TcpMigrateTransport.MigrateDataToRemote.delay:100000*call();"
-          "MemoryRebalanceScheduler.AssignTask:100000*call();"
-          "MemoryRebalanceScheduler.ExpireTask:100000*call();"
-          "worker.migrate_service.return:100000*call()";
+   std::string actions = "NodeSelector.setInterval:call(200);"
+                         "ResourceManager.setInterval:call(200);"
+                         "TcpMigrateTransport.MigrateDataToRemote.delay:100000*call();"
+                         "MemoryRebalanceScheduler.AssignTask:100000*call();"
+                         "MemoryRebalanceScheduler.ExpireTask:100000*call();"
+                         "worker.migrate_service.return:100000*call()";
+   if (IsSourceClockOffsetCase()) {
+       actions += ";" + SOURCE_CLOCK_OFFSET_POINT + ":"
+                  + FormatString("call(%lld)", static_cast<long long>(SOURCE_CLOCK_OFFSET_MS));
+   }
+   return actions;
 }
 
 void SleepMs(int timeoutMs)
@@ -324,6 +340,21 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_SingleWorkerHighWaterTrigger
 
    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1);
+   AssertReadable(client1_, sourceBatch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_SourceClockOffsetUsesRelativeTaskTimeout)
+{
+   WaitAllNodesActiveInHashRing(3);
+   auto clockOffsetBaseline = GetTotalInjectCount(SOURCE_CLOCK_OFFSET_POINT);
+   auto sourceSendBaseline = GetTotalInjectCount(SOURCE_SEND_POINT);
+   auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+   auto sourceBatch = WriteObjects(client0_, "rebalance_source_clock_offset", 9, 'd');
+
+   WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+   WaitForTotalInjectCount(SOURCE_CLOCK_OFFSET_POINT, clockOffsetBaseline + 1);
+   WaitForTotalInjectCount(SOURCE_SEND_POINT, sourceSendBaseline + 1);
    AssertReadable(client1_, sourceBatch);
 }
 

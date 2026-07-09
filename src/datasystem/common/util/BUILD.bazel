@@ -62,6 +62,7 @@ ds_cc_library(
         ["*.h", "*.def"],
         exclude = [
             "format.h",
+            "math_util.h",
             "strings_util.h",
         ],
     ) + [":git_version_def"],
@@ -126,6 +127,7 @@ ds_cc_library(
     name = "common_util",
     deps = [
         ":common_util_impl",
+        ":math_util",
         ":status_helper",
         ":meta_route_tool",
         "//src/datasystem/common/flags:kv_client_config",
@@ -140,6 +142,11 @@ ds_cc_library(
         ":status_helper",
         ":strings_util",
     ],
+)
+
+ds_cc_library(
+    name = "math_util",
+    hdrs = ["math_util.h"],
 )
 
 # Backward-compatible aliases for all former leaf targets

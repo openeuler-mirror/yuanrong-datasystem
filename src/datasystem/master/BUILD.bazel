@@ -97,6 +97,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:node_info",
         "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:math_util",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/protos:master_object_cc_proto",
     ],

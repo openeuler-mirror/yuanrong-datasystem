@@ -238,10 +238,12 @@ TEST_F(MemoryRebalanceSchedulerTest, DeadlineUsesConfiguredTaskTimeout)
     auto rsp = ScheduleAndGetRsp(scheduler, source, snapshot);
 
     auto rate_bytes_per_sec = static_cast<uint64_t>(FLAGS_data_migrate_rate_limit_mb) * 1024 * 1024;
-    auto estimated_transfer_ms = ((rsp.rebalance_task().max_bytes() + rate_bytes_per_sec - 1) / rate_bytes_per_sec) * MS_PER_SECOND;
+    auto estimated_transfer_ms =
+        ((rsp.rebalance_task().max_bytes() + rate_bytes_per_sec - 1) / rate_bytes_per_sec) * MS_PER_SECOND;
     ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
-    EXPECT_EQ(rsp.rebalance_task().deadline_ms() - rsp.rebalance_task().create_time_ms(),
-              estimated_transfer_ms * TRANSFER_TIME_MULTIPLIER + FLAGS_rebalance_task_report_grace_ms);
+    auto expectedTimeoutMs = estimated_transfer_ms * TRANSFER_TIME_MULTIPLIER + FLAGS_rebalance_task_report_grace_ms;
+    EXPECT_EQ(rsp.rebalance_task().timeout_ms(), expectedTimeoutMs);
+    EXPECT_EQ(rsp.rebalance_task().deadline_ms() - rsp.rebalance_task().create_time_ms(), expectedTimeoutMs);
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, TargetInflightBytesPreventsOverAssigningTarget)

@@ -28,6 +28,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/math_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -40,11 +41,6 @@ constexpr uint64_t PERCENT_BASE = 100;
 constexpr uint64_t MS_PER_SECOND = 1'000;
 constexpr size_t MIN_REBALANCE_WORKER_COUNT = 2;
 constexpr uint64_t TRANSFER_TIME_MULTIPLIER = 2;
-
-uint64_t SaturatingAdd(uint64_t lhs, uint64_t rhs)
-{
-    return std::numeric_limits<uint64_t>::max() - lhs < rhs ? std::numeric_limits<uint64_t>::max() : lhs + rhs;
-}
 
 uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
@@ -124,8 +120,9 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
         SaturatingAdd(targetInflightBytes_[task.target_worker()], task.max_bytes());
 
     LOG(INFO) << FormatString(
-        "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu deadline_ms=%lu", task.task_id(),
-        task.source_worker(), task.target_worker(), task.max_bytes(), task.deadline_ms());
+        "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu timeout_ms=%lu deadline_ms=%lu",
+        task.task_id(), task.source_worker(), task.target_worker(), task.max_bytes(), task.timeout_ms(),
+        task.deadline_ms());
     INJECT_POINT_NO_RETURN("MemoryRebalanceScheduler.AssignTask");
 
     auto newTask = activeTasksBySource_.find(reportingWorker);
@@ -347,8 +344,10 @@ void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestP
     task.set_create_time_ms(createTimeMs);
     auto rate_bytes_per_sec = static_cast<uint64_t>(FLAGS_data_migrate_rate_limit_mb) * 1024 * 1024;
     auto estimated_transfer_ms = ((bestPair.maxBytes + rate_bytes_per_sec - 1) / rate_bytes_per_sec) * MS_PER_SECOND;
-    task.set_deadline_ms(createTimeMs + estimated_transfer_ms * TRANSFER_TIME_MULTIPLIER +
-                         static_cast<uint64_t>(FLAGS_rebalance_task_report_grace_ms));
+    auto transferTimeoutMs = SaturatingMultiply(estimated_transfer_ms, TRANSFER_TIME_MULTIPLIER);
+    auto timeoutMs = SaturatingAdd(transferTimeoutMs, static_cast<uint64_t>(FLAGS_rebalance_task_report_grace_ms));
+    task.set_timeout_ms(timeoutMs);
+    task.set_deadline_ms(SaturatingAdd(createTimeMs, timeoutMs));
 }
 
 Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
