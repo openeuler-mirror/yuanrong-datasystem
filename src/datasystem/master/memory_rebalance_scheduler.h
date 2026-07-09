@@ -71,7 +71,7 @@ private:
 
     static bool IsTerminalStatus(master::RebalanceTaskStatusPb status);
     static bool IsFailedStatus(master::RebalanceTaskStatusPb status);
-    static uint64_t CalculateUsageRate(uint64_t usedMemory, uint64_t memoryCapacity);
+    static uint64_t CalculateUsageRate(uint64_t usedMemory, uint64_t memoryLimit);
     static uint64_t CalculateUsageRate(const NodeInfo &node);
 
     void ExpireTimeoutTasksLocked(uint64_t nowMs, const std::string &activeWorker);

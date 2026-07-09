@@ -685,6 +685,7 @@ message WorkerStat {
   bool is_ready = 3;
   uint64 used_memory = 4;
   uint64 memory_capacity = 5;
+  uint64 memory_limit = 6;
 }
 
 message RebalanceTaskPb {

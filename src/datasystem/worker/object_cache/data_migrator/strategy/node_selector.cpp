@@ -288,11 +288,13 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     auto *allocator = datasystem::memory::Allocator::Instance();
     const auto availableMemory = allocator->GetMemoryAvailToHighWater();
     const auto usedMemory = allocator->GetTotalRealMemoryUsage();
+    const auto memoryLimit = allocator->GetMaxMemoryLimit();
     stat->set_address(localAddress_);
     stat->set_available_memory(availableMemory);
     stat->set_used_memory(usedMemory);
     // Report capacity as current used memory plus memory still available to the high watermark.
     stat->set_memory_capacity(usedMemory + availableMemory);
+    stat->set_memory_limit(memoryLimit);
     stat->set_is_ready(!(clusterManager_->CheckLocalNodeIsExiting()));
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
@@ -342,7 +344,7 @@ Status NodeSelector::CollectClusterInfo()
     totalSize_ = 0;
     for (const auto &info : rsp.stats()) {
         rankList_.emplace_back(info.address(), info.available_memory(), info.is_ready(), 0, info.used_memory(),
-                               info.memory_capacity());
+                               info.memory_capacity(), info.memory_limit());
         if (info.is_ready()) {
             totalSize_ += info.available_memory();
         }

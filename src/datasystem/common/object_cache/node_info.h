@@ -20,7 +20,6 @@
 #ifndef DATASYSTEM_COMMON_OBJECT_CACHE_NODE_INFO_H
 #define DATASYSTEM_COMMON_OBJECT_CACHE_NODE_INFO_H
 
-#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -32,32 +31,31 @@ struct NodeInfo {
     uint64_t timestamp = 0;
     uint64_t usedMemory = 0;
     uint64_t memoryCapacity = 0;
+    uint64_t memoryLimit = 0;
 
     NodeInfo() = default;
 
     NodeInfo(const std::string& id, int64_t memory, bool ready, int64_t currentTime = 0)
-        : nodeId(id), availableMemory(memory), isReady(ready), timestamp(currentTime), usedMemory(0), memoryCapacity(0)
+        : nodeId(id),
+          availableMemory(memory),
+          isReady(ready),
+          timestamp(currentTime),
+          usedMemory(0),
+          memoryCapacity(0),
+          memoryLimit(0)
     {
     }
 
     NodeInfo(const std::string& id, int64_t memory, bool ready, int64_t currentTime, uint64_t used,
-             uint64_t capacity)
+             uint64_t capacity, uint64_t limit)
         : nodeId(id),
           availableMemory(memory),
           isReady(ready),
           timestamp(currentTime),
           usedMemory(used),
-          memoryCapacity(capacity)
+          memoryCapacity(capacity),
+          memoryLimit(limit)
     {
-    }
-
-    uint32_t GetUsagePercent() const
-    {
-        constexpr uint64_t percentBase = 100;
-        if (memoryCapacity == 0) {
-            return 0;
-        }
-        return static_cast<uint32_t>(std::min<uint64_t>(percentBase, usedMemory * percentBase / memoryCapacity));
     }
 
     bool operator<(const NodeInfo& other) const

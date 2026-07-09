@@ -42,7 +42,10 @@ constexpr uint32_t WORKER0 = 0;
 constexpr uint32_t WORKER1 = 1;
 constexpr uint32_t WORKER2 = 2;
 constexpr size_t VALUE_SIZE = 5 * 1024UL * 1024UL;
+constexpr size_t MEMORY_LIMIT_SOURCE_VALUE_SIZE = 4 * 1024UL * 1024UL;
 constexpr size_t SPILL_VALUE_SIZE = 4 * 1024UL * 1024UL;
+constexpr int MEMORY_LIMIT_SOURCE_OBJECT_COUNT = 8;
+constexpr int MEMORY_LIMIT_SOURCE_TRIGGER_OBJECT_COUNT = 2;
 constexpr int GET_TIMEOUT_MS = 30'000;
 constexpr int REBALANCE_TIMEOUT_MS = 25'000;
 constexpr int HASH_RING_TIMEOUT_MS = 60'000;
@@ -51,6 +54,7 @@ constexpr int POLL_INTERVAL_MS = 100;
 constexpr int WORKER_RECEIVE_RING_DELAY_MS = 1'000;
 constexpr char SCALE_UP_CASE_NAME[] = "ScaleUpNewWorkerParticipatesInRebalance";
 constexpr char USAGE_GAP_BELOW_THRESHOLD_CASE_NAME[] = "UsageGapBelowThresholdDoesNotDispatchTask";
+constexpr char MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME[] = "UsageRateUsesMemoryLimitForSourceThreshold";
 
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
 const std::string TARGET_MIGRATE_POINT = "worker.migrate_service.return";
@@ -86,6 +90,14 @@ bool IsUsageGapBelowThresholdCase()
    return name == USAGE_GAP_BELOW_THRESHOLD_CASE_NAME;
 }
 
+bool IsMemoryLimitSourceThresholdCase()
+{
+   std::string caseName;
+   std::string name;
+   GetCurTestName(caseName, name);
+   return name == MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME;
+}
+
 std::string BuildRebalanceInjectActions()
 {
    return "NodeSelector.setInterval:call(200);"
@@ -112,12 +124,21 @@ public:
        opts.numWorkers = IsScaleUpCase() ? 2 : 3;
        opts.numEtcd = 1;
        opts.numOBS = 0;
+       bool memoryLimitSourceThresholdCase = IsMemoryLimitSourceThresholdCase();
        std::string usageGapPercent = IsUsageGapBelowThresholdCase() ? "100" : "30";
+       if (memoryLimitSourceThresholdCase) {
+           usageGapPercent = "1";
+       }
+       std::string sourceUsagePercent = memoryLimitSourceThresholdCase ? "55" : "70";
+       std::string watermarkParams =
+           memoryLimitSourceThresholdCase ? " -eviction_high_watermark_ratio=0.8 -eviction_low_watermark_ratio=0.7" : "";
        opts.workerGflagParams =
            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
-           "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=70 "
+           "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=" +
+           sourceUsagePercent + " "
            "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
-           "-data_migrate_rate_limit_mb=1024";
+           "-data_migrate_rate_limit_mb=1024" +
+           watermarkParams;
        opts.injectActions = BuildRebalanceInjectActions();
    }
 
@@ -337,6 +358,25 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_UsageGapBelowThresholdDoesNo
    AssertReadable(client0_, sourceBatch);
    AssertReadable(client1_, worker1Batch);
    AssertReadable(client2_, worker2Batch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_UsageRateUsesMemoryLimitForSourceThreshold)
+{
+   auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+   // 8 * 4 MB is below 55% of memory_limit, but above 55% of 0.8 high-water capacity.
+   auto sourceBatch = WriteObjects(client0_, "rebalance_memory_limit_source_threshold", MEMORY_LIMIT_SOURCE_OBJECT_COUNT,
+                                  'm', MEMORY_LIMIT_SOURCE_VALUE_SIZE);
+
+   SleepMs(SHORT_WAIT_MS);
+   ASSERT_EQ(GetTotalInjectCount(ASSIGN_TASK_POINT), assignBaseline);
+
+   auto triggerBatch = WriteObjects(client0_, "rebalance_memory_limit_source_trigger",
+                                    MEMORY_LIMIT_SOURCE_TRIGGER_OBJECT_COUNT, 't', MEMORY_LIMIT_SOURCE_VALUE_SIZE);
+
+   WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+   AssertReadable(client0_, sourceBatch);
+   AssertReadable(client0_, triggerBatch);
 }
 
 TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_ScaleUpNewWorkerParticipatesInRebalance)
