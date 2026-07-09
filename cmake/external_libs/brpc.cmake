@@ -4,7 +4,14 @@ set(brpc_VERSION 1.15.0)
 if (NOT "$ENV{DS_LOCAL_LIBS_DIR}" STREQUAL "")
     set(brpc_URL "$ENV{DS_LOCAL_LIBS_DIR}/opensource_third_party/1.15.0.tar.gz")
 else()
-    set(brpc_URL "https://gh-proxy.com/https://github.com/apache/brpc/archive/refs/tags/1.15.0.tar.gz")
+    # Default: upstream GitHub. Set DATASYSTEM_GITHUB_PROXY env (any non-empty value)
+    # to route downloads through the gh-proxy.com mirror (for build hosts that cannot
+    # reach github directly). Applies to all three brpc-related libs (brpc/gflags/leveldb).
+    if (NOT "$ENV{DATASYSTEM_GITHUB_PROXY}" STREQUAL "")
+        set(brpc_URL "https://gh-proxy.com/https://github.com/apache/brpc/archive/refs/tags/1.15.0.tar.gz")
+    else()
+        set(brpc_URL "https://github.com/apache/brpc/archive/refs/tags/1.15.0.tar.gz")
+    endif()
 endif()
 set(brpc_SHA256 "f674b753af71dc313d9d2dcf34f574f0a3438c9f9bb9e7e6ca500a3b0ca7ddfb")
 
