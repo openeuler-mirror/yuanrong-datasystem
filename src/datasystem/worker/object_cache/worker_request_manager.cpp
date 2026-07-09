@@ -495,7 +495,7 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
 {
     bool hasCapacity = ubWriteOffset <= ubBufferSize_ && readSize <= ubBufferSize_ - ubWriteOffset;
     if (hasCapacity) {
-        METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
+        METRIC_TIMER(metrics::KvMetricId::URMA_WRITE_LATENCY);
         const uint64_t localObjectAddressBase = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
         uint64_t localSegAddress;
         uint64_t localSegSize;

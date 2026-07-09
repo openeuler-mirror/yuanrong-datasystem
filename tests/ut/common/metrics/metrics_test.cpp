@@ -1133,10 +1133,10 @@ TEST_F(MetricsTest, kv_metrics_urma_path_test)
 {
     InitKvMetricsForTest();
     METRIC_ADD(metrics::KvMetricId::CLIENT_GET_URMA_READ_TOTAL_BYTES, 32);
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY)).Observe(10);
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WRITE_LATENCY)).Observe(10);
     auto summary = metrics::DumpSummaryForTest();
     EXPECT_NE(summary.find(ScalarMetricJson("client_get_urma_read_total_bytes", 32, 32)), std::string::npos);
-    EXPECT_NE(summary.find(HistogramMetricJson("worker_urma_write_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10,
+    EXPECT_NE(summary.find(HistogramMetricJson("urma_write_latency", 1, 10, 10, 10, 10, 10, 1, 10, 10, 10, 10,
                                                  10)),
               std::string::npos);
 }
