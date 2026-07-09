@@ -587,9 +587,11 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots)
     constexpr uint64_t availableMemory = 2 * 1024;
     constexpr uint64_t usedMemory = 6 * 1024;
     constexpr uint64_t memoryCapacity = 8 * 1024;
+    constexpr uint64_t memoryLimit = 16 * 1024;
     stat->set_available_memory(availableMemory);
     stat->set_used_memory(usedMemory);
     stat->set_memory_capacity(memoryCapacity);
+    stat->set_memory_limit(memoryLimit);
     stat->set_is_ready(true);
     master::ResourceReportRspPb rsp;
     ReportResource(req, rsp);
@@ -599,6 +601,7 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots)
     EXPECT_EQ(rsp.stats(0).available_memory(), availableMemory);
     EXPECT_EQ(rsp.stats(0).used_memory(), usedMemory);
     EXPECT_EQ(rsp.stats(0).memory_capacity(), memoryCapacity);
+    EXPECT_EQ(rsp.stats(0).memory_limit(), memoryLimit);
     EXPECT_TRUE(rsp.stats(0).is_ready());
 
     // Step 2: At this time, switch the read/write snapshot,
@@ -620,6 +623,7 @@ TEST_F(ResourceManagerTest, TestReadWriteSnapshots)
     EXPECT_EQ(rsp.stats(0).available_memory(), availableMemory);
     EXPECT_EQ(rsp.stats(0).used_memory(), usedMemory);
     EXPECT_EQ(rsp.stats(0).memory_capacity(), memoryCapacity);
+    EXPECT_EQ(rsp.stats(0).memory_limit(), memoryLimit);
     EXPECT_TRUE(rsp.stats(0).is_ready());
 
     // Step 4: There is loopCount + 1 data in write snapshot and the loopCount data be cleared, only left one data in

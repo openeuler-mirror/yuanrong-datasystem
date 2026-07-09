@@ -39,6 +39,7 @@ void FillWorkerStat(const NodeInfo &nodeInfo, master::WorkerStat &stat)
     stat.set_is_ready(nodeInfo.isReady);
     stat.set_used_memory(nodeInfo.usedMemory);
     stat.set_memory_capacity(nodeInfo.memoryCapacity);
+    stat.set_memory_limit(nodeInfo.memoryLimit);
 }
 }  // namespace
 
@@ -67,7 +68,7 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
     std::string address = req.stat().address();
     CHECK_FAIL_RETURN_STATUS(!address.empty(), K_INVALID, "The address can not be empty");
     NodeInfo newInfo(address, req.stat().available_memory(), req.stat().is_ready(), currentTimestamp,
-                     req.stat().used_memory(), req.stat().memory_capacity());
+                     req.stat().used_memory(), req.stat().memory_capacity(), req.stat().memory_limit());
     {
         // Update the write snapshot
         std::lock_guard<std::mutex> lock(writeSnapshotMutex_);

@@ -75,20 +75,22 @@ bool MemoryRebalanceScheduler::IsFailedStatus(master::RebalanceTaskStatusPb stat
     return status == master::REBALANCE_TASK_FAILED || status == master::REBALANCE_TASK_EXPIRED;
 }
 
-uint64_t MemoryRebalanceScheduler::CalculateUsageRate(uint64_t usedMemory, uint64_t memoryCapacity)
+uint64_t MemoryRebalanceScheduler::CalculateUsageRate(uint64_t usedMemory, uint64_t memoryLimit)
 {
-    if (memoryCapacity == 0) {
+    if (memoryLimit == 0) {
+        // Unknown memory limit is treated as full usage so it cannot look like a low-usage target.
+        // Callers must still guard memoryLimit > 0 before adding a worker to rebalance candidates.
         return PERCENT_BASE;
     }
     if (usedMemory > std::numeric_limits<uint64_t>::max() / PERCENT_BASE) {
         return PERCENT_BASE;
     }
-    return std::min<uint64_t>(PERCENT_BASE, usedMemory * PERCENT_BASE / memoryCapacity);
+    return std::min<uint64_t>(PERCENT_BASE, usedMemory * PERCENT_BASE / memoryLimit);
 }
 
 uint64_t MemoryRebalanceScheduler::CalculateUsageRate(const NodeInfo &node)
 {
-    return CalculateUsageRate(node.usedMemory, node.memoryCapacity);
+    return CalculateUsageRate(node.usedMemory, node.memoryLimit);
 }
 
 Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req,
@@ -275,7 +277,7 @@ bool MemoryRebalanceScheduler::IsSourceCandidateLocked(const NodeInfo &node, uin
 {
     uint64_t targetInflightBytes = GetTargetInflightBytesLocked(node.nodeId);
     bool hasInboundTask = targetInflightBytes > 0;
-    return node.isReady && node.memoryCapacity > 0
+    return node.isReady && node.memoryLimit > 0
            && CalculateUsageRate(node) >= FLAGS_rebalance_source_usage_percent
            && activeTasksBySource_.find(node.nodeId) == activeTasksBySource_.end() && !hasInboundTask
            && !IsInCooldownLocked(node.nodeId, nowMs);
@@ -293,7 +295,7 @@ void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordere
         if (node.nodeId == sourceWorker && IsSourceCandidateLocked(node, nowMs)) {
             sources.emplace_back(&node);
         }
-        if (node.isReady && node.memoryCapacity > 0 && !IsInCooldownLocked(node.nodeId, nowMs)) {
+        if (node.isReady && node.memoryLimit > 0 && !IsInCooldownLocked(node.nodeId, nowMs)) {
             targets.emplace_back(&node);
         }
     }
@@ -411,7 +413,7 @@ uint64_t MemoryRebalanceScheduler::CalculateProjectedTargetUsageRate(const NodeI
     uint64_t projectedUsed = target.usedMemory;
     projectedUsed = SaturatingAdd(projectedUsed, targetInflightBytes);
     projectedUsed = SaturatingAdd(projectedUsed, maxBytes);
-    return CalculateUsageRate(projectedUsed, target.memoryCapacity);
+    return CalculateUsageRate(projectedUsed, target.memoryLimit);
 }
 
 }  // namespace master

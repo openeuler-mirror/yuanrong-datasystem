@@ -50,9 +50,10 @@ const std::string WORKER_78 = "127.0.0.1:7800";
 const std::string WORKER_15 = "127.0.0.1:1500";
 const std::string WORKER_10 = "127.0.0.1:1000";
 
-NodeInfo MakeNode(const std::string &worker, uint64_t usedMemory, uint64_t availableMemory, bool isReady = true)
+NodeInfo MakeNode(const std::string &worker, uint64_t usedMemory, uint64_t availableMemory, bool isReady = true,
+                  uint64_t memoryCapacity = MEMORY_CAPACITY, uint64_t memoryLimit = MEMORY_CAPACITY)
 {
-    return NodeInfo(worker, availableMemory, isReady, 0, usedMemory, MEMORY_CAPACITY);
+    return NodeInfo(worker, availableMemory, isReady, 0, usedMemory, memoryCapacity, memoryLimit);
 }
 
 std::unordered_map<std::string, NodeInfo> MakeSnapshot(std::initializer_list<NodeInfo> nodes)
@@ -173,6 +174,24 @@ TEST_F(MemoryRebalanceSchedulerTest, UsageGapThresholdControlsWhetherTaskIsCreat
     verify(410, false);  // 70% - 41% = 29%
     verify(400, true);   // 70% - 40% = 30%
     verify(390, true);   // 70% - 39% = 31%
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, UsageRateUsesMemoryLimitInsteadOfHighWaterCapacity)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:8000";
+    const std::string target = "127.0.0.1:5000";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 800, 100, true, 800, MEMORY_CAPACITY),
+        MakeNode(target, 500, 300, true, 500, MEMORY_CAPACITY),
+    });
+
+    auto rsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+
+    ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(rsp.rebalance_task().source_worker(), source);
+    EXPECT_EQ(rsp.rebalance_task().target_worker(), target);
+    EXPECT_EQ(rsp.rebalance_task().max_bytes(), 150ul);
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, CalculateMaxBytesAndSkipNonPositiveBudget)
