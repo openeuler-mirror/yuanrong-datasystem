@@ -1257,5 +1257,29 @@ TEST_F(MetricsTest, wrap_with_pod_cluster_prepends_labels)
     EXPECT_EQ(escaped, R"({"time":"2023-06-02T14:58:32.081156","pod_name":"a\"b\\c\b\f\u0001\u0000",)"
                        R"("cluster_name":"recs\ncluster",)" + body.substr(1));
 }
+
+TEST_F(MetricsTest, client_exist_metrics_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_INC(metrics::KvMetricId::CLIENT_EXIST_REQUEST_TOTAL);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_exist_request_total", 1, 1)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, client_exist_metrics_error_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ERROR_IF(true, metrics::KvMetricId::CLIENT_EXIST_ERROR_TOTAL);
+    METRIC_ERROR_IF(false, metrics::KvMetricId::CLIENT_EXIST_ERROR_TOTAL);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_exist_error_total", 1, 1)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, worker_process_exist_latency_test)
+{
+    InitKvMetricsForTest();
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY)).Observe(10);
+    EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_process_exist_latency\""), std::string::npos);
+}
 }  // namespace ut
 }  // namespace datasystem
