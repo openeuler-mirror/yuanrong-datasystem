@@ -115,11 +115,14 @@ private:
 
     void Execute(master::RebalanceTaskPb task);
     void SubmitBusyResult(const master::RebalanceTaskPb &task, const std::string &runningTaskId);
-    bool IsExpired(const master::RebalanceTaskPb &task) const;
+    uint64_t BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const;
+    uint64_t NowMsForExpiryCheck() const;
+    bool IsExpired(uint64_t localDeadlineMs) const;
     Status ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         object_cache::DataMigrator &migrator);
-    void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats);
-    Status ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr) const;
+    void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
+                        uint64_t localDeadlineMs);
+    Status ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr, uint64_t localDeadlineMs) const;
     Status SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates);
     MigrateResult MigrateToTarget(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                   const std::vector<std::string> &objectKeys,

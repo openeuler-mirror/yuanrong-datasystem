@@ -695,6 +695,8 @@ message RebalanceTaskPb {
   uint64 max_bytes = 4;
   uint64 deadline_ms = 5;
   uint64 create_time_ms = 6;
+  // Relative timeout assigned by master. Source worker converts it to a local steady-clock deadline.
+  uint64 timeout_ms = 7;
 }
 
 enum RebalanceTaskStatusPb {

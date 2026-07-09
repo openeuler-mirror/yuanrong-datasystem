@@ -98,6 +98,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:math_util",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",

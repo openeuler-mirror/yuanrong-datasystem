@@ -22,8 +22,10 @@
 #include <thread>
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/math_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
@@ -37,6 +39,14 @@ constexpr int REPORT_RESULT_RETRY_TIMES = 3;
 constexpr int REPORT_RESULT_RETRY_INTERVAL_MS = 100;
 constexpr uint64_t REBALANCE_BATCH_MAX_BYTES = 64ULL * 1024 * 1024;
 constexpr size_t REBALANCE_BATCH_MAX_OBJECTS = 512;
+
+uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
+{
+    // Compute |offset| without undefined behavior on INT64_MIN.
+    // The +1/-1 pattern avoids negating INT64_MIN directly.
+    auto absOffset = static_cast<uint64_t>(-(offset + 1)) + 1;
+    return value > absOffset ? value - absOffset : 0;
+}
 }  // namespace
 
 RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
@@ -116,16 +126,15 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
     }
 }
 
-Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr) const
+Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr,
+                                       uint64_t localDeadlineMs) const
 {
     CHECK_FAIL_RETURN_STATUS(
         task.source_worker() == localAddress_.ToString(), K_INVALID,
         FormatString("Task source %s is not local worker %s", task.source_worker(), localAddress_.ToString()));
     CHECK_FAIL_RETURN_STATUS(!task.target_worker().empty(), K_INVALID, "Rebalance target worker is empty");
     CHECK_FAIL_RETURN_STATUS(task.max_bytes() > 0, K_INVALID, "Rebalance max bytes is zero");
-    auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
-    CHECK_FAIL_RETURN_STATUS(task.deadline_ms() == 0 || nowMs <= task.deadline_ms(), K_RUNTIME_ERROR,
-                             "Rebalance task is expired");
+    CHECK_FAIL_RETURN_STATUS(!IsExpired(localDeadlineMs), K_RUNTIME_ERROR, "Rebalance task is expired");
     RETURN_IF_NOT_OK(targetAddr.ParseString(task.target_worker()));
     CHECK_FAIL_RETURN_STATUS(targetAddr != localAddress_, K_INVALID,
                              FormatString("Rebalance target %s can not be local worker", task.target_worker()));
@@ -161,10 +170,32 @@ RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master
     return migrator.MigrateToTargetNode(objectKeys, targetAddr, nullptr, false, 0, false).get();
 }
 
-bool RebalanceExecutor::IsExpired(const master::RebalanceTaskPb &task) const
+uint64_t RebalanceExecutor::NowMsForExpiryCheck() const
 {
     auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
-    return task.deadline_ms() != 0 && nowMs > task.deadline_ms();
+    INJECT_POINT_NO_RETURN("RebalanceExecutor.NowMsForExpiryCheck.addOffsetMs", [&nowMs](int64_t offsetMs) {
+        if (offsetMs < 0) {
+            nowMs = SubtractOffsetOrZero(nowMs, offsetMs);
+            return;
+        }
+        nowMs = SaturatingAdd(nowMs, static_cast<uint64_t>(offsetMs));
+    });
+    return nowMs;
+}
+
+uint64_t RebalanceExecutor::BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const
+{
+    if (task.timeout_ms() == 0) {
+        // Compatibility fallback for tasks produced before timeout_ms was set.
+        // This keeps the legacy absolute-deadline behavior and its known cross-node clock-skew risk.
+        return task.deadline_ms();
+    }
+    return SaturatingAdd(NowMsForExpiryCheck(), task.timeout_ms());
+}
+
+bool RebalanceExecutor::IsExpired(uint64_t localDeadlineMs) const
+{
+    return localDeadlineMs != 0 && NowMsForExpiryCheck() > localDeadlineMs;
 }
 
 Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
@@ -211,13 +242,13 @@ Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, cons
 }
 
 void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
-                                       ExecutionStats &stats)
+                                       ExecutionStats &stats, uint64_t localDeadlineMs)
 {
     // max_bytes is the target amount assigned by master; split it into bounded local batches to avoid reserving
     // too many objects at once.
     std::unique_ptr<object_cache::DataMigrator> migrator;
     while (stats.migratedBytes < task.max_bytes()) {
-        if (IsExpired(task)) {
+        if (IsExpired(localDeadlineMs)) {
             stats.status = master::REBALANCE_TASK_EXPIRED;
             stats.failedReason = "Rebalance task is expired";
             break;
@@ -245,16 +276,17 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task)
     Timer timer;
     do {
         HostPort targetAddr;
-        auto rc = ValidateTask(task, targetAddr);
+        auto localDeadlineMs = BuildLocalDeadlineMs(task);
+        auto rc = ValidateTask(task, targetAddr, localDeadlineMs);
         if (rc.IsError()) {
             stats.failedReason = rc.ToString();
-            if (IsExpired(task)) {
+            if (IsExpired(localDeadlineMs)) {
                 stats.status = master::REBALANCE_TASK_EXPIRED;
             }
             break;
         }
 
-        ExecuteBatches(task, targetAddr, stats);
+        ExecuteBatches(task, targetAddr, stats, localDeadlineMs);
         bool targetReached = stats.migratedBytes >= task.max_bytes();
         bool partialCompleted = stats.migratedBytes > 0 && stats.candidatesExhausted;
         if (stats.status != master::REBALANCE_TASK_EXPIRED && stats.failedObjects == 0
