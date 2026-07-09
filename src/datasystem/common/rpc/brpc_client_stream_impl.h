@@ -137,8 +137,11 @@ public:
                                  response_.get(), nullptr);
             if (cntl_->Failed()) {
                 auto errText = cntl_->ErrorText();
-                RETURN_STATUS(TryExtractStatusFromControllerError(errText).GetCode(),
-                              errText.c_str());
+                // Wrap with RETURN_STATUS to retain this adapter's call-site
+                // (file/line) for on-call; the helper's Status carries the
+                // brpc errno/name + ErrorText diagnostics in its message.
+                auto st = TryExtractStatusFromControllerError(errText, cntl_->ErrorCode());
+                RETURN_STATUS(st.GetCode(), st.GetMsg());
             }
         }
 
@@ -177,7 +180,7 @@ public:
 
         if (cntl_->Failed()) {
             auto errText = cntl_->ErrorText();
-            return TryExtractStatusFromControllerError(errText);
+            return TryExtractStatusFromControllerError(errText, cntl_->ErrorCode());
         }
 
         // Parse response from response attachment
@@ -371,8 +374,11 @@ public:
                 {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
                 cntl_,
                 "BrpcClientReaderImpl::Write (errText)");
-            RETURN_STATUS(TryExtractStatusFromControllerError(errText).GetCode(),
-                          errText.c_str());
+            // Wrap with RETURN_STATUS to retain this adapter's call-site
+            // (file/line) for on-call; the helper's Status carries the brpc
+            // errno/name + ErrorText diagnostics in its message.
+            auto st = TryExtractStatusFromControllerError(errText, cntl_->ErrorCode());
+            RETURN_STATUS(st.GetCode(), st.GetMsg());
         }
 
         return Status::OK();

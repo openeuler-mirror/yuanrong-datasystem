@@ -385,7 +385,7 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         "        }\n"
         "        // brpc ErrorCode() uses its own namespace (EXyz); server app\n"
         "        // error codes are in the text as \\x01DS_ERR:N\\x02 sentinel.\n"
-        "        return ::datasystem::TryExtractStatusFromControllerError(cntl.ErrorText());\n"
+        "        return ::datasystem::TryExtractStatusFromControllerError(cntl.ErrorText(), cntl.ErrorCode());\n"
         "    }\n"
         "    return ::datasystem::Status::OK();\n"
         "}\n";
@@ -646,7 +646,7 @@ std::string RpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescr
         "        if (embedded.IsError()) {\n"
         "            return embedded;\n"
         "        }\n"
-        "        return ::datasystem::TryExtractStatusFromControllerError(call->errorText);\n"
+        "        return ::datasystem::TryExtractStatusFromControllerError(call->errorText, call->errorCode);\n"
         "    }\n"
         "    reply.CopyFrom(*typedResp);\n";
     if (HasPayloadRecvOption(method)) {

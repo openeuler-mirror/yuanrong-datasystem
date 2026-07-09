@@ -95,7 +95,7 @@ public:
                 if (embedded.IsError()) {
                     return embedded;
                 }
-                return TryExtractStatusFromControllerError(cntl.ErrorText());
+                return TryExtractStatusFromControllerError(cntl.ErrorText(), cntl.ErrorCode());
             }
             responseAttachment_ = std::move(cntl.response_attachment());
             pb.CopyFrom(response_);

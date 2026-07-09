@@ -72,6 +72,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_status_util_test",
+    srcs = ["brpc_status_util_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/rpc:brpc_status_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_async_context_test",
     srcs = ["brpc_async_context_test.cpp"],
     deps = [
