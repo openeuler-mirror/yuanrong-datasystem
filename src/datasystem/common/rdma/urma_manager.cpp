@@ -888,7 +888,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     constexpr double US_TO_MS = 1000.0;
     auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
     auto totalElapsedMs = static_cast<double>(totalElapsedUs) / US_TO_MS;
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
     auto config = GetServerLatencyTraceConfig();
     GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
@@ -1356,7 +1356,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                      UrmaEvent::OperationType::WRITE, args.waiter));
         urma_status_t ret;
         Timer t;
-        METRIC_TIMER(metrics::KvMetricId::WORKER_URMA_WRITE_LATENCY);
+        METRIC_TIMER(metrics::KvMetricId::URMA_WRITE_LATENCY);
         auto jettyId = args.jetty->GetJettyId();
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
             << "URMA write useNumaAffinity:" << useNumaAffinity << ", src:" << static_cast<uint32_t>(args.srcChipId)
