@@ -576,8 +576,9 @@ Status ZmqSockConnHelper::GetEndPoint(const ReconnectInfo &cInfo, std::string &p
     ZmqMetaMsgFrames reply;
     Status rc = mQue.ReceiveMsg(reply, timeout);
     if (rc.GetCode() == K_TRY_AGAIN) {
-        rc = Status(StatusCode::K_RPC_UNAVAILABLE, FormatString("[RPC_RECV_TIMEOUT] Remote host %s is not available",
-                                                                info->channel_->GetZmqEndPoint()));
+        auto msg = FormatString("[RPC_RECV_TIMEOUT] Remote host %s is not available",
+                                info->channel_->GetZmqEndPoint());
+        rc = Status(StatusCode::K_RPC_DEADLINE_EXCEEDED, std::move(msg));
     }
     RETURN_IF_NOT_OK(rc);
     PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK, GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));

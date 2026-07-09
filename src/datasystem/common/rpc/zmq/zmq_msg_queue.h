@@ -892,7 +892,7 @@ public:
             if (flags == ZmqRecvFlags::DONTWAIT) {
                 return rc;
             }
-            rc = Status(StatusCode::K_RPC_UNAVAILABLE,
+            rc = Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
                         FormatString("[RPC_RECV_TIMEOUT] Rpc service for client %s has not responded within the "
                                      "allowed time. Detail: %s",
                                      GetId(), rc.ToString()));

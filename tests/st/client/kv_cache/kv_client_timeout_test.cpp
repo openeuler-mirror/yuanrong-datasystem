@@ -64,7 +64,7 @@ TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());
-    EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout"));
@@ -91,7 +91,7 @@ TEST_F(KVClientTimeoutTest, KVMSetShortTimeoutDeadlineExceeded)
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());
-    EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster"));
@@ -111,7 +111,7 @@ TEST_F(KVClientTimeoutTest, KVExistShortTimeoutDeadlineExceeded)
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());
-    EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "Exist.Sleep"));
@@ -141,7 +141,7 @@ TEST_F(KVClientTimeoutTest, Set3msCreateSlowExhaustsSharedBudget)
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());
-    EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 50);
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster"));
@@ -172,7 +172,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
         int64_t elapsedMs = timer.ElapsedMilliSecond();
 
         EXPECT_FALSE(rc.IsOk());
-        EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+        EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
         EXPECT_LT(elapsedMs, 50);
 
         DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster"));
@@ -226,7 +226,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
         int64_t elapsedMs = timer.ElapsedMilliSecond();
 
         EXPECT_FALSE(rc.IsOk());
-        EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+        EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
         EXPECT_LT(elapsedMs, 100);
 
         DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "master.CreateMultiMeta.begin"));
@@ -294,7 +294,7 @@ TEST_F(KVClientTimeoutTest, KVMSetMemoryCopySlowDeadlineExceeded)
     int64_t elapsedMs = timer.ElapsedMilliSecond();
 
     EXPECT_FALSE(rc.IsOk());
-    EXPECT_TRUE(rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_LT(elapsedMs, 5000);
 
     (void)inject::Clear("ObjectClientImpl.MemoryCopyParallel.slow");

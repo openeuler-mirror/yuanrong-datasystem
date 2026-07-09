@@ -3473,7 +3473,7 @@ TEST_F(ProducerTest, LEVEL1_TestCreateProducerTimeout3)
     });
     producerPool.Execute([&producerFunc, i = 0]() {
         std::shared_ptr<Producer> producer;
-        ASSERT_EQ(producerFunc(i, producer).GetCode(), K_RPC_UNAVAILABLE);
+        ASSERT_EQ(producerFunc(i, producer).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     });
     // sleep a bit so the first CreateProducer RPC request is sent.
     sleep(1);
