@@ -25,10 +25,13 @@
 #define DATASYSTEM_COMMON_RPC_BRPC_STATUS_UTIL_H
 
 #include <climits>
+#include <errno.h>
 #include <string>
 #include <vector>
 
+#include <butil/errno.h>  // berror(): renders both system errno and brpc-registered errno to text
 #include <google/protobuf/message.h>
+#include "datasystem/common/log/log.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -41,6 +44,98 @@ inline constexpr int kStreamCloseTimeoutSec = 5;
 /// a peer crash / network partition cannot block the calling bthread forever and
 /// exhaust the bthread pool under nested RPC load. Must be > kStreamCloseTimeoutSec.
 inline constexpr int kStreamReadTimeoutSec = 30;
+
+/// brpc::Errno namespace values, mirrored from <brpc/errno.pb.h> (brpc 1.15.0,
+/// pinned by cmake/external_libs/brpc.cmake). brpc::Controller::ErrorCode()
+/// returns either a system errno (ECONNREFUSED, ETIMEDOUT, ...) or one of
+/// these brpc-internal codes. Each constant is annotated with its brpc enum
+/// name so a future brpc upgrade can be cross-checked against the source.
+/// If brpc changes these values, the mismatch surfaces as a wrong/default
+/// mapping (not a crash); bump the pin and re-verify against errno.pb.h.
+inline constexpr int kBrpcErpcTimedOut = 1008;   // brpc::ERPCTIMEDOUT
+inline constexpr int kBrpcFailedSocket = 1009;   // brpc::EFAILEDSOCKET
+inline constexpr int kBrpcEof = 1014;            // brpc::EEOF
+inline constexpr int kBrpcSsl = 1016;            // brpc::ESSL
+inline constexpr int kBrpcReject = 1018;         // brpc::EREJECT
+inline constexpr int kBrpcInternal = 2001;       // brpc::EINTERNAL
+inline constexpr int kBrpcLogoff = 2003;         // brpc::ELOGOFF
+inline constexpr int kBrpcClose = 2005;          // brpc::ECLOSE
+
+/**
+ * @brief Map a brpc Controller ErrorCode() to a datasystem Status.
+ *
+ * brpc::Controller::ErrorCode() returns an int that is either a system errno
+ * (ECONNREFUSED, ETIMEDOUT, ...) or a brpc-internal Errno (ERPCTIMEDOUT,
+ * EFAILEDSOCKET, ...). Without this mapping every non-sentinel controller
+ * failure surfaces as K_RPC_CANCELLED, masking connection/timeout errors as
+ * "rpc cancelled" and blocking diagnosis of cross-node RPC failures.
+ *
+ * Mapping (kBrpc* constants mirror the brpc enum names shown in comments):
+ *   - timeouts (kBrpcErpcTimedOut / ERPCTIMEDOUT, ETIMEDOUT)
+ *                                              → K_RPC_DEADLINE_EXCEEDED
+ *   - peer-unreachable (kBrpcFailedSocket / EFAILEDSOCKET,
+ *     kBrpcLogoff / ELOGOFF, ECONNREFUSED, ECONNRESET, ECONNABORTED,
+ *     EHOSTUNREACH, ENETUNREACH, ENOTCONN, EPIPE, EHOSTDOWN, ESHUTDOWN,
+ *     kBrpcEof / EEOF, kBrpcClose / ECLOSE, kBrpcSsl / ESSL,
+ *     kBrpcReject / EREJECT, kBrpcInternal / EINTERNAL)
+ *                                              → K_RPC_UNAVAILABLE
+ *   - ECANCELED (brpc/OS cancellation)         → K_RPC_CANCELLED (genuine)
+ *   - everything else                          → K_RPC_CANCELLED (fallback,
+ *     preserves prior behavior; message carries the raw code + text so the
+ *     failure is no longer opaque)
+ *
+ * @param errorCode brpc::Controller::ErrorCode().
+ * @param errorText brpc::Controller::ErrorText() (for the diagnostic message).
+ * @return Status with a code that reflects the failure class.
+ */
+inline Status MapBrpcErrorCodeToStatus(int errorCode, const std::string &errorText)
+{
+    auto makeStatus = [&](StatusCode code, const char *hint) {
+        // berror() renders brpc-registered errno (EFAILEDSOCKET, ELOGOFF, ...)
+        // and system errno (ECONNREFUSED, ETIMEDOUT, ...) to a human-readable
+        // name, so the StatusCode category plus this text lets an operator
+        // tell exactly which transport failure occurred without memorizing
+        // numeric codes. No __LINE__/__FILE__: they would all point at this
+        // helper, which carries no diagnostic value.
+        const char *errName = berror(errorCode);
+        return Status(code,
+                      std::string(hint) + " [brpc errno=" + std::to_string(errorCode)
+                          + (errName != nullptr && errName[0] != '\0'
+                                 ? std::string(" ") + errName
+                                 : std::string())
+                          + "] " + errorText);
+    };
+    switch (errorCode) {
+        // Timeouts → deadline exceeded
+        case kBrpcErpcTimedOut:
+        case ETIMEDOUT:
+            return makeStatus(StatusCode::K_RPC_DEADLINE_EXCEEDED, "RPC timed out");
+        // Peer not reachable → unavailable
+        case kBrpcFailedSocket:
+        case kBrpcEof:
+        case kBrpcSsl:
+        case kBrpcReject:
+        case kBrpcInternal:
+        case kBrpcLogoff:
+        case kBrpcClose:
+        case ECONNREFUSED:
+        case ECONNRESET:
+        case ECONNABORTED:
+        case EHOSTUNREACH:
+        case ENETUNREACH:
+        case ENOTCONN:
+        case EPIPE:
+        case EHOSTDOWN:
+        case ESHUTDOWN:
+            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable");
+        // Genuine cancellation (brpc/OS) — keep K_RPC_CANCELLED
+        case ECANCELED:
+            return makeStatus(StatusCode::K_RPC_CANCELLED, "RPC cancelled");
+        default:
+            break;
+    }
+    return makeStatus(StatusCode::K_RPC_CANCELLED, "RPC failed");
+}
 
 /**
  * @brief Try to extract an embedded Status from a brpc response protobuf.
@@ -133,10 +228,21 @@ inline bool TryParseDsErrCode(const std::string &codeStr, long &codeOut)
  * response protobuf has no ErrorInfoPb field, this function recovers the server
  * error code from the Controller's error text.
  *
+ * If no DS_ERR sentinel is present, the failure is a brpc-internal/transport
+ * error (connection refused, timeout, peer down, ...) rather than a server
+ * application error. In that case the server never ran application code, so
+ * there is no embedded code to recover — fall back to MapBrpcErrorCodeToStatus()
+ * which maps the brpc ErrorCode() to K_RPC_UNAVAILABLE / K_RPC_DEADLINE_EXCEEDED
+ * / K_RPC_CANCELLED so the failure class is visible instead of being masked as
+ * a generic "rpc cancelled".
+ *
  * @param errorText The error text from brpc::Controller::ErrorText().
- * @return The extracted Status, or K_RPC_CANCELLED if parsing fails.
+ * @param errorCode brpc::Controller::ErrorCode() (0 = caller did not capture it;
+ *                  treated as unknown → K_RPC_CANCELLED fallback, preserving
+ *                  prior behavior for call sites not yet updated).
+ * @return The extracted Status, or a mapped transport Status if no sentinel.
  */
-inline Status TryExtractStatusFromControllerError(const std::string &errorText)
+inline Status TryExtractStatusFromControllerError(const std::string &errorText, int errorCode = 0)
 {
     // Search for the \x01DS_ERR:<code>\x02 sentinel set by SendStatus.
     // \x01/\x02 (SOH/STX) delimiters prevent false matches on business error
@@ -152,15 +258,23 @@ inline Status TryExtractStatusFromControllerError(const std::string &errorText)
             std::string codeStr = errorText.substr(codeStart, codeEnd - codeStart);
             long code = 0;
             if (TryParseDsErrCode(codeStr, code)) {
-                // Strip sentinel + control bytes to produce clean message.
-                std::string cleanMsg = "RPC failed: code=" + codeStr;
-                return Status(static_cast<StatusCode>(code), __LINE__, __FILE__, cleanMsg);
+                // Keep the server error code and the full brpc ErrorText so
+                // on-call retains the original application error context (the
+                // sentinel itself is stripped). No __LINE__/__FILE__: they
+                // would point at this helper, not the failing call site.
+                std::string cleanMsg = "RPC failed: code=" + codeStr + "; " + errorText;
+                return Status(static_cast<StatusCode>(code), cleanMsg);
             }
             LOG(WARNING) << "Corrupt DS_ERR sentinel in Controller error text: '"
-                         << codeStr << "', falling back to K_RPC_CANCELLED";
+                         << codeStr << "', falling back to brpc errno mapping";
         }
     }
-    return Status(StatusCode::K_RPC_CANCELLED, __LINE__, __FILE__, "RPC cancelled");
+    // No (parseable) DS_ERR sentinel → transport/brpc-internal failure.
+    // Map the brpc ErrorCode so connection/timeout errors are not masked as
+    // K_RPC_CANCELLED. When errorCode == 0 (call site did not capture it),
+    // MapBrpcErrorCodeToStatus falls through to K_RPC_CANCELLED, preserving
+    // prior behavior for legacy callers.
+    return MapBrpcErrorCodeToStatus(errorCode, errorText);
 }
 
 }  // namespace datasystem

@@ -181,8 +181,11 @@ public:
                 {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
                 stream_cntl_,
                 "BrpcClientStreamWriterReader::Write (errText)");
-            RETURN_STATUS(TryExtractStatusFromControllerError(errText).GetCode(),
-                          errText.c_str());
+            // Wrap with RETURN_STATUS to retain this adapter's call-site
+            // (file/line) for on-call; the helper's Status carries the brpc
+            // errno/name + ErrorText diagnostics in its message.
+            auto st = TryExtractStatusFromControllerError(errText, stream_cntl_->ErrorCode());
+            RETURN_STATUS(st.GetCode(), st.GetMsg());
         }
 
         return Status::OK();
