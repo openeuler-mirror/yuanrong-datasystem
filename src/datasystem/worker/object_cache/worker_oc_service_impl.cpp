@@ -2323,6 +2323,7 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY);
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
                                      "validate worker state failed");

@@ -102,6 +102,9 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 73, "urma_connection_setup_latency", MetricType::HISTOGRAM, "us" },
     { 74, "urma_jetty_create_latency", MetricType::HISTOGRAM, "us" },
     { 75, "urma_jetty_recreate_latency", MetricType::HISTOGRAM, "us" },
+    { 76, "client_exist_request_total", MetricType::COUNTER, "count" },
+    { 77, "client_exist_error_total", MetricType::COUNTER, "count" },
+    { 78, "worker_process_exist_latency", MetricType::HISTOGRAM, "us" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

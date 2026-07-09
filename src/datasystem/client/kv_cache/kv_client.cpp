@@ -511,6 +511,8 @@ Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &
     PerfPoint point(PerfKey::KV_CLIENT_EXIST);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_EXIST);
     Status rc = impl_->Exist(keys, exists, true, false);
+    METRIC_INC(metrics::KvMetricId::CLIENT_EXIST_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_EXIST_ERROR_TOTAL);
     access.ObjectKeysRef(keys).Result(rc).Record();
     return rc;
 }
