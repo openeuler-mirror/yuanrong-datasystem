@@ -62,8 +62,7 @@ public:
      * @brief Construct OCNotifyWorkerManager.
      */
     OCNotifyWorkerManager(std::shared_ptr<ObjectMetaStore> objectStore, bool backendStoreExist,
-                          std::shared_ptr<AkSkManager> akSkManager,
-                          OCMetadataManager *ocMetadataManager);
+                          std::shared_ptr<AkSkManager> akSkManager, OCMetadataManager *ocMetadataManager);
 
     ~OCNotifyWorkerManager();
 
@@ -276,13 +275,13 @@ public:
     /**
      * @brief Requests the worker to send meta to the master in the response.
      * @param[in] masterAddr The address of the master requesting for the metadata.
-     * @param[in] dbName The rocksdb name of the master requesting for the metadata.
+
      * @param[in] workerAddr The address of the worker to whom the request is sent.
      * @param[out] rsp The response of the call containing meta related to the master.
      * @return Status of the call.
      */
-    Status RequestMetaFromWorker(const std::string &masterAddr, const std::string &dbName,
-                                 const std::string &workerAddr, RequestMetaFromWorkerRspPb &rsp);
+    Status RequestMetaFromWorker(const std::string &masterAddr, const std::string &workerAddr,
+                                 RequestMetaFromWorkerRspPb &rsp);
 
     /**
      * @brief Send push metadata to worker.
@@ -356,7 +355,7 @@ public:
      */
     void ProcessChangePrimaryCopy(const std::unordered_map<std::string, std::unordered_set<std::string>> &input,
                                   bool ifvoluntaryScaleDown);
-    
+
     Status ProcessAsyncDeleteNotifyOpImpl();
 
 private:

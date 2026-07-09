@@ -158,8 +158,7 @@ public:
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds,
-                            std::vector<std::string> &needMigrateL2CacheIds)
+                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
     {
         INJECT_POINT("ProcessVoluntaryScaledown", [this] {
             Timer timer;
@@ -217,8 +216,7 @@ public:
      * @param[out] needWaitIds Need wait finished object key list.
      */
     Status BeforeMigrateData(const std::string &taskId, std::vector<std::string> &needMigrateDataIds,
-                             std::vector<std::string> &needWaitIds,
-                             std::vector<std::string> &needMigrateL2CacheIds);
+                             std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief Migrate data when scale down happen.
@@ -348,14 +346,6 @@ public:
      * @return Status of the call.
      */
     Status DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp) override;
-
-    /**
-     * @brief Get the Primary Replica Addr object
-     * @param srcAddr Src addr
-     * @param destAddr Dest addr
-     * @return Status of the calll
-     */
-    Status GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr);
 
     /**
      * @brief Invalidate a share memory unit.
@@ -904,10 +894,10 @@ private:
     /**
      * @brief Get or Create a worker to Master api object for objKey in format uuid:host:port
      * @param[in] objKey Object key that contain remote master's ip address
-     * @param[out] metaAddrInfo The meta address information.
+     * @param[out] masterAddr The metadata owner address.
      * @return Status of the call.
      */
-    Status GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo) const;
+    Status GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const;
 
     /**
      * @brief Update object version from worker or redis when object is expired
@@ -1005,24 +995,24 @@ private:
     /**
      * @brief Add object table data to heartbeat request
      * @param[in] req The heartbeat request extended protobuf
-     * @param[in] metaAddrInfo The meta data address information
+     * @param[in] masterAddr The metadata owner address
      * @return Status of the call
      */
-    Status FillObjData(master::PushMetaToMasterReqPb &req, const MetaAddrInfo &metaAddrInfo);
+    Status FillObjData(master::PushMetaToMasterReqPb &req, const HostPort &masterAddr);
 
     /**
      * @brief Add all object references belong master to heartbeat request
-     * @param[in] targetMetaAddrInfo The meta data address information
+     * @param[in] targetMasterAddr The metadata owner address.
      * @param[in] objectKeys The object keys.
      */
-    void FillRefData(const MetaAddrInfo &targetMetaAddrInfo, std::vector<std::string> &objectKeys);
+    void FillRefData(const HostPort &targetMasterAddr, std::vector<std::string> &objectKeys);
 
     /**
      * @brief send requests decreasing gref to masters.
      * @param[in] objKeysGrpByMaster object keys grouped by master.
      * @return Status
      */
-    Status ReconciliationDecrRef(const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster);
+    Status ReconciliationDecrRef(const std::unordered_map<HostPort, std::vector<std::string>> &objKeysGrpByMaster);
 
     /**
      * @brief Helper function to assign fields to the metadata protobuf
@@ -1066,11 +1056,11 @@ private:
     /**
      * @brief Fill object metadata.
      * @param[in] objectKey The id of object.
-     * @param[in] targetMetaAddrInfo The meta address information.
+     * @param[in] targetMasterAddr The metadata owner address.
      * @param[out] metadata Object meta to fill.
      * @param[out] isFill The metadata is fill or not.
      */
-    void FillMetadata(const std::string &objectKey, const MetaAddrInfo &targetMetaAddrInfo, ObjectMetaPb *metadata,
+    void FillMetadata(const std::string &objectKey, const HostPort &targetMasterAddr, ObjectMetaPb *metadata,
                       bool &isFill);
 
     /**
@@ -1132,7 +1122,7 @@ private:
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
-    EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
+    EtcdStore *etcdStore_;                       // pointer to EtcdStore in WorkerOcServer
     topology::ICoordinationBackend *coordinationBackend_{ nullptr };
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;

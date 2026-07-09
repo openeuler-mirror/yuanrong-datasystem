@@ -132,7 +132,7 @@ public:
                 return Status::OK();
             } else if (!rsp.meta_is_moving()) {
                 HostPort newMetaAddr;
-                RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(rsp.info().redirect_meta_address(), newMetaAddr));
+                RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info().redirect_meta_address()));
                 LOG(INFO) << "meta has been migrated to the new master: " << newMetaAddr.ToString();
                 workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
                 CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
@@ -303,14 +303,6 @@ public:
     Status BatchLockWithInsert(const std::vector<std::string> &objectKeys,
                                std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries,
                                std::vector<std::string> &successIds, std::vector<std::string> &failedIds);
-
-    /**
-     * @brief Get the primary replica addr
-     * @param[in] srcAddr The source address.
-     * @param[out] destAddr The dest address.
-     * @return Status of this call.
-     */
-    Status GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr);
 
     /**
      * @brief Remove meta location

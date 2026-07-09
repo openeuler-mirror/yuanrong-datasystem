@@ -89,7 +89,7 @@ void NodeSelector::Shutdown()
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
-    clusterManager_  = nullptr;
+    clusterManager_ = nullptr;
     apiManager_.reset();
     LOG(INFO) << "NodeSelector shutdown";
 }
@@ -120,8 +120,7 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
         return GetStandbyWorker(excludeNodes, outNode);
     }
     auto maxLeftMemory = rankList_[0].availableMemory;
-    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES,
-                             K_NO_SPACE, "The max available memory in not enough");
+    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES, K_NO_SPACE, "The max available memory in not enough");
 
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&preferNode](NodeInfo info) { return info.nodeId == preferNode; });
@@ -213,14 +212,14 @@ Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &addres
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     hasSnapshot = !rankList_.empty();
     if (!hasSnapshot) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
-                                                localAddress_));
+        RETURN_STATUS(K_NOT_FOUND,
+                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
     }
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&address](const NodeInfo &info) { return info.nodeId == address; });
     if (it == rankList_.end()) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
-                                                localAddress_));
+        RETURN_STATUS(K_NOT_FOUND,
+                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
     }
     if (!it->isReady) {
         RETURN_STATUS(K_NOT_READY, FormatString("Remote node %s is not ready for resource selection, local node %s",
@@ -269,11 +268,11 @@ void NodeSelector::WorkerThread()
 Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi)
 {
     // get the master address info
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, metaAddrInfo));
+    HostPort masterAddr;
+    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, masterAddr));
     VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
-        << "Get " << RESOURCE_MONITOR_MASTER << " address: " << metaAddrInfo.GetAddress().ToString();
-    workerMasterApi = apiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddress());
+        << "Get " << RESOURCE_MONITOR_MASTER << " address: " << masterAddr.ToString();
+    workerMasterApi = apiManager_->GetWorkerMasterApi(masterAddr);
     if (workerMasterApi == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR, "The worker master api is nullptr");
     }

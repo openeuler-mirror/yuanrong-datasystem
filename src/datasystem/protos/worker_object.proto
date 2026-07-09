@@ -260,7 +260,9 @@ message PushMetaToWorkerRspPb {
 
 message RequestMetaFromWorkerReqPb {
   bytes address = 1;
-  bytes db_name = 2;
+  // Field 2 was the legacy db_name field. It is reserved because metadata routing now uses only HostPort.
+  reserved 2;
+  reserved "db_name";
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

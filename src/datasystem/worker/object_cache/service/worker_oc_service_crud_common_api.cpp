@@ -140,9 +140,8 @@ Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &obj
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
     PerfPoint point(PerfKey::WORKER_SAVE_L2_CACHE);
-    Status res = persistenceApi_->Save(
-        objectKey, entry->GetCreateTime(), remainingTime, buf, 0, entry->modeInfo.GetWriteMode(),
-        entry->GetTtlSecond());
+    Status res = persistenceApi_->Save(objectKey, entry->GetCreateTime(), remainingTime, buf, 0,
+                                       entry->modeInfo.GetWriteMode(), entry->GetTtlSecond());
     point.Record();
 
     uint64_t oldVersionMax = entry->GetCreateTime() - 1;
@@ -322,13 +321,6 @@ Status WorkerOcServiceCrudCommonApi::BatchLockWithInsert(
     return lastRc;
 }
 
-Status WorkerOcServiceCrudCommonApi::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
-{
-    [[maybe_unused]] std::string dbName;
-    RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    return Status::OK();
-}
-
 Status WorkerOcServiceCrudCommonApi::RemoveMeta(const std::list<std::string> &objectKeysRemoveList,
                                                 const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                                 const master::RemoveMetaReqPb::Cause removeCause,
@@ -369,7 +361,7 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
         std::list<std::string> redirectIds = { redirectInfo.change_meta_ids().begin(),
                                                redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
-        RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
+        RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
         auto status = clusterManager_->CheckConnection(redirectMasterAddr);
         if (status.IsError()) {
             LOG(WARNING) << "remove meta failed: " << status.ToString();
@@ -402,12 +394,12 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
     return Status::OK();
 }
 
-void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string> &objectKeys,
-    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(
+    const std::vector<std::string> &objectKeys, const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
     const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
-    const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
-    std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-    std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
+    const std::unordered_map<std::string, uint64_t> &batchKeyVersions, std::vector<std::string> &failedIds,
+    std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+    std::vector<std::string> &needMigrateL2CacheIds)
 {
     std::list<std::string> objectKeysRemoveList;
     const uint32_t objBatch = 300;
@@ -431,8 +423,8 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
                 reqTimeoutDuration.Init(RPC_TIMEOUT);
             }
             master::RemoveMetaRspPb response;
-            auto result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true,
-                localAddress, batchKeyVersions, response);
+            auto result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, localAddress,
+                                     batchKeyVersions, response);
             if (result.IsError()) {
                 LOG(WARNING) << "remove meta failed: " << result.ToString();
                 failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
@@ -455,8 +447,8 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
             reqTimeoutDuration.Init(RPC_TIMEOUT);
         }
         master::RemoveMetaRspPb response;
-        Status result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true,
-                                  localAddress, batchKeyVersions, response);
+        Status result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, localAddress,
+                                   batchKeyVersions, response);
         if (result.IsError()) {
             LOG(WARNING) << "remove meta failed: " << result.ToString();
             failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
@@ -483,7 +475,7 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddress();
+        const HostPort &masterAddr = item.first;
         std::vector<std::string> currentObjectKeysRemove = item.second;
         std::shared_ptr<worker::WorkerMasterOCApi> workerMasterApi =
             workerMasterApiManager_->GetWorkerMasterApi(masterAddr);

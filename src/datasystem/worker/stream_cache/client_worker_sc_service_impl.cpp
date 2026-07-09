@@ -192,13 +192,6 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     return Status::OK();
 }
 
-Status ClientWorkerSCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
-{
-    [[maybe_unused]] std::string dbName;
-    RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    return Status::OK();
-}
-
 void ClientWorkerSCServiceImpl::ConstructCreateProducerPb(const std::string &streamName,
                                                           const Optional<StreamFields> &streamFields,
                                                           master::CreateProducerReqPb &out) const noexcept
@@ -1645,13 +1638,12 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
                                                          const worker::HashRange &hashRanges)
 {
     if (!masterAddr.empty()) {
-        MetaAddrInfo metaAddrInfo;
-        auto rc = clusterManager_->GetMetaAddress(streamName, metaAddrInfo);
+        HostPort masterAddress;
+        auto rc = clusterManager_->GetMetaAddress(streamName, masterAddress);
         if (rc.IsError()) {
             LOG(ERROR) << rc.ToString();
             return false;
         }
-        auto masterAddress = metaAddrInfo.GetAddress();
         return masterAddress.ToString() == masterAddr;
     }
     return clusterManager_->IsInRange(hashRanges, streamName);

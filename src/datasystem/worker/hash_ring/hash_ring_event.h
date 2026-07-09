@@ -39,8 +39,7 @@ class HashRingEvent : public EventNotifier {
         CLEAR_DEV_META,
         GET_FAILED_WORKERS,
         CLUSTER_INIT_FINISH,
-        GET_DB_PRIMARY_LOCATION,
-        GET_NEED_CHANGE_REPLICATION_DB_NAME,
+        GET_NEED_CHANGE_REPLICATION_WORKER_ID,
         SCALE_DOWN_FINISH,
         VOLUNTARY_SCALE_DOWN_FINISH,
         SCALEUP_FINISH,
@@ -54,18 +53,17 @@ public:
         EventSubscribers<BEFORE_VOLUNTARY_EXIT, std::function<Status(const std::string &taskId)>>;
     using MigrateRanges = EventSubscribers<
         MIGRATE_META_RANGES,
-        std::function<Status(const std::string &dbName, const std::string &dest, const std::string &destDbNAme,
+        std::function<Status(const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
                              const worker::HashRange &ranges, bool isNetworkRecovery)>>;
     using SyncClusterNodes = EventSubscribers<HASH_RING_MODIFY, std::function<void(const std::set<std::string> &)>>;
     using RecoverMetaRanges =
         EventSubscribers<RECOVER_META_RANGES, std::function<Status(const worker::HashRange &extraRanges)>>;
-    using RecoverAsyncTaskRanges = EventSubscribers<
-        RECOVER_RANGES_WHEN_VOLUNTARY_SCALE_DOWN_FINISH,
-        std::function<Status(const worker::HashRange &extraRanges)>>;
-    using ClearDataWithoutMeta = EventSubscribers<
-        CLEAR_DATA_WITHOUT_META,
-        std::function<Status(const worker::HashRange &ranges, const std::string &workerAddr,
-                             const worker::HashRange &halfCompletedRanges)>>;
+    using RecoverAsyncTaskRanges = EventSubscribers<RECOVER_RANGES_WHEN_VOLUNTARY_SCALE_DOWN_FINISH,
+                                                    std::function<Status(const worker::HashRange &extraRanges)>>;
+    using ClearDataWithoutMeta =
+        EventSubscribers<CLEAR_DATA_WITHOUT_META,
+                         std::function<Status(const worker::HashRange &ranges, const std::string &workerAddr,
+                                              const worker::HashRange &halfCompletedRanges)>>;
     using LocalClearDataWithoutMeta =
         EventSubscribers<LOCAL_CLEAR_DATA_WITHOUT_META, std::function<Status(const worker::HashRange &ranges)>>;
     using LocalClearDataWithoutMetaFinish =
@@ -79,19 +77,14 @@ public:
     using ClusterInitFinish =
         EventSubscribers<CLUSTER_INIT_FINISH, std::function<void(const std::string &, const std::string &)>>;
 
-    using GetDbPrimaryLocation =
-        EventSubscribers<GET_DB_PRIMARY_LOCATION,
-                         std::function<Status(const std::string &, HostPort &, std::string &)>>;
-
-    using GetNeedChangeReplicationDbName =
-        EventSubscribers<GET_NEED_CHANGE_REPLICATION_DB_NAME,
+    using GetNeedChangeReplicationWorkerId =
+        EventSubscribers<GET_NEED_CHANGE_REPLICATION_WORKER_ID,
                          std::function<void(const std::set<std::string> &, std::vector<std::string> &)>>;
 
-    using ScaleDownFinish =
-        EventSubscribers<GET_NEED_CHANGE_REPLICATION_DB_NAME, std::function<void(const std::vector<std::string> &)>>;
+    using ScaleDownFinish = EventSubscribers<SCALE_DOWN_FINISH, std::function<void(const std::vector<std::string> &)>>;
 
     using VoluntaryScaleDownFinsih =
-        EventSubscribers<GET_NEED_CHANGE_REPLICATION_DB_NAME, std::function<void(const std::string &)>>;
+        EventSubscribers<VOLUNTARY_SCALE_DOWN_FINISH, std::function<void(const std::string &)>>;
     using ScaleupFinish = EventSubscribers<SCALEUP_FINISH, std::function<void(const std::string &)>>;
     using DataMigrationReady = EventSubscribers<DATA_MIGRATION_READY, std::function<Status(void)>>;
 };

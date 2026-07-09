@@ -125,7 +125,6 @@
   - `GetMetaAddressNotCheckConnection`
   - `GetMasterAddr`
   - `GetPrimaryReplicaLocationByObjectKey`
-  - `GetPrimaryReplicaLocationByAddr`
   - `GroupKeysByMetaOwner`
   - `GroupKeysByMetaOwnerWithIndex`
 - Health probe entrypoints:

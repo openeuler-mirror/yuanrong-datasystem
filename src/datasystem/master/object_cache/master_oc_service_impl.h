@@ -344,11 +344,11 @@ public:
     Status ReportResource(const ResourceReportReqPb &req, ResourceReportRspPb &rsp) override;
 
     /**
-    * @brief Report memory rebalance task result.
-    * @param[in] req The rpc req protobuf.
-    * @param[out] rsp The rpc rsp protobuf.
-    * @return K_OK on success; the error code otherwise.
-    */
+     * @brief Report memory rebalance task result.
+     * @param[in] req The rpc req protobuf.
+     * @param[out] rsp The rpc rsp protobuf.
+     * @return K_OK on success; the error code otherwise.
+     */
     Status ReportRebalanceResult(const ReportRebalanceResultReqPb &req, ReportRebalanceResultRspPb &rsp) override;
 
     /**
@@ -422,7 +422,7 @@ public:
     Status RecvRootInfo(
         std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> serverApi) override;
 
-    std::string GetDbName();
+    std::string GetWorkerId();
 
     /**
      * @brief Get metadata of object, i.e., lifecycle mode and buffer sizes.

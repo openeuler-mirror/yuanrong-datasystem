@@ -23,7 +23,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
-#include "datasystem/master/meta_addr_info.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -62,12 +62,12 @@ public:
                         const ClientKey &clientId);
 
 private:
-    using ObjGroupMap = std::unordered_map<MetaAddrInfo, std::vector<std::pair<std::string, size_t>>>;
+    using ObjGroupMap = std::unordered_map<HostPort, std::vector<std::pair<std::string, size_t>>>;
 
     struct CreateMultiMetaResult {
         Status rc;
         master::CreateMultiMetaRspPb rsp;
-        MetaAddrInfo metaAddrInfo;
+        HostPort masterAddr;
     };
 
     /**
@@ -191,13 +191,12 @@ private:
      * @param[out] respRes The response list of create.
      * @return Status of the call.
      */
-    Status CreateMultiMetaParallel(const std::vector<MetaAddrInfo> &masterAddrs,
+    Status CreateMultiMetaParallel(const std::vector<HostPort> &masterAddrs,
                                    std::vector<master::CreateMultiMetaReqPb> &reqs,
                                    std::vector<CreateMultiMetaResult> &respRes);
 
     CreateMultiMetaResult BuildCreateMultiMetaResult(const std::shared_ptr<worker::WorkerMasterOCApi> &api,
-                                                     master::CreateMultiMetaReqPb &req,
-                                                     const MetaAddrInfo &masterAddrInfo);
+                                                     master::CreateMultiMetaReqPb &req, const HostPort &masterAddr);
 
     /**
      * @brief Create multimeta request to master in parallel.
@@ -206,7 +205,7 @@ private:
      * @param[in] reqs The CreateMultiMeta requests.
      * @return Status of the call.
      */
-    Status CreateMultiMetaParallel(const ObjGroupMap &objGroup, const std::vector<MetaAddrInfo> &addrs,
+    Status CreateMultiMetaParallel(const ObjGroupMap &objGroup, const std::vector<HostPort> &addrs,
                                    std::vector<master::CreateMultiMetaReqPb> &reqs);
 
     /**

@@ -72,10 +72,7 @@ namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
     SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
-        : reqId_(std::move(reqId)),
-          objects_(std::move(objects)),
-          address_(std::move(address)),
-          timer_(nullptr)
+        : reqId_(std::move(reqId)), objects_(std::move(objects)), address_(std::move(address)), timer_(nullptr)
     {
     }
     // request id
@@ -233,11 +230,11 @@ public:
      * @param[in] persistApi Provides calls to a persistence service through a cloud client.
      * @param[in] masterAddress The address of master.
      * @param[in] cm ETCD cluster manager for persistence.
-     * @param[in] dbName The db name.
+     * @param[in] workerId The worker id.
      */
     OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore, EtcdStore *etcdStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
-                      ClusterManager *cm = nullptr, const std::string &dbName = "", bool newNode = false);
+                      ClusterManager *cm = nullptr, const std::string &workerId = "", bool newNode = false);
 
     ~OCMetadataManager();
 
@@ -426,14 +423,6 @@ public:
      * @param[out] rsp The rpc response protobuf.
      */
     Status CreateMultiMeta(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp);
-
-    /**
-     * @brief Get the Primary Replica Addr object
-     * @param[in] masterAddr masterAddr
-     * @param[out] primaryAddr primary replica addr
-     * @return Status of the call;
-     */
-    Status GetPrimaryReplicaAddr(const std::string &masterAddr, HostPort &primaryAddr);
 
     /**
      * @brief Remove object meta info of server in cache and rocksdb.
@@ -1096,13 +1085,13 @@ public:
 
     std::array<MetaTableShard, kMetaTableShardCount> metaShards_;
 
-    size_t GetShardIndex(const std::string& key) const
+    size_t GetShardIndex(const std::string &key) const
     {
         return std::hash<std::string>{}(key) % kMetaTableShardCount;
     }
 
     template <typename Func>
-    void WithAllShardsLocked(Func&& func)
+    void WithAllShardsLocked(Func &&func)
     {
         size_t lockedCount = 0;
         try {
@@ -1131,14 +1120,14 @@ public:
     size_t GetMetaTableSize() const
     {
         size_t total = 0;
-        for (const auto& shard : metaShards_) {
+        for (const auto &shard : metaShards_) {
             total += shard.table.size();
         }
         return total;
     }
 
     // Public helper for friend classes to access sharded meta table.
-    MetaTableShard& GetShardFor(const std::string& key)
+    MetaTableShard &GetShardFor(const std::string &key)
     {
         return metaShards_[GetShardIndex(key)];
     }
@@ -1189,12 +1178,12 @@ public:
     Status CreateDeviceMeta(const ObjectMetaPb &newMeta, const std::string &address);
 
     /**
-     * @brief Get rocksdb name.
-     * @return std::string the rocksdb name.
+     * @brief Get worker id.
+     * @return std::string the worker id.
      */
-    std::string GetDbName()
+    std::string GetWorkerId()
     {
-        return dbName_;
+        return workerId_;
     }
 
     /**
@@ -1875,7 +1864,7 @@ private:
     std::atomic<bool> initialized_{ false };
     std::string eventName_;
     std::unique_ptr<Thread> monitor_;
-    std::string dbName_;
+    std::string workerId_;
     std::shared_ptr<PersistenceApi> persistApi_;
 
     // Indicate the master is new added node or not.

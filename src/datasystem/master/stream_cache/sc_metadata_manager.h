@@ -49,11 +49,11 @@ public:
      * @param[in] rpcSessionManager Master to Worker session manager.
      * @param[in] cm The cluster manager instance.
      * @param[in] rocksStore The rocks store instance.
-     * @param[in] dbName The db name.
+     * @param[in] workerId The worker id.
      */
     SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
                       std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm, RocksStore *rocksStore,
-                      const std::string &dbName);
+                      const std::string &workerId);
 
     /**
      * @brief Shutdown the sc metadata manager module.
@@ -217,12 +217,12 @@ public:
     void StartClearWorkerMetadata(const HostPort &workerAddr);
 
     /**
-     * @brief Get rocksdb name.
-     * @return std::string the rocksdb name.
+     * @brief Get worker id.
+     * @return std::string the worker id.
      */
-    std::string GetDbName()
+    std::string GetWorkerId()
     {
-        return dbName_;
+        return workerId_;
     }
 
     /**
@@ -421,7 +421,7 @@ private:
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     std::shared_ptr<std::atomic_bool> exitFlag_;
 
-    const std::string dbName_;
+    const std::string workerId_;
     const std::string eventName_;
 };
 }  // namespace master

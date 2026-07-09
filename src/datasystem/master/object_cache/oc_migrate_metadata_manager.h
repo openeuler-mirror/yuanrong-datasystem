@@ -51,7 +51,7 @@ public:
         std::string destAddr = "";
         worker::HashRange ranges = {};
         std::vector<std::string> failedIds = {};
-        std::string destDbName = "";
+        std::string destWorkerId = "";
     };
 
     OCMigrateMetadataManager(const OCMigrateMetadataManager &other) = delete;
@@ -85,13 +85,13 @@ public:
 
     /**
      * @brief Migrate data by hash range
-     * @param[in] dbName The rocksdb name.
+     * @param[in] workerId The worker id.
      * @param[in] dest Destination address of the migration.
      * @param[in] ranges The object keys to be migrated.
      * @param[in] isNetworkRecovery True if under network recovery scenario.
      * @return Status of the call.
      */
-    Status MigrateByRanges(const std::string &dbName, const std::string &dest, const std::string &destDbNAme,
+    Status MigrateByRanges(const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
                            const worker::HashRange &ranges, bool isNetworkRecovery);
 
     /**
@@ -106,12 +106,12 @@ public:
 
     /**
      * @brief Obtaining the Data Migration Result
-     * @param[in] dbName The rocksdb name.
+     * @param[in] workerId The worker id.
      * @param[in] destination Destination address of the migration.
      * @param[out] failedObjectKeys Failed object keys.
      * @return Status of the call.
      */
-    Status GetMigrateMetadataResult(const std::string &dbName, const std::string &destination,
+    Status GetMigrateMetadataResult(const std::string &workerId, const std::string &destination,
                                     std::vector<std::string> &failedObjectKeys);
 
     /**

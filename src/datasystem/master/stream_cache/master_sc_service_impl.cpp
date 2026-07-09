@@ -299,9 +299,9 @@ Status MasterSCServiceImpl::StartCheckMetadata()
     std::vector<std::future<void>> rcs(nodeAddrs.size());
     for (size_t i = 0; i < nodeAddrs.size(); ++i) {
         rcs[i] = checkPool->Submit([this, i, &nodeAddrs]() {
-            auto func = [i, &nodeAddrs](const std::string &dbName, MetadataManager metadataMansger) {
+            auto func = [i, &nodeAddrs](const std::string &workerId, MetadataManager metadataMansger) {
                 auto traceGuard = Trace::Instance().SetTraceNewID(GetStringUuid() + "-sc-check");
-                LOG(INFO) << "Check metadata for db name " << dbName;
+                LOG(INFO) << "Check metadata for worker id " << workerId;
                 if (metadataMansger.sc != nullptr) {
                     metadataMansger.sc->StartCheckMetadata(nodeAddrs[i]);
                 }
@@ -340,7 +340,7 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
     return Status::OK();
 }
 
-std::string MasterSCServiceImpl::GetDbName()
+std::string MasterSCServiceImpl::GetWorkerId()
 {
     return metadataManagerHolder_->GetCurrentWorkerUuid();
 }

@@ -74,7 +74,7 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     return Status::OK();
 }
 
-Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, RocksStore *objectRocksStore,
+Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, RocksStore *objectRocksStore,
                                                 RocksStore *streamRocksStore)
 {
     if (ocMetadataManager_ != nullptr || scMetadataManager_ != nullptr) {
@@ -85,10 +85,10 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, Rocks
     double ocElapsed = 0;
     double scElapsed = 0;
     if (isOcEnabled_) {
-        auto oc =
-            std::make_shared<master::OCMetadataManager>(akSkManager_, objectRocksStore, etcdStore_, persistenceApi_,
-                                                        masterAddress_.ToString(), clusterManager_, dbName, isNewNode_);
-        LOG(INFO) << "Start init OCMetadataManager for " << dbName;
+        auto oc = std::make_shared<master::OCMetadataManager>(akSkManager_, objectRocksStore, etcdStore_,
+                                                              persistenceApi_, masterAddress_.ToString(),
+                                                              clusterManager_, workerId, isNewNode_);
+        LOG(INFO) << "Start init OCMetadataManager for " << workerId;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
         oc->AssignLocalWorker(masterWorkerService_, workerWorkerService_, masterAddress_);
@@ -97,8 +97,8 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, Rocks
 
     if (isScEnabled_) {
         auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_,
-                                                              clusterManager_, streamRocksStore, dbName);
-        LOG(INFO) << "Start init SCMetadataManager for " << dbName;
+                                                              clusterManager_, streamRocksStore, workerId);
+        LOG(INFO) << "Start init SCMetadataManager for " << workerId;
         timer.Reset();
         RETURN_IF_NOT_OK(sc->Init());
         scElapsed = timer.ElapsedMilliSecond();
@@ -106,7 +106,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &dbName, Rocks
     }
 
     LOG(INFO) << "OCMetadataManager init cost:" << ocElapsed << "ms, SCMetadataManager init cost:" << scElapsed
-              << "ms for " << dbName;
+              << "ms for " << workerId;
     return Status::OK();
 }
 
@@ -132,7 +132,7 @@ bool MetadataManagerHolder::HaveAsyncMetaRequest()
     return ocMetadataManager_ != nullptr && ocMetadataManager_->HaveAsyncMetaRequest();
 }
 
-Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &dbName)
+Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &workerId)
 {
     std::unique_lock<std::shared_timed_mutex> locker(mutex_);
     if (objectRocksStore_ == nullptr) {
@@ -145,7 +145,7 @@ Status MetadataManagerHolder::EnsureLocalMetadataManager(const std::string &dbNa
         RETURN_IF_NOT_OK(Replica::CreateRocksStoreInstance(streamPath, streamRocksStore_));
         RETURN_IF_NOT_OK(Replica::CreateScTable(streamRocksStore_.get()));
     }
-    return CreateMetaManager(dbName, objectRocksStore_.get(), streamRocksStore_.get());
+    return CreateMetaManager(workerId, objectRocksStore_.get(), streamRocksStore_.get());
 }
 
 void MetadataManagerHolder::Shutdown()
@@ -173,10 +173,11 @@ Status MetadataManagerHolder::InitLocalMetadataForStart(bool isRestart, const Cl
 {
     (void)isRestart;
     (void)clusterInfo;
-    const auto &dbName = GetCurrentWorkerUuid();
-    LOG(INFO) << "Create local metadata manager for worker:" << dbName << ", worker addr:" << masterAddress_.ToString();
+    const auto &workerId = GetCurrentWorkerUuid();
+    LOG(INFO) << "Create local metadata manager for worker:" << workerId
+              << ", worker addr:" << masterAddress_.ToString();
 
-    return EnsureLocalMetadataManager(dbName);
+    return EnsureLocalMetadataManager(workerId);
 }
 
 bool MetadataManagerHolder::CheckMetaEmpty()

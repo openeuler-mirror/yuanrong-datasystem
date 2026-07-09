@@ -410,7 +410,7 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
     std::unordered_set<std::string> tmpFailedIds;
     for (auto &item : objKeysGrpByMaster) {
-        HostPort masterAddr = item.first.GetAddress();
+        HostPort masterAddr = item.first;
         const auto &ids = item.second;
         auto workerMasterApi = GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
@@ -761,7 +761,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         req.set_origin_primary_addr(originAddr);
         req.set_new_primary_addr(localAddr_);
         req.set_remove_location(type == MigrateType::SPILL);
-        HostPort masterAddr = item.first.GetAddress();
+        HostPort masterAddr = item.first;
         const auto &ids = item.second;
         AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
         VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",
@@ -907,7 +907,7 @@ Status WorkerOcServiceMigrateImpl::PureQueryMetaToRedirectMaster(
 
         // 2. Get redirect master api.
         HostPort masterAddr;
-        Status rc = GetPrimaryReplicaAddr(addr, masterAddr);
+        Status rc = masterAddr.ParseString(addr);
         if (!rc.IsOk()) {
             lastRc = rc;
             LOG(WARNING) << "[Migrate Data] Get redirect master address failed: " << rc.ToString();
@@ -1116,7 +1116,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
 
         // 2. Get redirect master api.
         HostPort masterAddr;
-        Status rc = GetPrimaryReplicaAddr(address, masterAddr);
+        Status rc = masterAddr.ParseString(address);
         if (!rc.IsOk()) {
             lastRc = rc;
             LOG(WARNING) << "[Migrate Data] Get redirect master address failed: " << rc.ToString();

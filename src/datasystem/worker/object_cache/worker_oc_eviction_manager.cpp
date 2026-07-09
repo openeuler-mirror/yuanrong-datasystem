@@ -315,10 +315,10 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
                                    objectKeys.erase(std::remove(objectKeys.begin(), objectKeys.end(), objectKey),
                                                     objectKeys.end());
                                }
-                               objKeysGrpByMaster[MetaAddrInfo()].emplace_back(objectKey);
+                               objKeysGrpByMaster[HostPort()].emplace_back(objectKey);
                            });
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddress();
+        const HostPort &masterAddr = item.first;
         const auto &currentObjectKeys = item.second;
         if (currentObjectKeys.empty()) {
             continue;
@@ -854,7 +854,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
     ReaddPrimaryEndLifeTasks(failedTasks);
 
     for (const auto &item : groupedKeys) {
-        HostPort masterAddr = item.first.GetAddress();
+        HostPort masterAddr = item.first;
         std::vector<PrimaryEndLifeTask> masterTasks;
         masterTasks.reserve(item.second.size());
         for (const auto &objectKey : item.second) {
@@ -1321,12 +1321,12 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     if (clusterManager_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetMetaAddress(objectKey, metaAddrInfo),
+    HostPort masterAddr;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetMetaAddress(objectKey, masterAddr),
                                      "Get metadata address failed.");
 
-    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(metaAddrInfo.GetAddress(),
-                                                                              localAddress_, akSkManager_, masterOc_);
+    auto workerMasterApi =
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     master::DeleteAllCopyMetaReqPb req;
     req.add_object_keys(objectKey);

@@ -60,7 +60,6 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -143,7 +142,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         remainingUs = changedRemainingUs;
         return Status::OK();
     });
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
@@ -175,8 +175,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             } else {
                 int64_t currentRemainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
                 VLOG(1) << FormatString("[Get] Receive, clientId: %s, objects: %s, threadPool: %s, remainingUs: %ld",
-                    clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
-                    currentRemainingUs);
+                                        clientId, VectorToString(request->GetRawObjectKeys()),
+                                        threadPool_->GetStatistics(), currentRemainingUs);
                 // subTimeout is the client's subscribe budget; the actual wait is capped by
                 // std::min(subTimeout, remainingTimeMs) in ProcessGetObjectRequest.
                 auto newSubTimeout = subTimeout > 0 ? subTimeout : 0;
@@ -1535,7 +1535,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
         auto func = [&res, remainingUs, subTimeout, itemPtr, &traceID, dispatchTime, this]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
-            HostPort masterAddr = itemPtr->first.GetAddress();
+            HostPort masterAddr = itemPtr->first;
             const std::vector<std::string> &currentIds = itemPtr->second;
             datasystem::master::QueryMetaRspPb &rsp = res.rsp;
             Timer queryMetaTimer;
@@ -1631,7 +1631,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMeta
         std::vector<std::string> redirectIds = { redirectInfo.change_meta_ids().begin(),
                                                  redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
-        RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
+        RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
         SetQueryMetaInfo(redirectQueryReq, redirectIds, redirectMasterAddr.ToString(), false);
         std::shared_ptr<WorkerMasterOCApi> redirectWorkerMasterApi =
             workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
@@ -2249,7 +2249,7 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
     auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
-    std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> paramsGroupByAddress;
+    std::unordered_map<HostPort, std::vector<UpdateLocationParam>> paramsGroupByAddress;
     paramsGroupByAddress.reserve(objKeysGrpByMaster.size());
     std::vector<UpdateLocationParam> params = task.ExtractParams();
     bool found;
@@ -2286,18 +2286,18 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
 }
 
 void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
-    std::unordered_map<MetaAddrInfo, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
+    std::unordered_map<HostPort, std::vector<UpdateLocationParam>> &paramsGroupByAddress,
     std::vector<UpdateLocationParam> &params, std::vector<UpdateLocationParam> &retryParams,
     std::unordered_map<std::string, uint64_t> &clearMetaKeys,
     std::unordered_map<std::string, uint64_t> &clearObjectKeys)
 {
-    // grouped send batch request
+    // Group by metadata owner HostPort. The current topology has one worker per HostPort.
     for (const auto &group : paramsGroupByAddress) {
         if (group.second.empty()) {
             continue;
         }
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-        workerMasterApiManager_->GetWorkerMasterApi(group.first.GetAddress(), workerMasterApi);
+        workerMasterApiManager_->GetWorkerMasterApi(group.first, workerMasterApi);
         if (workerMasterApi == nullptr) {
             retryParams.insert(retryParams.end(), group.second.begin(), group.second.end());
             continue;
@@ -2428,10 +2428,7 @@ Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPor
 {
     CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(clusterManager_->LocateMetaOwner(objKey, true, metaAddrInfo));
-    masterAddr = metaAddrInfo.GetAddress();
-    return Status::OK();
+    return clusterManager_->LocateMetaOwner(objKey, true, masterAddr);
 }
 
 bool WorkerOcServiceGetImpl::IsNearDeathObject(const std::string &location, const ObjectMetaPb &meta)
@@ -2556,7 +2553,7 @@ Status WorkerOcServiceGetImpl::QueryObjectLocationsFromRedirectMaster(
 {
     for (const auto &redirectInfo : infos) {
         HostPort redirectMasterAddr;
-        Status rc = GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr);
+        Status rc = redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address());
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Get redirect master address failed: %s", rc.ToString());
             lastRc = rc;
@@ -2592,7 +2589,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
     auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
     auto &objKeysGrpByMaster = grouped.groups;
     for (auto &[master, objs] : objKeysGrpByMaster) {
-        HostPort workerAddr = master.GetAddress();
+        HostPort workerAddr = master;
         master::GetObjectLocationsReqPb masterReq;
         master::GetObjectLocationsRspPb masterRsp;
         *masterReq.mutable_object_keys() = { objs.begin(), objs.end() };

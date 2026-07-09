@@ -27,7 +27,7 @@
 
 #include "common.h"
 #include "../../../common/binmock/binmock.h"
-#include "datasystem/master/meta_addr_info.h"
+
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/thread_local.h"
 #define private public
@@ -120,8 +120,7 @@ TEST_F(WorkerRemoteMasterRpcDiagnosticTest, SealCreateMetaTimeoutReportsRpcDiagn
     reqTimeoutDuration.Init();
 
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-CreateMeta->[" + master.ToString() + "]"),
-              std::string::npos)
+    EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-CreateMeta->[" + master.ToString() + "]"), std::string::npos)
         << rc.ToString();
 }
 
@@ -137,9 +136,8 @@ public:
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_);
         memCpyThreadPool_ = std::make_shared<ThreadPool>(1);
         workerMasterApiManager_ = std::make_shared<TestWorkerMasterApiManager>(localAddress_);
-        manager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, nullptr,
-                                                             workerMasterApiManager_, 128, evictionManager_,
-                                                             memCpyThreadPool_);
+        manager_ = std::make_unique<MetaDataRecoveryManager>(
+            localAddress_, objectTable_, nullptr, workerMasterApiManager_, 128, evictionManager_, memCpyThreadPool_);
     }
 
     void TearDown() override
@@ -191,8 +189,7 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {
-    BINEXPECT_CALL((Status(ClusterManager::*)(const HostPort &, bool)) & ClusterManager::CheckConnection,
-                   (_, _))
+    BINEXPECT_CALL((Status (ClusterManager::*)(const HostPort &, bool))&ClusterManager::CheckConnection, (_, _))
         .WillRepeatedly(Return(Status::OK()));
 
     constexpr size_t totalObjects = 1201;
@@ -208,7 +205,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
     auto workerMasterApi = std::make_shared<TestWorkerMasterOCApi>(masterAddr, localAddress_);
     workerMasterApiManager_->SetApi(masterAddr, workerMasterApi);
 
-    auto result = manager_->SendRecoverRequest(MetaAddrInfo(masterAddr, ""), objectKeys);
+    auto result = manager_->SendRecoverRequest(masterAddr, objectKeys);
     DS_ASSERT_OK(result.status);
     EXPECT_TRUE(result.failedIds.empty());
 
@@ -227,7 +224,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataShouldReturnAllFailedIdsWhenM
     }
 
     HostPort unreachableMaster("127.0.0.1", 18502);
-    auto result = manager_->SendRecoverRequest(MetaAddrInfo(unreachableMaster, ""), objectKeys);
+    auto result = manager_->SendRecoverRequest(unreachableMaster, objectKeys);
     DS_ASSERT_NOT_OK(result.status);
     EXPECT_EQ(result.status.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(result.failedIds.size(), objectKeys.size());
@@ -267,9 +264,8 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
     auto content = std::make_shared<std::stringstream>();
     const std::string expected = "payload_for_restart_recovery";
     (*content) << expected;
-    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
-        { "tenant/payload_obj", content }
-    };
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{ { "tenant/payload_obj",
+                                                                                             content } };
 
     std::vector<std::string> recoveredObjectKeys;
     DS_ASSERT_OK(manager_->RecoverLocalEntries(recoverMetas, recoveredContents, recoveredObjectKeys));
@@ -298,9 +294,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesSkipsOlderMetaWhenLocalEn
     oldMeta.set_data_size(2048);
     auto oldContent = std::make_shared<std::stringstream>();
     (*oldContent) << "old_payload";
-    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
-        { objectKey, oldContent }
-    };
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{ { objectKey, oldContent } };
 
     std::vector<std::string> recoveredObjectKeys;
     DS_ASSERT_OK(manager_->RecoverLocalEntries({ oldMeta }, recoveredContents, recoveredObjectKeys));

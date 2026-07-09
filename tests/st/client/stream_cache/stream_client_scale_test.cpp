@@ -181,10 +181,9 @@ public:
      * @param[in] streamNum The number of streams to create
      * @param[in] sameWorker Whether to create consumers on w2Client instead
      */
-    void CreateNProducerAndConsumer(std::map<std::string, std::pair<
-        std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> &streams,
-        int streamNum, std::string streamName,
-        bool sameWorker = true)
+    void CreateNProducerAndConsumer(
+        std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> &streams, int streamNum,
+        std::string streamName, bool sameWorker = true)
     {
         for (int i = 0; i < streamNum; ++i) {
             std::string strmName = streamName + std::to_string(i);
@@ -243,8 +242,7 @@ public:
             const int interval = 100;  // 100ms;
             std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         }
-        LOG(INFO) << "Check " << (flag ? "success" : "failed")
-                  << ", Ring info:" << worker::HashRingToJsonString(ring);
+        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", Ring info:" << worker::HashRingToJsonString(ring);
         ASSERT_TRUE(flag);
     }
 
@@ -302,10 +300,8 @@ public:
      * @param[in] streams The map of stream names to pairs of prod/cons
      * @param[in] remoteClient The remote client to use for producer
      */
-    void PostScaleTest(
-        std::map<std::string, std::pair<
-        std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> &streams,
-        std::shared_ptr<StreamClient> &remoteClient)
+    void PostScaleTest(std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> &streams,
+                       std::shared_ptr<StreamClient> &remoteClient)
     {
         const int K_TEN = 10;
         int streamNum = streams.size();
@@ -367,7 +363,6 @@ public:
     }
 
 protected:
-
     Status TryAndDeleteStream(std::shared_ptr<StreamClient> spClient, std::string streamName)
     {
         // if pending notifications retry delete
@@ -415,7 +410,7 @@ TEST_F(StreamClientScaleTest, TestConsumerCanRecvEleAfterScaleDown)
     HostPort w3Addr;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(2, w3Addr));  // 2 is the index of node.
     std::shared_ptr<StreamClient> w3Client;
-    InitStreamClient(2, w3Client);   // 2 is the index of node.
+    InitStreamClient(2, w3Client);  // 2 is the index of node.
     // Create producer/consumer -> send/recv one element -> close producer
     for (int i = 0; i < streamNum; ++i) {
         auto &consumer = std::get<0>(cache[i]);
@@ -461,7 +456,7 @@ TEST_F(StreamClientScaleTest, TestAutoDeleteStreamAfterScaleDown)
     cache.resize(streamNum);
 
     std::shared_ptr<StreamClient> w3Client;
-    InitStreamClient(2, w3Client); // index is 2
+    InitStreamClient(2, w3Client);  // index is 2
     // Create producer/consumer -> send/recv one element -> close producer
     defaultProducerConf_.autoCleanup = true;
     for (int i = 0; i < streamNum; ++i) {
@@ -709,7 +704,7 @@ TEST_F(StreamClientScaleTest, LEVEL2_TestScaleDownWhileRetainingData)
     WaitAllNodesJoinIntoHashRing(1);
 
     auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
-    DS_ASSERT_OK(externalCluster->StartWorkerAndWaitReady({0}));
+    DS_ASSERT_OK(externalCluster->StartWorkerAndWaitReady({ 0 }));
 
     WaitAllNodesJoinIntoHashRing(2);  // 2 workers online
 
@@ -774,7 +769,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpAndDown)
     // Add new worker node to trigger scale up and metadata migration
     // Scale down and Restart worker1
     DS_ASSERT_OK(AddNode());
-    WaitAllNodesJoinIntoHashRing(3); // 3 workers online
+    WaitAllNodesJoinIntoHashRing(3);  // 3 workers online
     VoluntaryScaleDownInject(0);
     VoluntaryScaleDownInject(1);
     w1Client_.reset();
@@ -782,12 +777,12 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpAndDown)
     for (auto &stream : streams) {
         stream.second = { nullptr, nullptr };
     }
-    WaitAllNodesJoinIntoHashRing(1); // 1 workers online
+    WaitAllNodesJoinIntoHashRing(1);  // 1 workers online
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, {}));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, {}));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    WaitAllNodesJoinIntoHashRing(3); // 3 workers online
+    WaitAllNodesJoinIntoHashRing(3);  // 3 workers online
 
     InitStreamClient(0, w1Client_);
     InitStreamClient(1, w2Client_);
@@ -811,7 +806,6 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpAndDown)
     }
     LOG(INFO) << "LEVEL1_TestScaleUpAndDown finish!";
 }
-
 
 TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_TestScaleDownProducerCount)
 {
@@ -979,7 +973,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_ScaleWhenSyncConsumerNode)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "SCMetadataManager.GetMetasMatch.timeout", "call(5)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "SCMetadataManager.GetMetasMatch.timeout", "call(5)"));
     AddNode();
-    WaitAllNodesJoinIntoHashRing(3, 10); // wait 10s for worker 3 join
+    WaitAllNodesJoinIntoHashRing(3, 10);  // wait 10s for worker 3 join
     for (const auto &fut : futs) {
         fut.wait();
     }
@@ -993,7 +987,7 @@ TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_ContinuousRedirection)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, worker3Idx, "SCMetadataManager.Subscribe.wait", "2*sleep(3000)"));
     const int threadNum = 2;
     ThreadPool threadPool(threadNum);
-    auto fut1 = threadPool.Submit([this, &consumers] () {
+    auto fut1 = threadPool.Submit([this, &consumers]() {
         int streamNum = 16;
         for (int i = 0; i < streamNum; i++) {
             std::string streamName = RandomData().GetRandomString(10);  // stream name len is 10
@@ -1346,7 +1340,8 @@ TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL2_TestScaleDownNotifications1)
     const int streamNum = 10;
     std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
     CreateNProducerAndConsumer(streams, streamNum, streamName, false);
-    // Voluntarily scale down worker3, metadata will get migrated and notification/reconciliation logic should be triggered.
+    // Voluntarily scale down worker3, metadata will get migrated and notification/reconciliation logic should be
+    // triggered.
     VoluntaryScaleDownInject(worker3Index);
     sleep(SCALE_DOWN_WAIT_TIME);
     for (auto &stream : streams) {
@@ -1531,18 +1526,18 @@ public:
         opts.workerGflagParams += " -enable_stream_data_verification=true ";
     }
 
-    void CreateStreams(uint numOfStream, uint producerPerStream, uint consumerPerStream,
-        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-        std::vector<std::shared_ptr<Consumer>>>> &streams, std::string streamName)
+    void CreateStreams(
+        uint numOfStream, uint producerPerStream, uint consumerPerStream,
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams,
+        std::string streamName)
     {
         streams.resize(numOfStream);
-        CreateNProducerAndMConsumerForEachStream(producerPerStream, consumerPerStream, streams,
-                                                 streamName);
+        CreateNProducerAndMConsumerForEachStream(producerPerStream, consumerPerStream, streams, streamName);
     }
 
-    void CreateNProducerAndMConsumerForEachStream(uint producerPerStream, uint consumerPerStream,
-        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-        std::vector<std::shared_ptr<Consumer>>>> &streams,
+    void CreateNProducerAndMConsumerForEachStream(
+        uint producerPerStream, uint consumerPerStream,
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams,
         std::string streamName)
     {
         for (uint i = 0; i < streams.size(); ++i) {
@@ -1564,9 +1559,9 @@ public:
         }
     }
 
-    void TestSendRecv(uint numOfElementPerProducer, uint numOfElementPerConsumer,
-        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-                              std::vector<std::shared_ptr<Consumer>>>> &streams)
+    void TestSendRecv(
+        uint numOfElementPerProducer, uint numOfElementPerConsumer,
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams)
     {
         for (auto &stream : streams) {
             auto &producers = stream.first;
@@ -1583,10 +1578,11 @@ public:
             if (numOfElementPerConsumer == 0) {
                 continue;
             }
+            constexpr int receiveTimeoutMs = 5'000;
             for (auto &consumer : stream.second) {
                 if (consumer) {
                     std::vector<Element> outElements;
-                    DS_ASSERT_OK(consumer->Receive(numOfElementPerConsumer, RPC_TIMEOUT, outElements));
+                    DS_ASSERT_OK(consumer->Receive(numOfElementPerConsumer, receiveTimeoutMs, outElements));
                     ASSERT_EQ(outElements.size(), numOfElementPerConsumer);
                     outElements.clear();
                 }
@@ -1594,9 +1590,9 @@ public:
         }
     }
 
-    void CloseProducer(std::vector<uint> producerIndex,
-        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-                              std::vector<std::shared_ptr<Consumer>>>> &streams)
+    void CloseProducer(
+        std::vector<uint> producerIndex,
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams)
     {
         for (auto &stream : streams) {
             for (auto &idx : producerIndex) {
@@ -1608,9 +1604,9 @@ public:
         }
     }
 
-    void CloseConsumers(std::vector<uint> consumerIndex,
-        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-                              std::vector<std::shared_ptr<Consumer>>>> &streams)
+    void CloseConsumers(
+        std::vector<uint> consumerIndex,
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams)
     {
         for (auto &stream : streams) {
             for (auto &idx : consumerIndex) {
@@ -1622,9 +1618,9 @@ public:
         }
     }
 
-    void DeleteStreams(std::vector<std::pair<std::vector<std::shared_ptr<Producer>>,
-                       std::vector<std::shared_ptr<Consumer>>>> &streams,
-                       std::string streamName)
+    void DeleteStreams(
+        std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> &streams,
+        std::string streamName)
     {
         for (uint i = 0; i < streams.size(); ++i) {
             auto &stream = streams.at(i);
@@ -1663,7 +1659,7 @@ TEST_F(DataVerificationStreamClientScaleTest, TestVoluntaryScaleDown)
     TestSendRecv(numOfElementPerProducer, numOfElementPerConsumer, streams);
 
     // Close 1st and 3rd producer.
-    std::vector<uint> producerIndex = {0, 2};
+    std::vector<uint> producerIndex = { 0, 2 };
     CloseProducer(producerIndex, streams);
     producerPerStream -= producerIndex.size();
 
@@ -1708,7 +1704,7 @@ TEST_F(DataVerificationStreamClientScaleTest, TestVoluntaryScaleUp)
     TestSendRecv(numOfElementPerProducer, numOfElementPerConsumer, streams);
 
     // Close 1st and 3rd producer.
-    std::vector<uint> producerIndex = {0, 2};
+    std::vector<uint> producerIndex = { 0, 2 };
     CloseProducer(producerIndex, streams);
     producerPerStream -= producerIndex.size();
 
@@ -1771,7 +1767,7 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestPassiveScaleDown)
     numOfNotReceiveElementPerConsumer += numOfElementPerProducer * producerPerStream;
 
     // Close 5 producers.
-    std::vector<uint> producerIndex = {0, 6, 7, 8, 9};
+    std::vector<uint> producerIndex = { 0, 6, 7, 8, 9 };
     CloseProducer(producerIndex, streams);
     producerPerStream -= producerIndex.size();
 
@@ -1818,7 +1814,7 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestRestartPassiveScaleDown
     numOfNotReceiveElementPerConsumer += numOfElementPerProducer * producerPerStream;
 
     // Close 5 producers.
-    std::vector<uint> producerIndex = {0, 6, 7, 8, 9};
+    std::vector<uint> producerIndex = { 0, 6, 7, 8, 9 };
     CloseProducer(producerIndex, streams);
     producerPerStream -= producerIndex.size();
 
@@ -1849,8 +1845,7 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestRestartPassiveScaleDown
     LOG(INFO) << "TestRestartPassiveScaleDown finish!";
 }
 
-class StreamClientScaleDfxTest : public StreamClientScaleTest {
-};
+class StreamClientScaleDfxTest : public StreamClientScaleTest {};
 
 TEST_F(StreamClientScaleDfxTest, LEVEL2_ScaleUpWhenMetaResidue)
 {
@@ -1862,7 +1857,7 @@ TEST_F(StreamClientScaleDfxTest, LEVEL2_ScaleUpWhenMetaResidue)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "BatchMigrateMetadata.finish", "1*sleep(2000)"));
 
     VoluntaryScaleDownInject(1);
-    sleep(1); // wait hash ring change
+    sleep(1);  // wait hash ring change
     kill(cluster_->GetWorkerPid(1), SIGKILL);
     w2Client_.reset();
     sleep(6);  // wait 6s for worker passive reduction

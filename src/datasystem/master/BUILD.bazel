@@ -2,16 +2,7 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
-ds_cc_library(
-    name = "meta_addr_info",
-    hdrs = [
-        "meta_addr_info.h",
-    ],
-    deps = [
-        "//src/datasystem/common/util:common_util_base",
-        "//src/datasystem/common/util:thread_local",
-    ],
-)
+
 
 ds_cc_library(
     name = "node_descriptor",

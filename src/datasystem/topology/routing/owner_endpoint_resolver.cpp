@@ -43,8 +43,8 @@ OwnerEndpointResolver::OwnerEndpointResolver(std::shared_ptr<IRoutingView> routi
 {
 }
 
-Status OwnerEndpointResolver::LocateMetaOwner(const std::string &key, const RouteOptions &options,
-                                              IRoutingCache *cache, RouteDecision &decision) const
+Status OwnerEndpointResolver::LocateMetaOwner(const std::string &key, const RouteOptions &options, IRoutingCache *cache,
+                                              RouteDecision &decision) const
 {
     decision = RouteDecision{};
     CHECK_FAIL_RETURN_STATUS(endpointView_ != nullptr, K_INVALID, "Owner endpoint resolver endpoint view is not set.");
@@ -89,7 +89,7 @@ Status OwnerEndpointResolver::LocateMetaOwnersBatch(const std::vector<std::strin
             continue;
         }
         decision.perKeyDecision.emplace(key, route);
-        decision.groupsByEndpoint[route.ToMetaAddrInfo()].emplace_back(key);
+        decision.groupsByEndpoint[route.OwnerAddress()].emplace_back(key);
     }
     return Status::OK();
 }

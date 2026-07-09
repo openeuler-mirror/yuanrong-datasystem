@@ -81,7 +81,7 @@
 | node utility thread | event handling, demotion, hash-ring progress, sync | `StartNodeUtilThread` | overloaded loop |
 | orphan monitor | cleanup nodes missing from hash ring/ETCD | `StartOrphanNodeMonitorThread` | per-orphan ETCD get |
 | fake node repair | synthesize add/delete for ring workers absent from node table | `CompleteNodeTableWithFakeNode` | repairs full-cluster restart gaps |
-| route helpers | map object keys to `MetaAddrInfo` via hash ring | route methods in header/cpp | uses hash ring and cluster-node state |
+| route helpers | map object keys to `HostPort` metadata owner addresses via hash ring | route methods in header/cpp | uses hash ring and cluster-node state |
 | health probe | process readiness state and optional file | `worker_health_check.*` | used by startup and fake-node scheduling |
 
 ## Data And State Model

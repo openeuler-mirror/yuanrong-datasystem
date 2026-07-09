@@ -83,7 +83,6 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
@@ -514,13 +513,6 @@ void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &
               << " ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
 }
 
-Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
-{
-    [[maybe_unused]] std::string dbName;
-    RETURN_IF_NOT_OK(clusterManager_->GetPrimaryReplicaLocationByAddr(srcAddr, destAddr, dbName));
-    return Status::OK();
-}
-
 void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker checker)
 {
     asyncTasksDoneChecker_ = std::move(checker);
@@ -716,15 +708,15 @@ Status WorkerOCServiceImpl::FillRequestMetaByMaster(const RequestMetaFromWorkerR
 {
     const auto &masterAddress = req.address();
     HostPort masterAddr;
-    masterAddr.ParseString(masterAddress);
-    MetaAddrInfo metaAddrInfo(masterAddr, req.db_name());
+    RETURN_IF_NOT_OK(masterAddr.ParseString(masterAddress));
+
     std::vector<std::string> objectKeys;
     GetAllObjectKeys(objectKeys);
     rsp.set_address(localAddress_.ToString());
     ObjectMetaPb *metadata = rsp.add_metas();
     bool isFill = false;
     for (const auto &objectKey : objectKeys) {
-        FillMetadata(objectKey, metaAddrInfo, metadata, isFill);
+        FillMetadata(objectKey, masterAddr, metadata, isFill);
         if (isFill) {
             metadata = rsp.add_metas();
             isFill = false;
@@ -735,36 +727,28 @@ Status WorkerOCServiceImpl::FillRequestMetaByMaster(const RequestMetaFromWorkerR
     }
 
     std::vector<std::string> objKeys;
-    FillRefData(metaAddrInfo, objKeys);
+    FillRefData(masterAddr, objKeys);
     *rsp.mutable_gref_object_keys() = { objKeys.begin(), objKeys.end() };
     return Status::OK();
 }
 
 Status WorkerOCServiceImpl::PushMetadataToMaster(const HostPort &masterAddr)
 {
-    std::vector<std::string> dbNameList;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetPrimaryReplicaDbNames(masterAddr, dbNameList),
-                                     "get db name failed");
-    for (const auto &dbName : dbNameList) {
-        master::PushMetaToMasterReqPb req;
-        master::PushMetaToMasterRspPb rsp;
-        MetaAddrInfo metaAddrInfo(masterAddr, dbName);
-        // send meta-data for all objects owned by the masterAddr
-        RETURN_IF_NOT_OK(FillObjData(req, metaAddrInfo));
+    master::PushMetaToMasterReqPb req;
+    master::PushMetaToMasterRspPb rsp;
+    // send meta-data for all objects owned by the masterAddr
+    RETURN_IF_NOT_OK(FillObjData(req, masterAddr));
 
-        // send all references to object owners
-        std::vector<std::string> objectKeys;
-        FillRefData(metaAddrInfo, objectKeys);
-        *req.mutable_gref_object_keys() = { objectKeys.begin(), objectKeys.end() };
+    // send all references to object owners
+    std::vector<std::string> objectKeys;
+    FillRefData(masterAddr, objectKeys);
+    *req.mutable_gref_object_keys() = { objectKeys.begin(), objectKeys.end() };
 
-        VLOG(1) << "PushMetadataToMaster: " << LogHelper::IgnoreSensitive(req);
+    VLOG(1) << "PushMetadataToMaster: " << LogHelper::IgnoreSensitive(req);
 
-        std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(metaAddrInfo.GetAddress());
-        CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                 "hash master get failed, PushMeta failed");
-        RETURN_IF_NOT_OK(workerMasterApi->PushMetadataToMaster(req, rsp));
-    }
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, PushMeta failed");
+    RETURN_IF_NOT_OK(workerMasterApi->PushMetadataToMaster(req, rsp));
     VLOG(1) << "Push metadata to master success.";
     return Status::OK();
 }
@@ -778,24 +762,23 @@ void WorkerOCServiceImpl::GetAllObjectKeys(std::vector<std::string> &objectKeys)
     LOG(INFO) << "GetAllObjectKeys finished, objectKeys size:" << objectKeys.size();
 }
 
-Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey,
-                                                             MetaAddrInfo &metaAddrInfo) const
+Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const
 {
     CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
-    return clusterManager_->LocateMetaOwner(objKey, false, metaAddrInfo);
+    return clusterManager_->LocateMetaOwner(objKey, false, masterAddr);
 }
 
-void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const MetaAddrInfo &targetMetaAddrInfo,
+void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostPort &targetMasterAddr,
                                        ObjectMetaPb *metadata, bool &isFill)
 {
-    MetaAddrInfo metaAddrInfo;
-    Status status = GetMetaAddressNotCheckConnection(objectKey, metaAddrInfo);
+    HostPort masterAddr;
+    Status status = GetMetaAddressNotCheckConnection(objectKey, masterAddr);
     if (status.IsError()) {
         LOG(ERROR) << FormatString("[ObjectKey %s] FillMetadata may failed, status: %s", objectKey, status.ToString());
         return;
     }
-    if (metaAddrInfo != targetMetaAddrInfo) {
+    if (masterAddr != targetMasterAddr) {
         return;
     }
 
@@ -822,7 +805,7 @@ void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const MetaA
     isFill = true;
 }
 
-Status WorkerOCServiceImpl::FillObjData(master::PushMetaToMasterReqPb &req, const MetaAddrInfo &metaAddrInfo)
+Status WorkerOCServiceImpl::FillObjData(master::PushMetaToMasterReqPb &req, const HostPort &masterAddr)
 {
     INJECT_POINT("worker.FillObjData.Start");
     req.set_address(localAddress_.ToString());
@@ -831,7 +814,7 @@ Status WorkerOCServiceImpl::FillObjData(master::PushMetaToMasterReqPb &req, cons
     ObjectMetaPb *metadata = req.add_metas();
     bool isFill = false;
     for (const auto &objectKey : objectKeys) {
-        FillMetadata(objectKey, metaAddrInfo, metadata, isFill);
+        FillMetadata(objectKey, masterAddr, metadata, isFill);
         if (isFill) {
             metadata = req.add_metas();
             isFill = false;
@@ -843,23 +826,23 @@ Status WorkerOCServiceImpl::FillObjData(master::PushMetaToMasterReqPb &req, cons
     return Status::OK();
 }
 
-void WorkerOCServiceImpl::FillRefData(const MetaAddrInfo &targetMetaAddrInfo, std::vector<std::string> &objectKeys)
+void WorkerOCServiceImpl::FillRefData(const HostPort &targetMasterAddr, std::vector<std::string> &objectKeys)
 {
-    LOG(INFO) << "Filling Ref data for db name:" << targetMetaAddrInfo.ToString();
+    LOG(INFO) << "Filling Ref data for master address:" << targetMasterAddr.ToString();
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     globalRefTable_->GetAllRef(refTable);
     if (!refTable.empty()) {
         std::vector<std::string> ids;
         std::transform(refTable.begin(), refTable.end(), std::back_inserter(ids), [](auto &kv) { return kv.first; });
 
-        auto filter = [targetMetaAddrInfo, this](const std::string &objectKey) {
-            MetaAddrInfo metaAddrInfo;
-            Status status = GetMetaAddressNotCheckConnection(objectKey, metaAddrInfo);
+        auto filter = [targetMasterAddr, this](const std::string &objectKey) {
+            HostPort masterAddr;
+            Status status = GetMetaAddressNotCheckConnection(objectKey, masterAddr);
             if (status.IsError()) {
                 LOG(ERROR) << FormatString("[ObjectKey %s] Get meta address failed: %s", objectKey, status.ToString());
                 return true;
             }
-            return targetMetaAddrInfo != metaAddrInfo;
+            return targetMasterAddr != masterAddr;
         };
         // we only need objectKeys with masterAddr as master
         (void)ids.erase(std::remove_if(ids.begin(), ids.end(), filter), ids.end());
@@ -1099,11 +1082,11 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
 }
 
 Status WorkerOCServiceImpl::ReconciliationDecrRef(
-    const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &objKeysGrpByMaster)
+    const std::unordered_map<HostPort, std::vector<std::string>> &objKeysGrpByMaster)
 {
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddress();
+        const HostPort &masterAddr = item.first;
         const std::vector<std::string> &currentNeedDelGrefIds = item.second;
         auto func = [this, &currentNeedDelGrefIds, &masterAddr](int32_t) {
             std::unordered_set<std::string> unAliveIds;
@@ -1557,7 +1540,7 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
 
     // Send requests for each master
     for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first.GetAddress();
+        const HostPort &masterAddr = item.first;
         std::vector<std::string> &currentObjectKeysRemove = item.second;
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
@@ -2065,23 +2048,24 @@ Status WorkerOCServiceImpl::GetDeviceObject(
                                          "SubTimeout is out of range.");
 
     int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
-    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this,
-                          traceID]() mutable {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
-        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
-        if (initRc.IsError()) {
-            LOG(ERROR) << initRc.GetMsg();
-            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
-            return;
-        }
-        workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
-        LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
-    });
+    threadPool_->Execute(
+        [objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this, traceID]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
+            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+            if (initRc.IsError()) {
+                LOG(ERROR) << initRc.GetMsg();
+                LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+                return;
+            }
+            workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
+            LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
+        });
     return Status::OK();
 }
 
@@ -2125,7 +2109,8 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
@@ -2165,7 +2150,8 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
@@ -2228,7 +2214,8 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
@@ -2243,8 +2230,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
             LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             return;
         }
-        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi),
-                     "Process RecvRootInfo failed");
+        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi), "Process RecvRootInfo failed");
         LOG(INFO) << "Process RecvRootInfo done";
     });
     return Status::OK();
@@ -2290,7 +2276,8 @@ Status WorkerOCServiceImpl::GetDataInfo(
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
     int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();

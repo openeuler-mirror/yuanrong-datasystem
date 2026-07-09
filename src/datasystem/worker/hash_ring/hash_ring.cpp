@@ -46,7 +46,6 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_manager/worker_health_check.h"
@@ -288,11 +287,11 @@ bool HashRing::HashTokensIsReady(const HashRingPb &ring) const
     return sum == hashTokenNum;
 }
 
-void HashRing::GetActiveWorkersDbNames(std::vector<std::string> &activeDbNames)
+void HashRing::GetActiveWorkerIds(std::vector<std::string> &activeWorkerIds)
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     for (const auto &info : workerAddr2UuidMap_) {
-        activeDbNames.emplace_back(info.second);
+        activeWorkerIds.emplace_back(info.second);
     }
 }
 
@@ -468,14 +467,6 @@ void HashRing::InspectAndProcessPeriodically()
     }
 
     if ((state_.load() == RUNNING || state_.load() == PRE_LEAVING) && needVoluntaryScaleDown_) {
-        HostPort migrateDbAddr;
-        std::string migrateDbName;
-        auto status =
-            HashRingEvent::GetDbPrimaryLocation::GetInstance().NotifyAll(workerAddr_, migrateDbAddr, migrateDbName);
-        if (status.IsOk() && migrateDbAddr.ToString() != workerAddr_) {
-            LOG(INFO) << "wait voluntary scale down node change primary replica to local";
-            return;
-        }
         GenerateVoluntaryScaleDownChangingInfo();
         SubmitMigrateDataTaskIfNeed(ringInfo_);
     }
@@ -1004,21 +995,21 @@ void HashRing::ProcessForClusterInit()
 
 Status HashRing::ProcessForScaleDownFinish(HashRingPb &oldRing, HashRingPb &newRing)
 {
-    std::vector<std::string> needDeleteDbNames;
+    std::vector<std::string> needDeleteWorkerIds;
     auto oldWorkerInfos = GetWorkersFromHashRingPb(oldRing);
     for (const auto &worker : oldWorkerInfos) {
         if (newRing.workers().contains(worker.first)) {
             continue;
         }
-        std::string dbName = worker.second;
-        if (dbName.empty()) {
+        std::string workerId = worker.second;
+        if (workerId.empty()) {
             LOG(WARNING) << "The uuid is empty for " << worker.first;
             continue;
         }
-        needDeleteDbNames.emplace_back(dbName);
+        needDeleteWorkerIds.emplace_back(workerId);
     }
-    if (!needDeleteDbNames.empty()) {
-        HashRingEvent::ScaleDownFinish::GetInstance().NotifyAll(needDeleteDbNames);
+    if (!needDeleteWorkerIds.empty()) {
+        HashRingEvent::ScaleDownFinish::GetInstance().NotifyAll(needDeleteWorkerIds);
     }
     return Status::OK();
 }

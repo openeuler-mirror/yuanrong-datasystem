@@ -723,14 +723,6 @@ private:
         size_t streamsSize, size_t doneListSize, size_t errListSize);
 
     /**
-     * @brief Get the primary replica addr
-     * @param[in] srcAddr The source address.
-     * @param[out] destAddr The dest address.
-     * @return Status of this call.
-     */
-    Status GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr);
-
-    /**
      * @brief Retry and redirect
      * @tparam Req Request to master
      * @tparam Rsp Response of master
@@ -751,7 +743,7 @@ private:
                 return Status::OK();
             } else if (!rsp.meta_is_moving()) {
                 HostPort newMetaAddr;
-                RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(rsp.info().redirect_meta_address(), newMetaAddr));
+                RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info().redirect_meta_address()));
                 LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
                 RETURN_IF_NOT_OK_APPEND_MSG(workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr, workerMasterApi),
                                             "hash master get failed, RedirectRetryWhenMetaMoving failed");
@@ -782,7 +774,7 @@ private:
                 return Status::OK();
             } else if (!rsp.meta_is_moving()) {
                 HostPort newMetaAddr;
-                RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(rsp.info(0).redirect_meta_address(), newMetaAddr));
+                RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info(0).redirect_meta_address()));
                 LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
                 workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
                 CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,

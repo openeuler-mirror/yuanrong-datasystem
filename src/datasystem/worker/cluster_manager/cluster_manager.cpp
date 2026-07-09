@@ -49,7 +49,6 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/topology/routing/worker_locator.h"
@@ -162,10 +161,6 @@ ClusterManager::ClusterManager(const HostPort &workerAddress, const HostPort &ma
     HashRingEvent::GetFailedWorkers::GetInstance().AddSubscriber(
         ETCD_CLUSTER_SUBSCRIBER,
         [this](std::unordered_set<std::string> &failedWorkers) { failedWorkers = GetFailedWorkers(); });
-    HashRingEvent::GetDbPrimaryLocation::GetInstance().AddSubscriber(
-        ETCD_CLUSTER_SUBSCRIBER, [this](const std::string &address, HostPort &masterAddr, std::string &dbName) {
-            return GetPrimaryReplicaLocationByAddr(address, masterAddr, dbName);
-        });
     GetHashRangeNonBlockEvent::GetInstance().AddSubscriber("GET_HASH_RANGE_NON_BLOCK",
                                                            [this](worker::HashRange &range) {
                                                                range = GetHashRangeNonBlock();
@@ -186,7 +181,6 @@ Status ClusterManager::Shutdown()
 {
     HashRingEvent::SyncClusterNodes::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     HashRingEvent::GetFailedWorkers::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
-    HashRingEvent::GetDbPrimaryLocation::GetInstance().RemoveSubscriber(ETCD_CLUSTER_SUBSCRIBER);
     GetHashRangeNonBlockEvent::GetInstance().RemoveSubscriber("GET_HASH_RANGE_NON_BLOCK");
     // Clean up the node demotion thread if it was running
     if (thread_) {
@@ -238,8 +232,7 @@ bool ClusterManager::IsInRange(const worker::HashRange &ranges, const std::strin
     return placementFacade_->IsInRange(objKey, ranges);
 }
 
-Status ClusterManager::LocateMetaOwner(const std::string &objKey, bool requireAvailableTarget,
-                                       MetaAddrInfo &metaAddrInfo)
+Status ClusterManager::LocateMetaOwner(const std::string &objKey, bool requireAvailableTarget, HostPort &masterAddr)
 {
     CHECK_FAIL_RETURN_STATUS(placementFacade_ != nullptr, K_NOT_READY, "Placement facade is not provided.");
     topology::RouteOptions options;
@@ -248,7 +241,7 @@ Status ClusterManager::LocateMetaOwner(const std::string &objKey, bool requireAv
     options.masterAddress = masterAddress_;
     topology::RouteDecision decision;
     RETURN_IF_NOT_OK(placementFacade_->LocateMetaOwner(objKey, options, decision));
-    metaAddrInfo = decision.ToMetaAddrInfo();
+    masterAddr = decision.OwnerAddress();
     return Status::OK();
 }
 
@@ -788,9 +781,9 @@ Status ClusterManager::ProcessNetworkRecovery(const HostPort &recoverNodeKey, Cl
 
 Status ClusterManager::CheckConnection(const std::string &objKey)
 {
-    MetaAddrInfo info;
-    RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, info));
-    return CheckConnection(info.GetAddress(), IsCentralized());
+    HostPort masterAddr;
+    RETURN_IF_NOT_OK(GetMetaAddressNotCheckConnection(objKey, masterAddr));
+    return CheckConnection(masterAddr, IsCentralized());
 }
 
 Status ClusterManager::CheckConnection(const HostPort &nodeAddr, bool allowDirectoryLag)
@@ -1281,10 +1274,7 @@ Status ClusterManager::GetClusterNodeAddresses(std::vector<HostPort> &nodeAddrs)
 
 Status ClusterManager::GetMasterAddr(const std::string &objKey, HostPort &masterAddr)
 {
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(LocateMetaOwner(objKey, false, metaAddrInfo));
-    masterAddr = metaAddrInfo.GetAddress();
-    return Status::OK();
+    return LocateMetaOwner(objKey, false, masterAddr);
 }
 
 worker::HashRange ClusterManager::GetHashRangeNonBlock()
@@ -1296,10 +1286,10 @@ worker::HashRange ClusterManager::GetHashRangeNonBlock()
     return ToHashRange(snapshot->LocalOwnedRanges());
 }
 
-Status ClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKey, MetaAddrInfo &metaAddrInfo)
+Status ClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr)
 {
     Timer timer;
-    RETURN_IF_NOT_OK(LocateMetaOwner(objKey, false, metaAddrInfo));
+    RETURN_IF_NOT_OK(LocateMetaOwner(objKey, false, masterAddr));
     if (!IsCentralized()) {
         const uint64_t us = static_cast<uint64_t>(timer.ElapsedMicroSecond());
         metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY))
@@ -1309,9 +1299,9 @@ Status ClusterManager::GetMetaAddressNotCheckConnection(const std::string &objKe
     return Status::OK();
 }
 
-Status ClusterManager::GetMetaAddress(const std::string &objKey, MetaAddrInfo &metaAddrInfo)
+Status ClusterManager::GetMetaAddress(const std::string &objKey, HostPort &masterAddr)
 {
-    return LocateMetaOwner(objKey, true, metaAddrInfo);
+    return LocateMetaOwner(objKey, true, masterAddr);
 }
 
 Status ClusterManager::LocateMetaOwnersBatch(const std::vector<std::string> &objectKeys,
@@ -1336,10 +1326,10 @@ ClusterManager::MetaOwnerIndexedKeyGroups ClusterManager::GroupKeysByMetaOwnerWi
     Status rc = LocateMetaOwnersBatch(objectKeys, decision);
     for (size_t index = 0; index < objectKeys.size(); ++index) {
         const auto &objectKey = objectKeys[index];
-        MetaAddrInfo metaAddrInfo;
-        Status routeRc = ResolveBatchRouteForKey(objectKey, rc, decision, metaAddrInfo);
+        HostPort masterAddr;
+        Status routeRc = ResolveBatchRouteForKey(objectKey, rc, decision, masterAddr);
         if (routeRc.IsOk()) {
-            result.groups[std::move(metaAddrInfo)].emplace_back(objectKey, index);
+            result.groups[std::move(masterAddr)].emplace_back(objectKey, index);
             continue;
         }
         (void)result.failures.emplace(objectKey, routeRc);
@@ -1367,10 +1357,10 @@ ClusterManager::MetaOwnerKeyGroups ClusterManager::GroupKeysByMetaOwnerImpl(cons
     topology::BatchRouteDecision decision;
     Status rc = LocateMetaOwnersBatch(keys, decision);
     for (const auto &objectKey : keys) {
-        MetaAddrInfo metaAddrInfo;
-        Status routeRc = ResolveBatchRouteForKey(objectKey, rc, decision, metaAddrInfo);
+        HostPort masterAddr;
+        Status routeRc = ResolveBatchRouteForKey(objectKey, rc, decision, masterAddr);
         if (routeRc.IsOk()) {
-            result.groups[std::move(metaAddrInfo)].emplace_back(objectKey);
+            result.groups[std::move(masterAddr)].emplace_back(objectKey);
             continue;
         }
         (void)result.failures.emplace(objectKey, routeRc);
@@ -1386,15 +1376,14 @@ ClusterManager::MetaOwnerKeyGroups ClusterManager::GroupKeysByMetaOwnerImpl(cons
 }
 
 Status ClusterManager::ResolveBatchRouteForKey(const std::string &objectKey, const Status &batchRc,
-                                               const topology::BatchRouteDecision &decision,
-                                               MetaAddrInfo &metaAddrInfo) const
+                                               const topology::BatchRouteDecision &decision, HostPort &masterAddr) const
 {
     if (batchRc.IsError()) {
         return batchRc;
     }
     auto routeIter = decision.perKeyDecision.find(objectKey);
     if (routeIter != decision.perKeyDecision.end()) {
-        metaAddrInfo = routeIter->second.ToMetaAddrInfo();
+        masterAddr = routeIter->second.OwnerAddress();
         return Status::OK();
     }
     auto failureIter = decision.perKeyFailure.find(objectKey);
@@ -1403,11 +1392,10 @@ Status ClusterManager::ResolveBatchRouteForKey(const std::string &objectKey, con
 }
 
 void ClusterManager::GetObjectKeysFromNotConnectedMaster(
-    const std::unordered_map<MetaAddrInfo, std::vector<std::string>> &metaAddrInfos,
+    const std::unordered_map<HostPort, std::vector<std::string>> &masterAddrs,
     std::unordered_set<std::string> &objectKeys)
 {
-    for (const auto &[metaAddrInfo, keys] : metaAddrInfos) {
-        const auto &masterAddr = metaAddrInfo.GetAddress();
+    for (const auto &[masterAddr, keys] : masterAddrs) {
         if (CheckConnection(masterAddr).IsError()) {
             for (const auto &key : keys) {
                 objectKeys.emplace(key);
@@ -1416,8 +1404,7 @@ void ClusterManager::GetObjectKeysFromNotConnectedMaster(
     }
 }
 
-Status ClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr,
-                                                            std::string &dbName)
+Status ClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &objectKey, HostPort &masterAddr)
 {
     if (IsCentralized()) {
         if (FLAGS_master_address.empty()) {
@@ -1428,44 +1415,8 @@ Status ClusterManager::GetPrimaryReplicaLocationByObjectKey(const std::string &o
         }
         return masterAddr.ParseString(FLAGS_master_address);
     }
-    MetaAddrInfo metaAddrInfo;
-    RETURN_IF_NOT_OK(LocateMetaOwner(objectKey, false, metaAddrInfo));
-    masterAddr = metaAddrInfo.GetAddress();
-    dbName = metaAddrInfo.GetDbName();
-    VLOG(1) << FormatString("Object: %s, dbName: %s, metadata location: %s", objectKey, dbName, masterAddr.ToString());
-    return Status::OK();
-}
-
-Status ClusterManager::GetPrimaryReplicaLocationByAddr(const std::string &address, HostPort &masterAddr,
-                                                       std::string &dbName)
-{
-    constexpr int intervalMs = 100;
-    auto realRetryTimeMs = reqTimeoutDuration.CalcRemainingTime();
-    Timer timer;
-    Status status(K_NOT_READY, "Placement directory snapshot is not ready.");
-    while (timer.ElapsedMilliSecond() < realRetryTimeMs) {
-        topology::PlacementEndpoint endpoint;
-        status = placementDirectory_->ResolveWorkerByAddress(address, endpoint);
-        if (status.IsOk()) {
-            dbName = endpoint.workerId;
-            masterAddr = endpoint.address;
-            break;
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-        }
-    }
-    return status;
-}
-
-Status ClusterManager::GetPrimaryReplicaDbNames(const HostPort &address, std::vector<std::string> &dbNames)
-{
-    if (IsCentralized()) {
-        dbNames.emplace_back("");
-        return Status::OK();
-    }
-    topology::PlacementEndpoint endpoint;
-    RETURN_IF_NOT_OK(placementDirectory_->ResolveWorkerByAddress(address.ToString(), endpoint));
-    dbNames.emplace_back(endpoint.workerId);
+    RETURN_IF_NOT_OK(LocateMetaOwner(objectKey, false, masterAddr));
+    VLOG(1) << FormatString("Object: %s, metadata location: %s", objectKey, masterAddr.ToString());
     return Status::OK();
 }
 

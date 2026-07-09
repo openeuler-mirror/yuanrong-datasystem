@@ -78,7 +78,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
             reqTimeoutDuration.Init(realTimeoutMs - elapsed);
 
-            HostPort workerAddr = item.first.GetAddress();
+            HostPort workerAddr = item.first;
             const std::vector<std::string> &currentIds = item.second;
             rc = ExpireFromMaster(currentIds, workerAddr, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
             if (rc.IsError()) {
@@ -144,7 +144,7 @@ Status WorkerOcServiceExpireImpl::ExpireFromMaster(std::vector<std::string> obje
                                                redirectInfo.change_meta_ids().end() };
         redirectReq.set_ttl_second(ttlSeconds);
         HostPort redirectMasterAddr;
-        RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(redirectInfo.redirect_meta_address(), redirectMasterAddr));
+        RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
         auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
         CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "hash master get failed, ExpireFromMaster failed");

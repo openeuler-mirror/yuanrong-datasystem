@@ -37,7 +37,6 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/master/meta_addr_info.h"
 #include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/hash_ring/hash_ring_allocator.h"
@@ -435,9 +434,9 @@ public:
 
     /**
      * @brief Get uuid of all workers in active state.
-     * @param[out] activeDbNames The uuid of workers.
+     * @param[out] activeWorkerIds The uuid of workers.
      */
-    void GetActiveWorkersDbNames(std::vector<std::string> &activeDbNames);
+    void GetActiveWorkerIds(std::vector<std::string> &activeWorkerIds);
 
     using HashFunction = uint32_t (*)(const std::string &);
     static const HashFunction hashFunction_;

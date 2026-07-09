@@ -99,7 +99,7 @@
   - `TaskActionRegistry` subscribers are registered today by OC/SC metadata managers, `WorkerOcServiceClearDataFlow`,
     and `WorkerOCServer`; they reuse the same migration/recovery/cleanup functions but do not write ring progress, and
     `Dispatch` is not yet invoked from any ring code.
-  - cluster manager via `SyncClusterNodes`, `GetFailedWorkers`, `GetDbPrimaryLocation`, and redirect callbacks.
+  - cluster manager via `SyncClusterNodes`, `GetFailedWorkers`, `GetPrimaryLocation`, and redirect callbacks.
 - External dependencies:
   - ETCD-compatible KV and watch semantics, including CAS, range get, lease-backed cluster table, and monotonic revisions.
 
