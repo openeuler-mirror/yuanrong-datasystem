@@ -1,41 +1,41 @@
 load("//bazel:build_defs.bzl", "ds_cc_library")
 
-package(default_visibility = ["//visibility:public"])
+package(default_visibility=["//visibility:public"])
 
 ds_cc_library(
-    name = "membership_types",
-    hdrs = [
+    name="membership_types",
+    hdrs=[
         "membership/membership_types.h",
         "model/topology_types.h",
     ],
-    deps = [
+    deps=[
         "//include/datasystem/utils:utils_headers",
     ],
 )
 
 ds_cc_library(
-    name = "membership_value_codec",
-    srcs = ["membership/membership_value_codec.cpp"],
-    hdrs = [
+    name="membership_value_codec",
+    srcs=["membership/membership_value_codec.cpp"],
+    hdrs=[
         "membership/membership_types.h",
         "membership/membership_value_codec.h",
         "model/topology_types.h",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_cc_proto",
     ],
 )
 
 ds_cc_library(
-    name = "worker_node_info",
-    srcs = ["membership/worker_node_info.cpp"],
-    hdrs = [
+    name="worker_node_info",
+    srcs=["membership/worker_node_info.cpp"],
+    hdrs=[
         "membership/membership_types.h",
         "membership/worker_node_info.h",
         "model/topology_types.h",
     ],
-    deps = [
+    deps=[
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:format",
@@ -45,8 +45,8 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "topology",
-    srcs = [
+    name="topology",
+    srcs=[
         "algorithm/algorithm_catalog.cpp",
         "algorithm/hash_algorithm.cpp",
         "algorithm/route_policy_engine.cpp",
@@ -78,7 +78,7 @@ ds_cc_library(
         "runtime/topology_state_digest.cpp",
         "runtime/topology_snapshot_rebuilder.cpp",
     ],
-    hdrs = [
+    hdrs=[
         "algorithm/algorithm_catalog.h",
         "algorithm/hash_algorithm.h",
         "algorithm/route_policy_engine.h",
@@ -117,11 +117,12 @@ ds_cc_library(
         "runtime/topology_state_digest.h",
         "runtime/topology_snapshot_rebuilder.h",
     ],
-    deps = [
+    deps=[
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:meta_route_tool_header",
         "//src/datasystem/common/util:net_util",

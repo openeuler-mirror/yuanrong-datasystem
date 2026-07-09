@@ -16,6 +16,7 @@ ds_cc_library(
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_cc_proto",
         "//src/datasystem/topology:membership_value_codec",

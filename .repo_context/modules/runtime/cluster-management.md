@@ -137,7 +137,12 @@ Use this file as the cross-module map. Use the detailed package for source-level
     `WaitWorkerReadyIfNeed()` before processing node utility events
 - Verified from `ServiceDiscovery`:
   - `ServiceDiscovery::GetAllWorkers()` obtains worker entries from `ETCD_CLUSTER_TABLE`, parses `WorkerServiceInfo`, and
-    returns only workers whose service state is `WorkerServiceState::READY`
+    returns only workers whose service state is `WorkerServiceState::READY`;
+  - worker cluster-table keepalive values carry the local worker compatibility version; `ClusterMembership` recomputes the
+    process-wide cluster compatibility version from the full membership snapshot on rebuild and after PUT/DELETE events,
+    using the lowest version among non-`UNKNOWN`/non-`EXITING` members so rolling-upgrade feature gates advance only after
+    all counted members have upgraded. Missing or malformed member versions are treated as the local baseline/current
+    compatibility version for backward compatibility with older records.
   - host affinity is optional: `PREFERRED_SAME_NODE` partitions workers into same-host and other-host lists,
     `REQUIRED_SAME_NODE` returns only same-host workers, and `RANDOM` returns all workers through `otherAddrs`
 - Verified from remote-get transport:

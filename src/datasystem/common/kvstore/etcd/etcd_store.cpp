@@ -33,6 +33,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -483,6 +484,7 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
     // "_" is a placeholder, it will be replaced by timestamp later when a connection to etcd is built.
     keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
+    keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
     if (!isEtcdAvailableWhenStart) {
         keepAliveValue_.state = topology::MemberLifecycleState::DOWNGRADE_RESTARTING;
     } else if (isRestart) {

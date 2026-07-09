@@ -104,6 +104,8 @@ private:
 
     IClusterRegistry &registry_;
     TopologyNodeId localNodeId_;
+    // Leaf lock for local snapshot/state publication only. Do not call registry, compatibility-manager,
+    // topology, or membership callbacks while holding it.
     mutable std::mutex mutex_;
     std::shared_ptr<const MembershipSnapshot> snapshot_;
     MembershipRuntimeState state_{ MembershipRuntimeState::NOT_READY };

@@ -38,6 +38,7 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/wait_post.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/worker/client_manager/client_info.h"
 
 namespace datasystem {
@@ -68,8 +69,8 @@ public:
      * @param[in] tenantId The tenant id
      * @return Status of the call.
      */
-    Status AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount = true,
-                     const std::string &tenantId = "");
+    Status AddClient(const ClientKey &clientId, int socketFd, bool uniqueCount = true, const std::string &tenantId = "",
+                     const CompatibilityVersion &compatibilityVersion = {});
 
     /**
      * @brief Add client information with rpc heartbeat type.
@@ -85,7 +86,8 @@ public:
      * @return Status of the call.
      */
     Status AddClient(const ClientKey &clientId, bool shmEnabled, int socketFd, const std::string &tenantId,
-                     bool enableCrossNode, const std::string &podName, std::string deviceId, uint32_t &lockId,
+                     bool enableCrossNode, const std::string &podName, std::string deviceId,
+                     const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
                      uint32_t *pipelineQueueId = nullptr);
 
     /**

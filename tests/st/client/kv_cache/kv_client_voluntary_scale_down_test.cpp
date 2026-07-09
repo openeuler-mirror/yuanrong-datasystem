@@ -22,6 +22,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/kvstore/etcd/member_service_info.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/kv_client.h"
@@ -49,6 +50,16 @@ namespace st {
 
 const std::string HOST_IP_PREFIX = "127.0.0.1";
 constexpr size_t DEFAULT_WORKER_NUM = 4;
+
+Status GetClusterNodeState(EtcdStore *db, const std::string &workerAddress, std::string &state)
+{
+    std::string value;
+    RETURN_IF_NOT_OK(db->Get(ETCD_CLUSTER_TABLE, workerAddress, value));
+    topology::MemberServiceInfo memberInfo;
+    RETURN_IF_NOT_OK(topology::MemberServiceInfo::FromString(value, memberInfo));
+    return topology::MemberLifecycleStateToString(memberInfo.state, state);
+}
+
 class KVClientVoluntaryScaleDownTest : public STCScaleTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -1933,37 +1944,29 @@ public:
 
 TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerReady)
 {
-    std::string value;
+    std::string state;
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
-    DS_ASSERT_OK(db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value));
-    auto pos = value.find(";");
-    auto state = value.substr(pos + 1);
+    DS_ASSERT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
     ASSERT_EQ(state, "ready");
 }
 
 TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecovery)
 {
-    std::string value;
+    std::string state;
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
-    db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-    auto pos = value.find(";");
-    auto state = value.substr(pos + 1);
+    DS_ASSERT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
     ASSERT_EQ(state, "ready");
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "heartbeat.sleep", "1*sleep(4000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "recover.toReady.delay", "1*sleep(2000)"));
     std::function<Status()> fun = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        pos = value.find(";");
-        state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "recover") {
             return Status::OK();
         }
         return Status(K_RUNTIME_ERROR, "not equal");
     };
     std::function<Status()> fun1 = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        pos = value.find(";");
-        state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "ready") {
             return Status::OK();
         }
@@ -1980,27 +1983,21 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecoveryWhenRestart)
     client1_.reset();
     client2_.reset();
     client3_.reset();
-    std::string value;
+    std::string state;
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
-    db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-    auto pos = value.find(";");
-    auto state = value.substr(pos + 1);
+    DS_ASSERT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
     ASSERT_EQ(state, "ready");
     DS_ASSERT_OK(externalCluster_->KillWorker(2)); // index is 2
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "heartbeat.sleep", "1*sleep(4000)"));
     std::function<Status()> fun = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        pos = value.find(";");
-        state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "recover") {
             return Status::OK();
         }
         return Status(K_RUNTIME_ERROR, "not equal");
     };
     std::function<Status()> fun1 = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        pos = value.find(";");
-        state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "ready") {
             return Status::OK();
         }
@@ -2014,7 +2011,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerRecoveryWhenRestart)
 
 TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeavingTimeout)
 {
-    std::string value;
+    std::string state;
     for (int i = 0; i < 20; i++) {  // Generate 20 objects
         auto key = "a_key_for_test_" + std::to_string(i);
         DS_ASSERT_OK(client0_->Set(key, "vvvvvvvvvv"));
@@ -2025,9 +2022,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeavingTimeout)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "BatchMigrateMetadata.delay", "call(60)"));
     VoluntaryScaleDownInject(0);
     std::function<Status()> fun1 = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        auto pos = value.find(";");
-        auto state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "exiting") {
             return Status::OK();
         }
@@ -2035,9 +2030,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeavingTimeout)
         return Status(K_RUNTIME_ERROR, "not equal");
     };
     std::function<Status()> fun = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        auto pos = value.find(";");
-        auto state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "recover") {
             return Status::OK();
         }
@@ -2054,7 +2047,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeavingTimeout)
 
 TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeaving)
 {
-    std::string value;
+    std::string state;
     for (int i = 0; i < 20; i++) {  // Generate 20 objects
         auto key = "a_key_for_test_" + std::to_string(i);
         DS_ASSERT_OK(client0_->Set(key, "vvvvvvvvvv"));
@@ -2062,9 +2055,7 @@ TEST_F(KVCacheClientClusterState, DISABLED_TestWorkerLeaving)
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
     VoluntaryScaleDownInject(0);
     std::function<Status()> fun1 = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        auto pos = value.find(";");
-        auto state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "exiting") {
             return Status::OK();
         }
@@ -2086,13 +2077,11 @@ TEST_F(KVCacheClientClusterState, LEVEL1_TestEtcdRestartWorkerReady)
         client2_.reset();
         client3_.reset();
     });
-    std::string value;
+    std::string state;
     std::string nodeState = "recover";
     DS_ASSERT_OK(db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
     std::function<Status()> fun1 = [&]() {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        auto pos = value.find(";");
-        auto state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == nodeState) {
             return Status::OK();
         }
@@ -2133,7 +2122,7 @@ public:
 
 TEST_F(KVCacheClientClusterStateTest, LEVEL1_WorkerLeaving)
 {
-    std::string value;
+    std::string state;
     for (int i = 0; i < 20; i++) {  // Generate 20 objects
         auto key = "a_key_for_test_" + std::to_string(i);
         DS_ASSERT_OK(client0_->Set(key, "vvvvvvvvvv"));
@@ -2142,9 +2131,7 @@ TEST_F(KVCacheClientClusterStateTest, LEVEL1_WorkerLeaving)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "BatchMigrateMetadata.delay", "call(5)"));
     VoluntaryScaleDownInject(0);
     std::function<Status()> fun1 = [&] {
-        db_->Get(ETCD_CLUSTER_TABLE, workerAddress_.front(), value);
-        auto pos = value.find(";");
-        auto state = value.substr(pos + 1);
+        RETURN_IF_NOT_OK(GetClusterNodeState(db_.get(), workerAddress_.front(), state));
         if (state == "exiting") {
             return Status::OK();
         }

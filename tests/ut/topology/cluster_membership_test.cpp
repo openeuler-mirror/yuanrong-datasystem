@@ -22,10 +22,11 @@
 #include <functional>
 #include <memory>
 
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "gtest/gtest.h"
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/topology/membership/membership_value_codec.h"
 #include "tests/ut/common.h"
 #include "tests/ut/topology/fake_coordination_backend.h"
@@ -33,6 +34,8 @@
 namespace datasystem {
 namespace topology {
 namespace {
+
+constexpr int64_t TEST_MEMBERSHIP_TIMESTAMP = 100;
 
 class FailingRegistry final : public IClusterRegistry {
 public:
@@ -78,13 +81,24 @@ public:
 std::string MakeMembershipValue(MemberLifecycleState state)
 {
     MembershipValue value;
-    value.timestamp = 100;
+    value.timestamp = TEST_MEMBERSHIP_TIMESTAMP;
     value.hostId = "host-a";
     value.lifecycleState = state;
     std::string encoded;
     auto rc = MembershipValueCodec::Encode(value, encoded);
     EXPECT_TRUE(rc.IsOk()) << rc.ToString();
     return encoded;
+}
+
+std::string MakeWorkerServiceInfoProto(const std::string &state, const std::string &compatibilityVersion)
+{
+    WorkerServiceInfo value;
+    value.timestamp = TEST_MEMBERSHIP_TIMESTAMP;
+    value.hostId = "host-a";
+    value.compatibilityVersion = compatibilityVersion;
+    auto rc = StringToWorkerServiceState(state, value.state);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    return rc.IsOk() ? value.ToProto() : "";
 }
 
 CoordinationEvent MakeEvent(CoordinationEventType type, const std::string &nodeId, const std::string &value,
@@ -96,8 +110,8 @@ CoordinationEvent MakeEvent(CoordinationEventType type, const std::string &nodeI
 TEST(ClusterMembershipTest, RebuildPublishesSnapshotAndValidatesScaleIn)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
-                                  MakeMembershipValue(MemberLifecycleState::READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
 
@@ -106,7 +120,7 @@ TEST(ClusterMembershipTest, RebuildPublishesSnapshotAndValidatesScaleIn)
 
     std::shared_ptr<const MembershipSnapshot> snapshot;
     DS_ASSERT_OK(membership.GetSnapshot(snapshot));
-    EXPECT_EQ(snapshot->members.size(), 1ul);
+    EXPECT_EQ(snapshot->members.size(), 1UL);
 
     ScaleInRequest request;
     Revision revision = 0;
@@ -117,24 +131,88 @@ TEST(ClusterMembershipTest, RebuildPublishesSnapshotAndValidatesScaleIn)
 TEST(ClusterMembershipTest, AppliesExternalStorePutAndDeleteEvents)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
-                                  MakeMembershipValue(MemberLifecycleState::READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
 
-    DS_ASSERT_OK(membership.HandleStoreEvent(
-        MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7002",
-                  MakeMembershipValue(MemberLifecycleState::STARTING), 3)));
+    DS_ASSERT_OK(membership.HandleStoreEvent(MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7002",
+                                                       MakeMembershipValue(MemberLifecycleState::STARTING), 3)));
     std::shared_ptr<const MembershipSnapshot> snapshot;
     DS_ASSERT_OK(membership.GetSnapshot(snapshot));
-    EXPECT_EQ(snapshot->members.size(), 2ul);
+    EXPECT_EQ(snapshot->members.size(), 2UL);
     EXPECT_EQ(snapshot->members.at("127.0.0.1:7002").lifecycleState, MemberLifecycleState::STARTING);
 
     DS_ASSERT_OK(membership.HandleStoreEvent(MakeEvent(CoordinationEventType::DELETE, "127.0.0.1:7002", "", 4)));
     DS_ASSERT_OK(membership.GetSnapshot(snapshot));
-    EXPECT_EQ(snapshot->members.count("127.0.0.1:7002"), 0ul);
+    EXPECT_EQ(snapshot->members.count("127.0.0.1:7002"), 0UL);
     EXPECT_EQ(snapshot->revision, 4);
+}
+
+TEST(ClusterMembershipTest, RebuildComputesClusterCompatibilityVersionFromReadyMembers)
+{
+    FakeCoordinationBackend store;
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.1")));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.2")));
+    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7003", MakeWorkerServiceInfoProto("start", "1.0.0")));
+    ClusterRegistry registry(store);
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+
+    DS_ASSERT_OK(membership.Rebuild());
+
+    EXPECT_EQ(CompatibilityManager::Instance().GetClusterCompatibilityVersion(), CompatibilityVersion(1, 0, 1));
+}
+
+TEST(ClusterMembershipTest, EmptyReadyMemberVersionFallsBackToBaseline)
+{
+    FakeCoordinationBackend store;
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "")));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.1")));
+    ClusterRegistry registry(store);
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+
+    DS_ASSERT_OK(membership.Rebuild());
+
+    EXPECT_EQ(CompatibilityManager::Instance().GetClusterCompatibilityVersion(),
+              CompatibilityManager::Instance().GetBaselineCompatibilityVersion());
+}
+
+TEST(ClusterMembershipTest, MembershipEventKeepsClusterCompatibilityAtLowestReadyMemberVersion)
+{
+    FakeCoordinationBackend store;
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.1")));
+    ClusterRegistry registry(store);
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+    DS_ASSERT_OK(membership.Rebuild());
+
+    DS_ASSERT_OK(membership.HandleStoreEvent(MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7002",
+                                                       MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.2"), 3)));
+    DS_ASSERT_OK(membership.HandleStoreEvent(
+        MakeEvent(CoordinationEventType::PUT, "127.0.0.1:7003", MakeWorkerServiceInfoProto("start", "1.0.0"), 4)));
+
+    EXPECT_EQ(CompatibilityManager::Instance().GetClusterCompatibilityVersion(), CompatibilityVersion(1, 0, 1));
+}
+
+TEST(ClusterMembershipTest, MembershipDeleteRecomputesClusterCompatibilityVersion)
+{
+    FakeCoordinationBackend store;
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.1")));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeWorkerServiceInfoProto(ETCD_NODE_READY, "1.0.2")));
+    ClusterRegistry registry(store);
+    ClusterMembership membership(registry, "127.0.0.1:7001");
+    DS_ASSERT_OK(membership.Rebuild());
+
+    DS_ASSERT_OK(membership.HandleStoreEvent(MakeEvent(CoordinationEventType::DELETE, "127.0.0.1:7001", "", 3)));
+
+    EXPECT_EQ(CompatibilityManager::Instance().GetClusterCompatibilityVersion(), CompatibilityVersion(1, 0, 2));
 }
 
 TEST(ClusterMembershipTest, NotReadyBeforeRebuildAndStoppedAfterStop)
@@ -183,8 +261,8 @@ TEST(ClusterMembershipTest, StopDuringRebuildKeepsStoppedState)
 TEST(ClusterMembershipTest, DestructorStopsMembership)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
-                                  MakeMembershipValue(MemberLifecycleState::READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     auto membership = std::make_unique<ClusterMembership>(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership->Rebuild());
@@ -195,8 +273,8 @@ TEST(ClusterMembershipTest, DestructorStopsMembership)
 TEST(ClusterMembershipTest, ScaleInRequiresReadyLocalWorker)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001",
-                                  MakeMembershipValue(MemberLifecycleState::STARTING)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7001", MakeMembershipValue(MemberLifecycleState::STARTING)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());
@@ -212,8 +290,8 @@ TEST(ClusterMembershipTest, ScaleInRequiresReadyLocalWorker)
 TEST(ClusterMembershipTest, ScaleInRequiresLocalMemberInSnapshot)
 {
     FakeCoordinationBackend store;
-    DS_ASSERT_OK(store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002",
-                                  MakeMembershipValue(MemberLifecycleState::READY)));
+    DS_ASSERT_OK(
+        store.PutForTest(ETCD_CLUSTER_TABLE, "127.0.0.1:7002", MakeMembershipValue(MemberLifecycleState::READY)));
     ClusterRegistry registry(store);
     ClusterMembership membership(registry, "127.0.0.1:7001");
     DS_ASSERT_OK(membership.Rebuild());

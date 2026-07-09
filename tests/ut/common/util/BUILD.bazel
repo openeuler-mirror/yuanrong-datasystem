@@ -24,6 +24,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "compatibility_version_test",
+    srcs = ["compatibility_version_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:common_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "fd_manager_test",
     srcs = ["fd_manager_test.cpp"],
     deps = [
@@ -313,6 +322,7 @@ test_suite(
         "blocking_queue_test",
         "request_context_test",
         "event_subscribers_test",
+        "compatibility_version_test",
         "fd_manager_test",
         "fd_pass_over_scmtcp_test",
         "fd_pass_test",

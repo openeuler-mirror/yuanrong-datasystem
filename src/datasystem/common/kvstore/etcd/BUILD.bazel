@@ -92,6 +92,7 @@ ds_cc_library(
         ":grpc_session",
         ":etcd_keep_alive",
         ":etcd_watch",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:event_subscribers",
         "//src/datasystem/common/util:locks",
         "//src/datasystem/common/util:status_helper",
