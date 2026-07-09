@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: podName
+spec:
+  nodeName: nodeName
+  hostNetwork: false
+  containers:
+  - name: containerName
+    image: imageName
+    imagePullPolicy: Never
+    command: ["/bin/sh", "-c", "while true; do sleep 1000; done"]
+    resources:
+      requests:
+        cpu: "requests_cpu"
+        memory: "requests_memory"
+        unifiedbus.com/ub_net_device: "1"
+      limits:
+        cpu: "limits_cpu"
+        memory: "limits_memory"
+        unifiedbus.com/ub_net_device: "1"
+    env:
+      - name: HOST_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.hostIP
+      - name: POD_IP
+        valueFrom:
+          fieldRef:
+            apiVersion: v1
+            fieldPath: status.podIP
+
+    securityContext:
+      privileged: false
+
+    volumeMounts:
+      - name: share
+        mountPath: /home/share
+
+  volumes:
+  - name: share
+    hostPath:
+      path: /home/share/
+      type: Directory
