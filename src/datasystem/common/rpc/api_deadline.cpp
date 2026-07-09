@@ -15,10 +15,13 @@
  */
 
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/format.h"
 
 namespace datasystem {
+// Rate-limit the "ApiDeadline uninitialized" fallback log for request-receive threads.
+constexpr uint32_t K_API_DEADLINE_FALLBACK_LOG_EVERY_N = 100;
 
 ApiDeadline &ApiDeadline::Instance()
 {
@@ -105,7 +108,13 @@ int64_t GetRemainingUsForMeta()
         int64_t us = ApiDeadline::Instance().ApiRemainingUs();
         return us > 0 ? us : 1;
     }
-    VLOG(1) << "ApiDeadline uninitialized, falling back to reqTimeoutDuration.";
+    // Background / fan-out threads (IsRequestLogTrace()==false): uninitialized ApiDeadline is
+    // the expected steady state — stay silent. Request-receive threads: unexpected fallback
+    // (deadline not propagated / exhausted in queue), bound to 1-per-N to avoid stress flooding.
+    if (Trace::Instance().IsRequestLogTrace()) {
+        VLOG_EVERY_N(1, K_API_DEADLINE_FALLBACK_LOG_EVERY_N)
+            << "ApiDeadline uninitialized, falling back to reqTimeoutDuration.";
+    }
     return reqTimeoutDuration.CalcRealRemainingTimeUs();
 }
 
