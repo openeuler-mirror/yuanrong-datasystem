@@ -379,15 +379,13 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
     cfg.jfc = jfc;
     cfg.recv_queue_capacity = jettySize;
 
-    DO_LOAD_DYNLIB(OsTransportLibLoader);
-    if (!IS_VALID_DYNFUNC(OsTransportLibLoader, DoInit))
-        return Status(StatusCode::K_NOT_FOUND, "failed to load OsTransportLibLoader");
+    DO_LOAD_OS_TRANSPORT();
 
     if (needCuda) {
 #ifndef PIPLN_USE_MOCK
         DO_LOAD_DYNLIB(CudaRTLibLoader);
         if (!IS_VALID_DYNFUNC(CudaRTLibLoader, cudaSetDevice)) {
-            DO_UNLOAD_DYNLIB(OsTransportLibLoader);
+            DO_UNLOAD_OS_TRANSPORT();
             return Status(StatusCode::K_NOT_FOUND, "failed to load CudaRTLibLoader");
         }
 
@@ -409,7 +407,7 @@ Status ChunkManager::InitOsPiplnRH2DEnv(urma_context_t *ctx, urma_jfc_t *jfc, ur
         return Status::OK();
     } else {
         osPiplnH2DHandle_ = nullptr;
-        DO_UNLOAD_DYNLIB(OsTransportLibLoader);
+        DO_UNLOAD_OS_TRANSPORT();
         DO_UNLOAD_DYNLIB(CudaRTLibLoader);
         LOG(ERROR) << "os_transport_init ret: " << ret;
         return Status(StatusCode::K_INVALID, "Failed to init os pipeline h2d environments");
@@ -425,7 +423,7 @@ void ChunkManager::UnInitOsPiplnRH2DEnv()
     int ret;
     CALL_OS_XPRT_FUNC(ret, DoDestroy, osPiplnH2DHandle_);
     osPiplnH2DHandle_ = nullptr;
-    DO_UNLOAD_DYNLIB(OsTransportLibLoader);
+    DO_UNLOAD_OS_TRANSPORT();
     DO_UNLOAD_DYNLIB(CudaRTLibLoader);
 }
 
@@ -488,15 +486,8 @@ Status ChunkManager::WaitPiplnStep12Done()
             if (syncHandle) {
                 info.second.syncHandle = nullptr;
                 int ret;
-                if (IS_VALID_DYNFUNC(OsTransportLibLoader, DoWaitTimeout)) {
-                    datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
-                    CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
-                } else {
-                    LOG(WARNING)
-                        << "wait_and_free_sync_timeout is not found, fallback to wait_and_free_sync without timeout";
-                    datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
-                    CALL_OS_XPRT_FUNC(ret, DoWait, osPiplnH2DHandle_, syncHandle);
-                }
+                datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
+                CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
                 if (ret == 0) {
                     MarkCancelOrDone(info.first, true /* isDone */);
                 } else {
@@ -649,7 +640,9 @@ void ChunkManager::MarkCancelOrDone(uint32_t reqId, bool isDone)
             info->Done();
         } else {
             uint32_t ret;
-            CALL_OS_XPRT_FUNC(ret, DoCancel, osPiplnH2DHandle_, &info->syncHandle, reqId);
+            auto *syncHandle = static_cast<task_sync_t *>(info->syncHandle);
+            CALL_OS_XPRT_FUNC(ret, DoCancel, osPiplnH2DHandle_, &syncHandle, reqId);
+            info->syncHandle = syncHandle;
             info->Cancel();
         }
     }

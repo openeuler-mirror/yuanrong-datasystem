@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: share lib loaders for libcudart.so and os_transport.so
+ * Description: shared loader for libcudart.so and direct os_transport wrappers
  */
 
 #ifndef OS_XPRT_PIPLN_DLOPEN_UTIL
@@ -63,30 +63,22 @@ struct LibLoaderBase {
 #define DO_UNLOAD_DYNLIB(type) type::Instance()->UnLoad();
 #define IS_VALID_DYNFUNC(type, func) (type::Instance()->func##Func_ != nullptr)
 
-struct OsTransportLibLoader : public LibLoaderBase {
-    OsTransportLibLoader() : LibLoaderBase("libos_transport.so")
-    {
-    }
-    void Load() override;
-    void UnLoad() override;
-    static OsTransportLibLoader *Instance();
+#define DO_LOAD_OS_TRANSPORT() static_cast<void>(0)
+#define DO_UNLOAD_OS_TRANSPORT() static_cast<void>(0)
+#define CALL_OS_XPRT_FUNC(ret, funcName, ...)                                      \
+    do {                                                                           \
+        ret = static_cast<decltype(ret)>(OS_XPRT_DIRECT_##funcName(__VA_ARGS__));  \
+    } while (0)
 
-    // os transport
-    REG_METHOD(DoLogReg, int, int, log_callback_t);
-    REG_METHOD(DoInit, uint32_t, urma_context_t *urma_ctx, os_transport_cfg_t *ost_cfg, void **handle);
-    REG_METHOD(DoRecv, uint32_t, void *handle, ost_buffer_info_t *host_src, ost_device_info_t *device_dst, uint32_t len,
-               uint32_t client_key, task_sync_t **ret_sync_handle, notify_callback_t notify_callback);
-    REG_METHOD(DoSend, uint32_t, void *handle, urma_jetty_info_t *jetty_info, ost_buffer_info_t *local_src,
-               ost_buffer_info_t *remote_dst, uint32_t len, uint32_t server_key, uint32_t client_key,
-               task_sync_t **ret_sync_handle);
-    REG_METHOD(DoDestroy, uint32_t, void *handle);
-    REG_METHOD(DoWait, uint32_t, void *handle, task_sync_t *sync_handle);
-    REG_METHOD(DoWaitTimeout, uint32_t, void *handle, task_sync_t *sync_handle, int64_t timeout_ms);
-    REG_METHOD(DoNotify, int, void *handle, void *cr_t);
-    REG_METHOD(DoCancel, uint32_t, void *handle, void **sync_handle, uint32_t request_id);
-};
-
-#define CALL_OS_XPRT_FUNC(ret, funcName, ...) CALL_DYN_FUNC_BASE(OsTransportLibLoader, ret, funcName, __VA_ARGS__);
+#define OS_XPRT_DIRECT_DoLogReg os_transport_log_reg
+#define OS_XPRT_DIRECT_DoInit os_transport_init
+#define OS_XPRT_DIRECT_DoRecv os_transport_recv
+#define OS_XPRT_DIRECT_DoSend os_transport_send
+#define OS_XPRT_DIRECT_DoDestroy os_transport_destroy
+#define OS_XPRT_DIRECT_DoWait wait_and_free_sync
+#define OS_XPRT_DIRECT_DoWaitTimeout wait_and_free_sync_timeout
+#define OS_XPRT_DIRECT_DoNotify os_transport_wake_up_task
+#define OS_XPRT_DIRECT_DoCancel os_transport_cancel_tasks
 
 #ifndef PIPLN_USE_MOCK
 struct CudaRTLibLoader : public LibLoaderBase {

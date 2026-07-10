@@ -9,6 +9,9 @@ if (BUILD_PIPLN_H2D)
     )
 
     add_library(os_transport_pipeline STATIC ${OS_XPRT_PIPLN_SRCS})
+    target_compile_definitions(os_transport_pipeline PUBLIC
+        BUILD_PIPLN_H2D
+    )
     target_include_directories(os_transport_pipeline PUBLIC
         ${OS_TRANSPORT_INCLUDE_DIR}
     )
@@ -18,12 +21,14 @@ if (BUILD_PIPLN_H2D)
             ${CUDA_INCLUDE_DIR}
         )
     endif()
-    target_link_libraries(os_transport_pipeline PRIVATE 
+    target_link_libraries(os_transport_pipeline PUBLIC
+        mlcachedirect_os_transport_static
         common_log
         common_perf
         dl
     )
     add_dependencies(os_transport_pipeline
         worker_object_cache
+        mlcachedirect_os_transport_static
     )
 endif()

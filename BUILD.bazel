@@ -341,15 +341,6 @@ copy_file(
 )
 
 copy_file(
-    name = "libos_transport_shared_file",
-    src = "@mlcachedirect//:libos_transport.so",
-    out = "yr/datasystem/lib/libos_transport.so",
-    visibility = [
-        "//bazel:__pkg__",
-    ],
-)
-
-copy_file(
     name = "datasystem_worker_sym_file",
     src = ":datasystem_worker_sym",
     out = "yr/datasystem/service/DATASYSTEM_SYM/datasystem_worker.sym",

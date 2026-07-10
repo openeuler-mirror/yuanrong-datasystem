@@ -108,9 +108,9 @@ function is_on() {
 }
 
 function normalize_build_options() {
-  if is_on "${BUILD_PIPLN_H2D}"; then
-    echo -e "-- [Warning] Pipeline H2D is temporarily disabled. Ignoring -T on."
-    BUILD_PIPLN_H2D="off"
+  if is_on "${BUILD_PIPLN_H2D}" && [[ "${BUILD_SYSTEM}" == "cmake" ]] && ! is_on "${BUILD_WITH_URMA}"; then
+    echo -e "-- [INFO] Pipeline H2D requires URMA. Enabling BUILD_WITH_URMA because -T on was specified."
+    BUILD_WITH_URMA="on"
   fi
 }
 
