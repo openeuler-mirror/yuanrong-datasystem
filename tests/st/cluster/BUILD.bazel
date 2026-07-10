@@ -25,6 +25,7 @@ cc_library(
         '-DCOORDINATOR_BIN_PATH=\\"/usr/local/bin/datasystem_coordinator\\"',
         '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
     ],
+    data = ["mock_obs_service.py"],
     includes = [".."],
     visibility = ["//tests:__subpackages__"],
     deps = [

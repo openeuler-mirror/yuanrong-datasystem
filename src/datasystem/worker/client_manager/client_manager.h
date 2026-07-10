@@ -49,6 +49,14 @@ using TbbClientInfoTable = tbb::concurrent_hash_map<ClientKey, std::shared_ptr<C
 class ClientManager {
 public:
     /**
+     * @brief Construct a client manager. Public so UTs can build a local
+     * instance whose lock-id quota is filled from the current
+     * FLAGS_max_client_num (the singleton caches the value at first
+     * construction).
+     */
+    ClientManager();
+
+    /**
      * @brief Singleton mode, obtaining instance.
      * @return Reference of ClientManager
      */
@@ -60,6 +68,12 @@ public:
      * @brief Init a client manager.
      */
     Status Init();
+
+    /**
+     * @brief Stop the health-check thread and release resources. Idempotent; safe
+     * to call before re-Init so a singleton is not left with a joinable thread.
+     */
+    void Shutdown();
 
     /**
      * @brief Add client information.
@@ -216,8 +230,6 @@ public:
     bool ExistClientsOnSameNode();
 
 private:
-    friend std::unique_ptr<ClientManager> std::make_unique<ClientManager>();
-    ClientManager();
 
     /**
      * @brief Get lock id for client.

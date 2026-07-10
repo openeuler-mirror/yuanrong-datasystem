@@ -22,6 +22,7 @@
 
 #include "ut/common.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
+#include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/page_queue/shared_page_queue_group.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -46,6 +47,9 @@ public:
 
     void TearDown() override
     {
+        // svc_->Init starts ScMetricsMonitor (singleton). Stop it between cases
+        // so the next SetUp's Init does not destroy a joinable Tick thread.
+        ScMetricsMonitor::Instance()->Shutdown();
         CommonTest::TearDown();
     }
 

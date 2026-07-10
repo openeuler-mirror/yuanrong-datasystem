@@ -43,11 +43,17 @@ ClientManager &ClientManager::Instance()
 
 ClientManager::~ClientManager()
 {
+    Shutdown();
+}
+
+void ClientManager::Shutdown()
+{
     healthThreadExit_ = true;
     cvLock_.Set();
     if (healthThread_ != nullptr && healthThread_->joinable()) {
         healthThread_->join();
     }
+    healthThread_.reset();
 }
 
 Status ClientManager::Init()
@@ -114,7 +120,11 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
         if (shmEnabled) {
             ReturnLockId(lockId);
             lockId = 0;
-            OsXprtPipln::ReleaseAvailableQueue(*pipelineQueueId);
+            // pipelineQueueId may be nullptr (default arg); only release the
+            // queue that was actually allocated above (which also gated on it).
+            if (pipelineQueueId != nullptr) {
+                OsXprtPipln::ReleaseAvailableQueue(*pipelineQueueId);
+            }
         }
         status = Status(StatusCode::K_RUNTIME_ERROR, FormatString("Failed to insert client %s to table", clientId));
     }

@@ -65,7 +65,10 @@ ds_cc_library(
         "dynamic_config_updater.cpp",
         "dynamic_flag_config.cpp",
     ],
-    visibility = ["//src/datasystem:__subpackages__"],
+    visibility = [
+        "//src/datasystem:__subpackages__",
+        "//tests:__subpackages__",
+    ],
     deps = [
         ":dynamic_flag_config_header",
         ":ds_flags",
