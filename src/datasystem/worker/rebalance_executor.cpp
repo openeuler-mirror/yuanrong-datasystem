@@ -40,6 +40,7 @@ constexpr int REPORT_RESULT_RETRY_INTERVAL_MS = 100;
 constexpr uint64_t REBALANCE_BATCH_MAX_BYTES = 64ULL * 1024 * 1024;
 constexpr size_t REBALANCE_BATCH_MAX_OBJECTS = 512;
 
+#ifdef WITH_TESTS
 uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
 {
     // Compute |offset| without undefined behavior on INT64_MIN.
@@ -47,6 +48,7 @@ uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
     auto absOffset = static_cast<uint64_t>(-(offset + 1)) + 1;
     return value > absOffset ? value - absOffset : 0;
 }
+#endif
 }  // namespace
 
 RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
