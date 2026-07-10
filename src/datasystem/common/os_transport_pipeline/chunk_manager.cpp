@@ -39,6 +39,7 @@
 #include "datasystem/common/os_transport_pipeline/dlopen_util.h"
 #include "datasystem/common/os_transport_pipeline/mock_rh2d_driver.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/thread_local.h"
 #include "os-transport/os_transport.h"
 
@@ -332,8 +333,11 @@ Status ChunkManager::DoPiplnStep1_StartReceiver(uint32_t reqId, uint64_t dataSrc
         std::lock_guard<std::mutex> l(reqIdToChkMgrMapMutex_);
         reqIdToChkMgrMap_[reqId] = this;
     }
-    CALL_OS_XPRT_FUNC(ret, DoRecv, osPiplnH2DHandle_, &hostSrc, &deviceInfo, size, reqId,
-                      (task_sync **)&info->syncHandle, DoPiplnStep1_ReceiveCallback);
+    {
+        datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_RECV);
+        CALL_OS_XPRT_FUNC(ret, DoRecv, osPiplnH2DHandle_, &hostSrc, &deviceInfo, size, reqId,
+                          (task_sync **)&info->syncHandle, DoPiplnStep1_ReceiveCallback);
+    }
     VLOG(2) << "os_transport_recv ret: " << ret << " reqId: " << reqId << " dataSrc " << dataSrc
             << " targetSeg.seg.ubva.va " << targetSeg->seg.ubva.va << " len " << size << " segoff "
             << (dataSrc - targetSeg->seg.ubva.va);
@@ -449,8 +453,11 @@ Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)
     dst.tseg = args.remoteSeg;
 
     int ret;
-    CALL_OS_XPRT_FUNC(ret, DoSend, osPiplnH2DHandle_, &jettyInfo, &src, &dst, args.len, args.serverKey, args.clientKey,
-                      (task_sync **)&info->syncHandle);
+    {
+        datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_SEND);
+        CALL_OS_XPRT_FUNC(ret, DoSend, osPiplnH2DHandle_, &jettyInfo, &src, &dst, args.len, args.serverKey,
+                          args.clientKey, (task_sync **)&info->syncHandle);
+    }
     VLOG(1) << "os_transport_send ret: " << ret << " reqId: " << reqId << " remote src " << args.remoteAddr
             << " targetSeg.seg.ubva.va " << args.remoteSeg->seg.ubva.va << " len " << args.len << " segoff "
             << (args.remoteAddr - args.remoteSeg->seg.ubva.va);
@@ -482,10 +489,12 @@ Status ChunkManager::WaitPiplnStep12Done()
                 info.second.syncHandle = nullptr;
                 int ret;
                 if (IS_VALID_DYNFUNC(OsTransportLibLoader, DoWaitTimeout)) {
+                    datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
                     CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
                 } else {
                     LOG(WARNING)
                         << "wait_and_free_sync_timeout is not found, fallback to wait_and_free_sync without timeout";
+                    datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_WAIT);
                     CALL_OS_XPRT_FUNC(ret, DoWait, osPiplnH2DHandle_, syncHandle);
                 }
                 if (ret == 0) {
@@ -652,7 +661,10 @@ bool ChunkManager::DoPiplnStep1_ReceiveUrmaEventHook(urma_cr_t *cr)
         return false;
     // return 0 when wake up task successfully
     int ret;
-    CALL_OS_XPRT_FUNC(ret, DoNotify, osPiplnH2DHandle_, cr);
+    {
+        datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_NOTIFY);
+        CALL_OS_XPRT_FUNC(ret, DoNotify, osPiplnH2DHandle_, cr);
+    }
     uint32_t low = (uint32_t)cr->user_ctx;
     uint32_t high = (uint32_t)(cr->user_ctx >> 32);
     VLOG(1) << "RH2D:DoPiplnStep1_ReceiveUrmaEventHook " << ret << " cr.user_ctx high:" << high << " low:" << low;

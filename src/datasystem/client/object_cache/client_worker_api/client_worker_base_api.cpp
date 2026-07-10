@@ -119,6 +119,7 @@ Status ClientWorkerBaseApi::PreparePipelineRH2DReq(
     GetReqPb &req)
 {
 #ifdef BUILD_PIPLN_H2D
+    PerfPoint point(PerfKey::PIPLN_RH2D_CLIENT_PREPARE);
     // adapt to get request
     auto &objectKeys = piplnRh2dParam.objectKeys;
     auto &devInfos = piplnRh2dParam.devInfos;
