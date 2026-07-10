@@ -308,6 +308,17 @@ ds_cc_test(
     ],
 )
 
+# ScMetricsMonitor 单测：覆盖 StartMonitor 重入与 init 失败场景
+ds_cc_test(
+    name = "sc_metrics_monitor_test",
+    srcs = ["stream_cache/sc_metrics_monitor_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # Stream Buffer Pool 测试
 ds_cc_test(
     name = "stream_bufferpool_test",

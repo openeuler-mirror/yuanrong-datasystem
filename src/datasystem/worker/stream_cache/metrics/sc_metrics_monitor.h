@@ -109,7 +109,12 @@ private:
     std::atomic<bool> interruptFlag_{ false };
     std::unique_ptr<MetricsExporter> exporter_{ nullptr };
     WaitPost cvLock_;
-    bool isEnabled_{ false };
+    // Read by other threads (ExitStream/IsEnabled) without the monitor lock, so
+    // make it atomic to avoid a data race with StartMonitor's write. Relaxed
+    // ordering is sufficient: the Tick thread is join'd in Shutdown() for the
+    // happens-before on exporter_/thread_, and isEnabled_ is only a best-effort
+    // gate (a stale read at worst skips or double-prints one exit message).
+    std::atomic<bool> isEnabled_{ false };
 };
 }  // namespace datasystem
 #endif

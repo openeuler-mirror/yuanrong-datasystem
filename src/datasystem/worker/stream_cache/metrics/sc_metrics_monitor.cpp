@@ -46,17 +46,32 @@ Status ScMetricsMonitor::StartMonitor()
         auto hardDiskExporter = std::make_unique<HardDiskExporter>();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Logging::CreateLogDir(), K_NOT_READY, "Log file creation failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hardDiskExporter->Init(filePath), "hardDiskExporter Init failed.");
+
+        // Stop a previously-started monitor thread only after the new setup has
+        // succeeded. ScMetricsMonitor is a singleton, so StartMonitor() can be
+        // called again (e.g. a second UT case re-creating
+        // ClientWorkerSCServiceImpl). Calling Shutdown() earlier would stop the
+        // old Tick before we know the new init succeeded, leaving the monitor in
+        // a half-dead state (isEnabled_ later set true but no Tick running) if
+        // CreateLogDir/Init fails. The old Tick uses the old exporter_ (a separate
+        // object), so there is no conflict while the new hardDiskExporter inits.
+        Shutdown();
+        interruptFlag_ = false;  // Reset so the new Tick() loop actually runs.
+        cvLock_.Clear();         // Shutdown() Set() the event to wake the old Tick;
+                                 // reset it so the new Tick's WaitFor actually waits
+                                 // for the interval instead of busy-spinning.
+
         exporter_ = std::move(hardDiskExporter);
         thread_ = std::make_unique<Thread>(&ScMetricsMonitor::Tick, this);
         exitPrintThread_ = std::make_unique<ThreadPool>(1);
     }
-    isEnabled_ = FLAGS_log_monitor;
+    isEnabled_.store(FLAGS_log_monitor, std::memory_order_relaxed);
     return Status::OK();
 }
 
 ScMetricsMonitor::~ScMetricsMonitor()
 {
-    if (isEnabled_) {
+    if (isEnabled_.load(std::memory_order_relaxed)) {
         Shutdown();
     }
 }
