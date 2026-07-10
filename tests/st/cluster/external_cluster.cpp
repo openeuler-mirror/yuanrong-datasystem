@@ -1239,12 +1239,23 @@ Status ExternalCluster::StartOBS(int index)
         const int permission = 0700;
         RETURN_IF_NOT_OK(CreateDir(rootDir, true, permission));
     }
-    char cwd[PATH_MAX + 1];
-    if (getcwd(cwd, sizeof(cwd)) == NULL) {
-        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "getcwd failed");
+    // Locate mock_obs_service.py relative to the source tree. Bazel and ctest set
+    // TEST_SRCDIR + TEST_WORKSPACE so the script path is independent of cwd — this
+    // works in both bazel and cmake build layouts. Fall back to the old getcwd()
+    // + relative-path method for environments that don't define these variables.
+    const char *srcdir = getenv("TEST_SRCDIR");
+    const char *workspace = getenv("TEST_WORKSPACE");
+    std::string mockOBS;
+    if (srcdir && workspace) {
+        mockOBS = std::string(srcdir) + "/" + std::string(workspace) +
+                  "/tests/st/cluster/mock_obs_service.py";
+    } else {
+        char cwd[PATH_MAX + 1];
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "getcwd failed");
+        }
+        mockOBS = std::string(cwd) + "/../../../tests/st/cluster/mock_obs_service.py";
     }
-    std::string mockOBS(cwd);
-    mockOBS += "/../../../tests/st/cluster/mock_obs_service.py";
     if (!FileExist(mockOBS)) {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "cannot find the mock OBS service at " + mockOBS);
     }
