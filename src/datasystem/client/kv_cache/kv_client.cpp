@@ -116,8 +116,6 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->Create(key, size, creatParam, buffer);
-    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
-    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
         .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
         .DataSize(size).Result(rc).Record();
@@ -137,8 +135,6 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
-    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
-    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
         .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
         .DataSize(sizes.size()).Result(rc).Record();
@@ -152,6 +148,8 @@ Status KVClient::Set(const std::shared_ptr<Buffer> &buffer)
     PerfPoint point(PerfKey::KV_CLIENT_SET_BUFFER);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(buffer);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(buffer->bufferInfo_->objectKey).TrackedTransportType()
         .DataSize(buffer->GetSize()).Result(rc).Record();
     return rc;
@@ -216,6 +214,8 @@ Status KVClient::Set(const std::string &key, const StringView &val, const SetPar
     PerfPoint point(PerfKey::KV_CLIENT_SET_OBJECT);
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     Status rc = impl_->Set(key, val, setParam);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
         .Existence(static_cast<int>(setParam.existence)).CacheType(static_cast<int>(setParam.cacheType))
         .TrackedTransportType().DataSize(val.size()).Result(rc).Record();
@@ -229,6 +229,8 @@ std::string KVClient::Set(const StringView &val, const SetParam &setParam)
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
     std::string key;
     auto rc = impl_->Set(val, setParam, key);
+    METRIC_INC(metrics::KvMetricId::CLIENT_PUT_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_PUT_ERROR_TOTAL);
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(setParam.writeMode)).TtlSecond(setParam.ttlSecond)
         .CacheType(static_cast<int>(setParam.cacheType)).TrackedTransportType()
         .DataSize(val.size()).Result(rc).Record();
