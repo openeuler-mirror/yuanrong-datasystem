@@ -27,6 +27,7 @@
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/zmq/zmq_stub.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/protos/meta_zmq.pb.h"
@@ -144,7 +145,7 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
         if (rc.IsError()) {
             sock.reset();
         }
-        doRetry = (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE || rc.GetCode() == StatusCode::K_TRY_AGAIN);
+        doRetry = (IsRpcTimeout(rc) || rc.GetCode() == StatusCode::K_TRY_AGAIN);
         if (doRetry) {
             // Retry after 100ms so it does not recreate too many ZmqFrontend on K_TRY_AGAIN
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));

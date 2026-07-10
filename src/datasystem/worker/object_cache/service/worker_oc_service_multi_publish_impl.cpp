@@ -34,6 +34,7 @@
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/request_context.h"
@@ -293,7 +294,7 @@ WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPubli
     CreateMultiMetaRspPb rsp;
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
     auto rc = RetryCreateMultiMeta(api, req, rsp);
-    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+    if (IsRpcTimeout(rc)) {
         rsp.mutable_last_rc()->set_error_code(rc.GetCode());
         rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
         for (auto &meta : *(req.mutable_metas())) {

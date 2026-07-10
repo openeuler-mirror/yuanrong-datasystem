@@ -578,9 +578,9 @@ TEST_F(KVCacheClientTest, TestGetFuncSingleKeyErrorCode)
     DS_ASSERT_OK(inject::Set("Get.RetryOnError.retry_on_error_after_func", "1*sleep(1000)"));
     ASSERT_EQ(client1->Get(key, valueGet).GetCode(), StatusCode::K_NOT_FOUND);
 
-    // TestCase3: single-key scenario, K_RPC_UNAVAILABLE Occurs When a Client Accesses a Worker.
+    // TestCase3: single-key scenario, K_RPC_DEADLINE_EXCEEDED Occurs When a Client Accesses a Worker.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "worker.before_query_meta", "1*sleep(2000)"));
-    ASSERT_EQ(client1->Get(key, valueGet).GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    ASSERT_EQ(client1->Get(key, valueGet).GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
     const int kWaitForSleepCompletion = 3;
     sleep(kWaitForSleepCompletion);
 }
@@ -1088,7 +1088,7 @@ TEST_F(KVCacheClientTest, GetTimeoutNotAddShmUnit)
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Get.asyncGetStart", "1*call(2000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.Get.beforeReturn", "1*sleep(4000)"));
     std::vector<std::string> dataList;
-    ASSERT_EQ(client->Get({ objectKey1 }, dataList).GetCode(), K_RPC_UNAVAILABLE);
+    ASSERT_EQ(client->Get({ objectKey1 }, dataList).GetCode(), K_RPC_DEADLINE_EXCEEDED);
 
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->Del({ objectKey1 }, failedObjectKeys));
@@ -2394,7 +2394,7 @@ TEST_F(KVClientQuerySizeTest, TestRPCError)
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
     std::vector<uint64_t> outSizes;
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_query_meta", "1*sleep(2000)"));
-    ASSERT_EQ(client->QuerySize({ key }, outSizes).GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    ASSERT_EQ(client->QuerySize({ key }, outSizes).GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
     int keyCount = 1;
     ASSERT_EQ(outSizes.capacity(), keyCount);
 }

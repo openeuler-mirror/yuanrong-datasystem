@@ -77,7 +77,7 @@ Status ZmqSocket::ZmqRecvMsg(ZmqMessage &msg, ZmqRecvFlags flags)
     if (status.GetCode() == K_TRY_AGAIN && blocking) {
         int64_t waitSec = std::chrono::duration_cast<std::chrono::seconds>(endTick - startTick).count();
         LOG(WARNING) << FormatString("[ZMQ_RECV_TIMEOUT] Blocking recv timed out after %d seconds", waitSec);
-        RETURN_STATUS(K_RPC_UNAVAILABLE,
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
                       FormatString("[ZMQ_RECV_TIMEOUT] Waited %d seconds. Didn't receive any response from server",
                                    waitSec));
     }
