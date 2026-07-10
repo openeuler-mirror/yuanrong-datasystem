@@ -16,8 +16,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 DEFAULT_TIMEOUT = 300
 
 
-def get_pods(namespace, prefix):
-    """Get running pods matching name prefix."""
+def get_pods(namespace, prefixes):
+    """Get running pods matching any of the given name prefixes.
+
+    OR semantics: a pod is selected if its name starts with any prefix.
+    Dedup by name (defensive; pod names are unique within a namespace, so
+    a pod matching multiple prefixes is still added once). The final list is
+    sorted by name globally so instance_id assignment is deterministic
+    regardless of the order prefixes were passed on the CLI. A WARNING is
+    printed for each prefix that matched zero pods; callers decide whether
+    an all-zero result is fatal.
+    """
     try:
         out = subprocess.check_output(
             ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json',
@@ -30,16 +39,24 @@ def get_pods(namespace, prefix):
         print(f'ERROR: kubectl failed: {e.stderr}', file=sys.stderr)
         sys.exit(1)
 
+    prefixes = list(prefixes or [])
     pods = []
+    seen = set()
     for item in json.loads(out).get('items', []):
         name = item['metadata']['name']
-        if not name.startswith(prefix):
+        if not any(name.startswith(p) for p in prefixes):
             continue
         pod_ip = item.get('status', {}).get('podIP', '')
         if not pod_ip:
             continue
+        if name in seen:
+            continue
+        seen.add(name)
         pods.append({'name': name, 'ip': pod_ip})
     pods.sort(key=lambda p: p['name'])
+    for p in prefixes:
+        if not any(pod['name'].startswith(p) for pod in pods):
+            print(f'WARNING: prefix "{p}" matched 0 pods', file=sys.stderr)
     return pods
 
 
@@ -645,8 +662,11 @@ def main():
 
     # Common parent parser
     parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument('-p', '--prefix', required=True,
-                               help='Pod name prefix to match')
+    parent_parser.add_argument('-p', '--prefix', action='append', default=None,
+                               dest='prefixes', metavar='PREFIX',
+                               help='Pod name prefix to match (repeatable: '
+                                    '-p worker-a -p worker-b). A pod is '
+                                    'selected if it matches ANY prefix.')
     parent_parser.add_argument('-n', '--namespace', default='default',
                                help='k8s namespace (default: default)')
     parent_parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT,
@@ -736,10 +756,17 @@ def main():
         parser.print_help()
         return 1
 
+    # argparse with action='append' default=None won't enforce presence, so
+    # validate explicitly here with a clear message.
+    if not args.prefixes:
+        print('ERROR: at least one --prefix is required '
+              '(e.g. -p worker-a [-p worker-b])', file=sys.stderr)
+        return 1
+
     # Get pods
-    pods = get_pods(args.namespace, args.prefix)
+    pods = get_pods(args.namespace, args.prefixes)
     if not pods:
-        print(f'No running pods found with prefix "{args.prefix}" '
+        print(f'No running pods found matching prefixes {args.prefixes} '
               f'in namespace "{args.namespace}"')
         return 1
 

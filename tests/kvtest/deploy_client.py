@@ -738,7 +738,15 @@ def parse_duration(s):
 
 # --- gen-config ---
 
-def _get_pods(namespace, prefix):
+def _get_pods(namespace, prefixes):
+    """Get running pods matching any of the given name prefixes.
+
+    OR semantics: a pod is selected if its name starts with any prefix.
+    Dedup by name (a pod matching multiple prefixes is still added once).
+    The final list is sorted by name globally so instance_id assignment is
+    deterministic regardless of the order prefixes were passed on the CLI.
+    A WARNING is printed for each prefix that matched zero pods.
+    """
     try:
         out = subprocess.check_output(
             ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json',
@@ -751,18 +759,26 @@ def _get_pods(namespace, prefix):
         print(f'ERROR: kubectl failed: {e.stderr}', file=sys.stderr)
         sys.exit(1)
 
+    prefixes = list(prefixes or [])
     data = json.loads(out)
     pods = []
+    seen = set()
     for item in data.get('items', []):
         name = item['metadata']['name']
-        if not name.startswith(prefix):
+        if not any(name.startswith(p) for p in prefixes):
             continue
         pod_ip = item.get('status', {}).get('podIP', '')
         if not pod_ip:
             continue
+        if name in seen:
+            continue
+        seen.add(name)
         node_name = item.get('spec', {}).get('nodeName', '')
         pods.append({'name': name, 'ip': pod_ip, 'node': node_name})
     pods.sort(key=lambda p: p['name'])
+    for p in prefixes:
+        if not any(pod['name'].startswith(p) for pod in pods):
+            print(f'WARNING: prefix "{p}" matched 0 pods', file=sys.stderr)
     return pods
 
 
@@ -814,11 +830,11 @@ def cmd_gen_config(args):
             sys.exit(1)
 
     # --- Node discovery ---
-    if args.prefix:
+    if args.prefixes:
         # Pod discovery via kubectl (all modes)
-        pods = _get_pods(args.namespace, args.prefix)
+        pods = _get_pods(args.namespace, args.prefixes)
         if not pods:
-            print(f'No running pods found with prefix "{args.prefix}" '
+            print(f'No running pods found matching prefixes {args.prefixes} '
                   f'in namespace "{args.namespace}"', file=sys.stderr)
             sys.exit(1)
         if mode != 'benchmark' and (args.writer_count < 0 or args.writer_count > len(pods)):
@@ -997,8 +1013,12 @@ def cmd_gen_config(args):
 
 def _add_gen_config_args(p):
     """Add gen-config arguments to an argparse subparser."""
-    p.add_argument('-p', '--prefix',
-                   help='Pod name prefix to match (kubectl discovery)')
+    p.add_argument('-p', '--prefix', action='append', default=None,
+                    dest='prefixes', metavar='PREFIX',
+                    help='Pod name prefix to match (repeatable: -p worker-a '
+                         '-p worker-b; kubectl discovery). A pod is selected '
+                         'if it matches ANY prefix. Omit to use --nodes '
+                         'manual mode instead.')
     p.add_argument('-n', '--namespace', default='default',
                    help='k8s namespace (default: default)')
     p.add_argument('-r', '--remote-work-dir',
