@@ -80,6 +80,11 @@ Status CudaRH2DDriver::CallCudaRTHook(const std::function<cudaError_t(void)> &ho
         RETURN_IF_NOT_OK(CUDA_CALL_WRAPPER(funcName, __VA_ARGS__)); \
     } while (0)
 
+bool CudaRH2DDriver::UseExternalStream() const
+{
+    return h2dStream != nullptr;
+}
+
 Status CudaRH2DDriver::ResetContext()
 {
     if (currentDevId_ == -1) {
@@ -91,8 +96,14 @@ Status CudaRH2DDriver::ResetContext()
     CUDA_RETURN_IF_NOT_OK(cudaSetDevice, currentDevId_);
     inited_ = true;
 
-    // cudaDeviceReset destroys CUDA resources in the current context. Since stream_/event_ are
-    // now per-driver resources, mark this driver's handles as invalid and recreate them below.
+    if (UseExternalStream()) {
+        // The stream is owned by caller. Do not reset CUDA context, create event, or destroy it.
+        stream_ = reinterpret_cast<cudaStream_t>(h2dStream);
+        event_ = nullptr;
+        return Status::OK();
+    }
+
+    // Keep the original internal-stream behavior for compatibility when caller does not pass a stream.
     CUDA_RETURN_IF_NOT_OK(cudaDeviceReset);
     stream_ = nullptr;
     event_ = nullptr;
@@ -100,7 +111,8 @@ Status CudaRH2DDriver::ResetContext()
     if (isClient) {
         CUDA_RETURN_IF_NOT_OK(cudaStreamCreateWithFlags, &stream_, cudaStreamNonBlocking);
         CUDA_RETURN_IF_NOT_OK(cudaEventCreate, &event_, cudaEventDisableTiming);
-        LOG(WARNING) << "RH2D stream verify(reset): driver=" << this << " stream=" << stream_ << " event=" << event_;
+        VLOG(1) << "RH2D internal stream created(reset): driver=" << this << " stream=" << stream_
+                << " event=" << event_;
     }
 
     return Status::OK();
@@ -109,6 +121,18 @@ Status CudaRH2DDriver::ResetContext()
 Status CudaRH2DDriver::Init()
 {
     if (!isClient) {
+        return Status::OK();
+    }
+
+    if (UseExternalStream()) {
+        if (currentDevId_ != -1) {
+            CUDA_RETURN_IF_NOT_OK(cudaSetDevice, currentDevId_);
+            inited_ = true;
+        }
+        stream_ = reinterpret_cast<cudaStream_t>(h2dStream);
+        CHECK_FAIL_RETURN_STATUS(stream_ != nullptr, StatusCode::K_RUNTIME_ERROR, "external h2d stream is null");
+        event_ = nullptr;
+        VLOG(1) << "RH2D use external stream: driver=" << this << " stream=" << stream_;
         return Status::OK();
     }
 
@@ -124,10 +148,7 @@ Status CudaRH2DDriver::Init()
 
     RETURN_RUNTIME_ERROR_IF_NULL(GetSelfEvent(true /* createIfNotExists */));
 
-    // Temporary verification log. In the old implementation, different drivers printed the same
-    // stream address. With this implementation, different CudaRH2DDriver instances should usually
-    // print different stream addresses.
-    LOG(WARNING) << "RH2D stream verify(init): driver=" << this << " stream=" << stream_ << " event=" << event_;
+    VLOG(1) << "RH2D use internal stream: driver=" << this << " stream=" << stream_ << " event=" << event_;
     return Status::OK();
 }
 
@@ -170,7 +191,7 @@ Status CudaRH2DDriver::RegisterHostMemory(void *ptr, size_t size)
     cudaError_t cudaRet;
     CALL_CUDA_RT_FUNC(cudaRet, cudaHostRegister, ptr, size, cudaHostRegisterPortable);
     if (cudaRet != cudaSuccess && cudaRet != cudaErrorHostMemoryAlreadyRegistered) {
-        return Status(StatusCode::K_IO_ERROR,
+        return Status(StatusCode::K_RUNTIME_ERROR,
                       "cudaHostRegister failed: " + CudaErrToString(cudaRet, "cudaHostRegister"));
     }
     return Status::OK();
@@ -189,36 +210,45 @@ Status CudaRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset
     if (!isClient) {
         return Status(StatusCode::K_NOT_SUPPORTED, "worker should not call submitIO");
     }
-    cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
-    if (event == nullptr || stream_ == nullptr) {
-        return Status(StatusCode::K_IO_ERROR, "no stream/event for Submit");
+    if (stream_ == nullptr) {
+        return Status(StatusCode::K_RUNTIME_ERROR, "no stream for Submit");
     }
 
     size_t destAddr = reinterpret_cast<size_t>(targetAddr) + destOffset;
     CUDA_RETURN_IF_NOT_OK(cudaMemcpyAsync, (void *)destAddr, srcData, srcSize, cudaMemcpyHostToDevice, stream_);
-    CUDA_RETURN_IF_NOT_OK(cudaEventRecord, event, stream_);
 
-    VLOG(1) << "RH2D stream verify(submit): driver=" << this << " stream=" << stream_ << " event=" << event
-            << " srcSize=" << srcSize << " destOffset=" << destOffset;
+    if (!UseExternalStream()) {
+        cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
+        if (event == nullptr) {
+            return Status(StatusCode::K_RUNTIME_ERROR, "no event for internal stream Submit");
+        }
+        CUDA_RETURN_IF_NOT_OK(cudaEventRecord, event, stream_);
+        VLOG(1) << "RH2D submit internal stream: driver=" << this << " stream=" << stream_ << " event=" << event
+                << " srcSize=" << srcSize << " destOffset=" << destOffset;
+    } else {
+        VLOG(1) << "RH2D submit external stream: driver=" << this << " stream=" << stream_
+                << " srcSize=" << srcSize << " destOffset=" << destOffset;
+    }
     return Status::OK();
 }
 
 Status CudaRH2DDriver::WaitIO()
 {
-    if (!isClient) {
+    if (!isClient || UseExternalStream()) {
         return Status::OK();
     }
     cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
     if (event != nullptr) {
         CUDA_RETURN_IF_NOT_OK(cudaEventSynchronize, event);
-        VLOG(1) << "RH2D:cudaEventSynchronize end, driver=" << this << " stream=" << stream_ << " event=" << event;
+        VLOG(1) << "RH2D internal cudaEventSynchronize end, driver=" << this << " stream=" << stream_
+                << " event=" << event;
     }
     return Status::OK();
 }
 
 Status CudaRH2DDriver::Release()
 {
-    if (isClient) {
+    if (isClient && !UseExternalStream()) {
         RemoveSelfEvent();
         RemoveSelfStream();
     }

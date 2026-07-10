@@ -33,6 +33,7 @@
 
 #include "re2/re2.h"
 
+#include "datasystem/utils/device_blob.h"
 #include "datasystem/client/client_state_manager.h"
 #include "datasystem/client/embedded_client_worker_api.h"
 #include "datasystem/client/listen_worker.h"
@@ -337,8 +338,8 @@ public:
      * @return Status of the result.
      */
     std::shared_future<AsyncResult> GetWithOsTransportPipeline(
-        const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
-        int64_t subTimeoutMs);
+        const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob,
+        void *h2dStream = nullptr);
 
     /**
      * @brief Some data in an object can be read based on the specified key and parameters.
@@ -1555,9 +1556,8 @@ private:
      * @param[out] workerApi  The worker that handles get request.
      * @return K_OK on success; the error code otherwise.
      */
-    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys,
-                                 const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                 std::shared_ptr<IClientWorkerApi> &workerApi, int64_t subTimeoutMs);
+    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob,
+                                 std::shared_ptr<IClientWorkerApi> &workerApi);
 
     /**
      * @brief construct share memory buffer and find need wait keys

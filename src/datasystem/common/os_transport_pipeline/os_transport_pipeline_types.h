@@ -52,6 +52,9 @@ struct DevShmInfo {
     uint32_t devId;
     void *ptr;
     size_t size;
+    // Optional opaque H2D stream handle. For CUDA, this is cudaStream_t cast to void *.
+    // nullptr means RH2D should create an internal stream and wait for copy completion.
+    void *h2dStream = nullptr;
 };
 
 struct ChunkTag {

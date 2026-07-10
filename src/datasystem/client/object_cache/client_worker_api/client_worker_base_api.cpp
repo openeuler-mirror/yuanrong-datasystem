@@ -135,10 +135,10 @@ Status ClientWorkerBaseApi::PreparePipelineRH2DReq(
     }
     chunkManager->RegisterPipelineConsumer(pipelineConsumer);
     req.set_no_query_l2cache(false);  // force access l2 cache
-    req.set_sub_timeout(ClientGetRequestTimeout(piplnRh2dParam.subTimeoutMs));
+    req.set_sub_timeout(ClientGetRequestTimeout(piplnRh2dParam.requestTimeoutMs));
     req.set_client_id(clientId_);
     req.set_return_object_index(true);
-    req.set_request_timeout(std::max<int64_t>(piplnRh2dParam.subTimeoutMs, requestTimeoutMs_));
+    req.set_request_timeout(std::max<int64_t>(piplnRh2dParam.requestTimeoutMs, requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when H2D.");
     return Status::OK();
 #else

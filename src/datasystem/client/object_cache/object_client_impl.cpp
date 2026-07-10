@@ -2890,15 +2890,21 @@ Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, Pi
 #endif
 
 Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys,
-                                               const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                               std::shared_ptr<IClientWorkerApi> &workerApi, int64_t subTimeoutMs)
+                                               const std::vector<Blob> &devBlob,
+                                               std::shared_ptr<IClientWorkerApi> &workerApi)
 {
     // check args
-    CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devShmChunk.size(), K_INVALID,
-                             "objectKeys size is not equal to devShmChunk size");
+    CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devBlob.size(), K_INVALID,
+                             "objectKeys size is not equal to devBlob size");
     CHECK_FAIL_RETURN_STATUS(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                              FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
+    for (size_t i = 0; i < devBlob.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS(devBlob[i].pointer != nullptr, K_INVALID,
+                                 FormatString("device blob pointer is null, key index: %zu", i));
+        CHECK_FAIL_RETURN_STATUS(devBlob[i].size > 0, K_INVALID,
+                                 FormatString("device blob size is zero, key index: %zu", i));
+    }
 
     // client should be at same site with worker by shmem
     workerApi = workerApi_[LOCAL_WORKER];
@@ -2908,10 +2914,6 @@ Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &o
                              "not support pipeline rh2d: shared memory is not enabled");
     CHECK_FAIL_RETURN_STATUS(workerApi->WorkerSupportPiplnRH2D(), K_NOT_SUPPORTED, "worker don't enable pipeline rh2d");
 
-    CHECK_FAIL_RETURN_STATUS(
-        Validator::IsInNonNegativeInt32(subTimeoutMs), K_INVALID,
-        FormatString("subTimeoutMs %lld is out of range, which should be between[%d, %d]", subTimeoutMs, 0, INT32_MAX));
-
     // check connection
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckConnection());
@@ -2919,8 +2921,7 @@ Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &o
 }
 
 std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
-    const std::vector<std::string> &objectKeys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
-    int64_t subTimeoutMs)
+    const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob, void *h2dStream)
 {
     auto asyncResource = std::make_shared<PipelineAsyncResource>();
     std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
@@ -2930,7 +2931,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
 
     // check status
     std::shared_ptr<IClientWorkerApi> workerApi;
-    Status rc = CheckPipelineRH2DArgs(objectKeys, devShmChunk, workerApi, subTimeoutMs);
+    Status rc = CheckPipelineRH2DArgs(objectKeys, devBlob, workerApi);
     if (rc.IsError()) {
         if (workerApi) {
             workerApi->DecreaseInvokeCount();
@@ -2944,10 +2945,11 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
     for (size_t i = 0; i < objectKeys.size(); i++) {
         devInfos.emplace_back(OsXprtPipln::DevShmInfo{ OsXprtPipln::TargetDeviceType::CUDA, (uint32_t)-1,
-                                                       devShmChunk[i].first, devShmChunk[i].second });
+                                                       devBlob[i].pointer, static_cast<size_t>(devBlob[i].size),
+                                                       h2dStream });
     }
     asyncResource->piplnRh2dParam =
-        PiplnRh2dParam{ .subTimeoutMs = subTimeoutMs,
+        PiplnRh2dParam{ .requestTimeoutMs = requestTimeoutMs_,
                         .objectKeys = objectKeys,
                         .devInfos = std::move(devInfos),
                         .chunkManager = std::make_shared<H2DChunkManager>(true /* isClient */),
@@ -2988,8 +2990,8 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     });
     perfPoint.Record();
 #else
-    (void)devShmChunk;
-    (void)subTimeoutMs;
+    (void)devBlob;
+    (void)h2dStream;
     asyncResource->promise.set_value({ Status(K_NOT_SUPPORTED, "not build with BUILD_PIPLN_H2D"), objectKeys });
 #endif
     return future;

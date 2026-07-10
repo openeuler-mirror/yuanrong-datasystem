@@ -54,6 +54,7 @@ public:
 
 private:
     Status CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const std::string &funcName);
+    bool UseExternalStream() const;
     cudaEvent_t GetSelfEvent(bool createIfNotExists);
     void RemoveSelfEvent();
     void RemoveSelfStream();

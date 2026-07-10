@@ -9,5 +9,5 @@ cc_library(
     name = "hetero_headers",
     hdrs = [":all_headers"],
     strip_include_prefix = "/include",
-    deps = [],
+    deps = ["//include/datasystem/utils:utils_headers"],
 )
