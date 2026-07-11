@@ -103,7 +103,7 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
-                         bool enableExclusiveConnection, bool enableRemoteH2D) {
+                         bool enableRemoteH2D) {
             ConnectOptions connectOpts{
                 .host = host,
                 .port = port,
@@ -117,7 +117,6 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                 .secretKey = secretKey,
                 .tenantId = tenantId,
                 .enableCrossNodeConnection = enableCrossNodeConnection,
-                .enableExclusiveConnection = enableExclusiveConnection,
                 .enableRemoteH2D = enableRemoteH2D
             };
             return std::make_unique<HeteroClient>(connectOpts);

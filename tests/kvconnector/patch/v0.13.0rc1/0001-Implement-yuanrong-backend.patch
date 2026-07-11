@@ -112,7 +112,7 @@ new file mode 100644
 index 00000000..f9a5f3af
 --- /dev/null
 +++ b/vllm_ascend/distributed/kvpool/backend/yuanrong_backend.py
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,120 @@
 +import hashlib
 +import os
 +import re
@@ -147,13 +147,10 @@ index 00000000..f9a5f3af
 +
 +        worker_addr = os.getenv("DS_WORKER_ADDR", "")
 +        host, port = split_host_port(worker_addr)
-+        enable_exclusive_connection = bool(
-+            int(os.getenv("DS_ENABLE_EXCLUSIVE_CONNECTION", "0")))
 +        enable_remote_h2d = bool(int(os.getenv("DS_ENABLE_REMOTE_H2D", "0")))
 +        self._hetero_client = HeteroClient(
 +            host,
 +            int(port),
-+            enable_exclusive_connection=enable_exclusive_connection,
 +            enable_remote_h2d=enable_remote_h2d,
 +        )
 +        self._hetero_client.init()

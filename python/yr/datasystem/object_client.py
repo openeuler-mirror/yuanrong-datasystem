@@ -303,10 +303,6 @@ class ObjectClient:
         oauth_client_secret(str): The client secret for tenant.
         oauth_url(str): The auth url of IAM.
         tenant_id(str): The tenant ID.
-        enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-        datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-        `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-        the system will throw a request exception.
 
     Raises:
         TypeError: Raise a type error if the input parameter is invalid.
@@ -328,8 +324,7 @@ class ObjectClient:
         access_key="",
         secret_key="",
         tenant_id="",
-        req_timeout_ms=0,
-        enable_exclusive_connection=False
+        req_timeout_ms=0
     ):
         """
         Constructor of the ObjectClient class
@@ -347,10 +342,6 @@ class ObjectClient:
             tenant_id(str): The tenant ID.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same with
             connect_timeout_ms.
-            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-            the system will throw a request exception.
 
         Raises:
             TypeError: Raise a type error if the input parameter is invalid.
@@ -365,8 +356,7 @@ class ObjectClient:
             ["server_public_key", server_public_key, str],
             ["access_key", access_key, str],
             ["secret_key", secret_key, str],
-            ["tenant_id", tenant_id, str],
-            ["enable_exclusive_connection", enable_exclusive_connection, bool]
+            ["tenant_id", tenant_id, str]
         ]
         validator.check_args_types(args)
         self.client = ds.ObjectClient(
@@ -380,8 +370,7 @@ class ObjectClient:
             access_key,
             secret_key,
             tenant_id,
-            req_timeout_ms,
-            enable_exclusive_connection
+            req_timeout_ms
         )
 
     @staticmethod

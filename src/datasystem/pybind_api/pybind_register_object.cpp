@@ -123,7 +123,7 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
                          const std::string &clientPublicKey, const std::string &clientPrivateKey,
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId,
-                         int32_t reqTimeoutMs, bool enableExclusiveConnection) {
+                         int32_t reqTimeoutMs) {
             ConnectOptions connectOpts{
                 .host = host,
                 .port = port,
@@ -137,7 +137,6 @@ PybindDefineRegisterer g_pybind_define_f_Client("ObjectClient", PRIORITY_LOW, []
                 .secretKey = secretKey,
                 .tenantId = tenantId,
                 .enableCrossNodeConnection = false,
-                .enableExclusiveConnection = enableExclusiveConnection,
             };
             return std::make_unique<ObjectClient>(connectOpts);
         }))

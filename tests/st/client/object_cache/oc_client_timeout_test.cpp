@@ -134,7 +134,7 @@ TEST_F(OCClientTimeoutTest, ParallelGetUsesRealRemainingNotDecayed)
 TEST_F(OCClientTimeoutTest, MSetDeadlineExceededReturnsStatusNotSilent)
 {
     std::shared_ptr<KVClient> kvClient;
-    InitTestKVClient(0, kvClient, 60000, false, false, 500);
+    InitTestKVClient(0, kvClient, 60000, false, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(600)"));
 

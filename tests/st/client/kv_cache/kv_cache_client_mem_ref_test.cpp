@@ -216,7 +216,7 @@ TEST_F(KVCacheClientMemRefTest, AsyncDecreaseRefCntShortTimeoutDoesNotLeak)
     DS_ASSERT_OK(inject::Set("client.DecreaseReferenceCnt", "call(1)"));
 
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 500);
+    InitTestKVClient(0, client, 60000, false, 500);
 
     std::string key = ObjectKey();
     DS_ASSERT_OK(client->Set(key, "value"));

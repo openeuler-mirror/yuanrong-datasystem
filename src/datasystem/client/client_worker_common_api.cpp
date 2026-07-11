@@ -47,7 +47,6 @@
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
-#include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/compatibility_manager.h"
@@ -167,9 +166,6 @@ void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, c
                    clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
 }
 
-// Static/global id generator init
-std::atomic<int32_t> ClientWorkerRemoteCommonApi::exclusiveIdGen_ = 0;
-
 IClientWorkerCommonApi::~IClientWorkerCommonApi() = default;
 ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
 
@@ -283,7 +279,6 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id("");
     req.set_enable_cross_node(enableCrossNodeConnection_);
-    req.set_enable_exclusive_connection(false);
     req.set_pod_name(Logging::PodName());
     req.set_device_id(deviceId_);
     req.set_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
@@ -312,12 +307,11 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
 ClientWorkerRemoteCommonApi::ClientWorkerRemoteCommonApi(HostPort hostPort, RpcCredential cred,
                                                          HeartbeatType heartbeatType, SensitiveValue token,
                                                          Signature *signature, std::string tenantId,
-                                                         bool enableCrossNodeConnection, bool enableExclusiveConnection,
+                                                         bool enableCrossNodeConnection,
                                                          std::string deviceId)
     : IClientWorkerCommonApi(std::move(hostPort), heartbeatType, enableCrossNodeConnection, signature),
       cred_(cred),
       tenantId_(std::move(tenantId)),
-      enableExclusiveConnection_(enableExclusiveConnection),
       deviceId_(std::move(deviceId))
 {
     recvPageThread_ = Thread(&ClientWorkerRemoteCommonApi::RecvPageFd, this);
@@ -728,7 +722,6 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id(tenantId_);
     req.set_enable_cross_node(enableCrossNodeConnection_);
-    req.set_enable_exclusive_connection(enableExclusiveConnection_);
     req.set_pod_name(Logging::PodName());
     req.set_support_multi_shm_ref_count(true);
     req.set_device_id(deviceId_);
@@ -822,6 +815,7 @@ void ClientWorkerRemoteCommonApi::SetUrmaDataPlaneFailureCallback(std::function<
 
 Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
 {
+    (void)isDestruct;
     CHECK_FAIL_RETURN_STATUS(commonWorkerSession_ != nullptr || brpcCommonStub_ != nullptr, StatusCode::K_OK,
                              "No active connection. Do not send disconnect notice.");
     LOG(INFO) << FormatString("Client %s sends exit notice to worker.", clientId_);
@@ -845,10 +839,6 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
         RETURN_IF_NOT_OK(brpcCommonStub_->DisconnectClient(opts, req, rsp));
     } else {
         RETURN_IF_NOT_OK(commonWorkerSession_->DisconnectClient(opts, req, rsp));
-    }
-    if (!isDestruct && enableExclusiveConnection_ && exclusiveId_.has_value()) {
-        LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
-                     FormatString("Failed to close exclusive connection %d", exclusiveId_.value()));
     }
     return Status::OK();
 }
@@ -1029,11 +1019,6 @@ void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const Re
         ParseWorkerCompatibilityVersionOrCurrent(rsp.worker_compatibility_version(), "remote worker register");
     workerEnableP2Ptransfer_ = rsp.enable_p2p_transfer();
     SetHealthy(!rsp.unhealthy());
-    exclusiveConnSockPath_ = rsp.exclusive_conn_sockpath();
-    if (enableExclusiveConnection_ && exclusiveConnSockPath_.empty()) {
-        LOG(WARNING) << "Client requested exclusive connection, but the older worker did not support the feature.";
-        enableExclusiveConnection_ = false;
-    }
     workerSupportMultiShmRefCount_ = rsp.support_multi_shm_ref_count();
     SetHeartbeatProperties(timeoutMs, rsp);
     SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());

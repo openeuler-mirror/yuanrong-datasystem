@@ -146,15 +146,10 @@ void RpcGenerator::ImplementGenericStubOtherFuncDef(io::Printer &printer, const 
         "Status $stub$::GetInitStatus() {\n"
         "    return stub_->GetInitStatus();\n"
         "}\n";
-    const std::string setExclusiveConnInfo =
-        "void $stub$::SetExclusiveConnInfo(const std::optional<int32_t> &exclusiveId, const std::string &sockPath) {\n"
-        "    return stub_->SetExclusiveConnInfo(exclusiveId, sockPath);\n"
-        "}\n";
     printer.Print(vars, forgetRequest.c_str());
     printer.Print(vars, isPeerAlive.c_str());
     printer.Print(vars, cacheSession.c_str());
     printer.Print(vars, getInitStatus.c_str());
-    printer.Print(vars, setExclusiveConnInfo.c_str());
 }
 
 void RpcGenerator::ImplementGenericStubConstructor(io::Printer &printer,
@@ -636,25 +631,15 @@ void RpcGenerator::ImplementStubNoStreamDefHelper(std::string &impl,
         "    ::datasystem::Status rc;\n"
         "    auto &methodObj = methodMap_.find($methodIndex$)->second;\n"
         "    std::unique_ptr<datasystem::ClientUnaryWriterReaderImpl<$inputTypeName$, $outputTypeName$>> clientApi;\n"
-        "    if (!exclusiveId_.has_value()) {\n"
-        "        std::shared_ptr<::datasystem::ZmqMsgQueRef> sock;\n"
-        "        ::datasystem::RpcOptions o(opt);\n"
-        "        o.SetHWM(2);\n"
-        "        rc = pimpl_->CreateMsgQ(sock, serviceName_, o);\n"
-        "        if (rc.IsError()) { return rc; }\n"
-        "        clientApi =\n"
-        "            std::make_unique<datasystem::ClientUnaryWriterReaderImpl<$inputTypeName$, $outputTypeName$>>(\n"
-        "                std::move(sock), ServiceName(), methodObj->MethodIndex(),\n"
-        "                methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption());\n"
-        "    } else {\n"
-        "        // Exclusive connection mode has different constructor to set it up and requires an init.\n"
-        "        clientApi =\n"
-        "            std::make_unique<datasystem::ClientUnaryWriterReaderImpl<$inputTypeName$, $outputTypeName$>>(\n"
-        "                exclusiveId_.value(), ServiceName(), methodObj->MethodIndex(),\n"
-        "                methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption());\n"
-        "        rc = clientApi->InitExclusiveConnection(exclusiveSockPath_, opt.GetTimeout());\n"
-        "        if (rc.IsError()) { return rc; }\n"
-        "    }\n";
+        "    std::shared_ptr<::datasystem::ZmqMsgQueRef> sock;\n"
+        "    ::datasystem::RpcOptions o(opt);\n"
+        "    o.SetHWM(2);\n"
+        "    rc = pimpl_->CreateMsgQ(sock, serviceName_, o);\n"
+        "    if (rc.IsError()) { return rc; }\n"
+        "    clientApi =\n"
+        "        std::make_unique<datasystem::ClientUnaryWriterReaderImpl<$inputTypeName$, $outputTypeName$>>(\n"
+        "            std::move(sock), ServiceName(), methodObj->MethodIndex(),\n"
+        "            methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption());\n";
 
     if (criticalFunc) {
         impl +=

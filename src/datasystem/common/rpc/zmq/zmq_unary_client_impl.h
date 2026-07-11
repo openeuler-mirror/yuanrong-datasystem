@@ -39,7 +39,6 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/rpc/zmq/exclusive_conn_mgr.h"
 
 namespace datasystem {
 template <typename W, typename R>
@@ -57,33 +56,6 @@ public:
     {
         meta_ = CreateMetaData(svcName, methodIndex, sendPayload ? ZMQ_EMBEDDED_PAYLOAD_INX : ZMQ_INVALID_PAYLOAD_INX,
                                mQue_->GetId());
-    }
-
-    // Alternate constructor for exclusive connection mode
-    ClientUnaryWriterReaderImpl(int32_t exclusiveId, const std::string &svcName, int32_t methodIndex, bool sendPayload,
-                                bool recvPayload)
-        : StreamBase::StreamBase(sendPayload, recvPayload),
-          mQue_(nullptr),
-          writeOnce_(false),
-          readOnce_(false),
-          v2Server_(false),
-          payloadId_(-1),
-          payloadSz_(0),
-          exclusiveId_(exclusiveId)
-    {
-        // In non-exclusive connection mode, the mQue_->GetId() is used for the clientId metadata. This is not the
-        // actual client id, but the ZmqMsgQueue id. This field is not used in exclusive connection mode, but we can
-        // populate it with a name for diagnostic purposes.
-        std::string clientId = gExclusiveConnMgr.GetExclusiveConnMgrName();
-        meta_ = CreateMetaData(svcName, methodIndex, sendPayload ? ZMQ_EMBEDDED_PAYLOAD_INX : ZMQ_INVALID_PAYLOAD_INX,
-                               clientId);
-    }
-
-    Status InitExclusiveConnection(const std::string &exclusiveSockPath, int64_t timeoutMs)
-    {
-        RETURN_IF_NOT_OK(
-            gExclusiveConnMgr.CreateExclusiveConnection(exclusiveId_.value(), timeoutMs, exclusiveSockPath));
-        return Status::OK();
     }
 
     ~ClientUnaryWriterReaderImpl() override
@@ -266,11 +238,6 @@ public:
         return v2Server_;
     }
 
-    bool IsExclusiveConnection()
-    {
-        return exclusiveId_.has_value();
-    }
-
 protected:
     std::shared_ptr<ZmqMsgQueRef> mQue_;
 
@@ -367,99 +334,24 @@ private:
 
     Status SendConnMsg(MetaPb &meta, ZmqMsgFrames &frames, ZmqSendFlags flags)
     {
-        if (!IsExclusiveConnection()) {
-            ZmqMetaMsgFrames p(meta, std::move(frames));
-            RETURN_IF_NOT_OK(mQue_->SendMsg(p, flags));
-        } else {
-            ZmqMsgEncoder *encoder;
-            RETURN_IF_NOT_OK(gExclusiveConnMgr.GetExclusiveConnEncoder(exclusiveId_.value(), encoder));
-
-            // This is the last perf point before sending data to worker. In non-exclusive mode, this would be
-            // ZMQ_STUB_TO_BACK_TO_FRONT that gets recorded in the frontend sending codepath.
-            // Here in exclusive conn mode, it directly sends right here because there is no frontend.
-            // Thus, record a perf point here so that the next point, the server-side ZMQ_NETWORK_TRANSFER, will more
-            // accurately show the transfer time.
-            TraceGuard traceGuard = SetTraceContextFromMeta(meta);
-            PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_TO_EXCL_CONN, GetLapTime(meta, "ZMQ_STUB_TO_EXCL_CONN"));
-            RecordTick(meta, TICK_CLIENT_SEND);
-            // Add the meta to the frames
-            RETURN_IF_NOT_OK(PushFrontProtobufToFrames(meta, frames));
-
-            // The gatewayId field is part of the protocol for non-exclusive connections.
-            // In exclusive connection mode, this field is not functional, however it does provide a debugging handle
-            // for aligning the client request with server response when viewing logs, so it will continue to be added
-            // to the send frames.
-            std::string gatewayId = gExclusiveConnMgr.GetExclusiveConnMgrName();
-            RETURN_IF_NOT_OK(PushFrontStringToFrames(gatewayId, frames));
-            Status rc = encoder->SendMsgFrames(EventType::V1MTP, frames);
-            if (rc.IsError()) {
-                // If any error happens from sending the data, we shall close the exclusive connection so that future
-                // rpcs are forced to create a new connection. This avoids subsequent connection re-use againt a
-                // connection that is in error state.
-                // In the future, we may consider more intelligent error handling, since all errors may not require
-                // full cleanup.
-                LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
-                             "Error closing exclusive conn during error path");
-                return rc;
-            }
-        }
+        ZmqMetaMsgFrames p(meta, std::move(frames));
+        RETURN_IF_NOT_OK(mQue_->SendMsg(p, flags));
         return Status::OK();
     }
 
     Status RecvConnReply(ZmqMetaMsgFrames &reply, ZmqRecvFlags flags, bool isPayload)
     {
-        if (!IsExclusiveConnection()) {
-            RETURN_IF_NOT_OK(mQue_->ClientReceiveMsg(reply, flags));
-            // Regular receive counts the perf point using ZMQ_STUB_FRONT_TO_BACK. Special case for the payload version
-            // of a receive
-            if (isPayload) {
-                PerfPoint::RecordElapsed(PerfKey::ZMQ_PAYLOAD_TRANSFER,
-                                         GetLapTime(reply.first, "ZMQ_PAYLOAD_TRANSFER"));
-            } else {
-                PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK,
-                                         GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
-                RecordTick(reply.first, TICK_CLIENT_END);
-                RecordRpcLatencyMetrics(reply.first);
-            }
+        RETURN_IF_NOT_OK(mQue_->ClientReceiveMsg(reply, flags));
+        // Regular receive counts the perf point using ZMQ_STUB_FRONT_TO_BACK. Special case for the payload version
+        // of a receive
+        if (isPayload) {
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_PAYLOAD_TRANSFER,
+                                     GetLapTime(reply.first, "ZMQ_PAYLOAD_TRANSFER"));
         } else {
-            ZmqMsgDecoder *decoder;
-            RETURN_IF_NOT_OK(gExclusiveConnMgr.GetExclusiveConnDecoder(exclusiveId_.value(), decoder));
-
-            ZmqMsgFrames replyFrames;
-            // v2 decode supports v1 format. Use the v2 version of the decode.
-            Status rc = decoder->ReceiveMsgFramesV2(replyFrames);
-            if (rc.IsError()) {
-                // If any error happens from receiving the data, we shall close the exclusive connection so that future
-                // rpcs are forced to create a new connection. This avoids subsequent connection re-use againt a
-                // connection that is in error state.
-                // In the future, we may consider more intelligent error handling, since all errors may not require
-                // full cleanup.
-                LOG_IF_ERROR(gExclusiveConnMgr.CloseExclusiveConn(exclusiveId_.value()),
-                             "Error closing exclusive conn during error path");
-                return rc;
-            }
-
-            const size_t msgFrameMinSize = 2;
-            CHECK_FAIL_RETURN_STATUS(replyFrames.size() >= msgFrameMinSize, StatusCode::K_INVALID,
-                                     "Invalid msg: frames.size() = " + std::to_string(replyFrames.size()));
-            std::string receiver = ZmqMessageToString(replyFrames.front());
-            replyFrames.pop_front();
-
-            ZmqMessage metaHdr = std::move(replyFrames.front());
-            replyFrames.pop_front();
-            MetaPb meta;
-            RETURN_IF_NOT_OK(ParseFromZmqMessage(metaHdr, meta));
-            // In exclusive mode, there is no front/backend. There is only a receive. Do not record any stub perf
-            // points, and just record the network transfer here.
-            // Note that in non-exclusive mode, the ZMQ_NETWORK_TRANSFER_STUB_UDS was recorded in the frontend codepath,
-            // but that code did not run here so this is the appropriate time to capture this stat.
-            TraceGuard traceGuard = SetTraceContextFromMeta(meta, true);
-            PerfPoint::RecordElapsed(PerfKey::ZMQ_NETWORK_TRANSFER_STUB_UDS,
-                                     GetLapTime(meta, "ZMQ_NETWORK_TRANSFER (SOCKET)"));
-            RecordTick(meta, TICK_CLIENT_RECV);
-            RecordTick(meta, TICK_CLIENT_END);
+            PerfPoint::RecordElapsed(PerfKey::ZMQ_STUB_FRONT_TO_BACK,
+                                     GetLapTime(reply.first, "ZMQ_STUB_FRONT_TO_BACK"));
+            RecordTick(reply.first, TICK_CLIENT_END);
             RecordRpcLatencyMetrics(reply.first);
-            reply = std::make_pair(meta, std::move(replyFrames));
         }
         return Status::OK();
     }
@@ -469,7 +361,6 @@ private:
     bool v2Server_;
     int64_t payloadId_;
     size_t payloadSz_;
-    std::optional<int32_t> exclusiveId_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_ZMQ_STREAM_H

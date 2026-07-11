@@ -166,19 +166,13 @@ bool HasUrmaTcpFallbackPayload(const GetRspPb &rsp)
 
 ClientWorkerRemoteApi::ClientWorkerRemoteApi(HostPort hostPort, RpcCredential cred, HeartbeatType heartbeatType,
                                              SensitiveValue token, Signature *signature, std::string tenantId,
-                                             bool enableCrossNodeConnection, bool enableExclusiveConnection,
+                                             bool enableCrossNodeConnection,
                                              std::string deviceId)
     : client::IClientWorkerCommonApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
       ClientWorkerBaseApi(hostPort, heartbeatType, enableCrossNodeConnection, signature),
       ClientWorkerRemoteCommonApi(hostPort, cred, heartbeatType, std::move(token), signature, std::move(tenantId),
-                                  enableCrossNodeConnection, enableExclusiveConnection, std::move(deviceId))
+                                  enableCrossNodeConnection, std::move(deviceId))
 {
-    if (enableExclusiveConnection) {
-        // Assign a value and then bump the counter. This id is a client-side-only identifier, a bit like a
-        // client id but lighter weight for performance sensitive comparisons (existing client id is a large
-        // string and costly for lookups and string compare)
-        exclusiveId_ = exclusiveIdGen_++;
-    }
 }
 
 ClientWorkerRemoteApi::~ClientWorkerRemoteApi() = default;
@@ -211,9 +205,6 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
                                           GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
         }
         zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, connectTimeoutMs);
-        if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
-            zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
-        }
     }
     return Status::OK();
 }
@@ -271,10 +262,6 @@ Status ClientWorkerRemoteApi::ReconnectWorker(const std::vector<std::string> &gR
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(Connect(req, connectTimeoutMs_, true));
     RETURN_IF_NOT_OK(TryFastTransportAfterHeartbeat());
-    if (!FLAGS_use_brpc && enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
-        // exclusiveConnSockPath_ needs to be updated after reconnecting to worker.
-        zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
-    }
     return Status::OK();
 }
 
@@ -314,9 +301,6 @@ void ClientWorkerRemoteApi::RecreateOCStub()
                                           GetServiceSockName(ServiceSocketNames::DEFAULT_SOCK));
         }
         zmqStub_ = std::make_unique<WorkerOCService_Stub>(channel, stubTimeout);
-        if (enableExclusiveConnection_ && exclusiveId_.has_value() && IsShmEnableByUDS()) {
-            zmqStub_->SetExclusiveConnInfo(exclusiveId_, exclusiveConnSockPath_);
-        }
     }
 }
 

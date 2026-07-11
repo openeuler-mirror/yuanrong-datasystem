@@ -78,7 +78,6 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
     req.set_tenant_id("");
     req.set_enable_cross_node(false);
     req.set_pod_name("st");
-    req.set_enable_exclusive_connection(false);
     req.set_support_multi_shm_ref_count(false);
 
     DS_ASSERT_OK(signature.GenerateSignature(req));

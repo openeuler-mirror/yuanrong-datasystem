@@ -334,7 +334,6 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     token_ = connectOptions.token;
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
-    enableExclusiveConnection_ = connectOptions.enableExclusiveConnection;
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
@@ -506,7 +505,7 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
     if (!initWithWorker) {
         workerApi_[node] =
             std::make_shared<ClientWorkerRemoteApi>(address, cred_, heartbeatType, token_, signature_.get(), tenantId_,
-                                                    enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
+                                                    enableCrossNodeConnection_, deviceId_);
     } else {
         workerApi_[node] = std::make_shared<ClientWorkerLocalApi>(address, embeddedClientWorkerApi_, worker_,
                                                                   heartbeatType, signature_.get(), false, deviceId_);
@@ -1156,7 +1155,7 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
 {
     HeartbeatType heartbeatType = currentApi->heartbeatType_;
     auto candidateWorkerApi = currentApi->CloneWith(standbyWorker, cred_, heartbeatType, token_, signature_.get(),
-                                                    tenantId_, enableCrossNodeConnection_, enableExclusiveConnection_,
+                                                    tenantId_, enableCrossNodeConnection_,
                                                     embeddedClientWorkerApi_, worker_);
     candidateWorkerApi->isUseStandbyWorker_ = true;
     ConfigureUrmaDataPlaneFailureCallback(next, candidateWorkerApi);
@@ -1364,7 +1363,7 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
 {
     localWorkerApi =
         std::make_shared<ClientWorkerRemoteApi>(localAddress, cred_, heartbeatType, token_, signature_.get(), tenantId_,
-                                                enableCrossNodeConnection_, enableExclusiveConnection_, deviceId_);
+                                                enableCrossNodeConnection_, deviceId_);
     Status rc = localWorkerApi->Init(requestTimeoutMs_, connectTimeoutMs_, fastTransportMemSize_);
     if (rc.IsError()) {
         LOG(ERROR) << "[Switch] Init preferred same-node worker " << localAddress.ToString()

@@ -163,7 +163,6 @@ class KVClient:
         tenant_id="",
         enable_cross_node_connection=False,
         req_timeout_ms=0,
-        enable_exclusive_connection=False,
         fast_transport_mem_size=DEFAULT_FAST_TRANSPORT_MEM_SIZE,
         service_discovery=None
     ):
@@ -184,10 +183,6 @@ class KVClient:
             enable_cross_node_connection(bool): Indicates whether the client can connect to the standby node.
             req_timeout_ms(int): The timeout of request, when req_timeout_ms<=0, req_timeout_ms is the same
             with connect_timeout_ms.
-            enable_exclusive_connection(bool): Experimental feature: improves IPC performance between client and
-            datasystem_worker. A single datasystem_worker supports a maximum of 128 client connections with 
-            `enable_exclusive_connection` enabled. If the number of concurrent connections exceeds this threshold,
-            the system will throw a request exception.
             fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
             256MB. The valid range is [1, 2GB].
             service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
@@ -207,7 +202,6 @@ class KVClient:
             ["secret_key", secret_key, str],
             ["tenant_id", tenant_id, str],
             ["enable_cross_node_connection", enable_cross_node_connection, bool],
-            ["enable_exclusive_connection", enable_exclusive_connection, bool],
             ["fast_transport_mem_size", fast_transport_mem_size, int]
         ]
 
@@ -247,7 +241,6 @@ class KVClient:
             tenant_id,
             enable_cross_node_connection,
             req_timeout_ms,
-            enable_exclusive_connection,
             fast_transport_mem_size
         )
 

@@ -53,7 +53,7 @@ public:
 TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 500);
+    InitTestKVClient(0, client, 60000, false, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServiceImpl.Get.Timeout", "call(0)"));
 
@@ -73,7 +73,7 @@ TEST_F(KVClientTimeoutTest, KVGetShortTimeoutFailsFastWithDeadlineExceeded)
 TEST_F(KVClientTimeoutTest, KVMSetShortTimeoutDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 500);
+    InitTestKVClient(0, client, 60000, false, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(600)"));
 
@@ -100,7 +100,7 @@ TEST_F(KVClientTimeoutTest, KVMSetShortTimeoutDeadlineExceeded)
 TEST_F(KVClientTimeoutTest, KVExistShortTimeoutDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 500);
+    InitTestKVClient(0, client, 60000, false, 500);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "Exist.Sleep", "1*sleep(600)"));
 
@@ -122,7 +122,7 @@ TEST_F(KVClientTimeoutTest, Set3msCreateSlowExhaustsSharedBudget)
     // 3ms budget: Create phase sleeps 2ms, leaving ~1ms for master RPC.
     // Verifies budget is shared across the Set chain, not reinflated on retry.
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 3);
+    InitTestKVClient(0, client, 60000, false, 3);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
         "worker.before_CreateMultiMetaToMaster", "1*sleep(2)"));
@@ -154,7 +154,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // rejects before the injection fires. Either path yields K_RPC_DEADLINE_EXCEEDED.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, false, 1);
+        InitTestKVClient(0, client, 60000, false, 1);
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
             "worker.before_CreateMultiMetaToMaster", "1*sleep(1)"));
@@ -181,7 +181,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // <=10ms skips decay: RPC timeout ~= 9-10ms, sleep(5) + overhead < 9ms -> success.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, false, 10);
+        InitTestKVClient(0, client, 60000, false, 10);
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*sleep(5)"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", "1*sleep(5)"));
@@ -208,7 +208,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
     // minOnceRpcTimeoutMs=10 prevents retry after the first timeout.
     {
         std::shared_ptr<KVClient> client;
-        InitTestKVClient(0, client, 60000, false, false, 11);
+        InitTestKVClient(0, client, 60000, false, 11);
 
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiMeta.begin", "1*sleep(11)"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.CreateMultiMeta.begin", "1*sleep(11)"));
@@ -237,7 +237,7 @@ TEST_F(KVClientTimeoutTest, ShortTimeoutThresholdDecayBoundary)
 TEST_F(KVClientTimeoutTest, RetryDoesNotReinflateSharedBudget)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 50);
+    InitTestKVClient(0, client, 60000, false, 50);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0,
         "worker.before_CreateMultiMetaToMaster", "1*sleep(48)"));
@@ -276,7 +276,7 @@ TEST_F(KVClientTimeoutTest, KVMSetMemoryCopySlowDeadlineExceeded)
     // (mirrors single Set's TimedMemoryCopyWithDeadline) so MSet fails fast instead
     // of completing a slow copy silently.
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 3);
+    InitTestKVClient(0, client, 60000, false, 3);
 
     DS_ASSERT_OK(inject::Set("ObjectClientImpl.MemoryCopyParallel.slow", "1*sleep(20)"));
 

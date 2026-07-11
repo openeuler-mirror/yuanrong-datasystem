@@ -2109,10 +2109,6 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
         clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), HeartbeatType::RPC_HEARTBEAT);
 }
 
-Status WorkerOCServer::GetExclConnSockPath(std::string &sockPath)
-{
-    return objCacheClientWorkerSvc_->GetExclConnSockPath(sockPath);
-}
 
 void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)
 {
