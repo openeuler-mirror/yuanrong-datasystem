@@ -34,8 +34,10 @@ ds_cc_library(
         ],
         "//conditions:default": [],
     }),
-    copts = select({
-        "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
+    defines = select({
+        "//:enable_pipeline_h2d": [
+            "BUILD_PIPLN_H2D",
+        ],
         "//conditions:default": [],
     }),
     deps = [
@@ -54,6 +56,7 @@ ds_cc_library(
             "//src/datasystem/common/rdma:fast_transport_base_header",
             "//src/datasystem/common/flags:dynamic_flag_config_header",
             "@mlcachedirect//:os_transport_prefixed_hdrs",
+            "@mlcachedirect//:os_transport_lib",
             "@local_cuda//:cuda_headers",
         ],
         "//conditions:default": [],
@@ -72,8 +75,8 @@ ds_cc_library(
         "os_transport_pipeline_worker_api.h",
         "pipeline_notify_queue.h",
     ],
-    copts = select({
-        "//:enable_pipeline_h2d": ["-DBUILD_PIPLN_H2D"],
+    defines = select({
+        "//:enable_pipeline_h2d": ["BUILD_PIPLN_H2D"],
         "//conditions:default": [],
     }),
     deps = [

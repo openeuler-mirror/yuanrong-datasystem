@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: share lib loaders for libcudart.so and os_transport.so
+ * Description: shared loader for libcudart.so
  */
 
 #include "datasystem/common/os_transport_pipeline/dlopen_util.h"
@@ -112,39 +112,7 @@ void LibLoaderBase::UnLoad()
     handle_ = nullptr;
 }
 
-OsTransportLibLoader *OsTransportLibLoader::Instance()
-{
-    static OsTransportLibLoader inst;
-    return &inst;
-}
 
-void OsTransportLibLoader::Load()
-{
-    LibLoaderBase::Load();
-    DLSYM_FUNC_OBJ_LINK(DoLogReg, os_transport_log_reg, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoInit, os_transport_init, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoRecv, os_transport_recv, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoSend, os_transport_send, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoDestroy, os_transport_destroy, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoWait, wait_and_free_sync, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoWaitTimeout, wait_and_free_sync_timeout, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoNotify, os_transport_wake_up_task, handle_);
-    DLSYM_FUNC_OBJ_LINK(DoCancel, os_transport_cancel_tasks, handle_);
-}
-
-void OsTransportLibLoader::UnLoad()
-{
-    LibLoaderBase::UnLoad();
-    DLSYM_FUNC_OBJ_DESTROY(DoLogReg);
-    DLSYM_FUNC_OBJ_DESTROY(DoInit);
-    DLSYM_FUNC_OBJ_DESTROY(DoRecv);
-    DLSYM_FUNC_OBJ_DESTROY(DoSend);
-    DLSYM_FUNC_OBJ_DESTROY(DoDestroy);
-    DLSYM_FUNC_OBJ_DESTROY(DoWait);
-    DLSYM_FUNC_OBJ_DESTROY(DoWaitTimeout);
-    DLSYM_FUNC_OBJ_DESTROY(DoNotify);
-    DLSYM_FUNC_OBJ_DESTROY(DoCancel);
-}
 #ifndef PIPLN_USE_MOCK
 CudaRTLibLoader *CudaRTLibLoader::Instance()
 {

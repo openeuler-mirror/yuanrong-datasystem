@@ -372,7 +372,12 @@ ds_cc_library(
         "//src/datasystem/worker:worker_service_impl",
         "//src/datasystem/worker:worker_update_flag_check",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
-    ],
+    ] + select({
+        "//:enable_pipeline_h2d": [
+            "//src/datasystem/common/os_transport_pipeline:os_transport_pipeline",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 ds_cc_library(
