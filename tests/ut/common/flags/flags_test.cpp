@@ -1188,6 +1188,24 @@ TEST_F(FlagsTest, ValidateChangeRejectsNonModifiableFlag)
     EXPECT_TRUE(errMsg.find("not modifiable") != errMsg.npos);
     EXPECT_EQ(FLAGS_int32_flag, 32);
 }
+
+TEST_F(FlagsTest, ValidateChangeRejectsOutOfRangeMinLogLevel)
+{
+    const int32_t original = FLAGS_minloglevel;
+    std::string errMsg;
+    // Issue 670: minloglevel=100 should be rejected (valid range is 0..3).
+    EXPECT_FALSE(FlagManager::GetInstance()->ValidateChange("minloglevel", "100", errMsg));
+    EXPECT_THAT(errMsg, testing::HasSubstr("minloglevel"));
+    EXPECT_EQ(FLAGS_minloglevel, original);
+
+    // Negative values are also out of range.
+    EXPECT_FALSE(FlagManager::GetInstance()->ValidateChange("minloglevel", "-1", errMsg));
+    EXPECT_EQ(FLAGS_minloglevel, original);
+
+    // Valid values pass and leave the flag unchanged (ValidateChange does not persist).
+    EXPECT_TRUE(FlagManager::GetInstance()->ValidateChange("minloglevel", "2", errMsg));
+    EXPECT_EQ(FLAGS_minloglevel, original);
+}
 }  // namespace ut
 }  // namespace datasystem
 
