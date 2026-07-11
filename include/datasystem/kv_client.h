@@ -101,8 +101,8 @@ public:
     ///
     /// \param[in] clientConfig The client initialization config.
     ///
-    /// On the first Init in a process, explicit fields take precedence over command-line flags,
-    /// environment variables, and defaults; the config snapshot is then frozen. Subsequent Init
+    /// On the first Init in a process, explicit fields take precedence over environment
+    /// variables and defaults; the config snapshot is then frozen. Subsequent Init
     /// calls only check fields explicitly present in clientConfig; missing fields, including an
     /// empty config, are treated as unspecified. Differences are logged, Init returns K_OK, and
     /// the frozen process-level settings are not overridden. See KVClientConfig for details.

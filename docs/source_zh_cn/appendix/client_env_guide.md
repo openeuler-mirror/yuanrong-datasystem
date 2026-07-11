@@ -32,7 +32,7 @@
 | 12 | `DATASYSTEM_CLIENT_MAX_LOG_SIZE` | `100MB` | 日志文件最大大小,默认100MB。 |
 | 13 | `DATASYSTEM_LOG_TO_STDERR` | `false` | 为true时,日志信息输出到stderr而不是log_file。 |
 | 14 | `DATASYSTEM_ALSO_LOG_TO_STDERR` | `false` | 为true时,日志信息输出到stderr,同时输出到文件。 |
-| 15 | `DATASYSTEM_STD_THRESHOLD` | `10` | 除了日志文件之外,还将等于或高于此级别的日志消息复制到stderr。 |
+| 15 | `DATASYSTEM_STD_THRESHOLD` | `3` | 控制哪些级别的日志同时复制到stderr。取值范围`[0, 3]`，数值含义同`DATASYSTEM_MIN_LOG_LEVEL`（`0`=INFO、`1`=WARNING、`2`=ERROR、`3`=FATAL）；默认`3`表示只有FATAL输出到stderr。 |
 | 16 | `DATASYSTEM_LOG_RETENTION_DAY` | `0` | 日志保留时间(天),默认0表示不清除日志。 |
 | 17 | `DATASYSTEM_LOG_ASYNC_BUFFER_MB` | `2` | 异步日志缓冲区大小,单位为MB,默认2MB。 |
 | 18 | `DATASYSTEM_MAX_LOG_FILE_NUM` | `5` | 日志文件最大数量,默认5。 |
