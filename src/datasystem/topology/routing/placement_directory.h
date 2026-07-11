@@ -21,7 +21,6 @@
 #define DATASYSTEM_TOPOLOGY_ROUTING_PLACEMENT_DIRECTORY_H
 
 #include <memory>
-#include <shared_mutex>
 #include <unordered_map>
 
 #include "datasystem/common/util/status_helper.h"
@@ -93,7 +92,8 @@ public:
     void Publish(std::shared_ptr<const PlacementDirectorySnapshot> snapshot);
 
 private:
-    mutable std::shared_timed_mutex mutex_;
+    // Atomic snapshot access: removes PlacementDirectory's reader mutex from the hot path.
+    // std::atomic_load/store on shared_ptr is not guaranteed to be lock-free by C++17.
     std::shared_ptr<const PlacementDirectorySnapshot> snapshot_;
 };
 

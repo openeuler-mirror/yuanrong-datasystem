@@ -15,11 +15,11 @@
  */
 
 /**
- * Description: R0 placement directory snapshot.
+ * Description: R0 placement directory snapshot (atomic snapshot version).
  */
 #include "datasystem/topology/routing/placement_directory.h"
 
-#include <mutex>
+#include <memory>
 #include <utility>
 
 namespace datasystem {
@@ -27,40 +27,40 @@ namespace topology {
 
 Status PlacementDirectory::ResolveWorker(const std::string &workerId, PlacementEndpoint &endpoint) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
-    auto iter = snapshot_->workers.find(workerId);
-    CHECK_FAIL_RETURN_STATUS(iter != snapshot_->workers.end(), K_NOT_FOUND, "Worker endpoint is not found.");
+    auto snap = std::atomic_load(&snapshot_);
+    CHECK_FAIL_RETURN_STATUS(snap != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
+    auto iter = snap->workers.find(workerId);
+    CHECK_FAIL_RETURN_STATUS(iter != snap->workers.end(), K_NOT_FOUND, "Worker endpoint is not found.");
     endpoint = iter->second;
     return Status::OK();
 }
 
 Status PlacementDirectory::ResolveWorkerByAddress(const std::string &workerAddress, PlacementEndpoint &endpoint) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
-    auto idIter = snapshot_->workerIdsByAddress.find(workerAddress);
-    CHECK_FAIL_RETURN_STATUS(idIter != snapshot_->workerIdsByAddress.end(), K_NOT_FOUND,
+    auto snap = std::atomic_load(&snapshot_);
+    CHECK_FAIL_RETURN_STATUS(snap != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
+    auto idIter = snap->workerIdsByAddress.find(workerAddress);
+    CHECK_FAIL_RETURN_STATUS(idIter != snap->workerIdsByAddress.end(), K_NOT_FOUND,
                              "Worker id is not found by address.");
-    auto endpointIter = snapshot_->workers.find(idIter->second);
-    CHECK_FAIL_RETURN_STATUS(endpointIter != snapshot_->workers.end(), K_NOT_FOUND, "Worker endpoint is not found.");
+    auto endpointIter = snap->workers.find(idIter->second);
+    CHECK_FAIL_RETURN_STATUS(endpointIter != snap->workers.end(), K_NOT_FOUND, "Worker endpoint is not found.");
     endpoint = endpointIter->second;
     return Status::OK();
 }
 
 Status PlacementDirectory::GetLocalWorker(PlacementEndpoint &endpoint) const
 {
-    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
-    CHECK_FAIL_RETURN_STATUS(snapshot_ != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
-    auto iter = snapshot_->workers.find(snapshot_->localWorkerId);
-    if (iter != snapshot_->workers.end()) {
+    auto snap = std::atomic_load(&snapshot_);
+    CHECK_FAIL_RETURN_STATUS(snap != nullptr, K_NOT_READY, "Placement directory snapshot is not published.");
+    auto iter = snap->workers.find(snap->localWorkerId);
+    if (iter != snap->workers.end()) {
         endpoint = iter->second;
         return Status::OK();
     }
-    CHECK_FAIL_RETURN_STATUS(!snapshot_->localWorkerId.empty() || !snapshot_->localAddress.Empty(), K_NOT_FOUND,
+    CHECK_FAIL_RETURN_STATUS(!snap->localWorkerId.empty() || !snap->localAddress.Empty(), K_NOT_FOUND,
                              "Local worker is not found.");
-    endpoint.workerId = snapshot_->localWorkerId;
-    endpoint.address = snapshot_->localAddress;
+    endpoint.workerId = snap->localWorkerId;
+    endpoint.address = snap->localAddress;
     endpoint.availability = WorkerAvailability::NOT_READY;
     return Status::OK();
 }
@@ -91,8 +91,7 @@ Status PlacementDirectory::GetLocalEndpoint(MemberEndpoint &endpoint) const
 
 void PlacementDirectory::Publish(std::shared_ptr<const PlacementDirectorySnapshot> snapshot)
 {
-    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
-    snapshot_ = std::move(snapshot);
+    std::atomic_store(&snapshot_, std::move(snapshot));
 }
 
 }  // namespace topology
