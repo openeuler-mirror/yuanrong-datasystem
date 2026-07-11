@@ -302,10 +302,10 @@ TEST_F(OCClientTimeoutTest, GetObjMetaInfoIndependentDeadlineExceeded)
 // the zmq RPC response times out. Before the fix this returned K_RPC_UNAVAILABLE; after the
 // fix it must return K_RPC_DEADLINE_EXCEEDED so callers can distinguish deadline exhaustion
 // from connection/service failure.
-TEST_F(OCClientTimeoutTest, Level1_RpcResponseTimeoutReturnsDeadlineExceededIssue687)
+TEST_F(OCClientTimeoutTest, Level1_RpcResponseTimeoutReturnsDeadlineExceeded)
 {
     std::shared_ptr<KVClient> client;
-    InitTestKVClient(0, client, 60000, false, false, 10);
+    InitTestKVClient(0, client, 60000, false, 10);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.before_CreateMultiMetaToMaster", "1*sleep(100)"));
 

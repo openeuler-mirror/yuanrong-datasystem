@@ -339,6 +339,9 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     }
 
     if (limiter_.IsRemoteBusyNode()) {
+        (void)TryUpdateRate(0);
+    }
+    if (limiter_.IsRemoteBusyNode()) {
         LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
         std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
                        [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
