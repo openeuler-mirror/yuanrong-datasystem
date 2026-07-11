@@ -32,6 +32,7 @@
 #include <butil/errno.h>  // berror(): renders both system errno and brpc-registered errno to text
 #include <google/protobuf/message.h>
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -60,6 +61,7 @@ inline constexpr int kBrpcReject = 1018;         // brpc::EREJECT
 inline constexpr int kBrpcInternal = 2001;       // brpc::EINTERNAL
 inline constexpr int kBrpcLogoff = 2003;         // brpc::ELOGOFF
 inline constexpr int kBrpcClose = 2005;          // brpc::ECLOSE
+inline constexpr int kBrpcDetailLogLevel = 2;
 
 /**
  * @brief Map a brpc Controller ErrorCode() to a datasystem Status.
@@ -263,6 +265,9 @@ inline Status TryExtractStatusFromControllerError(const std::string &errorText, 
                 // sentinel itself is stripped). No __LINE__/__FILE__: they
                 // would point at this helper, not the failing call site.
                 std::string cleanMsg = "RPC failed: code=" + codeStr + "; " + errorText;
+                VLOG(kBrpcDetailLogLevel)
+                    << "[BRPC_STATUS] Extract DS_ERR from controller error, code=" << codeStr
+                    << ", errorTextLen=" << errorText.size();
                 return Status(static_cast<StatusCode>(code), cleanMsg);
             }
             LOG(WARNING) << "Corrupt DS_ERR sentinel in Controller error text: '"
@@ -274,6 +279,9 @@ inline Status TryExtractStatusFromControllerError(const std::string &errorText, 
     // K_RPC_CANCELLED. When errorCode == 0 (call site did not capture it),
     // MapBrpcErrorCodeToStatus falls through to K_RPC_CANCELLED, preserving
     // prior behavior for legacy callers.
+    VLOG(1) << "[BRPC_STATUS] No DS_ERR in controller error, fallback to brpc errno mapping"
+            << ", errorCode=" << errorCode << ", errorTextLen=" << errorText.size()
+            << ", errorText=" << FormatStringForLog(errorText);
     return MapBrpcErrorCodeToStatus(errorCode, errorText);
 }
 

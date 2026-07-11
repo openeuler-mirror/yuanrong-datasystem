@@ -205,7 +205,7 @@ public:
         bool expected = false;
         if (writeOnce_.compare_exchange_strong(expected, true)) {
             if (cntl_ != nullptr && rc.IsError()) {
-                cntl_->SetFailed(rc.GetMsg() + "\x01DS_ERR:"
+                cntl_->SetFailed(rc.GetMsg() + "\x01" "DS_ERR:"
                     + std::to_string(static_cast<int>(rc.GetCode())) + "\x02");
             }
             // Mark done as consumed and run done closure immediately — same as

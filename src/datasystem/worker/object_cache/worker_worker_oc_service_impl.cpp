@@ -124,6 +124,30 @@ Status GetRemoteAddressFromBatchGetReq(const BatchGetObjectRemoteReqPb &req, Hos
     requestAddress = HostPort(host, port);
     return Status::OK();
 }
+
+void LogBatchGetObjectRemotePrepareFailed(const BatchGetObjectRemoteReqPb &req, const std::string &callerAddress,
+                                          const std::string &firstObjectKey, const Status &status)
+{
+    VLOG(1) << "[REMOTE_GET_CONNECTION_CHECK_FAILED] method=BatchGetObjectRemote"
+            << ", count=" << req.requests_size() << ", firstObjectKey=" << firstObjectKey
+            << ", src=" << callerAddress << ", dst=" << FLAGS_worker_address
+            << ", status=" << status.ToString() << ", willReturnViaBrpcSetFailed=true";
+}
+
+void LogBatchGetObjectRemoteFinish(const LatencyTraceConfig &config, const BatchGetObjectRemoteReqPb &req,
+                                   const std::vector<RpcMessage> &payload, const std::string &firstObjectKey,
+                                   uint64_t realRemainingTime, const std::string &callerAddress, const Timer &timer)
+{
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
+        AppendSrcDstForLog(
+            FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
+                         "remainingTime: %zu, cost: %.3fms",
+                         req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
+            callerAddress, FLAGS_worker_address));
+}
 }  // namespace
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
@@ -170,7 +194,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     }
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     INJECT_POINT("worker.GetObjectRemote.afterRead");
-    RETURN_IF_NOT_OK(CheckConnectionStable(req));
+    auto connectionRc = CheckConnectionStable(req);
+    if (connectionRc.IsError()) {
+        VLOG(1) << "[REMOTE_GET_CONNECTION_CHECK_FAILED] method=GetObjectRemote"
+                << ", objectKey=" << req.object_key() << ", src=" << GetRemoteAddressForLog(req)
+                << ", dst=" << FLAGS_worker_address << ", status=" << connectionRc.ToString()
+                << ", willReturnViaBrpcSetFailed=true";
+        return connectionRc;
+    }
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
     // is different from the request
     RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
@@ -855,7 +886,11 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
         FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %zu", req.requests_size(), realRemainingTime),
         callerAddress, FLAGS_worker_address);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    RETURN_IF_NOT_OK(PrepareBatchGetObjectRemoteReq(req));
+    auto prepareRc = PrepareBatchGetObjectRemoteReq(req);
+    if (prepareRc.IsError()) {
+        LogBatchGetObjectRemotePrepareFailed(req, callerAddress, firstObjectKey, prepareRc);
+        return prepareRc;
+    }
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     if (traceEnabled) {
@@ -869,15 +904,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
                                      "GetObjectRemote send payload error");
     pointImpl.Record();
-    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
-    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-    SLOW_LOG_IF_OR_VLOG(
-        INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
-        AppendSrcDstForLog(
-            FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
-                         "remainingTime: %zu, cost: %.3fms",
-                         req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
-            callerAddress, FLAGS_worker_address));
+    LogBatchGetObjectRemoteFinish(config, req, payload, firstObjectKey, realRemainingTime, callerAddress, timer);
     point.Record();
     return Status::OK();
 }

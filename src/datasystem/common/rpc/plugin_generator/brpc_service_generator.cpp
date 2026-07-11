@@ -436,7 +436,7 @@ void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
         "$indent$}\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n";
     printer.Print(vars, impl.c_str());
@@ -487,7 +487,7 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "$indent$} while (false);\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, std::move(payload));\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n";
     printer.Print(vars, impl.c_str());
@@ -519,7 +519,7 @@ void RpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
         "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, outPayload);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$} else {\n"
         "$indent$    auto& buf = cntl->response_attachment();\n"
@@ -585,7 +585,7 @@ std::string RpcGenerator::BuildSendRecvPayloadImpl()
         "$indent$} while (false);\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, std::move(payload), outPayload);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$} else {\n"
         "$indent$    // Serialize outPayload -> response_attachment\n"
@@ -634,7 +634,12 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
         "$indent$scTimeoutDuration = serverApi->GetScTimeoutDuration();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(serverApi);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    VLOG(1) << \"[BRPC_UNARY_SOCKET_SET_FAILED] method=$methodName$\"\n"
+        "$indent$            << \", status=\" << st.ToString()\n"
+        "$indent$            << \", dsErrCode=\" << static_cast<int>(st.GetCode())\n"
+        "$indent$            << \", remoteSide=\" << cntl->remote_side()\n"
+        "$indent$            << \", localSide=\" << cntl->local_side();\n"
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$    // Mark done as consumed so ~BrpcServerUnaryWriterReader does not double-close.\n"
         "$indent$    serverApi->MarkDoneConsumed();\n"
@@ -714,7 +719,7 @@ void RpcGenerator::ImplementBrpcCallMethodClientStream(io::Printer &printer,
         "$indent$$outputTypeName$ reply;\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(reader, reply$optRecvPayload1$);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$} else {\n"
         "$indent$    rsp->CopyFrom(reply);\n"
@@ -786,13 +791,13 @@ void RpcGenerator::ImplementBrpcCallMethodServerStream(io::Printer &printer,
     impl +=
         "$indent$::datasystem::Status readSt = writer->ReadPb(rq);\n"
         "$indent$if (readSt.IsError()) {\n"
-        "$indent$    cntl->SetFailed(readSt.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(readSt.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(readSt.GetCode())) + \"\\x02\");\n"
         "$indent$    return;\n"
         "$indent$}\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(writer, rq$optSendPayload1$);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n";
     printer.Print(vars, impl.c_str());
@@ -828,7 +833,7 @@ void RpcGenerator::ImplementBrpcCallMethodBidiStream(io::Printer &printer,
     impl +=
         "$indent$::datasystem::Status st = impl_.$methodName$(stream);\n"
         "$indent$if (st.IsError()) {\n"
-        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01DS_ERR:\" + "
+        "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n";
     printer.Print(vars, impl.c_str());

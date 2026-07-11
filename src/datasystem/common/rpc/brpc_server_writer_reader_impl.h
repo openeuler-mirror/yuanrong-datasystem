@@ -199,7 +199,7 @@ public:
             // Write an error status frame so the client can recover the Status
             // code instead of treating stream close as normal end-of-stream.
             if (streamId_ != brpc::INVALID_STREAM_ID) {
-                std::string errFrame = "\x01DS_ERR:"
+                std::string errFrame = "\x01" "DS_ERR:"
                     + std::to_string(static_cast<int>(rc.GetCode())) + "\x02" + rc.GetMsg();
                 butil::IOBuf buf;
                 buf.append(errFrame);

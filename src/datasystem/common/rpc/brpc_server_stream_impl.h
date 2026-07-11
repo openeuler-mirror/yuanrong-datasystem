@@ -100,7 +100,7 @@ public:
         if (rc.IsError() && streamId_ != brpc::INVALID_STREAM_ID) {
             // Send error status via a control frame, then close
             butil::IOBuf buf;
-            std::string errMsg = std::string("\x01DS_ERR:") +
+            std::string errMsg = std::string("\x01" "DS_ERR:") +
                 std::to_string(static_cast<int>(rc.GetCode())) + "\x02" + rc.GetMsg();
             buf.append(errMsg);
             (void)brpc::StreamWrite(streamId_, buf);
@@ -271,7 +271,7 @@ public:
     Status SendStatus(const Status &rc)
     {
         if (rc.IsError()) {
-            cntl_->SetFailed(rc.GetMsg() + "\x01DS_ERR:" +
+            cntl_->SetFailed(rc.GetMsg() + "\x01" "DS_ERR:" +
                 std::to_string(static_cast<int>(rc.GetCode())) + "\x02");
         }
         return Status::OK();
