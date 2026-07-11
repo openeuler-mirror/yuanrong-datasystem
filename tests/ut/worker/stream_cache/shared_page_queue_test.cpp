@@ -25,6 +25,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
+#include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/common/stream_cache/stream_data_page.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/worker/stream_cache/page_queue/page_queue_handler.h"
@@ -55,6 +56,10 @@ public:
     }
     void TearDown() override
     {
+        // svc_->Init starts ScMetricsMonitor (singleton). Stop it between cases
+        // so the next SetUp's Init does not destroy a joinable Tick thread
+        // (which would fire std::terminate).
+        ScMetricsMonitor::Instance()->Shutdown();
         CommonTest::TearDown();
     }
 

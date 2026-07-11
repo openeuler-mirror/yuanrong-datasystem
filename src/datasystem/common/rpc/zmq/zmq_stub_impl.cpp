@@ -69,28 +69,6 @@ int64_t ZmqStubImpl::Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::strin
     return id;
 }
 
-Status AckRequest(ZmqMsgFrames &frames, ZmqMessage &reply)
-{
-    CHECK_FAIL_RETURN_STATUS(!frames.empty(), K_RUNTIME_ERROR, "Empty frames");
-    /**
-     * The first message is always the Status object.
-     */
-    ZmqMessage first = std::move(frames.front());
-    frames.pop_front();
-
-    /**
-     * We can do an early exit if there is any error. Server will
-     * not send any message body.
-     */
-    RETURN_IF_NOT_OK(ZmqMessageToStatus(first));
-
-    if (!frames.empty()) {
-        reply = std::move(frames.front());
-        frames.pop_front();
-    }
-    return Status::OK();
-}
-
 void ZmqStubImpl::ForgetRequest(int64_t tag)
 {
     Remove(tag);

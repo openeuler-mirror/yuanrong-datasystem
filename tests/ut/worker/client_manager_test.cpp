@@ -41,7 +41,17 @@ namespace datasystem {
 namespace ut {
 class ClientInfoTest : public CommonTest {};
 
-class ClientManagerTest : public CommonTest {};
+class ClientManagerTest : public CommonTest {
+public:
+    // ClientManager is a singleton; cases call Init() explicitly. Stop the
+    // health thread in TearDown so the next case's Init does not destroy a
+    // joinable thread (which would fire std::terminate).
+    void TearDown() override
+    {
+        ClientManager::Instance().Shutdown();
+        CommonTest::TearDown();
+    }
+};
 
 TEST_F(ClientInfoTest, TestInvalid)
 {
@@ -258,7 +268,10 @@ TEST_F(ClientManagerTest, TestAddClientFailed)
 TEST_F(ClientManagerTest, TestMaxClientNumOnlyCountsShmEnabled)
 {
     FLAGS_max_client_num = 1;
-    ClientManager &clientMgr = ClientManager::Instance();
+    // Use a local instance so the lock-id quota is filled from the current
+    // FLAGS_max_client_num (set above), not the value cached when the
+    // singleton was first constructed.
+    ClientManager clientMgr;
     DS_ASSERT_OK(clientMgr.Init());
 
     // Setting shmEnabled to true will consume lockId quota.
@@ -301,7 +314,10 @@ TEST_F(ClientManagerTest, TestClientShmEnabled)
 
 TEST_F(ClientManagerTest, TestRemovableClientCount)
 {
-    ClientManager &clientMgr = ClientManager::Instance();
+    // Restore the default quota (a previous case may have lowered it) and use a
+    // local instance so the lock-id quota matches this value.
+    FLAGS_max_client_num = 200;
+    ClientManager clientMgr;
     DS_ASSERT_OK(clientMgr.Init());
     size_t count = 100;
     uint32_t lockId;

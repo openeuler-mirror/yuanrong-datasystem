@@ -288,6 +288,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/stream_cache:stream_manager",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
         "//tests/common/binmock",
         "//tests/ut:ut_common",
     ],
@@ -301,6 +302,7 @@ ds_cc_test(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/stream_cache:client_worker_sc_service_impl",
+        "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
         "//src/datasystem/worker/stream_cache/page_queue:shared_page_queue_group",
         "//tests/ut:ut_common",
     ],
