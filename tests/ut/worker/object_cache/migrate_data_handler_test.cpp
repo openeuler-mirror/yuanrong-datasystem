@@ -902,6 +902,109 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)
     ASSERT_TRUE(result.failedIds.empty());
 }
 
+TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealsAfterRatePoisonedToZero)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 40;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardSelfHeal", objectSize, objectCount, objectKeys);
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&directCalls](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(directCalls == 0 ? 0 : (1024ul * 1024ul));
+            ++directCalls;
+            return Status::OK();
+        }));
+
+    uint32_t probeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&probeCalls](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                             MigrateDataRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_TRUE(payloads.empty());
+            rsp.set_limit_rate(probeCalls < 5 ? 0 : (1024ul * 1024ul));
+            ++probeCalls;
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    DS_ASSERT_OK(result.status);
+    ASSERT_EQ(result.successIds.size(), objectCount);
+    ASSERT_TRUE(result.failedIds.empty());
+    ASSERT_GE(probeCalls, 6u);
+}
+
+TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 40;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardGiveUp", objectSize, objectCount, objectKeys);
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillRepeatedly(Invoke([&directCalls](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(0);
+            ++directCalls;
+            return Status::OK();
+        }));
+
+    uint32_t probeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([&probeCalls](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
+                                             MigrateDataRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_TRUE(payloads.empty());
+            rsp.set_limit_rate(0);
+            ++probeCalls;
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    auto result = handler.MigrateDataToRemote();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
+    ASSERT_EQ(result.successIds.size(), 1ul);
+    ASSERT_EQ(result.failedIds.size(), 1ul);
+    ASSERT_TRUE(result.failedIds.count(objectKeys[0]) > 0
+                || result.failedIds.count(objectKeys[1]) > 0);
+    ASSERT_EQ(result.successIds.size() + result.failedIds.size(), objectCount);
+    ASSERT_GE(probeCalls, 10u);
+}
+
 TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestReleaseFailEnqueueTask)
 {
     BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
