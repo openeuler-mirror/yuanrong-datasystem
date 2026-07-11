@@ -28,8 +28,8 @@ namespace datasystem {
  *
  * Build via Builder and pass to KVClient::Init. Does not cover ConnectOptions.
  * The first Init in a process freezes the config snapshot; per-field priority on that
- * first Init is: explicit Builder fields > command-line flags > environment variables >
- * defaults. Later Init calls reuse the frozen process-level settings and do not override
+ * first Init is: explicit Builder fields > environment variables > defaults. Later Init
+ * calls reuse the frozen process-level settings and do not override
  * them. Later Init with config only checks fields explicitly present in that config;
  * missing fields, including an empty config, are treated as unspecified rather than as
  * a request to clear or compare against an empty snapshot.
