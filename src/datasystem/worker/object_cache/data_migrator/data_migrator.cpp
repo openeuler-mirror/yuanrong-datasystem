@@ -182,7 +182,7 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateToTargetNode
 
         std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
         MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_, remoteWorkerStub,
-                                   strategy, nullptr, isRetry, slotId);
+                                   strategy, &stopping_, progress_, isRetry, slotId);
         auto result = handler.MigrateDataToRemote(isSlotMigration);
         return result;
     });
@@ -373,7 +373,7 @@ MigrateDataHandler::MigrateResult DataMigrator::MigrateDataByNodeImpl(
 {
     std::vector<ImmutableString> needMigrateDataIds{ objectKeys.begin(), objectKeys.end() };
     MigrateDataHandler handler(type_, localAddress_.ToString(), needMigrateDataIds, objectTable_, remoteWorkerStub,
-                               strategy, progress_, false, slotId);
+                               strategy, &stopping_, progress_, false, slotId);
     return handler.MigrateDataToRemote(isSlotMigration);
 }
 

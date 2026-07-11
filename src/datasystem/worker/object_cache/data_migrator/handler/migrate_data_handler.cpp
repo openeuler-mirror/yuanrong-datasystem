@@ -22,6 +22,7 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/transport/fast_migrate_transport.h"
@@ -39,6 +40,7 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
                                        std::shared_ptr<ObjectTable> objectTable,
                                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi,
                                        std::shared_ptr<SelectionStrategy> strategy,
+                                       std::atomic<bool> *stoppingPtr,
                                        std::shared_ptr<MigrateProgress> progress, bool isRetry, uint32_t slotId)
     : type_(type),
       localAddr_(localAddr),
@@ -52,7 +54,8 @@ MigrateDataHandler::MigrateDataHandler(MigrateType type, const std::string &loca
       strategy_(std::move(strategy)),
       progress_(std::move(progress)),
       isRetry_(isRetry),
-      slotId_(slotId)
+      slotId_(slotId),
+      stoppingPtr_(stoppingPtr)
 {
     if (ShouldUseFastTransport()) {
         if (FLAGS_data_migrate_urma_transport_mode == "read") {
@@ -339,15 +342,17 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
     }
 
     if (limiter_.IsRemoteBusyNode()) {
-        (void)TryUpdateRate(0);
-    }
-    if (limiter_.IsRemoteBusyNode()) {
-        LOG(WARNING) << FormatString("[Migrate Data] Remote node %s is busy", remoteApi_->Address());
-        std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
-                       [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
-        lastRc_ = Status(StatusCode::K_NOT_READY, "[Migrate Data] Remote node is busy");
-        Clear();
-        return;
+        VLOG(1) << FormatString("[Migrate Data] self-heal triggered for %s", remoteApi_->Address());
+        Status heal = SelfHealBusyRate();
+        if (heal.IsError()) {
+            LOG(WARNING) << FormatString("[Migrate Data] Remote %s still busy after probe: %s",
+                                         remoteApi_->Address(), heal.ToString());
+            std::transform(datas_.begin(), datas_.end(), std::inserter(failedIds_, failedIds_.end()),
+                           [](const std::unique_ptr<BaseDataUnit> &d) { return d->Id(); });
+            lastRc_ = heal;
+            Clear();
+            return;
+        }
     }
     limiter_.WaitAllow(currBatchSize_);
 
@@ -368,7 +373,11 @@ void MigrateDataHandler::SendDataToRemote(bool isSlotMigration)
         AdjustMaxBatchSize(rsp.remainBytes);
         successIds_.insert(rsp.successKeys.begin(), rsp.successKeys.end());
         failedIds_.insert(rsp.failedKeys.begin(), rsp.failedKeys.end());
-        TryUpdateRate(rsp.limitRate);
+        Status rc = TryUpdateRate(rsp.limitRate);
+        if (rc.IsError()) {
+            LOG(WARNING) << FormatString("[Migrate Data] Rate update failed for %s: %s",
+                                         remoteApi_->Address(), rc.ToString());
+        }
         ReleaseResources(rsp.successKeys);
     } else {
         LOG(ERROR) << FormatString("[Migrate Data] Send %ld objects[%ld bytes] data to %s failed, error message: %s",
@@ -400,26 +409,77 @@ Status MigrateDataHandler::MigrateDataToRemoteRetry(const std::shared_ptr<Worker
     return status;
 }
 
-Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
+Status MigrateDataHandler::SelfHealBusyRate()
 {
-    const uint64_t minSleepMs = 100;
-    const uint64_t maxSleepMs = 500;
-    int busyNodeRetryCount = 5;
+    if (selfHealAttempted_) {
+        return lastHealStatus_;
+    }
+    selfHealAttempted_ = true;
+
+    int probesMade = 0;
+    auto deadline = static_cast<uint64_t>(GetSteadyClockTimeStampMs()) + BUSY_HEAL_BUDGET_MS;
+    uint64_t rate = 0;
+    Status lastErr;
     MigrateDataReqPb req;
     MigrateDataRspPb rsp;
-    while (rate == 0 && busyNodeRetryCount > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(RandomData().GetRandomUint64(minSleepMs, maxSleepMs)));
-        if (!IsRpcError(remoteApi_->MigrateData(req, {}, rsp))) {
-            rate = rsp.limit_rate();
+    uint64_t sleepMs = BUSY_HEAL_INITIAL_SLEEP_MS;
+    while (rate == 0 && probesMade < BUSY_HEAL_MAX_PROBES
+           && static_cast<uint64_t>(GetSteadyClockTimeStampMs()) < deadline
+           && (stoppingPtr_ == nullptr || !stoppingPtr_->load(std::memory_order_relaxed))) {
+        INJECT_POINT_NO_RETURN("MigrateDataHandler.SelfHealBusyRate.probe");
+        uint64_t actualSleep = RandomData().GetRandomUint64(
+            sleepMs, std::min(sleepMs * BUSY_HEAL_BACKOFF_FACTOR, BUSY_HEAL_MAX_SLEEP_MS));
+        for (uint64_t slept = 0;
+             slept < actualSleep && (stoppingPtr_ == nullptr || !stoppingPtr_->load(std::memory_order_relaxed));
+             slept += BUSY_HEAL_CANCEL_POLL_MS) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(BUSY_HEAL_CANCEL_POLL_MS));
         }
-        --busyNodeRetryCount;
+        if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_relaxed)) {
+            break;
+        }
+        Status s = remoteApi_->MigrateDataProbe(req, rsp, 2000);
+        if (s.IsOk()) {
+            rate = rsp.limit_rate();
+        } else {
+            lastErr = s;
+        }
+        VLOG(1) << FormatString("[Migrate Data] busy re-probe for %s: attempt %d, rate=%lu, rc=%s",
+                                remoteApi_->Address(), probesMade + 1, rate, s.ToString());
+        ++probesMade;
+        sleepMs = std::min(sleepMs * BUSY_HEAL_BACKOFF_FACTOR, BUSY_HEAL_MAX_SLEEP_MS);
         rsp.Clear();
     }
     limiter_.UpdateRate(rate);
-    CHECK_FAIL_RETURN_STATUS(
-        rate != 0, K_NOT_READY,
-        FormatString("Remote node %s can't provide banwidth to migrate data", remoteApi_->Address()));
-    return Status::OK();
+    return BuildHealResult(rate, probesMade, lastErr);
+}
+
+Status MigrateDataHandler::BuildHealResult(uint64_t rate, int probesMade, const Status &lastErr)
+{
+    if (stoppingPtr_ != nullptr && stoppingPtr_->load(std::memory_order_relaxed)) {
+        LOG(INFO) << FormatString("[Migrate Data] self-heal cancelled for %s during shutdown",
+                                  remoteApi_->Address());
+        lastHealStatus_ = Status(K_RUNTIME_ERROR, "Cancelled during shutdown");
+        return lastHealStatus_;
+    }
+    if (rate == 0) {
+        lastHealStatus_ = lastErr.IsError()
+            ? lastErr
+            : Status(K_NOT_READY,
+                     FormatString("Remote node %s can't provide bandwidth after %d probes",
+                                  remoteApi_->Address(), probesMade));
+        return lastHealStatus_;
+    }
+    lastHealStatus_ = Status::OK();
+    return lastHealStatus_;
+}
+
+Status MigrateDataHandler::TryUpdateRate(uint64_t rate)
+{
+    if (rate != 0) {
+        limiter_.UpdateRate(rate);
+        return Status::OK();
+    }
+    return SelfHealBusyRate();
 }
 
 MigrateDataHandler::MigrateResult MigrateDataHandler::ConstructResult(Status status) const

@@ -17,6 +17,7 @@
 /**
  * Description: Test interface to HashRingHealthCheck
  */
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <chrono>
@@ -335,12 +336,14 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
         .Times(1)
         .WillRepeatedly(DoAll(SetArgReferee<2>(fakeRsp), Return(Status::OK())));
 
-    MigrateDataHandler handler1(type_, "127.0.0.1:18888", {}, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler1(type_, "127.0.0.1:18888", {}, objectTable_, remoteApi_, strategy_,
+                                nullptr);
     auto result1 = handler1.MigrateDataToRemote();
     DS_ASSERT_OK(result1.status);
 
     DS_ASSERT_OK(CreateObject("xxx", 1));
-    MigrateDataHandler handler2(type_, "127.0.0.1:18888", { "xxx" }, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler2(type_, "127.0.0.1:18888", { "xxx" }, objectTable_, remoteApi_, strategy_,
+                                nullptr);
     auto result2 = handler2.MigrateDataToRemote();
     EXPECT_EQ(result2.status.GetCode(), StatusCode::K_NO_SPACE);
 }
@@ -385,7 +388,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSmallMemoryObjects)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("League_of_Legends", size, count, objectKeys);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -408,7 +412,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateNoExistObjects)
     for (size_t i = 0; i < count; ++i) {
         objectKeys.emplace_back("No_Exist_Object_" + std::to_string(i));
     }
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -437,7 +442,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateObjectsButLockFail)
     CreateObjects("Locked", size2, failCount, failObjectKeys, true);
 
     (void)objectKeys.insert(objectKeys.end(), failObjectKeys.begin(), failObjectKeys.end());
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -489,7 +495,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError1)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("League_of_Legends", size, count, objectKeys);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     ASSERT_EQ(result.status.GetCode(), StatusCode::K_NO_SPACE);
@@ -519,7 +526,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateSpilledObjects)
 
     std::vector<ImmutableString> objectKeys(smallObjects);
     objectKeys.insert(objectKeys.end(), bigObjects.begin(), bigObjects.end());
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -555,7 +563,8 @@ TEST_F(MigrateDataHandlerTest, TestSkipCacheInvalidOrLifeInvalidObjectsBeforeSen
         entry->WUnlock();
     }
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -583,7 +592,8 @@ TEST_F(MigrateDataHandlerTest, TestFailWhenNonSpilledObjectLosesShmBeforeSend)
         entry->WUnlock();
     }
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -614,7 +624,8 @@ TEST_F(MigrateDataHandlerTest, TestFailWhenSpilledObjectHasNoShmAndNoSpillPayloa
         entry->WUnlock();
     }
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -645,7 +656,8 @@ TEST_F(MigrateDataHandlerTest, TestMigrateBigObjectsWithLimitedRate)
     // Rate limit is 1MB/s, 6MB data would cost 6s.
     std::vector<ImmutableString> objectKeys(smallObjects);
     objectKeys.insert(objectKeys.end(), bigObjects.begin(), bigObjects.end());
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
 
     Timer timer;
     auto result = handler.MigrateDataToRemote();
@@ -704,7 +716,8 @@ TEST_F(MigrateDataHandlerSpillTest, TestMigrateObjectsByTCP)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("League_of_Legends", size, count, objectKeys);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -734,7 +747,8 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestMigrateObjectsByFastTransport)
 
     BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -769,7 +783,8 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportProbeFallback)
         entry->WUnlock();
     }
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_TRUE(result.successIds.empty());
@@ -792,7 +807,8 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportUsesLimiterAcrossBatches)
     std::vector<ImmutableString> objectKeys;
     CreateObjects("FastTransportLimiterAcrossBatches", objectSize, objectCount, objectKeys);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     Timer timer;
 
     auto result = handler.MigrateDataToRemote();
@@ -820,8 +836,16 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportSkipsSendWhenLimiterBusy)
     CreateObjects("FastTransportLimiterBusy", objectSize, objectCount, objectKeys);
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::NotifyRemoteGet, (_, _)).Times(0);
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _)).Times(0);
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            (void)req;
+            (void)timeoutMs;
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     ASSERT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
@@ -854,7 +878,8 @@ TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
             return Status::OK();
         }));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -885,16 +910,17 @@ TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)
             rsp.set_limit_rate(0);
             return Status::OK();
         }));
-    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
         .Times(1)
-        .WillOnce(Invoke([](MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
+        .WillOnce(Invoke([](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
             EXPECT_EQ(req.objects_size(), 0);
-            EXPECT_TRUE(payloads.empty());
+            EXPECT_EQ(timeoutMs, 2000);
             rsp.set_limit_rate(1024ul * 1024ul);
             return Status::OK();
         }));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
@@ -932,24 +958,36 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealsAfterRatePoisonedToZero)
             return Status::OK();
         }));
 
-    uint32_t probeCalls = 0;
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
-        .WillRepeatedly(Invoke([&probeCalls](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
-                                             MigrateDataRspPb &rsp) {
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp) {
             EXPECT_EQ(req.objects_size(), 0);
             EXPECT_TRUE(payloads.empty());
-            rsp.set_limit_rate(probeCalls < 5 ? 0 : (1024ul * 1024ul));
-            ++probeCalls;
+            rsp.set_limit_rate(0);
             return Status::OK();
         }));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&healProbeCalls](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_EQ(timeoutMs, 2000);
+            rsp.set_limit_rate(1024ul * 1024ul);
+            ++healProbeCalls;
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto t0 = std::chrono::steady_clock::now();
     auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
 
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.successIds.size(), objectCount);
     ASSERT_TRUE(result.failedIds.empty());
-    ASSERT_GE(probeCalls, 6u);
+    ASSERT_EQ(healProbeCalls, 1u);
+    ASSERT_LT(elapsedMs, 4500);
 }
 
 TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
@@ -982,19 +1020,28 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
             return Status::OK();
         }));
 
-    uint32_t probeCalls = 0;
     BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
-        .WillRepeatedly(Invoke([&probeCalls](MigrateDataReqPb &req, const std::vector<MemView> &payloads,
-                                             MigrateDataRspPb &rsp) {
-            EXPECT_EQ(req.objects_size(), 0);
-            EXPECT_TRUE(payloads.empty());
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
             rsp.set_limit_rate(0);
-            ++probeCalls;
             return Status::OK();
         }));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&healProbeCalls](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_EQ(timeoutMs, 2000);
+            rsp.set_limit_rate(0);
+            ++healProbeCalls;
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto t0 = std::chrono::steady_clock::now();
     auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
 
     ASSERT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
     ASSERT_EQ(result.successIds.size(), 1ul);
@@ -1002,7 +1049,194 @@ TEST_F(MigrateDataHandlerTest, TestBusyGuardGivesUpWhenRateStaysZero)
     ASSERT_TRUE(result.failedIds.count(objectKeys[0]) > 0
                 || result.failedIds.count(objectKeys[1]) > 0);
     ASSERT_EQ(result.successIds.size() + result.failedIds.size(), objectCount);
-    ASSERT_GE(probeCalls, 10u);
+    ASSERT_EQ(healProbeCalls, 3u);
+    ASSERT_LT(elapsedMs, 4500);
+}
+
+TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealProbesAfterBudgetWouldExpire)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 40;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardSelfHealAfterBudget", objectSize, objectCount, objectKeys);
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillRepeatedly(Invoke([&directCalls](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(MigrateDataHandler::BUSY_HEAL_BUDGET_MS + 100));
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(0);
+            ++directCalls;
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
+
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&healProbeCalls](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_EQ(timeoutMs, 2000);
+            rsp.set_limit_rate(0);
+            ++healProbeCalls;
+            return Status::OK();
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_NOT_READY);
+    ASSERT_EQ(directCalls, 1u);
+    ASSERT_GE(healProbeCalls, 1u);
+    ASSERT_LT(elapsedMs, 7000);
+}
+
+TEST_F(MigrateDataHandlerTest, TestBusyGuardProbeRpcErrorReturnsRpcError)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 40;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardRpcError", objectSize, objectCount, objectKeys);
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillRepeatedly(Invoke([&directCalls](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(0);
+            ++directCalls;
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
+
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&healProbeCalls](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_EQ(timeoutMs, 2000);
+            (void)rsp;
+            ++healProbeCalls;
+            return Status(StatusCode::K_RPC_UNAVAILABLE, "rpc down");
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    ASSERT_EQ(result.successIds.size(), 1ul);
+    ASSERT_EQ(result.failedIds.size(), 1ul);
+    ASSERT_TRUE(result.failedIds.count(objectKeys[0]) > 0
+                || result.failedIds.count(objectKeys[1]) > 0);
+    ASSERT_EQ(result.successIds.size() + result.failedIds.size(), objectCount);
+    ASSERT_EQ(healProbeCalls, 3u);
+    ASSERT_LT(elapsedMs, 4500);
+}
+
+TEST_F(MigrateDataHandlerTest, TestBusyGuardProbeNonRpcErrorReturnsError)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    const uint32_t oldRateLimitMb = FLAGS_data_migrate_rate_limit_mb;
+    Raii restoreRateLimit([oldRateLimitMb]() { FLAGS_data_migrate_rate_limit_mb = oldRateLimitMb; });
+    FLAGS_data_migrate_rate_limit_mb = 40;
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .Times(1)
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardNonRpcError", objectSize, objectCount, objectKeys);
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(1)
+        .WillRepeatedly(Invoke([&directCalls](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+            EXPECT_EQ(req.objects_size(), 1);
+            rsp.set_remain_bytes(1024ul * 1024ul);
+            rsp.set_limit_rate(0);
+            ++directCalls;
+            return Status::OK();
+        }));
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
+
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&healProbeCalls](MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs) {
+            EXPECT_EQ(req.objects_size(), 0);
+            EXPECT_EQ(timeoutMs, 2000);
+            (void)rsp;
+            ++healProbeCalls;
+            return Status(StatusCode::K_RUNTIME_ERROR, "session null");
+        }));
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(result.successIds.size(), 1ul);
+    ASSERT_EQ(result.failedIds.size(), 1ul);
+    ASSERT_TRUE(result.failedIds.count(objectKeys[0]) > 0
+                || result.failedIds.count(objectKeys[1]) > 0);
+    ASSERT_EQ(result.successIds.size() + result.failedIds.size(), objectCount);
+    ASSERT_EQ(healProbeCalls, 3u);
+    ASSERT_LT(elapsedMs, 4500);
 }
 
 TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestReleaseFailEnqueueTask)
@@ -1030,7 +1264,8 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestReleaseFailEnqueueTask)
         .WillRepeatedly(Return(Status(K_TRY_AGAIN, "release failed")));
     DS_ASSERT_OK(inject::Set("AsyncResourceReleaser.WorkerThread.delay", "1*call(300)"));
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
@@ -1062,13 +1297,60 @@ TEST_F(MigrateDataHandlerSpillTest, DISABLED_TestFastTransportRetryOnRpcError)
 
     BINEXPECT_CALL(&AsyncResourceReleaser::AddTask, (_, _)).Times(0);
 
-    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_);
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               nullptr);
     auto result = handler.MigrateDataToRemote();
 
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.address, hostPort_.ToString());
     ASSERT_EQ(result.successIds.size(), count);
     ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(MigrateDataHandlerTest, TestBusyGuardSelfHealCancelledByShutdown)
+{
+    LOG(INFO) << "Test busy guard self-heal is cancelled by the stopping flag during shutdown.";
+    std::atomic<bool> stopping{ false };
+
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateData, (_, _, _))
+        .WillRepeatedly(Invoke([](MigrateDataReqPb &, const std::vector<MemView> &, MigrateDataRspPb &rsp) {
+            rsp.set_remain_bytes(1024ul * 1024ul * 1024ul);
+            rsp.set_available_ratio(85.0);
+            rsp.set_limit_rate(0);
+            return Status::OK();
+        }));
+
+    uint32_t healProbeCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataProbe, (_, _, _))
+        .WillRepeatedly(Invoke([&stopping, &healProbeCalls](MigrateDataReqPb &, MigrateDataRspPb &rsp, int) {
+            rsp.set_limit_rate(0);
+            stopping.store(true, std::memory_order_relaxed);
+            ++healProbeCalls;
+            return Status::OK();
+        }));
+
+    constexpr uint64_t objectSize = 1024ul * 1024ul;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("BusyGuardCancel", objectSize, objectCount, objectKeys);
+
+    std::thread canceler([&stopping]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        stopping.store(true, std::memory_order_relaxed);
+    });
+
+    MigrateDataHandler handler(type_, "127.0.0.1:18888", objectKeys, objectTable_, remoteApi_, strategy_,
+                               &stopping);
+    auto t0 = std::chrono::steady_clock::now();
+    auto result = handler.MigrateDataToRemote();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    canceler.join();
+
+    ASSERT_EQ(result.status.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_LT(elapsedMs, 500);
+    ASSERT_LE(healProbeCalls, 1u);
 }
 
 }  // namespace ut

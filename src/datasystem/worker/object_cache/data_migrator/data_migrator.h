@@ -20,8 +20,10 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_H
 #define DATASYSTEM_MIGRATE_DATA_H
 
+#include <atomic>
 #include <future>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <utility>
 
@@ -45,7 +47,13 @@ public:
     {
     }
 
-    ~DataMigrator() = default;
+    ~DataMigrator()
+    {
+        Stop();
+        if (threadPool_) {
+            threadPool_.reset();
+        }
+    }
 
     /**
      * @brief Initialize data migrator.
@@ -103,6 +111,14 @@ public:
      */
     Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                      const HostPort &workerAddr);
+
+    /**
+     * @brief Signal all in-flight migration handlers to stop as soon as possible.
+     */
+    void Stop()
+    {
+        stopping_.store(true, std::memory_order_relaxed);
+    }
 
 private:
     using SlotMigrateFuture = std::pair<uint32_t, std::future<MigrateDataHandler::MigrateResult>>;
@@ -287,6 +303,8 @@ private:
     std::unordered_set<ImmutableString> failedKeys_;
     std::unordered_set<ImmutableString> skippedKeys_;
     std::shared_ptr<MigrateProgress> progress_;
+
+    std::atomic<bool> stopping_{ false };
 };
 
 }  // namespace object_cache

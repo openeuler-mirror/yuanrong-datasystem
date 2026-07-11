@@ -191,6 +191,8 @@ public:
 
     Status MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 
+    Status MigrateDataProbe(MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs);
+
     Status MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
 
     Status NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;

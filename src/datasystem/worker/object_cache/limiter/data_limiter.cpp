@@ -102,6 +102,7 @@ std::time_t DataLimiter::WaitMilliseconds(uint64_t requiredSize)
 
 bool DataLimiter::IsRemoteBusyNode() const
 {
+    INJECT_POINT("migrate.limiter.is_busy_node", []() { return true; });
     std::unique_lock<std::mutex> l(mtx_);
     return rate_ == 0;
 }
@@ -159,6 +160,14 @@ uint64_t MigrateDataRateController::CalculateNewRate(const std::string &workerAd
         },
         timer);
     return newRate;
+}
+
+uint64_t MigrateDataRateController::PeekAvailableRate(const std::string &workerAddr)
+{
+    std::shared_lock<std::shared_timed_mutex> l(mutex_);
+    auto it = rateMap_.find(workerAddr);
+    uint64_t lastRate = (it != rateMap_.end()) ? it->second : rateLimiter_.GetMaxBandwidth() / RATE_SMOOTHING_DIVISOR;
+    return CalculateSmoothedRate(lastRate, rateLimiter_.GetAvailableBandwidth());
 }
 
 void MigrateDataRateController::ClearExpiredRate(const std::string &workerAddr, uint64_t expireMs,

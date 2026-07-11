@@ -152,6 +152,13 @@ public:
     uint64_t CalculateNewRate(const std::string &workerAddr);
 
     /**
+     * @brief Peek available bandwidth without writing to rateMap_ or sliding window.
+     * @param[in] workerAddr Worker address for rate lookup.
+     * @return Available rate in bytes per second (0 if saturated).
+     */
+    uint64_t PeekAvailableRate(const std::string &workerAddr);
+
+    /**
      * @brief Smooth rate changes. Rate drops immediately under pressure and rises gradually when bandwidth recovers.
      * @param[in] lastRate Last rate sent to the worker.
      * @param[in] availableBandwidth Current available migration bandwidth.
