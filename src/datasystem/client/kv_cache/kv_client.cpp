@@ -249,22 +249,13 @@ Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretke
     return impl_->UpdateAkSk(accesskey, secretkey);
 }
 
-Status KVClient::MGetH2D(const std::vector<std::string> &keys,
-                         const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                         std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs)
+Status KVClient::MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob,
+                         std::vector<std::string> &outFailedKeys, void *h2dStream)
 {
-    std::shared_future<AsyncResult> future = AsyncMGetH2D(keys, devShmChunk, subTimeoutMs);
+    std::shared_future<AsyncResult> future = impl_->GetWithOsTransportPipeline(keys, devBlob, h2dStream);
     auto result = future.get();
     outFailedKeys = std::move(result.failedList);
     return result.status;
-}
-
-std::shared_future<AsyncResult> KVClient::AsyncMGetH2D(const std::vector<std::string> &keys,
-                                                       const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                                       int32_t subTimeoutMs)
-{
-    TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
-    return impl_->GetWithOsTransportPipeline(keys, devShmChunk, subTimeoutMs);
 }
 
 Status KVClient::Get(const std::string &key, std::string &val, int32_t timeoutMs)

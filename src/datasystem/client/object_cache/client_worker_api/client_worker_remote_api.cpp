@@ -886,11 +886,11 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
     RETURN_IF_NOT_OK(PreparePipelineRH2DReq(piplnRh2dParam, pipelineConsumer_, req));
 
     // send and wait
-    int64_t rpcTimeout = std::max<int64_t>(piplnRh2dParam.subTimeoutMs, rpcTimeoutMs_);
+    int64_t rpcTimeout = std::max<int64_t>(piplnRh2dParam.requestTimeoutMs, rpcTimeoutMs_);
     PerfPoint perfPoint(PerfKey::PIPLN_RH2D_CLIENT_RPC);
     Timer rpcTimer;
     Status status = RetryOnError(
-        std::max<int32_t>(requestTimeoutMs_, piplnRh2dParam.subTimeoutMs),
+        std::max<int32_t>(requestTimeoutMs_, piplnRh2dParam.requestTimeoutMs),
         [this, &req, &rsp, &piplnRh2dParam](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);

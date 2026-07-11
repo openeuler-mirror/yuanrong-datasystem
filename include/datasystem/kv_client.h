@@ -28,6 +28,7 @@
 #include "datasystem/object/buffer.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/kv/read_only_buffer.h"
+#include "datasystem/utils/device_blob.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/utils/status.h"
@@ -216,33 +217,23 @@ public:
     Status MSet(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                 std::vector<std::string> &outFailedKeys, const MSetParam &param = {});
 
-    /// \brief copy values of keys to device share memory by server
+    /// \brief Copy values of keys to device memory through RH2D.
     ///
     /// \param[in] keys The keys.
-    /// \param[in] devShmChunk share memory ptr and size pair.
+    /// \param[in] devBlob Device memory pointer and size list. Each key maps to one continuous Blob.
     /// \param[out] outFailedKeys failed H2D keys.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
+    /// \param[in] h2dStream Optional opaque CUDA stream handle. For CUDA, pass cudaStream_t cast to void *.
+    ///  If h2dStream is nullptr, MGetH2D creates an internal CUDA stream and waits until H2D copy finishes
+    ///  before returning. If h2dStream is not nullptr, MGetH2D only submits cudaMemcpyAsync to this stream;
+    ///  caller must synchronize the stream or use CUDA event dependencies before reading/reusing/freeing device memory.
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key is empty.
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
     ///         K_NOT_SUPPORT: client or worker don't support MGetH2D
-    Status MGetH2D(const std::vector<std::string> &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                   std::vector<std::string> &outFailedKeys, int32_t subTimeoutMs);
-
-    /// \brief copy values of keys to device share memory by server
-    ///
-    /// \param[in] keys The keys.
-    /// \param[in] devShmChunk share memory ptr and size pair.
-    /// \param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer
-    ///  number required. 0 means no waiting time allowed.
-    ///
-    /// \return async future
-    std::shared_future<AsyncResult> AsyncMGetH2D(const std::vector<std::string> &keys,
-                                                 const std::vector<std::pair<void *, size_t>> &devShmChunk,
-                                                 int32_t subTimeoutMs);
+    Status MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob,
+                   std::vector<std::string> &outFailedKeys, void *h2dStream = nullptr);
 
     /// \brief Invoke worker client to get the value of a key.
     ///

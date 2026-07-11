@@ -1,6 +1,5 @@
-
 /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +15,27 @@
  */
 
 /**
- * Description: Definition of heterogeneous device tensor description structure.
+ * Description: Public device memory blob definitions.
  */
 
-#ifndef DATASYSTEM_HETERO_DEVICE_COMMON_H
-#define DATASYSTEM_HETERO_DEVICE_COMMON_H
+#ifndef DATASYSTEM_DEVICE_BLOB_H
+#define DATASYSTEM_DEVICE_BLOB_H
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
-#include "datasystem/utils/device_blob.h"
-
 namespace datasystem {
-struct Tensor {
-    uint64_t ptr;
-    uint32_t elemSize;
-    std::vector<uint64_t> shape;
+struct Blob {
+    void *pointer = nullptr;
+    uint64_t size = 0;
+};
+
+struct DeviceBlobList {
+    // Constraint: The blobs under the same DeviceBlobList need to be under the same card.
+    std::vector<Blob> blobs;
+    int32_t deviceIdx = -1;
+    int32_t srcOffset = 0;  // Sender's Data Starting Offset (Bytes)
 };
 }  // namespace datasystem
+
 #endif

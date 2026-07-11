@@ -100,7 +100,7 @@ struct GetParam {
 };
 
 struct PiplnRh2dParam {
-    int64_t subTimeoutMs;
+    int64_t requestTimeoutMs;
     std::vector<std::string> objectKeys;
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
     std::shared_ptr<H2DChunkManager> chunkManager;

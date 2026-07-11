@@ -45,7 +45,8 @@ public:
           targetAddr(devInfo.ptr),
           targetSize(devInfo.size),
           targetType(devInfo.devType),
-          isClient(isClient)
+          isClient(isClient),
+          h2dStream(devInfo.h2dStream)
     {
     }
     virtual ~BaseRH2DDriver()
@@ -75,6 +76,7 @@ public:
     size_t targetSize;  // reuse as shmSize
     TargetDeviceType targetType;
     bool isClient;
+    void *h2dStream;
 };
 
 struct ReqInfo {
