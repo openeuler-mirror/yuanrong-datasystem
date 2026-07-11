@@ -119,9 +119,19 @@ def template_required_sections(template_text: str) -> list[str]:
     sections: list[str] = []
     for raw_line in template_text.splitlines():
         line = raw_line.strip()
-        match = re.search(r"(\*\*.+?\*\*)", line)
+        # Match standalone **bold** headings (entire line is bold text, not inline bold within a sentence)
+        match = re.match(r"^(\*\*.+?\*\*:?)$", line)
         if match:
             sections.append(match.group(1))
+            continue
+        # Match ## numbered section headings (new template), skip optional sections marked with (如有)/(if any)
+        match = re.match(r"(##\s+\d+\.\s+.+)", line)
+        if match:
+            heading = match.group(1).strip()
+            # Skip optional sections — template comment says "Bugfix 如无遗留可删除此章节"
+            if re.search(r"[(（]如有[)）]|\(if any\)", heading):
+                continue
+            sections.append(heading)
     return sections
 
 
