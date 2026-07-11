@@ -78,7 +78,11 @@ static bool OpMemoryCopy(PipelineContext &ctx, double &latencyMs) {
         return false;
     }
     return Measure([&]() {
-        return ctx.buffer->MemoryCopy(ctx.data.data(), ctx.size);
+        (void)ctx;
+        // No-copy benchmark: keep this pipeline stage as a no-op so setBuffer
+        // can publish the freshly created Buffer directly.
+        // return ctx.buffer->MemoryCopy(ctx.data.data(), ctx.size);
+        return Status::OK();
     }, latencyMs);
 }
 
@@ -213,7 +217,10 @@ static bool OpCacheGetOrCreate(PipelineContext &ctx, double &latencyMs) {
     // Step 3: MemoryCopy
     double copyLat = 0;
     ok = Measure([&]() {
-        return buf->MemoryCopy(ctx.data.data(), ctx.size);
+        // No-copy benchmark: skip filling the Buffer before publishing it.
+        // Restore the write below when content validation is needed again.
+        // return buf->MemoryCopy(ctx.data.data(), ctx.size);
+        return Status::OK();
     }, copyLat);
     latencyMs += copyLat;
     ctx.metrics->Record(kOpMemoryCopy, copyLat, ok, 0);

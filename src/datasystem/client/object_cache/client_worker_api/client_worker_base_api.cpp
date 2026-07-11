@@ -327,23 +327,38 @@ Status ClientWorkerBaseApi::SendBufferViaUbFromPool(const std::shared_ptr<Object
                                                     const void *data, uint64_t length, bool traceEnabled)
 {
 #ifdef USE_URMA
-    const uint64_t totalSize = bufferInfo->metadataSize + bufferInfo->dataSize;
-    errno_t memRet = memcpy_s(bufferInfo->pointer, bufferInfo->dataSize, data, length);
-    if (memRet != 0) {
-        return Status(K_RUNTIME_ERROR, "memcpy_s failed in SendBufferViaUbFromPool");
+    CHECK_FAIL_RETURN_STATUS(bufferInfo != nullptr, K_INVALID, "Buffer info is null");
+    CHECK_FAIL_RETURN_STATUS(bufferInfo->ubGetBufferHandle != nullptr, K_RUNTIME_ERROR, "UB buffer handle is null");
+    CHECK_FAIL_RETURN_STATUS(bufferInfo->pointer != nullptr, K_RUNTIME_ERROR, "UB buffer pointer is null");
+    CHECK_FAIL_RETURN_STATUS(bufferInfo->ubUrmaDataInfo != nullptr, K_RUNTIME_ERROR, "UB remote address info is null");
+    CHECK_FAIL_RETURN_STATUS(data != nullptr, K_INVALID, "Can't put null pointer.");
+
+    auto ubHandle = std::static_pointer_cast<UrmaManager::BufferHandle>(bufferInfo->ubGetBufferHandle);
+    CHECK_FAIL_RETURN_STATUS(ubHandle != nullptr && ubHandle->GetPointer() != nullptr, K_RUNTIME_ERROR,
+                             "Invalid UB buffer handle");
+
+    uint8_t *dstData = bufferInfo->pointer + bufferInfo->metadataSize;
+    const auto *srcData = static_cast<const uint8_t *>(data);
+    if (srcData != dstData) {
+        errno_t memRet = memcpy_s(dstData, bufferInfo->dataSize, srcData, length);
+        if (memRet != 0) {
+            return Status(K_RUNTIME_ERROR, "memcpy_s failed in SendBufferViaUbFromPool");
+        }
     }
-    auto [segAddr, segSize] = UrmaManager::Instance().GetLocalSegmentInfo();
     std::vector<uint64_t> eventKeys;
-    const uint8_t srcChipId = INVALID_CHIP_ID;
+    const uint8_t srcChipId = NumaIdToChipId(ubHandle->GetNumaId());
     const uint8_t dstChipId = bufferInfo->ubUrmaDataInfo->has_chip_id()
                                   ? static_cast<uint8_t>(bufferInfo->ubUrmaDataInfo->chip_id())
                                   : INVALID_CHIP_ID;
+    VLOG(1) << "call UrmaWritePayload from UB pool, srcChipId=" << static_cast<int>(srcChipId)
+            << ", dstChipId=" << static_cast<int>(dstChipId);
+    auto [segAddr, segSize] = UrmaManager::Instance().GetLocalSegmentInfo();
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_START);
     }
     Status rc = UrmaWritePayload(*(bufferInfo->ubUrmaDataInfo), segAddr, segSize,
-                                 reinterpret_cast<uint64_t>(bufferInfo->pointer), 0, totalSize, 0,
-                                 srcChipId, dstChipId, true, eventKeys);
+                                 reinterpret_cast<uint64_t>(bufferInfo->pointer), 0, bufferInfo->dataSize,
+                                 bufferInfo->metadataSize, srcChipId, dstChipId, true, eventKeys);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_UB_TRANSFER_END);
     }
