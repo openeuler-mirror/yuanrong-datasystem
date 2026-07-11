@@ -45,3 +45,7 @@ Rules:
   working notes.
 - Prefer small, scoped changes that match existing style. Do not perform unrelated refactors or broad formatting churn.
 - Before claiming completion, use `.repo_context/playbooks/upkeep/ai-self-verification.md`.
+
+## Pre-commit Self-Review
+
+Before creating a commit or claiming work is complete, run `$ds-self-verify` to review the diff, verify tests pass, check hot-path / concurrency / persistence-recovery risk, and confirm `.repo_context` updates are not stale.

@@ -59,7 +59,7 @@ class SensitiveScanTests(unittest.TestCase):
         self.assertEqual(scan_text("source", credential_key + ": str"), [])
 
     def test_scans_every_changed_file_patch_line(self) -> None:
-        private_endpoint = "10." + "1.2.3"
+        private_endpoint = "10." + "20.30.40"
         patch = "@@ -0,0 +1,2 @@\n+safe line\n+build host: " + private_endpoint + "\n"
 
         matches, scanned_lines = scan_changed_file(
@@ -136,6 +136,76 @@ class SensitiveScanTests(unittest.TestCase):
             self.assertIn("Sensitive information scan failed", str(exc.exception))
             self.assertNotIn(COMPANY, str(exc.exception))
             self.assertFalse((Path(tmpdir) / "pr-42" / "bundle.json").exists())
+
+    def test_does_not_flag_localhost_and_wildcard_ips(self) -> None:
+        """127.0.0.1 and 0.0.0.0 are safe in any context (test/bind addresses)."""
+        self.assertEqual(scan_text("test", 'HostPort("127.0.0.1", port)'), [])
+        self.assertEqual(scan_text("test", 'server.start("0.0.0.0:9090")'), [])
+        self.assertEqual(scan_text("source", 'auto addr = HostPort("0.0.0.0", 8080);'), [])
+
+    def test_does_not_flag_link_local_ips(self) -> None:
+        """169.254.x.x (link-local, APIPA) is commonly used in test/auto-config environments."""
+        self.assertEqual(scan_text("test", 'auto ip = "169.254.1.1";'), [])
+        self.assertEqual(scan_text("test", 'server.start("169.254.100.50:9999")'), [])
+
+    def test_does_not_flag_rfc5737_documentation_ips(self) -> None:
+        """RFC 5737 TEST-NET IPs (192.0.2.x, 198.51.100.x, 203.0.113.x) are documentation-only."""
+        self.assertEqual(scan_text("test", 'client->Connect("192.0.2.1:8080")'), [])
+        self.assertEqual(scan_text("test", 'auto ip = "198.51.100.1";'), [])
+        self.assertEqual(scan_text("test", 'auto ip = "203.0.113.5";'), [])
+
+    def test_does_not_flag_cxx_type_declarations_with_credential_param_names(self) -> None:
+        """C++ function signatures with credential-like parameter names should not be flagged."""
+        self.assertEqual(scan_text("source",
+            'Status UpdateAkSk(const std::string &accessKey, SensitiveValue secretKey) = 0;'), [])
+        self.assertEqual(scan_text("source",
+            'DefaultClientRequestAuth(std::string clientId = "", std::string accessKey = "",'), [])
+        self.assertEqual(scan_text("source",
+            'void SetAccount(std::string account) { account_ = std::move(account); }'), [])
+
+    def test_still_flags_real_private_network_ips(self) -> None:
+        """Real private network IPs (10.x, 172.16.x, 192.168.x) must still be flagged."""
+        real_lines = [
+            'workerAddr = "10.20.30.40:8443";',
+            'auto host = "192.168.50.100";',
+            'auto endpoint = "10.30.40.50:443";',
+            'auto addr = "172.30.40.10:8443";',
+        ]
+        for line in real_lines:
+            matches = scan_text("source", line)
+            self.assertTrue(
+                any(m.category == "server IP or endpoint" for m in matches),
+                f"Should flag real IP in: {line}",
+            )
+
+    def test_does_not_flag_plain_local_paths_without_sensitive_dirs(self) -> None:
+        """Plain paths without .ssh/.config/secrets should not be flagged."""
+        plain_paths = [
+            '/a/b/c/logs/server.log',
+            '/x/y/output/data.bin',
+            '/p/q/r/config/settings.yaml',
+            '/m/n/build/output/main.cpp',
+        ]
+        for line in plain_paths:
+            self.assertEqual(scan_text("source", line), [],
+                f"Should not flag plain path: {line}")
+
+    def test_flags_local_paths_containing_sensitive_directories(self) -> None:
+        """Paths containing .ssh/.config/.aws/.kube/secrets/credentials/tokens/.env should be flagged."""
+        sensitive_paths = [
+            '/a/b/.ssh/id_rsa',
+            '/x/y/.config/credentials/db.json',
+            '/p/q/.aws/credentials',
+            '/m/secrets/api_token',
+            '/r/s/.env',
+            '/t/.kube/config',
+        ]
+        for line in sensitive_paths:
+            matches = scan_text("source", line)
+            self.assertTrue(
+                any("filesystem" in m.category for m in matches),
+                f"Should flag sensitive path: {line}",
+            )
 
 
 if __name__ == "__main__":

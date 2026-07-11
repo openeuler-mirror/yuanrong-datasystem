@@ -99,3 +99,7 @@ For multi-step tasks, state a brief plan:
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 These guidelines are working if: fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+## Pre-commit Self-Review
+
+Before creating a commit or claiming work is complete, run `$ds-self-verify` to review the diff, verify tests pass, check hot-path / concurrency / persistence-recovery risk, and confirm `.repo_context` updates are not stale.

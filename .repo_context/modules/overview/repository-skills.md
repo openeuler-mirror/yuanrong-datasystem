@@ -111,10 +111,11 @@ skills in order:
 1. Use `ds-issue-intake` to fetch the concrete issue and produce a sanitized task spec.
 2. Use `ds-infra-engineering` before product, build, test, config, or workflow edits.
 3. Implement the smallest source-backed fix.
-4. Use `ds-self-verify` before claiming completion or PR readiness.
+4. Use `ds-pr-review` for a multi-round deep review of the implementation before testing.
 5. Use `ds-test` for validation planning and configured local or remote validation.
-6. Use `ds-create-pr` only after the branch is committed and pushed.
-7. Use `ds-pr-comment-proc` when review comments need replies, fixes, resolution, or resolved-state verification.
+6. Use `ds-self-verify` before claiming completion or PR readiness.
+7. Use `ds-create-pr` only after the branch is committed and pushed.
+8. Use `ds-pr-comment-proc` when review comments need replies, fixes, resolution, or resolved-state verification.
 
 At each step, stop and give a friendly setup prompt when required configuration is missing. The prompt must be actionable
 without asking the user to paste secrets into chat:

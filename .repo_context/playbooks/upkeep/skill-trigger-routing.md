@@ -117,10 +117,11 @@ For a concrete request such as “帮我解决 issue#572” or “修复这个 i
 
 1. `ds-issue-intake` for issue fetching, redaction, and task spec creation.
 2. `ds-infra-engineering` before implementation or workflow edits.
-3. `ds-self-verify` after changes and before claiming completion.
+3. `ds-pr-review` for a multi-round deep review of the implementation before testing.
 4. `ds-test` for validation planning and configured validation execution.
-5. `ds-create-pr` after the branch is committed and pushed.
-6. `ds-pr-comment-proc` only if PR review comments need processing.
+5. `ds-self-verify` after changes and before claiming completion.
+6. `ds-create-pr` after the branch is committed and pushed.
+7. `ds-pr-comment-proc` only if PR review comments need processing.
 
 Each phase should be skippable only when its precondition is already satisfied and source-backed evidence exists.
 Configuration gaps should produce a setup prompt, not guessed credentials or hardcoded private infrastructure details:
