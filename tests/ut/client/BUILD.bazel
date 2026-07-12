@@ -44,3 +44,17 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "transport_test",
+    srcs = ["transport_test.cpp"],
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:object_posix_brpc",
+        "//tests/ut:ut_common",
+    ],
+)

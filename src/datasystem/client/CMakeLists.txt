@@ -35,7 +35,16 @@ list(APPEND CLIENT_SRCS
         stream_cache/producer_impl.cpp
         stream_cache/stream_client.cpp
         stream_cache/stream_client_impl.cpp
-        stream_cache/producer_consumer_worker_api.cpp)
+        stream_cache/producer_consumer_worker_api.cpp
+        transport/transport_advisor.cpp
+        transport/transport_layer.cpp
+        transport/data_plane/data_plane_manager.cpp
+        transport/data_plane/tcp_transporter.cpp
+        transport/data_plane/ub_connection.cpp
+        transport/data_plane/ub_transporter.cpp
+        transport/rpc/client_request_auth.cpp
+        transport/rpc/get_request_builder.cpp
+        transport/rpc/worker_rpc_client.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
