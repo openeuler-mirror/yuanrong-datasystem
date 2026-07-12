@@ -122,15 +122,46 @@ Publishing rules:
 
 ## Review Focus
 
-Focus on low latency, high performance, high concurrency, high reliability, high availability, deadlock prevention, and
-coredump prevention. These are the core quality red lines for yuanrong-datasystem as distributed cache infrastructure —
-any change that could cause latency jitter, throughput bottleneck, concurrency race, data loss, service unavailability,
-deadlock, or process crash must be identified and blocked during review.
+Focus on low latency, high performance, high concurrency, high reliability, high availability, deadlock prevention,
+coredump prevention, and pthread mutex prohibition. These are the core quality red lines for yuanrong-datasystem as
+distributed cache infrastructure — any change that could cause latency jitter, throughput bottleneck, concurrency race,
+data loss, service unavailability, deadlock, or process crash must be identified and blocked during review.
 
-Conduct multiple rounds of deep review: do not stop after a single-pass happy-path check. For changes touching hot paths,
-shared state, concurrency primitives, persistence/recovery paths, or lifecycle management, follow the Strict Review
-Passes multi-round mode, with each round focusing on a different dimension, until residual uncertainty on all high-risk
-surfaces has been assessed or eliminated.
+Conduct multiple rounds of deep review. Do not stop after a single-pass happy-path check. Scale the number of rounds to
+the size of the change:
+
+- **< 100 lines**: at least 1 round, applying all triggered Strict Review Passes in a single integrated pass.
+  Aligns with the existing `single_integrated_pass` review-plan mode. Must cover the core quality red lines and
+  auto-supplement at least one additional review direction beyond the planned passes.
+- **100–500 lines**: at least **2 rounds**, aligned with `parallel_multi_round`. Every round must cover the core
+  quality red lines (low latency, high performance, high concurrency, high reliability, high availability, deadlock
+  prevention, coredump prevention, pthread mutex prohibition). Beyond the core focus, each round must auto-supplement
+  additional review directions from the list below.
+- **> 500 lines**: at least **5 rounds**. Every round must cover the core quality red lines (low latency, high
+  performance, high concurrency, high reliability, high availability, deadlock prevention, coredump prevention,
+  pthread mutex prohibition) plus auto-supplemented directions, with each round drawing on a different subset of the
+  Strict Review Passes and System-Wide Design Gates to ensure full gate coverage across all rounds.
+
+For changes touching hot paths, shared state, concurrency primitives, persistence/recovery paths, or lifecycle
+management, upgrade to the next tier even if the line count is below the threshold.
+
+In each round, after addressing the core red lines, you must supplement additional review directions beyond the
+explicitly planned passes. While many directions below overlap with the Strict Review Passes and System-Wide Design
+Gates, the purpose is to ensure no dimension is skipped just because it was not assigned to this round. Select
+relevant directions from the list (not all apply to every change), and proactively identify additional directions
+beyond this list:
+
+- Build system and packaging completeness (Bazel + CMake parity)
+- Test coverage and quality (missing edge cases, flakiness risk, invariant tests)
+- End-to-end test coverage (whether the changed behavior has corresponding end-to-end verification)
+- Production diagnosability and environment localization (logs, metrics, error codes, on-call triage path)
+- Log storm and log printing reasonableness (rate limiting, hot-path logging, sensitive data in logs)
+- Security boundaries and sensitive information exposure (auth, input validation, credential handling)
+- Cross-language and boundary layer impacts (C API, JNI, pybind, RPC, protobuf)
+- Forward and backward compatibility (client ↔ worker, worker ↔ coordinator)
+- Resource management and lifecycle (memory, threads, file descriptors, connections)
+
+The goal is that no high-risk surface escapes review simply because it was not listed in the planned dimensions.
 
 ## Strict Review Passes
 
