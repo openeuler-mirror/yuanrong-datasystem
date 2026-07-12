@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -247,14 +248,8 @@ public:
     Status StartBrpcServer(const std::string &addr, int port);
 
     /**
-     * @brief Stop the brpc server with bounded Join timeout.
-     *
-     * Calls Stop(0) (async, marks server closing) then runs Join() on a
-     * detached thread with a 10s bounded wait via std::future::wait_for.
-     * Normal path: Join completes, brpcServer_ is reset() safely.
-     * Timeout path: LOG(ERROR), intentional leak via release() to avoid
-     * UAF with the detached Join thread. Process continues for graceful
-     * local cleanup (data flush, log drain).
+     * @brief Stop the brpc server synchronously (Stop + Join + reset).
+     * Thread-safe and idempotent: brpcStopMtx_ serializes concurrent calls.
      */
     void StopBrpcServer();
 
@@ -320,6 +315,7 @@ private:
     std::variant<std::unique_ptr<ZmqServerImpl>> pimpl_;
     std::unique_ptr<brpc::Server> brpcServer_;
     bool useBrpc_ = false;
+    std::mutex brpcStopMtx_;  ///< Serializes StopBrpcServer() concurrent calls.
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_RPC_SERVER_H

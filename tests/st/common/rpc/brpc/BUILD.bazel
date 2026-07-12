@@ -12,6 +12,18 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "shutdown_timeout_test",
+    srcs = ["shutdown_timeout_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/rpc/brpc:hello_cc_proto",
+        "//src/datasystem/common/rpc/zmq:zmq_payload",
+        "//src/datasystem/common/rpc/zmq:zmq_stub_impl",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
     name = "stream_close_timeout_test",
     srcs = ["stream_close_timeout_test.cpp"],
     deps = [
