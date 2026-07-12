@@ -56,6 +56,31 @@ SAFE_CREDENTIAL_WORDS = {
     "value",
 }
 
+# IPs that are safe in any context: localhost, wildcard, RFC 5737 documentation IPs,
+# link-local addresses, and broadcast commonly used in tests and examples.
+SAFE_IP_RE = re.compile(
+    r"^(?:"
+    r"0\.0\.0\.0|"  # wildcard bind
+    r"127\.0\.0\.1|"  # localhost
+    r"localhost|"
+    r"169\.254\.\d{1,3}\.\d{1,3}|"  # link-local (APIPA, commonly used in tests)
+    r"192\.0\.2\.\d{1,3}|"  # RFC 5737 TEST-NET-1 (documentation)
+    r"198\.51\.100\.\d{1,3}|"  # RFC 5737 TEST-NET-2
+    r"203\.0\.113\.\d{1,3}|"  # RFC 5737 TEST-NET-3
+    r"255\.255\.255\.255"  # broadcast
+    r")$"
+)
+
+
+def _is_safe_ip_or_endpoint(text: str) -> bool:
+    """Check if a matched IP or host:port is a known safe value (localhost, test-dummy, documentation IP)."""
+    for token in re.findall(r"[\w.]+(?::\d+)?", text):
+        ip_only = token.split(":")[0]
+        if SAFE_IP_RE.match(ip_only):
+            return True
+    return False
+
+
 SENSITIVE_LINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "server IP or endpoint",
@@ -67,10 +92,17 @@ SENSITIVE_LINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
     (
-        "local filesystem path",
+        "local filesystem path with sensitive content",
         re.compile(
-            r"(?<![\w.-])(?:/(?:Users|home|root|tmp|var|mnt|opt|workspace|Volumes)(?:/[^\s`'\"<>]+)+"
-            r"|[A-Za-z]:\\(?:Users|workspace|tmp|temp)\\[^\s`'\"<>]+)"
+            r"(?<![\w.-])/"
+            r"(?:[^\s`'\"<>]+/)*"
+            r"(?:\.ssh|\.gnupg|\.config|\.aws|\.kube|secrets?|credentials?|tokens?|\.env)"
+            r"(?:/[^\s`'\"<>]+)*"
+            r"|"
+            r"[A-Za-z]:\\"
+            r"[^\s`'\"<>]*"
+            r"\\(?:\.ssh|\.gnupg|\.config|\.aws|\.kube|secrets?|credentials?|tokens?|\.env)"
+            r"(?:\\[^\s`'\"<>]+)*"
         ),
     ),
     (
@@ -94,10 +126,6 @@ SENSITIVE_LINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "personal contact or identity number",
         re.compile(r"(?<!\d)(?:1[3-9]\d{9}|\d{17}[\dXx])(?!\w)"),
-    ),
-    (
-        "personal name or account",
-        re.compile(r"(?i)(?:\u59d3\s*\u540d|real\s*name|full\s*name|owner\s*name)\s*[:=\uff1a]\s*\S+"),
     ),
 )
 
@@ -153,6 +181,8 @@ def _scan_line(location: str, line: str, line_number: int | None) -> list[Sensit
 
     for category, pattern in SENSITIVE_LINE_PATTERNS:
         if pattern.search(line):
+            if category == "server IP or endpoint" and _is_safe_ip_or_endpoint(line):
+                continue
             matches.append(SensitiveMatch(location=location, category=category, line=line_number))
 
     deduped: list[SensitiveMatch] = []

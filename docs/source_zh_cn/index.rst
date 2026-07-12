@@ -75,5 +75,6 @@ openYuanrong datasystem 的部署视图如上图所示：
   design_document/index.md
   api_reference/index.md
   contributor_guide/contribution.md
+  contributor_guide/ai_development_workflow.md
   appendix/index.md
   FAQ/FAQ.md

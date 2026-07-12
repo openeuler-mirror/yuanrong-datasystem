@@ -18,9 +18,12 @@ python3 .skills/ds-pr-review/scripts/review_pr.py prepare <PR_OR_URL>
 ```
 
    `prepare` runs a mandatory sensitive-information scan before writing `bundle.json`. It scans the PR title/body,
-   every changed file path, and every patch line returned by GitCode. If any changed file has no scannable patch payload,
-   or if any scanned field matches a blocked category, stop and report only the category/location summary from the helper.
-   Do not bypass this gate or paste raw sensitive values into local notes, findings, chat output, or PR comments.
+   every changed file path, and every patch line returned by GitCode. The scanner is designed to recognize common
+   false positives automatically: C++ type declarations (`const std::string &accessKey`), enum/constant identifiers,
+   parameter names in function signatures, and test-dummy IPs (e.g. `192.0.2.x`, `127.0.0.1`, `0.0.0.0` in test
+   files). If any changed file has no scannable patch payload, or if any scanned field matches a genuine blocked
+   category, stop and report only the category/location summary from the helper. Do not bypass this gate or paste
+   raw sensitive values into local notes, findings, chat output, or PR comments.
 
 2. Read the generated bundle path from the command output, then load the generated `bundle.json`.
 3. Read `bundle.change_stats` and `bundle.review_plan` before reviewing. Follow `review_plan.mode`:
@@ -61,15 +64,21 @@ python3 .skills/ds-pr-review/scripts/review_pr.py publish \
 
 Publishing rules:
 
-- Post one remote comment per high-confidence finding.
-- Do not post a summary comment.
+- **Post one diff_comment per high-confidence finding.** Every published comment must be a diff_comment anchored to a
+  specific file and line (`path` + `position`), never a body-only general comment. Use the publish script to resolve
+  `diff_line_index` to the absolute file line automatically. If you are publishing findings manually (e.g. when
+  `prepare` was skipped or the bundle is unavailable), you must still compute the absolute line number from the patch
+  and post a diff_comment with `path` + `position` + `need_to_resolve: true`.
+- **Do not post a summary comment.** A summary of all findings is for the local review report only, not for the PR page.
 - If there are no findings, do not post remote comments.
 - Let the publish script resolve `diff_line_index` to the absolute file line and handle fingerprint deduplication.
 - Search existing unresolved and resolved discussions for semantic duplicates before adding a new finding. If a new
   comment replaces a weaker or badly rendered one, prefer replying in the existing discussion when the comment tool can
   do so.
 - If publishing fails because credentials are missing, API access is unavailable, or a line anchor cannot be safely
-  resolved, report that limitation and include the local findings.
+  resolved, report that limitation and include the local findings. Do not fall back to body-only general comments as a
+  substitute for diff_comment — if you cannot anchor a finding to a line, include it in the local report and state the
+  limitation.
 
 ## Required Reading
 
@@ -110,6 +119,18 @@ Publishing rules:
 - For large, cross-cutting, or AI-assisted PRs, keep durable local review notes under `.codex/context/` when the user asks
   for repeated passes, context-survival, or strict auditability. Keep those notes source-backed and separate from official
   repo context unless the source tree itself changed.
+
+## Review Focus
+
+Focus on low latency, high performance, high concurrency, high reliability, high availability, deadlock prevention, and
+coredump prevention. These are the core quality red lines for yuanrong-datasystem as distributed cache infrastructure —
+any change that could cause latency jitter, throughput bottleneck, concurrency race, data loss, service unavailability,
+deadlock, or process crash must be identified and blocked during review.
+
+Conduct multiple rounds of deep review: do not stop after a single-pass happy-path check. For changes touching hot paths,
+shared state, concurrency primitives, persistence/recovery paths, or lifecycle management, follow the Strict Review
+Passes multi-round mode, with each round focusing on a different dimension, until residual uncertainty on all high-risk
+surfaces has been assessed or eliminated.
 
 ## Strict Review Passes
 
@@ -176,6 +197,12 @@ all round findings have been merged, deduplicated, and severity-calibrated.
    - For RAII or one-shot objects with destructor side effects, check copy/move/delete semantics and moved-from safety.
    - List every lock acquisition path touched by the PR and check for AB/BA lock-order cycles, blocking IO or callbacks
      while locked, and lock nesting that changed across call sites.
+   - **Prohibit pthread mutex.** Flag any new or changed code using `pthread_mutex_t`, `pthread_mutex_lock`,
+     `pthread_mutex_unlock`, `pthread_mutex_init`, or other pthread synchronization primitives. yuanrong-datasystem is
+     built on bthread — pthread mutex causes OS-level blocking rather than bthread-level yielding, leading to thread
+     starvation and performance jitter under high concurrency. Flag as Critical and require replacement with
+     `bthread::Mutex`, `std::mutex`, or lock-free structures. Exception: C interop layers or third-party library
+     requirements that cannot be avoided, where the reason must be confirmed and documented in the review.
    - For atomics, verify the memory-order contract against the protection model. Flag `load` plus `store` Start/Stop
      races that need CAS, unnecessary strong ordering inside lock-protected state, and weak ordering without a documented
      happens-before edge.
