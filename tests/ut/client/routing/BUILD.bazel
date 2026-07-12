@@ -1,0 +1,14 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "worker_router_test",
+    srcs = ["worker_router_test.cpp"],
+    deps = [
+        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)

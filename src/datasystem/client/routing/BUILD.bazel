@@ -1,0 +1,28 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "routing",
+    srcs = [
+        "broken_filter.cpp",
+        "hash_ring_refresher.cpp",
+        "routing.cpp",
+        "state_filter.cpp",
+        "worker_router.cpp",
+    ],
+    hdrs = [
+        "broken_filter.h",
+        "hash_ring_refresher.h",
+        "i_worker_filter.h",
+        "routing.h",
+        "state_filter.h",
+        "worker_router.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:common_util_impl",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+    ],
+)

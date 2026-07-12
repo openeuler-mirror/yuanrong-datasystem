@@ -111,6 +111,7 @@ proto_library(
     srcs = ["object_posix.proto"],
     strip_import_prefix = PROTO_ROOT,
     deps = [
+        ":hash_ring_proto",
         ":meta_transport_proto",
         ":p2p_subscribe_proto",
         ":rpc_option_proto",
@@ -466,6 +467,7 @@ zmq_cc_proto_library(
 zmq_cc_proto_library(
     name = "object_posix_zmq_cc_proto",
     extra_protos = [
+        ":hash_ring_proto",
         ":p2p_subscribe_proto",
         ":utils_proto",
         ":rpc_option_proto",
@@ -474,6 +476,7 @@ zmq_cc_proto_library(
     proto = "object_posix.proto",
     proto_root = ZMQ_PROTO_ROOT,
     deps = [
+        ":hash_ring_cc_proto",
         ":meta_transport_cc_proto",
         ":object_posix_cc_proto",
         ":p2p_subscribe_cc_proto",
@@ -991,6 +994,7 @@ genrule(
     name = "object_posix_brpc_gen",
     srcs = [
         "object_posix.proto",
+        "hash_ring.proto",
         "rpc_option.proto",
         "utils.proto",
         "p2p_subscribe.proto",
@@ -1042,6 +1046,7 @@ cc_library(
     include_prefix = "datasystem/protos",
     deps = [
         ":object_posix_cc_proto",
+        ":hash_ring_cc_proto",
         ":rpc_option_cc_proto",
         ":utils_cc_proto",
         ":p2p_subscribe_cc_proto",

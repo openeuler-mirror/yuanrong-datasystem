@@ -2348,6 +2348,28 @@ Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfo
     return getProc_->GetMetaInfo(req, rsp);
 };
 
+Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
+    auto *hashRing = clusterManager_->GetHashRing();
+    CHECK_FAIL_RETURN_STATUS(hashRing != nullptr, K_NOT_READY, "Hash ring is not initialized");
+
+    int64_t currentVersion = 0;
+    std::string localWorkerUuid;
+    std::map<std::string, HostPort> uuid2AddrMap;
+    hashRing->GetWorkerUuidAddressMapSnapshot(currentVersion, localWorkerUuid, uuid2AddrMap);
+    rsp.set_version(static_cast<uint64_t>(currentVersion));
+    rsp.set_master_address(FLAGS_master_address);
+
+    if (static_cast<uint64_t>(currentVersion) == req.version()) {
+        rsp.set_hash_ring_changed(false);
+    } else {
+        rsp.set_hash_ring_changed(true);
+        *rsp.mutable_hash_ring() = hashRing->GetHashRingPb();
+    }
+    return Status::OK();
+}
+
 Status WorkerOCServiceImpl::DeleteDevObjects(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
 {
     LOG(INFO) << "Worker delete device objects: " << VectorToString(req.object_keys());
