@@ -18,72 +18,39 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_I_DATA_TRANSPORTER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_I_DATA_TRANSPORTER_H
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "datasystem/client/transport/transport_kind.h"
-#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/rpc/rpc_message.h"
-#include "datasystem/kv_client.h"
-#include "datasystem/protos/object_posix.pb.h"
+#include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
 
-/** @brief Owns a transport receive buffer referenced by zero-copy payload spans. */
+/** @brief Owns a transport receive buffer referenced by a zero-copy result. */
 class IReceiveBufferOwner {
 public:
     virtual ~IReceiveBufferOwner() = default;
 };
 
-struct TransportGetRequest {
-    TransportGetRequest(const std::vector<std::string> &keys, const std::vector<ReadParam> &params,
-                        int64_t timeoutMs, bool queryL2)
-        : objectKeys(keys), readParams(params), subTimeoutMs(timeoutMs), queryL2Cache(queryL2)
-    {
-    }
-
-    const std::vector<std::string> &objectKeys;
-    const std::vector<ReadParam> &readParams;
-    int64_t subTimeoutMs;
-    bool queryL2Cache;
+/** @brief One data read against a transporter already bound to a data-worker endpoint. */
+struct DataGetRequest {
+    std::string objectKey;
+    uint64_t expectedSize = 0;
 };
 
-/**
- * @brief Non-owning view of one zero-copy payload in a transport receive buffer.
- *
- * The data remains valid only while the externalOwner in the same TransportGetBatchResult is retained.
- */
-struct ExternalPayloadSpan {
-    size_t payloadInfoIndex = 0;
-    const uint8_t *data = nullptr;
-    uint64_t size = 0;
-};
-
-/** @brief One transport batch whose response and payload storage remain owned by this result. */
-struct TransportGetBatchResult {
-    std::vector<size_t> requestIndices;
-    GetRspPb response;
+/** @brief Owned result returned by one data-worker transporter. */
+struct DataGetResult {
+    GetObjectRemoteRspPb response;
     std::vector<RpcMessage> rpcPayloads;
-    std::vector<ExternalPayloadSpan> externalPayloads;
+    const uint8_t *externalData = nullptr;
+    uint64_t externalSize = 0;
     std::shared_ptr<IReceiveBufferOwner> externalOwner;
-    uint32_t workerVersion = 0;
     AccessTransportKind kind = AccessTransportKind::TCP;
-};
-
-struct TransportGetResult {
-    void Clear()
-    {
-        batches.clear();
-        actualKind = AccessTransportKind::TCP;
-    }
-
-    std::vector<TransportGetBatchResult> batches;
-    AccessTransportKind actualKind = AccessTransportKind::TCP;
 };
 
 class IDataTransporter {
@@ -91,13 +58,12 @@ public:
     virtual ~IDataTransporter() = default;
 
     /**
-     * @brief Execute an object Get using this transport.
-     * @param[in] input Logical Get request.
-     * @param[out] output Transport batches with owned RPC payloads or external buffer references.
-     * @return K_OK when transport completes; worker business status remains in each batch response. Returns a
-     *         retry/rebuild error when the existing object-client Get flow requires one.
+     * @brief Read one object from this transporter's data-worker endpoint.
+     * @param[in] input Object identity and expected size.
+     * @param[out] output Owned RPC payloads or an owner-backed external buffer.
+     * @return K_OK on success; the error code otherwise.
      */
-    virtual Status Get(const TransportGetRequest &input, TransportGetResult &output) = 0;
+    virtual Status Get(const DataGetRequest &input, DataGetResult &output) = 0;
 
     virtual AccessTransportKind Kind() const = 0;
 

@@ -44,6 +44,7 @@ struct ConnectOptions {
     SensitiveValue secretKey = "";
     std::string tenantId = "";
     bool enableCrossNodeConnection = false;
+    bool enableLocalCache = true;
     bool enableRemoteH2D = false;
     std::shared_ptr<IServiceDiscovery> serviceDiscovery = nullptr;
     uint64_t fastTransportMemSize = 256 * 1024 * 1024;  // 256M

@@ -18,19 +18,15 @@
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 
-#include <tbb/concurrent_hash_map.h>
-
-#include <atomic>
 #include <mutex>
-#include <shared_mutex>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "datasystem/client/transport/data_plane/shm_connection.h"
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -64,79 +60,30 @@ Status InitClientUbRuntime(uint64_t fastTransportMemSize)
 
 }  // namespace
 
-struct DataPlaneManager::WorkerTransportEntry {
-    bool HasAliveTransporter(AccessTransportKind expectedKind) const
-    {
-        return transporter != nullptr && kind == expectedKind && transporter->IsAlive();
-    }
-
-    void ResetDataPlaneLocked()
-    {
-        auto staleTransporter = std::move(transporter);
-        if (staleTransporter != nullptr) {
-            staleTransporter->CloseDataPlane();
-        }
-    }
-
-    void ResetDataPlane()
-    {
-        std::unique_lock<std::shared_mutex> lock(mutex);
-        ResetDataPlaneLocked();
-    }
-
-    std::shared_mutex mutex;
-    std::shared_ptr<WorkerRpcClient> rpcClient;
-    std::shared_ptr<IDataTransporter> transporter;
-    AccessTransportKind kind = AccessTransportKind::TCP;
-};
-
-class DataPlaneManager::Impl {
-public:
-    using EntryMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerTransportEntry>>;
-
-    ~Impl()
-    {
-        Shutdown();
-    }
-
-    void Shutdown()
-    {
-        if (shutdown_.exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-
-        std::vector<std::shared_ptr<WorkerTransportEntry>> entries;
-        {
-            std::unique_lock<std::shared_mutex> lock(mutex_);
-            entries.reserve(entries_.size());
-            for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
-                if (iter->second != nullptr) {
-                    entries.emplace_back(iter->second);
-                }
-            }
-            entries_.clear();
-        }
-        for (auto &entry : entries) {
-            entry->ResetDataPlane();
-        }
-    }
-
-    EntryMap entries_;
-    std::shared_mutex mutex_;
-    std::atomic<bool> shutdown_{ false };
-    std::shared_ptr<ClientRequestAuth> auth_;
-    BrpcChannelConfig channelConfig_;
-    uint64_t fastTransportMemSize_ = DataPlaneManager::DEFAULT_FAST_TRANSPORT_MEM_SIZE;
-    std::atomic<bool> initialized_{ false };
-};
-
-DataPlaneManager::DataPlaneManager(std::shared_ptr<ClientRequestAuth> auth, uint64_t fastTransportMemSize,
-                                   BrpcChannelConfig channelConfig)
-    : impl_(new Impl())
+bool DataPlaneManager::WorkerTransportEntry::HasAliveTransporter(AccessTransportKind expectedKind) const
 {
-    impl_->auth_ = std::move(auth);
-    impl_->fastTransportMemSize_ = fastTransportMemSize;
-    impl_->channelConfig_ = std::move(channelConfig);
+    return transporter != nullptr && kind == expectedKind && transporter->IsAlive();
+}
+
+void DataPlaneManager::WorkerTransportEntry::ResetDataPlaneLocked()
+{
+    auto staleTransporter = std::move(transporter);
+    if (staleTransporter != nullptr) {
+        staleTransporter->CloseDataPlane();
+    }
+}
+
+void DataPlaneManager::WorkerTransportEntry::ResetDataPlane()
+{
+    std::unique_lock<std::shared_mutex> lock(mutex);
+    ResetDataPlaneLocked();
+}
+
+DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
+                                   BrpcChannelConfig channelConfig)
+    : signature_(std::move(signature)), channelConfig_(std::move(channelConfig)),
+      fastTransportMemSize_(fastTransportMemSize)
+{
 }
 
 DataPlaneManager::~DataPlaneManager()
@@ -146,25 +93,26 @@ DataPlaneManager::~DataPlaneManager()
 
 Status DataPlaneManager::Init()
 {
-    CHECK_FAIL_RETURN_STATUS(!impl_->shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
 
-    RETURN_RUNTIME_ERROR_IF_NULL(impl_->auth_);
-    if (impl_->initialized_.load(std::memory_order_acquire)) {
+    RETURN_RUNTIME_ERROR_IF_NULL(signature_);
+    if (initialized_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(InitClientUbRuntime(impl_->fastTransportMemSize_));
-    CHECK_FAIL_RETURN_STATUS(!impl_->shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+    RETURN_IF_NOT_OK(InitClientUbRuntime(fastTransportMemSize_));
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    impl_->initialized_.store(true, std::memory_order_release);
+    initialized_.store(true, std::memory_order_release);
     return Status::OK();
 }
 
 Status DataPlaneManager::CreateWorkerRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out)
 {
-    auto rpcClient = std::make_shared<WorkerRpcClient>(workerAddr, impl_->auth_, impl_->channelConfig_);
+    auto rpcClient = std::make_shared<WorkerRpcClient>(workerAddr, signature_, channelConfig_);
     RETURN_IF_NOT_OK(rpcClient->Init());
     out = std::move(rpcClient);
+    VLOG(1) << "[TransportGet][Connection] RPC connection ready, endpoint: " << workerAddr.ToString();
     return Status::OK();
 }
 
@@ -177,23 +125,41 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     return GetOrBuildTransporter(workerAddr, hint, KindForHint(hint), entry, out);
 }
 
+Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out)
+{
+    out.reset();
+    std::shared_ptr<WorkerTransportEntry> entry;
+    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
+    {
+        std::shared_lock<std::shared_mutex> lock(entry->mutex);
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        if (entry->rpcClient != nullptr && entry->rpcClient->IsAlive()) {
+            out = entry->rpcClient;
+            return Status::OK();
+        }
+    }
+    std::unique_lock<std::shared_mutex> lock(entry->mutex);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry));
+    out = entry->rpcClient;
+    return Status::OK();
+}
+
 Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
                                           std::shared_ptr<WorkerTransportEntry> &entry)
 {
-    std::shared_lock<std::shared_mutex> lock(impl_->mutex_);
-    CHECK_FAIL_RETURN_STATUS(!impl_->shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    {
-        Impl::EntryMap::const_accessor accessor;
-        if (impl_->entries_.find(accessor, workerKey)) {
-            entry = accessor->second;
-        }
-    }
-    if (entry != nullptr) {
+    EntryMap::const_accessor constAccessor;
+    if (entries_.find(constAccessor, workerKey)) {
+        entry = constAccessor->second;
         return Status::OK();
     }
-    Impl::EntryMap::accessor accessor;
-    (void)impl_->entries_.insert(accessor, workerKey);
+    EntryMap::accessor accessor;
+    (void)entries_.insert(accessor, workerKey);
     if (accessor->second == nullptr) {
         accessor->second = std::make_shared<WorkerTransportEntry>();
     }
@@ -208,7 +174,7 @@ Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, Trans
 {
     {
         std::shared_lock<std::shared_mutex> lock(entry->mutex);
-        CHECK_FAIL_RETURN_STATUS(!impl_->shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
         if (entry->HasAliveTransporter(expectedKind)) {
             out = entry->transporter;
@@ -216,7 +182,7 @@ Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, Trans
         }
     }
     std::unique_lock<std::shared_mutex> entryLock(entry->mutex);
-    CHECK_FAIL_RETURN_STATUS(!impl_->shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     if (entry->HasAliveTransporter(expectedKind)) {
         out = entry->transporter;
@@ -224,7 +190,7 @@ Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, Trans
     }
     RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry));
     RETURN_IF_NOT_OK(EnsureTransporterLocked(workerAddr, hint, expectedKind, entry));
-    if (impl_->shutdown_.load(std::memory_order_acquire)) {
+    if (shutdown_.load(std::memory_order_acquire)) {
         entry->ResetDataPlaneLocked();
         return Status(K_SHUTTING_DOWN, "DataPlaneManager is shutting down");
     }
@@ -258,20 +224,22 @@ Status DataPlaneManager::EnsureTransporterLocked(const HostPort &workerAddr, Tra
     CHECK_FAIL_RETURN_STATUS(transporter != nullptr, K_RUNTIME_ERROR, "Transporter missing after build");
     entry->kind = transporter->Kind();
     entry->transporter = std::move(transporter);
+    VLOG(1) << "[TransportGet][Connection] Data transporter ready, endpoint: " << workerAddr.ToString()
+            << ", transport kind: " << static_cast<int>(entry->kind);
     return Status::OK();
 }
 
 void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
 {
-    if (impl_->shutdown_.load(std::memory_order_acquire)) {
+    if (shutdown_.load(std::memory_order_acquire)) {
         return;
     }
 
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        std::shared_lock<std::shared_mutex> lock(impl_->mutex_);
-        Impl::EntryMap::const_accessor accessor;
-        if (impl_->entries_.find(accessor, workerAddr.ToString())) {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        EntryMap::const_accessor accessor;
+        if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
         }
     }
@@ -282,17 +250,17 @@ void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
 
 void DataPlaneManager::Teardown(const HostPort &workerAddr)
 {
-    if (impl_->shutdown_.load(std::memory_order_acquire)) {
+    if (shutdown_.load(std::memory_order_acquire)) {
         return;
     }
 
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        std::shared_lock<std::shared_mutex> lock(impl_->mutex_);
-        Impl::EntryMap::accessor accessor;
-        if (impl_->entries_.find(accessor, workerAddr.ToString())) {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        EntryMap::accessor accessor;
+        if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
-            impl_->entries_.erase(accessor);
+            entries_.erase(accessor);
         }
     }
     if (entry != nullptr) {
@@ -312,26 +280,26 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> goneEntries;
     {
-        std::unique_lock<std::shared_mutex> lock(impl_->mutex_);
-        if (impl_->shutdown_.load(std::memory_order_acquire)) {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (shutdown_.load(std::memory_order_acquire)) {
             return;
         }
 
         std::vector<std::string> goneWorkers;
-        for (auto iter = impl_->entries_.begin(); iter != impl_->entries_.end(); ++iter) {
+        for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
             if (liveWorkers.find(iter->first) == liveWorkers.end()) {
-                goneWorkers.push_back(iter->first);
+                goneWorkers.emplace_back(iter->first);
             }
         }
 
         goneEntries.reserve(goneWorkers.size());
         for (const auto &worker : goneWorkers) {
-            Impl::EntryMap::accessor accessor;
-            if (impl_->entries_.find(accessor, worker)) {
+            EntryMap::accessor accessor;
+            if (entries_.find(accessor, worker)) {
                 if (accessor->second != nullptr) {
                     goneEntries.emplace_back(accessor->second);
                 }
-                impl_->entries_.erase(accessor);
+                entries_.erase(accessor);
             }
         }
     }
@@ -342,14 +310,31 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 
 void DataPlaneManager::Shutdown()
 {
-    impl_->Shutdown();
+    if (shutdown_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    std::vector<std::shared_ptr<WorkerTransportEntry>> entries;
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        entries.reserve(entries_.size());
+        for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
+            if (iter->second != nullptr) {
+                entries.emplace_back(iter->second);
+            }
+        }
+        entries_.clear();
+    }
+    for (auto &entry : entries) {
+        entry->ResetDataPlane();
+    }
 }
 
 Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
                                             const std::shared_ptr<WorkerRpcClient> &rpcClient,
-                                            const std::string &errorPrefix, std::shared_ptr<IDataTransporter> &out)
+                                            std::shared_ptr<IDataTransporter> &out)
 {
-    CHECK_FAIL_RETURN_STATUS(impl_->initialized_.load(std::memory_order_acquire), K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(initialized_.load(std::memory_order_acquire), K_NOT_READY,
                              "Call DataPlaneManager::Init before creating UB data-plane transport");
 
     auto ubConnection = std::make_shared<UbConnection>(rpcClient);
@@ -361,21 +346,15 @@ Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
     if (rc.GetCode() == K_NOT_SUPPORTED) {
         return rc;
     }
-    return Status(K_URMA_CONNECT_FAILED, errorPrefix + rc.GetMsg());
+    return Status(K_URMA_CONNECT_FAILED, "UB establish failed: " + rc.GetMsg());
 }
 
 Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportHint hint,
                                           const std::shared_ptr<WorkerRpcClient> &rpcClient,
                                           std::shared_ptr<IDataTransporter> &out)
 {
-    if (hint == TransportHint::SHM_CANDIDATE) {
-        // Reserve the SHM establishment entry for the SHM transporter; data transfer currently degrades to UB.
-        auto shmConnection = std::make_shared<ShmConnection>();
-        (void)shmConnection->Establish(workerAddr);
-        return BuildUbTransporter(workerAddr, rpcClient, "UB establish failed after SHM degrade: ", out);
-    }
-    if (hint == TransportHint::UB_CANDIDATE) {
-        return BuildUbTransporter(workerAddr, rpcClient, "UB establish failed: ", out);
+    if (hint != TransportHint::TCP_ONLY) {
+        return BuildUbTransporter(workerAddr, rpcClient, out);
     }
     out = std::make_shared<TcpTransporter>(rpcClient);
     return Status::OK();

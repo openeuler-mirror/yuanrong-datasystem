@@ -96,6 +96,7 @@ static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int MIN_TTL_SECOND = 0;
 static constexpr int ASYNC_MIN_THREAD_NUM = 2;
 static constexpr int ASYNC_MAX_THREAD_NUM = 5;
+static constexpr int QUERY_AND_GET_MAX_COPY_NUM = 5;
 static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
 static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
 
@@ -2556,6 +2557,37 @@ Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
         } else {
             location->set_object_size(0);
         }
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp)
+{
+    INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
+    std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
+    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving());
+    for (const auto &objectKey : objectKeys) {
+        TbbMetaTable::const_accessor accessor;
+        ObjectLocationInfoPb *location = rsp.add_location_infos();
+        location->set_object_key(objectKey);
+        const size_t shardIdx = GetShardIndex(objectKey);
+        if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
+            continue;
+        }
+        const auto &primaryAddress = accessor->second.meta.primary_address();
+        if (!primaryAddress.empty()) {
+            location->add_object_locations(primaryAddress);
+        }
+        for (const auto &address : accessor->second.locations) {
+            if (location->object_locations_size() >= QUERY_AND_GET_MAX_COPY_NUM) {
+                break;
+            }
+            if (address.first != primaryAddress) {
+                location->add_object_locations(address.first);
+            }
+        }
+        location->set_object_size(accessor->second.meta.data_size());
     }
     return Status::OK();
 }

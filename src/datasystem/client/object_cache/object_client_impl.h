@@ -44,6 +44,8 @@
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
+#include "datasystem/client/transport/transport_layer.h"
+#include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase_types.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -888,6 +890,27 @@ private:
     Status GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> workerApi, GetParam &getParam,
                                 std::vector<std::shared_ptr<Buffer>> &buffers);
 
+    Status InitTransportLayer();
+
+    Status ResolveTransportMetaOwner(const std::string &objectKey, HostPort &metaOwner) const;
+
+    void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
+                                   std::vector<Status> &itemStatuses) const;
+
+    Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
+                                 std::vector<std::shared_ptr<Buffer>> &buffers);
+
+    Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
+                                    std::shared_ptr<Buffer> &buffer);
+
+    Status ApplyTransportReadResult(const std::vector<std::string> &objectKeys,
+                                    const client::ObjectReadRequest &request, client::ObjectReadResult &result,
+                                    const Status &transportStatus, std::vector<std::shared_ptr<Buffer>> &buffers,
+                                    std::vector<Status> &itemStatuses, AccessTransportKind &actualKind);
+
+    Status FinishTransportRead(const std::vector<Status> &itemStatuses, AccessTransportKind actualKind,
+                               const Status &transportStatus);
+
 #ifdef USE_URMA
     /**
      * @brief Get buffers from worker in sub-batches when total UB data exceeds the max buffer size.
@@ -1592,6 +1615,7 @@ private:
     SensitiveValue token_;
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
+    bool enableLocalCache_ = true;
     std::unique_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };
@@ -1625,6 +1649,8 @@ private:
     std::shared_ptr<ThreadPool> asyncSwitchWorkerPool_;
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;
     std::shared_ptr<ThreadPool> asyncReleasePool_;
+    std::shared_ptr<Signature> transportSignature_;
+    std::unique_ptr<client::TransportLayer> transportLayer_;
 
     // Listenworker needs to be placed at the bottom to ensure that it is destructed first.
     std::vector<std::shared_ptr<client::ListenWorker>> listenWorker_;

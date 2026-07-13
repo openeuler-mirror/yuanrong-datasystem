@@ -597,6 +597,22 @@ message GetObjectLocationsRspPb {
   bool meta_is_moving = 3;
 }
 
+message QueryAndGetReqPb {
+  repeated string object_keys = 1;
+  bool redirect = 2;
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
+}
+
+message QueryAndGetRspPb {
+  repeated ObjectLocationInfoPb location_infos = 1;
+  repeated RedirectMetaInfo info = 2;
+  bool meta_is_moving = 3;
+}
+
 message ReplacePrimaryReqPb {
   message ObjectInfoPb {
     string object_key = 1;
@@ -761,6 +777,7 @@ service MasterOCService {
   }
   rpc UpdateMeta(UpdateMetaReqPb) returns (UpdateMetaRspPb) {}
   rpc GetObjectLocations(GetObjectLocationsReqPb) returns (GetObjectLocationsRspPb) {}
+  rpc QueryAndGet(QueryAndGetReqPb) returns (QueryAndGetRspPb) {}
   rpc GIncreaseRef(GIncreaseReqPb) returns (GIncreaseRspPb) {}
   rpc GDecreaseRef(GDecreaseReqPb) returns (GDecreaseRspPb) {
     option (datasystem.unary_socket_option) = true;

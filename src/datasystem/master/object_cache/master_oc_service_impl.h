@@ -134,6 +134,14 @@ public:
     Status GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &resp) override;
 
     /**
+     * @brief Query object locations for client direct reads.
+     * @param[in] req The query request.
+     * @param[out] resp The object locations and redirect state.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp) override;
+
+    /**
      * @brief Delete metadata and notify other workers to delete these objects.
      * @param[in] serverApi The ServerUnaryWriterReader object.
      * @return Status of the call.

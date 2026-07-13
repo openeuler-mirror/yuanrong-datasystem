@@ -180,6 +180,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_client_transport_get_test",
+    srcs = ["kv_client_transport_get_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],

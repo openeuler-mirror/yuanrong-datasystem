@@ -467,8 +467,8 @@ Status WorkerWorkerOCServiceImpl::GetSafeObjectEntry(const std::string &objectKe
             // get data from L2 cache if worker is primary copy
             return ocClientWorkerSvc_->GetDataFromL2CacheForPrimaryCopy(objectKey, version, safeEntry);
         }
-        // tryLock it is the local master call, we need to avoid deadlock.
-        RETURN_STATUS(StatusCode::K_UNKNOWN_ERROR, "Object not found");
+        // tryLock callers must not load a missing entry from L2; the remote-get handler maps not-found for retry.
+        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Object not found");
     }
     return Status::OK();
 }
@@ -830,7 +830,9 @@ Status WorkerWorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb
 
 Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReqPb &req)
 {
-    bool isFastTransportEnabled = (IsUrmaEnabled() && req.has_urma_info()) || (IsUcpEnabled() && req.has_ucp_info());
+    const bool isUrmaRequest = IsUrmaEnabled() && req.has_urma_info();
+    const bool isUcpRequest = IsUcpEnabled() && req.has_ucp_info();
+    const bool isFastTransportEnabled = isUrmaRequest || isUcpRequest;
     if (!isFastTransportEnabled) {
         return Status::OK();
     }
@@ -845,17 +847,21 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
         port = req.ucp_info().remote_ip_addr().port();
     }
     const HostPort requestAddress(host, port);
-    auto rc = CheckTransportConnectionStable(requestAddress.ToString(), req.urma_instance_id());
+    const std::string requestAddressStr = requestAddress.ToString();
+    const bool isClientUrmaRequest = isUrmaRequest && !req.urma_info().client_id().empty();
+    const std::string &remoteConnectionId =
+        isClientUrmaRequest ? req.urma_info().client_id() : requestAddressStr;
+    auto rc = CheckTransportConnectionStable(remoteConnectionId, req.urma_instance_id());
     if (rc.IsError() && rc.GetCode() == K_URMA_NEED_CONNECT) {
         std::string remoteWorkerId = "UNKNOWN";
-        if (clusterManager_ != nullptr) {
-            auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(requestAddress.ToString());
+        if (!isClientUrmaRequest && clusterManager_ != nullptr) {
+            auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(requestAddressStr);
             if (!workerId.empty()) {
                 remoteWorkerId = workerId;
             }
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddress.ToString()
+            << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddressStr
             << ", remoteWorkerId=" << remoteWorkerId
             << ", remoteInstanceId=" << (req.urma_instance_id().empty() ? "UNKNOWN" : req.urma_instance_id())
             << ", rc=" << rc.ToString();

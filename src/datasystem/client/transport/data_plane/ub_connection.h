@@ -43,7 +43,7 @@ public:
     void Teardown() override;
 
 private:
-    Status EstablishUrma(const HostPort &workerAddr);
+    Status EstablishUrma();
 
     HostPort workerAddr_;
     std::shared_ptr<WorkerRpcClient> rpcClient_;
