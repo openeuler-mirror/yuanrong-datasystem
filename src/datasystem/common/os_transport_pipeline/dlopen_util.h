@@ -90,8 +90,6 @@ struct CudaRTLibLoader : public LibLoaderBase {
     static CudaRTLibLoader *Instance();
 
     // cuda toolkit
-    REG_METHOD(cudaSetDevice, cudaError_t, int);
-    REG_METHOD(cudaDeviceReset, cudaError_t);
     REG_METHOD(cudaIpcOpenMemHandle, cudaError_t, void **, cudaIpcMemHandle_t, unsigned int);
     REG_METHOD(cudaStreamCreateWithFlags, cudaError_t, cudaStream_t *, unsigned int);
     REG_METHOD(cudaEventCreate, cudaError_t, cudaEvent_t *, unsigned int);

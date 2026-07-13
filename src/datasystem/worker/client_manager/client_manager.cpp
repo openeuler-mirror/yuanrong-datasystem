@@ -110,7 +110,7 @@ Status ClientManager::AddClient(const ClientKey &clientId, bool shmEnabled, int 
     // allocate pipeline queue
     if (shmEnabled && pipelineQueueId) {
         uint32_t queueId = OsXprtPipln::INVALID_PIPLN_QUEUE_ID;
-        LOG_IF_ERROR(OsXprtPipln::HoleOnePiplnRH2DQueue(queueId), "failed to hold one pipeline queue");
+        LOG_IF_ERROR(OsXprtPipln::HoldOnePiplnRH2DQueue(queueId), "failed to hold one pipeline queue");
         clientInfo->SetPipelineQueueId(queueId);
         *pipelineQueueId = queueId;
     }

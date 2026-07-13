@@ -30,11 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/status.h"
 
-static constexpr int MAX_POPEN_LINE_LENGTH = 256;
-
 namespace OsXprtPipln {
-
-std::unordered_map<std::string, int32_t> CudaRH2DDriver::uuidToDevIdMap_;
 
 static inline std::string CudaErrToString(cudaError_t code, const std::string &symbol)
 {
@@ -45,27 +41,13 @@ static inline std::string CudaErrToString(cudaError_t code, const std::string &s
     }
 }
 
-Status CudaRH2DDriver::CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const std::string &funcName)
+static Status CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const std::string &funcName)
 {
     cudaError_t ret = hook();
-    switch (ret) {
-        case cudaSuccess:
-            return Status::OK();
-        case cudaErrorLaunchFailure:
-        case cudaErrorIllegalAddress:
-        case cudaErrorHardwareStackError:
-        case cudaErrorUnknown:
-            break;
-        default:
-            return Status(StatusCode::K_IO_ERROR, funcName + " failed: " + CudaErrToString(ret, funcName));
-    }
-    // meet fatal error, reset context and try again
-    RETURN_IF_NOT_OK(ResetContext());
-    CHECK_FAIL_RETURN_STATUS(hook() == cudaSuccess, StatusCode::K_IO_ERROR,
-                             funcName + " failed: " + CudaErrToString(ret, funcName));
+    if (ret != cudaSuccess)
+        return Status(StatusCode::K_IO_ERROR, funcName + " failed: " + CudaErrToString(ret, funcName));
     return Status::OK();
 }
-
 #define CUDA_CALL_WRAPPER(funcName, ...)                   \
     CallCudaRTHook(                                        \
         [&]() {                                            \
@@ -75,47 +57,17 @@ Status CudaRH2DDriver::CallCudaRTHook(const std::function<cudaError_t(void)> &ho
         },                                                 \
         #funcName)
 
-#define CUDA_RETURN_IF_NOT_OK(funcName, ...)                        \
-    do {                                                            \
-        RETURN_IF_NOT_OK(CUDA_CALL_WRAPPER(funcName, __VA_ARGS__)); \
+#define CUDA_RETURN_IF_NOT_OK(funcName, ...)                                               \
+    do {                                                                                   \
+        cudaError_t ret;                                                                   \
+        CALL_CUDA_RT_FUNC(ret, funcName, __VA_ARGS__);                                     \
+        CHECK_FAIL_RETURN_STATUS(ret == cudaSuccess, StatusCode::K_IO_ERROR,               \
+                                 #funcName " failed: " + CudaErrToString(ret, #funcName)); \
     } while (0)
 
 bool CudaRH2DDriver::UseExternalStream() const
 {
     return h2dStream != nullptr;
-}
-
-Status CudaRH2DDriver::ResetContext()
-{
-    if (currentDevId_ == -1) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "set cuda device failed, cudaId is null");
-    }
-
-    std::unique_lock<std::shared_mutex> l(initMutex_);
-
-    CUDA_RETURN_IF_NOT_OK(cudaSetDevice, currentDevId_);
-    inited_ = true;
-
-    if (UseExternalStream()) {
-        // The stream is owned by caller. Do not reset CUDA context, create event, or destroy it.
-        stream_ = reinterpret_cast<cudaStream_t>(h2dStream);
-        event_ = nullptr;
-        return Status::OK();
-    }
-
-    // Keep the original internal-stream behavior for compatibility when caller does not pass a stream.
-    CUDA_RETURN_IF_NOT_OK(cudaDeviceReset);
-    stream_ = nullptr;
-    event_ = nullptr;
-
-    if (isClient) {
-        CUDA_RETURN_IF_NOT_OK(cudaStreamCreateWithFlags, &stream_, cudaStreamNonBlocking);
-        CUDA_RETURN_IF_NOT_OK(cudaEventCreate, &event_, cudaEventDisableTiming);
-        VLOG(1) << "RH2D internal stream created(reset): driver=" << this << " stream=" << stream_
-                << " event=" << event_;
-    }
-
-    return Status::OK();
 }
 
 Status CudaRH2DDriver::Init()
@@ -124,31 +76,16 @@ Status CudaRH2DDriver::Init()
         return Status::OK();
     }
 
-    if (UseExternalStream()) {
-        if (currentDevId_ != -1) {
-            CUDA_RETURN_IF_NOT_OK(cudaSetDevice, currentDevId_);
-            inited_ = true;
-        }
-        stream_ = reinterpret_cast<cudaStream_t>(h2dStream);
-        CHECK_FAIL_RETURN_STATUS(stream_ != nullptr, StatusCode::K_RUNTIME_ERROR, "external h2d stream is null");
-        event_ = nullptr;
-        VLOG(1) << "RH2D use external stream: driver=" << this << " stream=" << stream_;
-        return Status::OK();
-    }
-
-    if (!inited_) {
-        RETURN_IF_NOT_OK(ResetContext());
-    } else if (currentDevId_ != -1) {
-        CUDA_RETURN_IF_NOT_OK(cudaSetDevice, currentDevId_);
-    }
-
     if (stream_ == nullptr) {
         CUDA_RETURN_IF_NOT_OK(cudaStreamCreateWithFlags, &stream_, cudaStreamNonBlocking);
     }
 
     RETURN_RUNTIME_ERROR_IF_NULL(GetSelfEvent(true /* createIfNotExists */));
 
-    VLOG(1) << "RH2D use internal stream: driver=" << this << " stream=" << stream_ << " event=" << event_;
+    // Temporary verification log. In the old implementation, different drivers printed the same
+    // stream address. With this implementation, different CudaRH2DDriver instances should usually
+    // print different stream addresses.
+    VLOG(1) << PIPLN_LOG_PREFIX "stream verify(init): driver=" << this << " stream=" << stream_ << " event=" << event_;
     return Status::OK();
 }
 
@@ -200,8 +137,7 @@ Status CudaRH2DDriver::RegisterHostMemory(void *ptr, size_t size)
 void CudaRH2DDriver::UnRegisterHostMemory(void *ptr)
 {
     if (ptr) {
-        cudaError_t ret;
-        CALL_CUDA_RT_FUNC(ret, cudaHostUnregister, ptr);
+        CUDA_CALL_WRAPPER(cudaHostUnregister, ptr);
     }
 }
 
@@ -223,10 +159,10 @@ Status CudaRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset
             return Status(StatusCode::K_RUNTIME_ERROR, "no event for internal stream Submit");
         }
         CUDA_RETURN_IF_NOT_OK(cudaEventRecord, event, stream_);
-        VLOG(1) << "RH2D submit internal stream: driver=" << this << " stream=" << stream_ << " event=" << event
-                << " srcSize=" << srcSize << " destOffset=" << destOffset;
+        VLOG(2) << PIPLN_LOG_PREFIX "RH2D submit internal stream: driver=" << this << " stream=" << stream_
+                << " event=" << event << " srcSize=" << srcSize << " destOffset=" << destOffset;
     } else {
-        VLOG(1) << "RH2D submit external stream: driver=" << this << " stream=" << stream_
+        VLOG(2) << PIPLN_LOG_PREFIX "RH2D submit external stream: driver=" << this << " stream=" << stream_
                 << " srcSize=" << srcSize << " destOffset=" << destOffset;
     }
     return Status::OK();
@@ -240,7 +176,7 @@ Status CudaRH2DDriver::WaitIO()
     cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
     if (event != nullptr) {
         CUDA_RETURN_IF_NOT_OK(cudaEventSynchronize, event);
-        VLOG(1) << "RH2D internal cudaEventSynchronize end, driver=" << this << " stream=" << stream_
+        VLOG(1) << PIPLN_LOG_PREFIX "cudaEventSynchronize end, driver=" << this << " stream=" << stream_
                 << " event=" << event;
     }
     return Status::OK();
@@ -256,90 +192,6 @@ Status CudaRH2DDriver::Release()
     return Status::OK();
 }
 
-Status CudaRH2DDriver::LoadGpuIds()
-{
-    char buf[MAX_POPEN_LINE_LENGTH];
-    FILE *f = popen("nvidia-smi -L", "r");
-    if (!f) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "LoadGpuIds failed: failed to popen(\"nvidia-smi -L\")");
-    }
-    uuidToDevIdMap_.clear();
-    while (fgets(buf, MAX_POPEN_LINE_LENGTH, f)) {
-        std::string line = buf;
-        // gpu id
-        const std::string gpu_prefix = "GPU ";
-        size_t pos_gpu = line.find(gpu_prefix);
-        if (pos_gpu == std::string::npos) {
-            continue;
-        }
-        size_t start = pos_gpu + gpu_prefix.size();
-        size_t end = start;
-        while (line[end] >= '0' && line[end] <= '9' && end < line.size())
-            end++;
-        if (start == end)
-            continue;
-        int devId = std::stoi(line.substr(start, end - start));
-
-        // gpu uuid
-        const std::string uuid_prefix = "UUID: GPU-";
-        size_t pos_uuid = line.find(uuid_prefix);
-        if (pos_uuid == std::string::npos)
-            continue;
-        start = pos_uuid + uuid_prefix.size();
-        end = line.find(')', start);
-        if (start == end)
-            continue;
-        std::string gpuUUID = line.substr(start, end - start);
-
-        // save it
-        uuidToDevIdMap_[gpuUUID] = devId;
-    }
-    int status = pclose(f);
-    if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0)) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "LoadGpuIds failed: popen return " + std::to_string(status));
-    }
-    return Status::OK();
-}
-
-void CudaRH2DDriver::SwitchToAndGetGpuId(const std::string &uuid)
-{
-    if (uuid.empty())
-        return;
-    int32_t ret = -1;
-    try {
-        // is num
-        ret = std::stoi(uuid);
-    } catch (...) {
-        // is uuid
-        auto it = uuidToDevIdMap_.find(uuid);
-        if (it != uuidToDevIdMap_.end()) {
-            ret = it->second;
-        } else {
-            // is GPU-uuid
-            auto it2 = uuidToDevIdMap_.find(uuid.substr(4));
-            if (it2 != uuidToDevIdMap_.end())
-                ret = it2->second;
-        }
-    }
-    currentDevId_ = ret;
-    if (ret == -1)
-        return;
-
-    cudaError_t cudaRet;
-    CALL_CUDA_RT_FUNC(cudaRet, cudaSetDevice, currentDevId_);
-    if (cudaRet != cudaSuccess) {
-        LOG(WARNING) << "set cuda device failed for " << std::to_string(currentDevId_) << ":"
-                     << CudaErrToString(cudaRet, "cudaSetDevice");
-    } else {
-        inited_ = true;
-    }
-    // Do not create a global static stream here. Each CudaRH2DDriver creates its own stream in Init().
-}
-
-std::unordered_map<std::string, int32_t> &CudaRH2DDriver::GetDevIdMap()
-{
-    return uuidToDevIdMap_;
-}
 }  // namespace OsXprtPipln
 
 #endif

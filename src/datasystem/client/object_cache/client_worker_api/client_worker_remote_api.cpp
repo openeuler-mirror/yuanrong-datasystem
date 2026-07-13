@@ -228,19 +228,23 @@ Status ClientWorkerRemoteApi::InitPipelineRH2DQueue(ShmConvertHookFunc hook)
     if (pipelineMsgShmUnit_) {
         pipelineConsumer_ = std::make_shared<OsXprtPipln::PipelineRH2DQueueConsumer>();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(pipelineConsumer_->InitQueue(pipelineMsgShmUnit_, converter),
-                                         "init pipeline queue failed");
+                                         PIPLN_LOG_PREFIX" init pipeline queue failed");
         // RegisterClient returns current data shm arenas. Mmap and cudaHostRegister them here so later H2D chunks do
         // not pay pageable-memory/staging overhead in cudaMemcpyAsync.
+        int successCount = 0;
         for (auto &shmUnit : pipelineDataShmUnits_) {
             auto ret = (*converter)(shmUnit);
             if (ret.IsError()) {
-                LOG(WARNING) << "mmap pipeline data shm failed before pinning " << ret.GetMsg();
+                LOG(WARNING) << PIPLN_LOG_PREFIX" mmap shm failed before pinning: " << ret.GetMsg();
             } else {
                 LOG_IF_ERROR(
                     pipelineConsumer_->RegisterHostMemory(shmUnit->fd, shmUnit->GetPointer(), shmUnit->mmapSize),
                     "cudaHostRegister pipeline data shm failed");
+                successCount++;
             }
         }
+        LOG(INFO) << PIPLN_LOG_PREFIX" Client initialized pipeline queue: registered " << successCount << "/"
+                  << pipelineDataShmUnits_.size() << " data shm fds";
     }
 
 #else

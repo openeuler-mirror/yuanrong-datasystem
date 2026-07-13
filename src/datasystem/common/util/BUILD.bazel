@@ -145,6 +145,11 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "dyn_bitmap",
+    hdrs = ["dyn_bitmap.h"],
+)
+
+ds_cc_library(
     name = "math_util",
     hdrs = ["math_util.h"],
 )

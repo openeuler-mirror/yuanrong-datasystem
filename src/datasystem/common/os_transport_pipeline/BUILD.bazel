@@ -46,6 +46,7 @@ ds_cc_library(
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:dlutils",
+        "//src/datasystem/common/util:dyn_bitmap",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:share_memory_cc_proto",

@@ -37,6 +37,8 @@ DS_DECLARE_int32(minloglevel);
 DS_DECLARE_int32(log_monitor_interval_ms);
 DS_DECLARE_bool(enable_perf_trace_log);
 
+#define PIPLN_LOG_PREFIX "[PIPLN RH2D]"
+
 namespace datasystem {
 
 // Default when FLAGS_log_monitor_interval_ms <= 0 (must match gflag default in res_metric_collector.cpp).

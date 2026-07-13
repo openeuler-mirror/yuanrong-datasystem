@@ -27,14 +27,14 @@
 #include <ub/umdk/urma/urma_api.h>
 #endif
 
-#define CHUNKTAG_TYPE_START_INDEX 0
-#define CHUNKTAG_TYPE_LEN 1
-#define CHUNKTAG_ID_START_INDEX 1
-#define CHUNKTAG_ID_LEN 4
-#define CHUNKTAG_SIZE_START_INDEX 5
-#define CHUNKTAG_SIZE_LEN 1
-#define CHUNKTAG_REQID_START_INDEX 6
+#define CHUNKTAG_REQID_START_INDEX 0
 #define CHUNKTAG_REQID_LEN 10
+#define CHUNKTAG_TYPE_START_INDEX 10
+#define CHUNKTAG_TYPE_LEN 1
+#define CHUNKTAG_ID_START_INDEX 11
+#define CHUNKTAG_ID_LEN 4
+#define CHUNKTAG_SIZE_START_INDEX 15
+#define CHUNKTAG_SIZE_LEN 1
 
 enum PiplnDoneStep {
     PIPLN_DONE_NO_STEP = 0,
@@ -60,10 +60,10 @@ struct DevShmInfo {
 struct ChunkTag {
     static inline constexpr int lastChunkTag = 0x1;
     static inline constexpr uint32_t chunkSize2MB = 2 * 1024 * 1024;
+    uint64_t reqId : 10;
     uint64_t chunkType : 1;
     uint64_t chunkId : 4;
     uint64_t chunkSize : 1;
-    uint64_t reqId : 10;
     uint64_t rsv : 48;
 
     static inline uint64_t GetRange(uint64_t tag, int start, int length)
@@ -79,20 +79,20 @@ struct ChunkTag {
     static inline ChunkTag FromUint64(uint64_t num)
     {
         ChunkTag tag{};
+        tag.reqId = GetRange(num, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         tag.chunkType = GetRange(num, CHUNKTAG_TYPE_START_INDEX, CHUNKTAG_TYPE_LEN);
         tag.chunkId = GetRange(num, CHUNKTAG_ID_START_INDEX, CHUNKTAG_ID_LEN);
         tag.chunkSize = GetRange(num, CHUNKTAG_SIZE_START_INDEX, CHUNKTAG_SIZE_LEN);
-        tag.reqId = GetRange(num, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         return tag;
     }
 
     static inline uint64_t ToUint64(ChunkTag tag)
     {
         uint64_t ret = 0;
+        SetRange(ret, tag.reqId, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         SetRange(ret, tag.chunkType, CHUNKTAG_TYPE_START_INDEX, CHUNKTAG_TYPE_LEN);
         SetRange(ret, tag.chunkId, CHUNKTAG_ID_START_INDEX, CHUNKTAG_ID_LEN);
         SetRange(ret, tag.chunkSize, CHUNKTAG_SIZE_START_INDEX, CHUNKTAG_SIZE_LEN);
-        SetRange(ret, tag.reqId, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         return ret;
     }
 

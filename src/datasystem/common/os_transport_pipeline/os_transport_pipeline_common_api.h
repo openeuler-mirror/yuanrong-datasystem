@@ -74,10 +74,5 @@ struct H2DChunkManager {
 
 #endif
 
-namespace OsXprtPipln {
-
-DEFINE_HOOK_WITH_RETTYPE(void, SwitchToAndGetGpuId(const std::string &uuidOrId));
-
-}
 
 #endif
