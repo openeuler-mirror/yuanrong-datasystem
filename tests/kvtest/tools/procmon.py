@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor CPU, memory, and file-descriptor usage of a process by name."""
+"""Monitor CPU, memory, file-descriptor, and TCP retransmission of a process by name."""
 
 import argparse
 import atexit
@@ -63,6 +63,39 @@ def read_proc_fd_count(pid):
         return None
 
 
+def read_tcp_retrans_stats():
+    """Read cumulative TCP retransmit and OutSegs counters from /proc/net/snmp.
+
+    Returns (retrans, outsegs) or (None, None) on read/parse failure.
+    /proc/net/snmp is network-namespace scoped: inside a container it reports
+    that container's TCP totals rather than a single process's. When the
+    monitored process is the dominant TCP user in the container (typical for
+    KV test workloads), container-level stats are an effective per-process
+    proxy. Counters are cumulative since the namespace's boot, so callers must
+    diff successive samples to get a rate.
+    """
+    try:
+        header = None
+        vals = None
+        with open("/proc/net/snmp") as f:
+            for line in f:
+                if not line.startswith("Tcp:"):
+                    continue
+                fields = line.split()
+                if header is None:
+                    header = fields
+                else:
+                    vals = fields
+                    break
+        if header is None or vals is None:
+            return None, None
+        idx_retrans = header.index("RetransSegs")
+        idx_outsegs = header.index("OutSegs")
+        return int(vals[idx_retrans]), int(vals[idx_outsegs])
+    except (FileNotFoundError, ValueError, IndexError):
+        return None, None
+
+
 def format_mb(bytes_val):
     return f"{bytes_val / (1024 * 1024):.1f}"
 
@@ -101,7 +134,7 @@ def _daemonize():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Monitor process CPU, memory, and file-descriptor usage")
+    parser = argparse.ArgumentParser(description="Monitor process CPU, memory, file-descriptor, and TCP retransmission")
     parser.add_argument("-p", "--process", help="Process name to find and monitor")
     parser.add_argument("--pid", type=int, help="Monitor specific PID directly")
     parser.add_argument("-i", "--interval", type=float, default=1, help="Sample interval in seconds (default: 1)")
@@ -154,8 +187,11 @@ def main():
     samples_cpu = []
     samples_mem = []
     samples_fd = []
+    samples_retrans = []
+    total_retrans = 0
     prev_cpu = read_proc_stat(pid)
     prev_time = time.monotonic()
+    prev_retrans, prev_outsegs = read_tcp_retrans_stats()
     start_time = prev_time
 
     running = True
@@ -195,9 +231,27 @@ def main():
         if fd_count is not None:
             samples_fd.append(fd_count)
 
+        retrans, outsegs = read_tcp_retrans_stats()
+        tcp_str = ""
+        if retrans is not None and outsegs is not None:
+            if prev_retrans is not None and prev_outsegs is not None:
+                delta_retrans = max(0, retrans - prev_retrans)
+                delta_outsegs = max(0, outsegs - prev_outsegs)
+            else:
+                delta_retrans = 0
+                delta_outsegs = 0
+            retrans_per_sec = delta_retrans / dt if dt > 0 else 0.0
+            retrans_rate = (delta_retrans / delta_outsegs * 100) if delta_outsegs > 0 else 0.0
+            samples_retrans.append(retrans_per_sec)
+            total_retrans += delta_retrans
+            tcp_str = (f" Retrans/s={retrans_per_sec:.2f}"
+                       f" Rate={retrans_rate:.2f}%")
+            prev_retrans = retrans
+            prev_outsegs = outsegs
+
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         fd_str = f" FD={fd_count}" if fd_count is not None else ""
-        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB{fd_str}")
+        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB{fd_str}{tcp_str}")
 
         prev_cpu = cpu_ticks
         prev_time = now
@@ -215,6 +269,10 @@ def main():
         avg_fd = sum(samples_fd) / len(samples_fd)
         peak_fd = max(samples_fd)
         emit(f"FD   avg={avg_fd:.0f} peak={peak_fd}")
+    if samples_retrans:
+        avg_retrans = sum(samples_retrans) / len(samples_retrans)
+        peak_retrans = max(samples_retrans)
+        emit(f"TCP  retrans total={total_retrans} avg={avg_retrans:.2f}/s peak={peak_retrans:.2f}/s")
 
 
 if __name__ == "__main__":
