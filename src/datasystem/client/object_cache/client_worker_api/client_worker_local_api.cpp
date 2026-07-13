@@ -105,8 +105,10 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
     }
     PublishRspPb rsp;
     RETURN_IF_NOT_OK(api_->WorkerOCPublish(workerOCService_, req, rsp, std::move(rms)));
-    if (!isShm) {
-        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    if (isShm) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    } else {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
     }
     return Status::OK();
 }
@@ -128,11 +130,14 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
     req.set_auto_release_memory_ref(!bufferInfo[0]->shmId.Empty());
     std::vector<MemView> mvs;
     uint64_t payloadBytes = 0;
+    uint64_t shmBytes = 0;
     req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
     for (size_t i = 0; i < bufferInfo.size(); ++i) {
         if (bufferInfo[i]->shmId.Empty()) {
             mvs.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
             payloadBytes += bufferInfo[i]->dataSize;
+        } else {
+            shmBytes += bufferInfo[i]->dataSize;
         }
         MultiPublishReqPb::ObjectInfoPb objectInfoPb;
         auto mutableBlobSizes = objectInfoPb.mutable_blob_sizes();
@@ -149,7 +154,8 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
     std::vector<RpcMessage> rms;
     RETURN_IF_NOT_OK(MemView2RpcMessage(mvs, rms));
     RETURN_IF_NOT_OK(api_->WorkerOCMultiPublish(workerOCService_, req, rsp, std::move(rms)));
-    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, payloadBytes);
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, shmBytes);
     return Status::OK();
 }
 

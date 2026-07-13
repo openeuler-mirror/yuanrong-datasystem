@@ -32,7 +32,6 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
-#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -652,11 +651,17 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
         MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send Publish request error");
+    RecordPublishWriteBytes(bufferInfo, isShm);
+    return Status::OK();
+}
 
-    if (!isShm && !bufferInfo->ubDataSentByMemoryCopy) {
+void ClientWorkerRemoteApi::RecordPublishWriteBytes(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm)
+{
+    if (isShm) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    } else if (!bufferInfo->ubDataSentByMemoryCopy) {
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
     }
-    return Status::OK();
 }
 
 Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
@@ -670,22 +675,9 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     std::vector<MemView> payloads;
     std::vector<UrmaFallbackTcpLimiter::Ticket> fallbackTickets;
     uint64_t payloadBytes = 0;
-    fallbackTickets.reserve(bufferInfo.size());
-    req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
-    for (size_t i = 0; i < bufferInfo.size(); ++i) {
-        if (bufferInfo[i]->shmId.Empty() || IsUrmaFallbackPayload(bufferInfo[i])) {
-            if (IsUrmaFallbackPayload(bufferInfo[i])) {
-                fallbackTickets.emplace_back();
-                RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo[i], payloads,
-                                                      fallbackTickets.back()));
-            } else {
-                payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
-            }
-            payloadBytes += bufferInfo[i]->dataSize;
-        }
-        const auto *currentBlobSizes = blobSizes.empty() ? nullptr : &blobSizes[i];
-        FillMultiPublishObjectInfo(bufferInfo[i], currentBlobSizes, req);
-    }
+    uint64_t shmBytes = 0;
+    RETURN_IF_NOT_OK(BuildMultiPublishPayloads(bufferInfo, blobSizes, payloads, payloadBytes, shmBytes, req,
+                                               fallbackTickets));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when multi publish.");
     point.RecordAndReset(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
     auto status =
@@ -708,6 +700,36 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send multi publish request error");
     METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, shmBytes);
+    return Status::OK();
+}
+
+Status ClientWorkerRemoteApi::BuildMultiPublishPayloads(
+    const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
+    const std::vector<std::vector<uint64_t>> &blobSizes, std::vector<MemView> &payloads,
+    uint64_t &payloadBytes, uint64_t &shmBytes, MultiPublishReqPb &req,
+    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets)
+{
+    fallbackTickets.reserve(bufferInfo.size());
+    req.mutable_object_info()->Reserve(static_cast<int>(bufferInfo.size()));
+    for (size_t i = 0; i < bufferInfo.size(); ++i) {
+        if (bufferInfo[i]->shmId.Empty() || IsUrmaFallbackPayload(bufferInfo[i])) {
+            if (IsUrmaFallbackPayload(bufferInfo[i])) {
+                fallbackTickets.emplace_back();
+                RETURN_IF_NOT_OK(AppendPublishPayload(urmaFallbackTcpPendingBytes_, bufferInfo[i], payloads,
+                                                      fallbackTickets.back()));
+            } else {
+                payloads.emplace_back(bufferInfo[i]->pointer, bufferInfo[i]->dataSize);
+            }
+            if (!bufferInfo[i]->ubDataSentByMemoryCopy) {
+                payloadBytes += bufferInfo[i]->dataSize;
+            }
+        } else {
+            shmBytes += bufferInfo[i]->dataSize;
+        }
+        const auto *currentBlobSizes = blobSizes.empty() ? nullptr : &blobSizes[i];
+        FillMultiPublishObjectInfo(bufferInfo[i], currentBlobSizes, req);
+    }
     return Status::OK();
 }
 

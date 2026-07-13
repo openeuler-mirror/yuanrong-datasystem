@@ -30,6 +30,7 @@
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/client/object_cache/client_worker_api/client_worker_base_api.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/net_util.h"
@@ -208,6 +209,30 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status InitDecreaseQueue();
+
+    /**
+     * @brief Record the bytes written by SHM or TCP (non-UB path) for Publish.
+     * @param[in] bufferInfo Buffer information, provides dataSize and ubDataSentByMemoryCopy.
+     * @param[in] isShm Whether the publish path is shared memory.
+     */
+    void RecordPublishWriteBytes(const std::shared_ptr<ObjectBufferInfo> &bufferInfo, bool isShm);
+
+    /**
+     * @brief Build payloads and per-path byte counters (TCP/SHM) for MultiPublish, and fill object info into req.
+     * @param[in] bufferInfo List of objects to publish.
+     * @param[in] blobSizes Per-object blob sizes; empty if unused.
+     * @param[out] payloads Constructed RPC payloads (TCP and UB-fallback entries).
+     * @param[out] payloadBytes Bytes counted toward TCP metric (excludes UB memory-copy bytes).
+     * @param[out] shmBytes Bytes counted toward SHM metric.
+     * @param[out] req Request whose object_info entries are filled.
+     * @param[out] fallbackTickets Limiter tickets for UB-fallback entries.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status BuildMultiPublishPayloads(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo,
+                                    const std::vector<std::vector<uint64_t>> &blobSizes,
+                                    std::vector<MemView> &payloads, uint64_t &payloadBytes, uint64_t &shmBytes,
+                                    MultiPublishReqPb &req,
+                                    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets);
 
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
     mutable std::mutex mtx_;

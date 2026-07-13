@@ -1281,5 +1281,21 @@ TEST_F(MetricsTest, worker_process_exist_latency_test)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY)).Observe(10);
     EXPECT_NE(metrics::DumpSummaryForTest().find("\"name\":\"worker_process_exist_latency\""), std::string::npos);
 }
+
+TEST_F(MetricsTest, client_put_shm_write_bytes_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_shm_write_total_bytes", 100, 100)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, client_put_local_write_bytes_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_put_local_write_total_bytes", 100, 100)),
+              std::string::npos);
+}
 }  // namespace ut
 }  // namespace datasystem
