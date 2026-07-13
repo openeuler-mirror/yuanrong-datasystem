@@ -617,6 +617,14 @@ void HashRing::GetWorkerUuidAddressMapSnapshot(int64_t &version, std::string &lo
     workerUuid2AddrMap = workerUuid2AddrMap_;
 }
 
+void HashRing::GetHashRingPbSnapshot(HashRingPb &ring, uint64_t &revision) const
+{
+    std::shared_lock<std::shared_timed_mutex> lock(mutex_);
+    ring = ringInfo_;
+    auto storeRevision = currHashRingRevision_ > 0 ? currHashRingRevision_ : baselineModRevisionOfRing_.load();
+    revision = static_cast<uint64_t>(storeRevision > 0 ? storeRevision : 1);
+}
+
 Status HashRing::GetPrimaryWorkerAddr(uint32_t keyHash, std::string &outWorkerAddr) const
 {
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
@@ -923,6 +931,9 @@ Status HashRing::UpdateRing(const std::string &newSerializedRingInfo, int64_t ve
         std::lock_guard<std::shared_timed_mutex> lock(mutex_);
         RETURN_OK_IF_TRUE(SkipUpdateRing(newRing, version, forceUpdate));
         currHashRingVersion_++;
+        if (version > 0) {
+            currHashRingRevision_ = version;
+        }
         LOG(INFO) << "Worker " << workerAddr_ << " update ring of version " << version << ". "
                   << SummarizeHashRing(newRing);
         auto lines = SplitRingJson(FormatString("Worker %s update local hash ring to", workerAddr_), newRing);

@@ -85,6 +85,8 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         worker_client_manager
         cluster_manager
         worker_health_check
+        membership_value_codec
+        worker_node_info
         common_task_action
         )
 

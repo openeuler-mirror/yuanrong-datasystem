@@ -87,6 +87,8 @@
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
+#include "datasystem/topology/membership/membership_value_codec.h"
+#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
@@ -99,6 +101,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
+#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/hash_ring/hash_ring.h"
@@ -2350,23 +2353,46 @@ Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfo
 
 Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp)
 {
+    ScopedRequestContext ctx;
+    RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
     auto *hashRing = clusterManager_->GetHashRing();
-    CHECK_FAIL_RETURN_STATUS(hashRing != nullptr, K_NOT_READY, "Hash ring is not initialized");
+    RETURN_RUNTIME_ERROR_IF_NULL(hashRing);
 
-    int64_t currentVersion = 0;
-    std::string localWorkerUuid;
-    std::map<std::string, HostPort> uuid2AddrMap;
-    hashRing->GetWorkerUuidAddressMapSnapshot(currentVersion, localWorkerUuid, uuid2AddrMap);
-    rsp.set_version(static_cast<uint64_t>(currentVersion));
-    rsp.set_master_address(FLAGS_master_address);
-
-    if (static_cast<uint64_t>(currentVersion) == req.version()) {
+    HashRingPb ring;
+    uint64_t currentVersion = 0;
+    hashRing->GetHashRingPbSnapshot(ring, currentVersion);
+    rsp.set_version(currentVersion);
+    if (req.version() != 0 && req.version() == currentVersion) {
         rsp.set_hash_ring_changed(false);
-    } else {
-        rsp.set_hash_ring_changed(true);
-        *rsp.mutable_hash_ring() = hashRing->GetHashRingPb();
+        return Status::OK();
     }
+
+    CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_NOT_READY,
+                             "Coordination backend is unavailable for hash ring refresh");
+    std::vector<std::pair<std::string, std::string>> workers;
+    RETURN_IF_NOT_OK(coordinationBackend_->GetAll(CLUSTER_TABLE, workers));
+
+    auto *hostIdMap = rsp.mutable_host_id_map();
+    for (const auto &entry : workers) {
+        topology::MembershipValue membership;
+        auto rc = topology::MembershipValueCodec::Decode(entry.second, membership);
+        if (rc.IsOk()) {
+            (*hostIdMap)[entry.first] = std::move(membership.hostId);
+            continue;
+        }
+
+        topology::WorkerServiceInfo legacyInfo;
+        rc = topology::WorkerServiceInfo::FromString(entry.second, legacyInfo);
+        if (rc.IsOk()) {
+            (*hostIdMap)[entry.first] = std::move(legacyInfo.hostId);
+        }
+    }
+
+    *rsp.mutable_hash_ring() = std::move(ring);
+    rsp.set_master_address(FLAGS_master_address);
+    rsp.set_hash_ring_changed(true);
     return Status::OK();
 }
 

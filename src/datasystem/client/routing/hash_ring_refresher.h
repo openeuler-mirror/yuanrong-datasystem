@@ -51,13 +51,14 @@ public:
     ~HashRingRefresher();
 
     Status InitialFetch(const HostPort &initialWorkerAddr);
-    void StartPeriodicRefresh(int64_t intervalMs);
+    Status StartPeriodicRefresh(int64_t intervalMs);
     void Stop();
     void ForceRefresh();
 
 private:
     void RefreshLoop();
     Status DoRefresh();
+    void UpdateWorkerList(const HashRingPb &ring);
 
     std::shared_ptr<WorkerRouter> router_;
     FetchRpc fetchRpc_;

@@ -46,7 +46,7 @@ inline Status VerifyOwner(ClusterManager *cm, const std::string &objKey)
     HostPort realOwner;
     Status s = cm->LocateMetaOwner(objKey, true, realOwner);
     if (s.IsError()) {
-        return Status(K_NOT_OWNER, "Key not owned by this worker");
+        return s;
     }
     return Status(K_NOT_OWNER, "Key not owned by this worker").WithExtra(realOwner.ToString());
 }
@@ -76,7 +76,7 @@ inline Status VerifyOwner(ClusterManager *cm,
     HostPort realOwner;
     Status s = cm->LocateMetaOwner(objectKeys[0], true, realOwner);
     if (s.IsError()) {
-        return Status(K_NOT_OWNER, "Key not owned by this worker");
+        return s;
     }
     return Status(K_NOT_OWNER, "Key not owned by this worker").WithExtra(realOwner.ToString());
 }

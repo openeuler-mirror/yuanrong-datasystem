@@ -21,6 +21,8 @@
 #ifndef DATASYSTEM_CLIENT_ROUTING_ROUTING_H
 #define DATASYSTEM_CLIENT_ROUTING_ROUTING_H
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -36,8 +38,9 @@ namespace client {
 
 class Routing {
 public:
-    Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher);
-    ~Routing() = default;
+    Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
+            int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
+    ~Routing();
 
     Status Init(const std::string &hostId, const HostPort &initialWorkerAddr);
 
@@ -52,8 +55,11 @@ public:
     void Shutdown();
 
 private:
+    static constexpr int64_t DEFAULT_REFRESH_INTERVAL_MS = 5'000;
     std::shared_ptr<WorkerRouter> router_;
     std::shared_ptr<HashRingRefresher> refresher_;
+    int64_t refreshIntervalMs_;
+    std::atomic<bool> initialized_{ false };
 };
 
 }  // namespace client

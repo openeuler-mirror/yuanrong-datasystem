@@ -447,6 +447,13 @@ public:
         return ringInfo_;
     }
 
+    /**
+     * @brief Copy the hash ring and its coordination-store revision under one lock.
+     * @param[out] ring Current hash ring.
+     * @param[out] revision Globally comparable revision for SDK refresh requests.
+     */
+    void GetHashRingPbSnapshot(HashRingPb &ring, uint64_t &revision) const;
+
 protected:
     enum HashState {
         NO_INIT,      // no need to construct the hash ring, refers to centralized master scenario
@@ -791,6 +798,7 @@ protected:
     std::atomic<bool> allWorkersVoluntaryScaleDown_{ false };
     std::atomic<int64_t> baselineModRevisionOfRing_{ 0 };
     int64_t currHashRingVersion_ = 0;
+    int64_t currHashRingRevision_ = 0;
     std::atomic<bool> needForceJoin_{ false };
 
     mutable std::shared_timed_mutex mutex_;  // protect the following variables

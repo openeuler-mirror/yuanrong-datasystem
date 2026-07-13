@@ -123,6 +123,15 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     return rc;
 }
 
+Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(workerAddr, rpcClient));
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
+    return rpcClient->InvokeGetHashRing(currentVersion, response);
+}
+
 void TransportLayer::Shutdown()
 {
     objectRead_.reset();

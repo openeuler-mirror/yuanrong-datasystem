@@ -16,7 +16,10 @@
 
 #include "datasystem/client/routing/hash_ring_refresher.h"
 
+#include <algorithm>
 #include <utility>
+
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace client {
@@ -31,6 +34,9 @@ HashRingRefresher::~HashRingRefresher()
 
 Status HashRingRefresher::InitialFetch(const HostPort &initialWorkerAddr)
 {
+    RETURN_RUNTIME_ERROR_IF_NULL(router_);
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(fetchRpc_), K_INVALID, "Hash ring fetch callback must be set");
+    CHECK_FAIL_RETURN_STATUS(!initialWorkerAddr.Empty(), K_INVALID, "Initial worker address must not be empty");
     currentVersion_.store(0);
     {
         std::lock_guard<std::mutex> lock(workerListMutex_);
@@ -40,12 +46,14 @@ Status HashRingRefresher::InitialFetch(const HostPort &initialWorkerAddr)
     return DoRefresh();
 }
 
-void HashRingRefresher::StartPeriodicRefresh(int64_t intervalMs)
+Status HashRingRefresher::StartPeriodicRefresh(int64_t intervalMs)
 {
+    CHECK_FAIL_RETURN_STATUS(intervalMs > 0, K_INVALID, "Hash ring refresh interval must be positive");
     Stop();
     intervalMs_ = intervalMs;
     running_.store(true);
     refreshThread_ = std::thread(&HashRingRefresher::RefreshLoop, this);
+    return Status::OK();
 }
 
 void HashRingRefresher::Stop()
@@ -62,18 +70,11 @@ void HashRingRefresher::Stop()
 void HashRingRefresher::ForceRefresh()
 {
     forceRefresh_.store(true, std::memory_order_release);
-    {
-        std::lock_guard<std::mutex> lock(cvMutex_);
-    }
     cv_.notify_all();
 }
 
 Status HashRingRefresher::DoRefresh()
 {
-    // Clear forceRefresh_ at the start of refresh cycle, not after wait_for,
-    // to avoid overwriting a new ForceRefresh that arrives during DoRefresh execution.
-    forceRefresh_.store(false, std::memory_order_release);
-
     // Copy worker list under lock to avoid data race with InitialFetch
     std::vector<HostPort> workers;
     {
@@ -96,6 +97,7 @@ Status HashRingRefresher::DoRefresh()
 
         if (changed) {
             currentVersion_.store(newVersion);
+            UpdateWorkerList(ring);
             auto ringPtr = std::make_shared<HashRingPb>(std::move(ring));
             auto hostIdMapPtr = std::make_shared<const std::unordered_map<std::string, std::string>>(
                 std::move(hostIdMap));
@@ -106,15 +108,37 @@ Status HashRingRefresher::DoRefresh()
     return Status(K_NOT_FOUND, "No reachable worker for hash ring refresh");
 }
 
+void HashRingRefresher::UpdateWorkerList(const HashRingPb &ring)
+{
+    std::vector<HostPort> updatedWorkers;
+    updatedWorkers.reserve(ring.workers_size());
+    for (const auto &entry : ring.workers()) {
+        if (entry.second.state() != WorkerPb_StatePb_ACTIVE) {
+            continue;
+        }
+        HostPort worker;
+        if (worker.ParseString(entry.first).IsOk()) {
+            updatedWorkers.emplace_back(std::move(worker));
+        }
+    }
+    if (updatedWorkers.empty()) {
+        return;
+    }
+    std::sort(updatedWorkers.begin(), updatedWorkers.end());
+    std::lock_guard<std::mutex> lock(workerListMutex_);
+    workerList_ = std::move(updatedWorkers);
+}
+
 void HashRingRefresher::RefreshLoop()
 {
     while (running_.load()) {
+        forceRefresh_.exchange(false, std::memory_order_acq_rel);
         DoRefresh();
 
         std::unique_lock<std::mutex> lock(cvMutex_);
-        // No predicate: ForceRefresh notify returns immediately (not swallowed by false predicate)
-        cv_.wait_for(lock, std::chrono::milliseconds(intervalMs_));
-        forceRefresh_.store(false, std::memory_order_release);
+        cv_.wait_for(lock, std::chrono::milliseconds(intervalMs_), [this] {
+            return !running_.load() || forceRefresh_.load(std::memory_order_acquire);
+        });
     }
 }
 

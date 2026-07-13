@@ -767,7 +767,10 @@ public:
     Status GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) override;
 
     /**
-     * @brief Return the current hash ring to the SDK for client-side routing.
+     * @brief Get the current hash ring and worker-to-host mapping for SDK routing.
+     * @param[in] req Client-side routing version.
+     * @param[out] rsp Hash ring snapshot when the version has changed.
+     * @return Status of the call.
      */
     Status GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp) override;
 

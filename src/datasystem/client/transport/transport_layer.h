@@ -33,6 +33,7 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/object/object_buffer.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/protos/object_posix.pb.h"
 
 namespace datasystem {
 namespace client {
@@ -73,6 +74,9 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param);
+
+    /** @brief Fetch a versioned hash-ring snapshot through the cached worker channel. */
+    Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
 
     void Shutdown();
 

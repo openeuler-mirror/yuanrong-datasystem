@@ -51,6 +51,11 @@
     must pass state whose dynamic type is `ObjectBufferInfo`. Source-tree transport code uses
     `src/datasystem/client/transport/object_buffer_internal.h` for typed access, preventing installed SDK headers from
     depending on client transport or common object-cache implementation headers.
+  - `ObjectClientImpl` owns the SDK routing lifecycle: after the initial worker is ready it creates `Routing`, performs a
+    version-0 `GetHashRing` fetch, starts periodic versioned refresh, and stops routing before its transport resources.
+  - Routing refresh always uses the transport layer's cached endpoint RPC client. It does not add HashRing methods to
+    the legacy local/remote worker API or embedded C wrapper, and the GetHashRing control request carries AK/SK fields.
+    Embedded configuration and `UpdateAkSk` keep the legacy and transport signature holders synchronized.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
@@ -86,6 +91,7 @@
 | `PerfClient` | `src/datasystem/client/perf_client/perf_client.cpp` | perf log reset/get helper for worker/client performance diagnostics |
 | `ObjectClient` | `src/datasystem/client/object_cache/object_client.cpp` -> `object_cache::ObjectClientImpl` | object semantics are thin wrappers around shared implementation |
 | direct object read | `src/datasystem/client/transport/transport_layer.cpp` -> `object_read/ObjectReadFlow` | groups keys by routed meta owner, then independently polls each key's returned data-worker locations through endpoint transporters |
+| SDK object routing | `src/datasystem/client/object_cache/object_client_impl.cpp` -> `src/datasystem/client/routing/*` | `ObjectClientImpl` owns routing initialization, versioned hash-ring refresh, and shutdown; routing returns the initial worker address while transport owns read retries and redirects |
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
@@ -198,8 +204,8 @@
   - `QueryAndGet` returns at most five copy locations per object. The primary address from object metadata is returned
     first, followed by non-primary locations, so replica retry always starts with the primary copy.
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
-    reads. It disables the local cache, injects the temporary metadata owner route, pins keys to that owner, and
-    asserts TCP in a normal build or UB when `USE_URMA` is enabled.
+    reads. It disables the local cache, applies the same deterministic hash rule in the SDK and worker processes, and
+    resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:

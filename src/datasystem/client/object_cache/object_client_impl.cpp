@@ -337,9 +337,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
     enableLocalCache_ = connectOptions.enableLocalCache;
-    if (!enableLocalCache_) {
-        transportSignature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
-    }
+    transportSignature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
@@ -385,6 +383,10 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
 
+    if (routing_ != nullptr) {
+        routing_->Shutdown();
+        routing_.reset();
+    }
     if (transportLayer_ != nullptr) {
         transportLayer_->Shutdown();
         transportLayer_.reset();
@@ -456,7 +458,10 @@ Status ObjectClientImpl::ParseEmbeddedConfig(const EmbeddedConfig &config)
 {
     const auto &args = config.GetArgs();
     if (args.find("system_access_key") != args.end() && args.find("system_secret_key") != args.end()) {
-        signature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key"));
+        RETURN_IF_NOT_OK(signature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key")));
+        RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
+        RETURN_IF_NOT_OK(
+            transportSignature_->SetClientAkSk(args.at("system_access_key"), args.at("system_secret_key")));
     }
     if (args.find("connectTimeoutMs") != args.end()) {
         int result = 0;
@@ -500,7 +505,7 @@ void ObjectClientImpl::ConstructTreadPool()
 
 Status ObjectClientImpl::InitTransportLayer()
 {
-    if (enableLocalCache_ || transportLayer_ != nullptr) {
+    if (transportLayer_ != nullptr) {
         return Status::OK();
     }
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
@@ -510,6 +515,74 @@ Status ObjectClientImpl::InitTransportLayer()
     RETURN_IF_NOT_OK(transportLayer->Init());
     transportLayer_ = std::move(transportLayer);
     LOG(INFO) << "[TransportGet] Transport layer initialized";
+    return Status::OK();
+}
+
+Status ObjectClientImpl::FetchRoutingHashRing(const HostPort &workerAddr, uint64_t currentVersion,
+    GetHashRingRspPb &response)
+{
+    if (transportLayer_ == nullptr) {
+        // Default path (enableLocalCache=true) does not use TransportLayer.
+        // Routing hash ring refresh is handled by the legacy worker-mediated path,
+        // so skip here and return OK with no change.
+        response.set_version(currentVersion);
+        response.set_hash_ring_changed(false);
+        return Status::OK();
+    }
+    return transportLayer_->GetHashRing(workerAddr, currentVersion, response);
+}
+
+client::HashRingRefresher::FetchRpc ObjectClientImpl::BuildRoutingFetchRpc(
+    const std::shared_ptr<client::WorkerRouter> &router, const HostPort &initialWorker, bool initialWorkerIsLocal)
+{
+    auto hostIdResolutionAttempted = std::make_shared<bool>(false);
+    return [this, router, initialWorker, initialWorkerIsLocal, hostIdResolutionAttempted](
+               const HostPort &workerAddr, uint64_t currentVersion, HashRingPb &ring, std::string &masterAddress,
+               uint64_t &newVersion, bool &changed,
+               std::unordered_map<std::string, std::string> &hostIdMap) -> Status {
+        GetHashRingRspPb response;
+        RETURN_IF_NOT_OK(FetchRoutingHashRing(workerAddr, currentVersion, response));
+        newVersion = response.version();
+        changed = response.hash_ring_changed();
+        masterAddress = response.master_address();
+        const bool shouldResolveHostId = initialWorkerIsLocal && !*hostIdResolutionAttempted;
+        if (shouldResolveHostId) {
+            *hostIdResolutionAttempted = true;
+        }
+        if (!changed) {
+            return Status::OK();
+        }
+        CHECK_FAIL_RETURN_STATUS(response.has_hash_ring(), K_RUNTIME_ERROR,
+                                 "GetHashRing response is missing the changed hash ring");
+        ring = response.hash_ring();
+        hostIdMap.clear();
+        for (const auto &entry : response.host_id_map()) {
+            hostIdMap.emplace(entry.first, entry.second);
+        }
+        if (shouldResolveHostId) {
+            auto iter = hostIdMap.find(initialWorker.ToString());
+            if (iter != hostIdMap.end() && !iter->second.empty()) {
+                router->SetHostId(iter->second);
+            }
+        }
+        return Status::OK();
+    };
+}
+
+Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal)
+{
+    if (routing_ != nullptr) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(!initialWorker.Empty(), K_NOT_READY,
+                             "Initial worker address is unavailable for routing initialization");
+    auto router = std::make_shared<client::WorkerRouter>("");
+    auto fetchRpc = BuildRoutingFetchRpc(router, initialWorker, initialWorkerIsLocal);
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, std::move(fetchRpc));
+    auto routing = std::make_shared<client::Routing>(router, std::move(refresher));
+    RETURN_IF_NOT_OK(routing->Init("", initialWorker));
+    routing_ = std::move(routing);
+    LOG(INFO) << "[Routing] Object client routing initialized from worker " << initialWorker.ToString();
     return Status::OK();
 }
 
@@ -603,7 +676,9 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     auto &workerApi = workerApi_[node];
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
     ConstructTreadPool();
-    RETURN_IF_NOT_OK(InitTransportLayer());
+    if (!enableLocalCache_) {
+        RETURN_IF_NOT_OK(InitTransportLayer());
+    }
 
     RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
@@ -613,6 +688,9 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     clientEnableP2Ptransfer_ = workerApi->workerEnableP2Ptransfer_;
     RETURN_IF_NOT_OK(InitListenWorkerAt(node, isLocalWorker));
     RETURN_IF_NOT_OK(workerApi->TryFastTransportAfterHeartbeat());
+    if (!enableLocalCache_) {
+        RETURN_IF_NOT_OK(InitRouting(workerApi->hostPort_, isLocalWorker));
+    }
     devOcImpl_ = std::make_unique<ClientDeviceObjectManager>(this);
     RETURN_IF_NOT_OK(devOcImpl_->Init());
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
@@ -686,6 +764,14 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     ShutdownMetricsThread(false);
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
+    if (routing_ != nullptr) {
+        routing_->Shutdown();
+        routing_.reset();
+    }
+    if (transportLayer_ != nullptr) {
+        transportLayer_->Shutdown();
+        transportLayer_.reset();
+    }
     for (auto &listener : listenWorker_) {
         if (listener != nullptr) {
             listener->StopListenWorker(true);
@@ -703,10 +789,6 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     workerSwitchState_ = WorkerSwitchState::AVAILABLE;
     mmapManager_.reset();
     devOcImpl_.reset();
-    if (transportLayer_ != nullptr) {
-        transportLayer_->Shutdown();
-        transportLayer_.reset();
-    }
     asyncSetRPCPool_ = nullptr;
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
@@ -2444,7 +2526,9 @@ Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    return workerApi->UpdateAkSk(accessKey, secretKey);
+    RETURN_IF_NOT_OK(workerApi->UpdateAkSk(accessKey, secretKey));
+    RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
+    return transportSignature_->SetClientAkSk(accessKey, secretKey);
 }
 
 Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
@@ -3051,15 +3135,8 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
 
 Status ObjectClientImpl::ResolveTransportMetaOwner(const std::string &objectKey, HostPort &metaOwner) const
 {
-    (void)objectKey;
-    std::string address;
-    INJECT_POINT("client.transport.meta_owner", [&address, &objectKey](const std::string &injectedAddress) {
-        (void)objectKey;
-        address = injectedAddress;
-        return Status::OK();
-    });
-    CHECK_FAIL_RETURN_STATUS(!address.empty(), K_NOT_READY, "Object route is not ready");
-    return metaOwner.ParseString(address);
+    CHECK_FAIL_RETURN_STATUS(routing_ != nullptr, K_NOT_READY, "Object route is not ready");
+    return routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY, metaOwner);
 }
 
 void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> &objectKeys,

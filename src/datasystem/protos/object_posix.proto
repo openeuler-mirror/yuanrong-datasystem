@@ -596,6 +596,11 @@ message ExpireRspPb {
 // SDK periodically fetches the hash ring from a worker for client-side routing.
 message GetHashRingReqPb {
   uint64 version = 1;  // Client's current version, 0 for full fetch.
+
+  // put to the end, the previous data is used to generate AK and SK signatures.
+  uint64 timestamp = 100;
+  string signature = 101;
+  string access_key = 102;
 }
 
 message GetHashRingRspPb {

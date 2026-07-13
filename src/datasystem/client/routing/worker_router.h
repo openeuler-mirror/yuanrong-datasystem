@@ -52,8 +52,11 @@ enum class WorkerRingState {
 
 class WorkerRouter {
 public:
-    WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWorkerFilter>> filters);
+    explicit WorkerRouter(std::string myHostId,
+                          std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {});
     ~WorkerRouter() = default;
+
+    void SetHostId(std::string hostId);
 
     // Single key selection. exclude list avoids specific workers (e.g., LEAVING on write retry).
     Status SelectWorker(const std::string &key, SelectStrategy strategy, HostPort &worker,
@@ -93,6 +96,9 @@ private:
 
     bool IsWorkerAvailable(const HostPort &addr) const;
     bool IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const;
+    Status SelectWorkerFromView(const std::string &key, SelectStrategy strategy, HostPort &worker,
+                                const std::vector<HostPort> &exclude,
+                                const std::shared_ptr<const RingView> &view) const;
     static std::shared_ptr<const RingView::TokenIndex> BuildTokenIndex(const HashRingPb &ring);
 };
 

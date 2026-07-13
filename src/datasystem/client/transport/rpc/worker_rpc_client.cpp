@@ -113,6 +113,12 @@ Status WorkerRpcClient::DoInvokeSet(const RpcOptions &options, const PublishReqP
     return controlStub_->Publish(options, request, response, payloads);
 }
 
+Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
+                                            GetHashRingRspPb &response)
+{
+    return controlStub_->GetHashRing(options, request, response);
+}
+
 Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                         std::vector<RpcMessage> &payloads)
 {
@@ -198,6 +204,22 @@ Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
     options.SetTimeout(rpcTimeout);
     Status rc = transportStub_->WorkerWorkerExchangeUrmaConnectInfo(options, request, response);
     return rc.IsError() ? WithRpcDiag(rc, "WorkerWorkerExchangeUrmaConnectInfo", workerAddress_) : Status::OK();
+}
+
+Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response)
+{
+    if (!IsAlive()) {
+        return Status(K_RPC_UNAVAILABLE, "Routed worker RPC client is not initialized");
+    }
+    CHECK_FAIL_RETURN_STATUS(channelConfig_.timeout_ms > 0, K_INVALID, "RPC timeout must be positive");
+    GetHashRingReqPb request;
+    request.set_version(currentVersion);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(static_cast<int32_t>(
+        std::min<int64_t>(channelConfig_.timeout_ms, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS))));
+    Status rc = DoInvokeGetHashRing(options, request, response);
+    return rc.IsError() ? WithRpcDiag(rc, "GetHashRing", workerAddress_) : Status::OK();
 }
 
 bool WorkerRpcClient::IsAlive() const
