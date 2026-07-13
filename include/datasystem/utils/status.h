@@ -64,6 +64,8 @@ enum StatusCode : uint32_t {
     K_LRU_HARD_LIMIT = 34,
     K_LRU_SOFT_LIMIT = 35,
     K_NOT_SUPPORTED = 36,
+    K_NO_AVAILABLE_WORKER = 37,
+    K_NOT_OWNER = 38,
 
     // rpc error code, range: [1000, 2000)
     K_RPC_CANCELLED = 1000,
@@ -229,12 +231,39 @@ public:
      */
     static std::string StatusCodeName(StatusCode code);
 
+    /**
+     * @brief Attach extra data (e.g., real owner address for K_NOT_OWNER).
+     * Transport layer maps this to brpc response_attachment. Business code
+     * only touches Status, never Controller.
+     */
+    Status &WithExtra(const std::string &extra)
+    {
+        if (state_ == nullptr) {
+            state_ = std::make_unique<State>(State{K_OK, "", extra});
+        } else {
+            state_->extra = extra;
+        }
+        return *this;
+    }
+
+    bool HasExtra() const
+    {
+        return state_ != nullptr && !state_->extra.empty();
+    }
+
+    const std::string &GetExtra() const
+    {
+        static const std::string empty;
+        return state_ != nullptr ? state_->extra : empty;
+    }
+
 private:
     void Assign(const Status &other) noexcept;
 
     struct State {
         StatusCode code;
         std::string errMsg;
+        std::string extra;
     };
     std::unique_ptr<State> state_{ nullptr };
 };

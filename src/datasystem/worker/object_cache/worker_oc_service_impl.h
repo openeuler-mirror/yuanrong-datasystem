@@ -767,6 +767,11 @@ public:
     Status GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) override;
 
     /**
+     * @brief Return the current hash ring to the SDK for client-side routing.
+     */
+    Status GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp) override;
+
+    /**
      * @brief Remove write back before shuhtdown
      * @return Status of the call
      */

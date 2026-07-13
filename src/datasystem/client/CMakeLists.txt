@@ -44,7 +44,12 @@ list(APPEND CLIENT_SRCS
         transport/data_plane/ub_transporter.cpp
         transport/rpc/client_request_auth.cpp
         transport/rpc/get_request_builder.cpp
-        transport/rpc/worker_rpc_client.cpp)
+        transport/rpc/worker_rpc_client.cpp
+        routing/broken_filter.cpp
+        routing/hash_ring_refresher.cpp
+        routing/routing.cpp
+        routing/state_filter.cpp
+        routing/worker_router.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
         ${SECUREC_LIBRARY}
@@ -81,7 +86,8 @@ list(APPEND CLIENT_DEPEND_LIBS
         client_mmap_static
         gRPC::grpc++
         common_etcd_client
-        worker_transport_api)
+        worker_transport_api
+        hash_ring_protos_client)
 
 if (BUILD_HETERO_NPU)
     list(APPEND CLIENT_DEPEND_LIBS common_acl_device)

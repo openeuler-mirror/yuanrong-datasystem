@@ -135,7 +135,7 @@ void Status::AppendMsg(const std::string &appendMsg)
 
 void Status::Assign(const Status &other) noexcept
 {
-    if (other.IsOk()) {
+    if (other.state_ == nullptr) {
         state_ = nullptr;
         return;
     }

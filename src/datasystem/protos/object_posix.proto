@@ -24,6 +24,7 @@ import "datasystem/protos/rpc_option.proto";
 import "datasystem/protos/utils.proto";
 import "datasystem/protos/p2p_subscribe.proto";
 import "datasystem/protos/meta_transport.proto";
+import "datasystem/protos/hash_ring.proto";
 
 option cc_enable_arenas = true;
 
@@ -592,6 +593,19 @@ message ExpireRspPb {
   ErrorInfoPb last_rc = 2;
 }
 
+// SDK periodically fetches the hash ring from a worker for client-side routing.
+message GetHashRingReqPb {
+  uint64 version = 1;  // Client's current version, 0 for full fetch.
+}
+
+message GetHashRingRspPb {
+  HashRingPb hash_ring = 1;       // Populated only when version differs.
+  string master_address = 2;
+  uint64 version = 3;             // Current version.
+  bool hash_ring_changed = 4;     // True if hash_ring field is populated.
+  map<string, string> host_id_map = 5;  // workerAddr("host:port") -> hostId, valid when hash_ring_changed=true.
+}
+
 service WorkerOCService {
   rpc HealthCheck (HealthCheckRequestPb) returns (HealthCheckReplyPb) {}
   rpc Create (CreateReqPb) returns (CreateRspPb) {}
@@ -663,4 +677,6 @@ service WorkerOCService {
   rpc Expire(ExpireReqPb) returns (ExpireRspPb) {}
 
   rpc GetMetaInfo(GetMetaInfoReqPb) returns (GetMetaInfoRspPb) {}
+
+  rpc GetHashRing(GetHashRingReqPb) returns (GetHashRingRspPb) {}
 }

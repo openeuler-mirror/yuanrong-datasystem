@@ -36,6 +36,8 @@ STATUS_CODE_DEF(K_CLIENT_DEADLOCK, "The client timeout")
 STATUS_CODE_DEF(K_LRU_HARD_LIMIT, "Lru hard limit")
 STATUS_CODE_DEF(K_LRU_SOFT_LIMIT, "Lru soft limit")
 STATUS_CODE_DEF(K_BUFFER_DEPRECATED, "Buffer deprecated")
+STATUS_CODE_DEF(K_NO_AVAILABLE_WORKER, "No available worker for routing")
+STATUS_CODE_DEF(K_NOT_OWNER, "Request routed to non-owner worker")
 
 // rpc
 STATUS_CODE_DEF(K_RPC_CANCELLED, "RPC cancelled")
