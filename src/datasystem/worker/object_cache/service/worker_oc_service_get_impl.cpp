@@ -136,7 +136,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
 
     int64_t subTimeout = req.sub_timeout();
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     auto dispatchTime = std::chrono::steady_clock::now();
     INJECT_POINT("WorkerOCServiceImpl.Get.Timeout", [&remainingUs](int64_t changedRemainingUs) {
         remainingUs = changedRemainingUs;
@@ -173,7 +173,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 LOG(ERROR) << initRc.GetMsg();
                 LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             } else {
-                int64_t currentRemainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+                int64_t currentRemainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
                 VLOG(1) << FormatString("[Get] Receive, clientId: %s, objects: %s, threadPool: %s, remainingUs: %ld",
                                         clientId, VectorToString(request->GetRawObjectKeys()),
                                         threadPool_->GetStatistics(), currentRemainingUs);
@@ -208,7 +208,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             }
         });
     } else {
-        int64_t currentRemainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+        int64_t currentRemainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
         if (currentRemainingUs <= 0) {
             LOG(ERROR) << "RPC deadline exceeded, remaining " << currentRemainingUs << " us";
             return Status(K_RPC_DEADLINE_EXCEEDED,
@@ -335,7 +335,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     PerfPoint all(PerfKey::WORKER_PROCESS_GET_OBJECT);
     auto config = GetServerLatencyTraceConfig();
     INJECT_POINT("worker.Get.asyncGetStart", [](int timeout) {
-        reqTimeoutDuration.Init(timeout);
+        GetRequestContext()->reqTimeoutDuration.Init(timeout);
         return Status::OK();
     });
     INJECT_POINT("worker.Get.delay");
@@ -363,7 +363,7 @@ Status WorkerOcServiceGetImpl::ProcessGetObjectRequest(int64_t subTimeout, std::
     // Try get from remote worker or L2 cache.
     RETURN_IF_NOT_OK(TryGetObjectFromRemote(subTimeout, request, std::move(remoteObjectKeys)));
     RETURN_OK_IF_TRUE(request->AlreadyReturn());
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (request->GetNotReadyCount() == 0 || subTimeout == 0 || remainingTimeMs <= 0) {
         point.RecordAndReset(PerfKey::WORKER_PROCESS_GET_RETURN);
         return request->ReturnToClient();
@@ -521,7 +521,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
                 (void)failedIds.emplace(id);
             }
         });
-        int64_t remainTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+        int64_t remainTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         const int64_t timeoutThresholdMs = 100;
         INJECT_POINT_NO_RETURN("TryGetObjectFromRemote.NoRetry", [&remainTimeMs] { remainTimeMs = 0; });
         // If we meets OOM, never try get again because there is no space for us to save the objects.
@@ -604,7 +604,7 @@ void WorkerOcServiceGetImpl::DeleteObjectsMetaUnacked(
         objKeys.emplace_back(kv.first);
     }
     while (!objKeys.empty() && retry < maxRetry) {
-        if (reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+        if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
             LOG(WARNING) << "Stop retry delete unacked object meta due to exhausted timeout, remaining size: "
                          << objKeys.size();
             break;
@@ -1096,7 +1096,7 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId
-        << ", realRemainingTimeMs=" << reqTimeoutDuration.CalcRealRemainingTime()
+        << ", realRemainingTimeMs=" << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime()
         << ", lastResult=" << lastResult.ToString();
 
     HostPort hostAddress;
@@ -1121,7 +1121,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     LOG_IF(INFO, elapsedMs > logThresholdMs)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker finished, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId << ", elapsed ms: " << elapsedMs
-        << ", realRemainingTimeMs=" << reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
+        << ", realRemainingTimeMs="
+        << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
     RETURN_IF_NOT_OK(rc);
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }
@@ -1271,7 +1272,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
         bool shmUnitAllocated = false;
         // Prepare the protobuf with urma/ucp info for data transfer if applicable.
         RETURN_IF_NOT_OK(PrepareGetRequestHelper(address, dataSize, objectKV, reqPb, shmUnitAllocated));
-        int64_t timeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
+        int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         INJECT_POINT("worker_oc_service_get_impl.pull_object_data_from_remote_worker.before_get_from_remote");
         Status rc = RetryOnErrorRepent(
             timeoutMs,
@@ -1522,7 +1523,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     std::vector<std::future<Status>> futures;
     futures.reserve(objKeysGrpByMaster.size());
     std::string traceID = Trace::Instance().GetTraceID();
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     std::vector<BatchQueryMetaResult> batchQueryResults;
     batchQueryResults.resize(objKeysGrpByMaster.size());
     size_t idx = 0;
@@ -1674,7 +1675,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
         auto metaPb = std::make_unique<ObjectMetaPb>();
         CHECK_FAIL_RETURN_STATUS(!etcdStore_->IsKeepAliveTimeout(), K_RPC_UNAVAILABLE, "etcd is unavailable");
         RangeSearchResult res;
-        Status rc = etcdStore_->RawGet(etcdKey, res, 0, reqTimeoutDuration.CalcRemainingTime());
+        Status rc = etcdStore_->RawGet(etcdKey, res, 0, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
         if (rc.IsError()) {
             LOG(ERROR) << "Can not get meta: " << rc.ToString();
             absentObjectKeys.emplace_back(objKey);
@@ -1701,7 +1702,7 @@ void WorkerOcServiceGetImpl::SetQueryMetaInfo(master::QueryMetaReqPb &req, const
 {
     // Get master addr successfully, query metadata by WorkerMastrOCApi.
     const std::string queryReqId = GetStringUuid();
-    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     LOG(INFO) << "Query metadata from master: " << masterAddr << ", object_count: " << objectKeys.size()
               << ", request id: " << queryReqId << ", remainingTime: " << remainingTime;
     *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
@@ -1792,7 +1793,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
         // Parallel sub-RPCs share the remaining budget captured at dispatch time;
         // each future deducts its own queue delay. Do not divide by future count—
         // parallel calls do not accumulate wall-clock time.
-        int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+        int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
         auto dispatchTime = std::chrono::steady_clock::now();
         futures.emplace_back(remoteGetThreadPool_->Submit([=, &queryMetas, &lockedEntries, &commonMutex, &abortAllTasks,
                                                            &request, &payloads, &lastRc, &successIds, &needRetryIds,
@@ -2095,7 +2096,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromPersistenceAndDumpWithoutCopyMeta(Ob
     SafeObjType &entry = objectKV.GetObjEntry();
     LOG(INFO) << FormatString("Get object from L2 storage, object key is : %s", objectKey);
 
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
     CHECK_FAIL_RETURN_STATUS(persistenceApi_ != nullptr, K_RUNTIME_ERROR, "persistenceApi is nullptr");
@@ -2190,7 +2191,7 @@ void WorkerOcServiceGetImpl::AsyncUpdateLocationFunc(UpdateLocationTask &&task)
         return;
     }
     const int64_t updateLocationTimeoutMs = 3000;
-    reqTimeoutDuration.Init(updateLocationTimeoutMs);
+    GetRequestContext()->reqTimeoutDuration.Init(updateLocationTimeoutMs);
     PerfPoint point(PerfKey::WORKER_ASYNC_UPDATE_LOCATION_FUNCTION);
     if (params.size() == 1) {
         return AsyncUpdateSingleLocationFunc(std::move(task));
@@ -2931,7 +2932,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
     size_t index = 0;
     auto traceContext = Trace::Instance().GetContext();
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     std::shared_ptr<GetRequest> fakeRequest = nullptr;
     auto dispatchTime = std::chrono::steady_clock::now();
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
@@ -3015,7 +3016,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
             lastRc = std::move(remoteGetRc);
         }
-    } while (!objectsNeedGetRemote.empty() && reqTimeoutDuration.CalcRealRemainingTime() > 0);
+    } while (!objectsNeedGetRemote.empty() && GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0);
     for (const auto &obj : objectsNeedGetRemote) {
         rsp.add_failed_object_keys(obj.objectKey);
     }

@@ -24,6 +24,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/common/log/log.h"
@@ -433,7 +434,7 @@ TEST_F(WorkerOCMasterTest, TestWorkerTimeoutInterval)
 
     inject::Set("rpc_util.retry_on_error_before_func", "return(K_RPC_UNAVAILABLE)");
     // 1.Construct master unavailable while CREATE, calculate the timeout interval meets the expectation
-    reqTimeoutDuration.Init(5000);
+    GetRequestContext()->reqTimeoutDuration.Init(5000);
     Timer timer;
     int succeed1 = WorkerCreate(inMetas1, worker1_client, true);
     EXPECT_NE(succeed1, num);
@@ -442,7 +443,7 @@ TEST_F(WorkerOCMasterTest, TestWorkerTimeoutInterval)
     ASSERT_TRUE(timeCost > 4500 && timeCost <= 5000);
 
     // 2.Construct master unavailable while QUERY, calculate the timeout interval meets the expectation
-    reqTimeoutDuration.Init(5000);
+    GetRequestContext()->reqTimeoutDuration.Init(5000);
     timer.Reset();
     std::list<std::string> queryIds;
     EXPECT_NE(WorkerQuery(worker0Address, queryIds, inMetas, worker0_client, queryIds.size()), Status::OK());

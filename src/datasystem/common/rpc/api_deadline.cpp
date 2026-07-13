@@ -16,6 +16,7 @@
 
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/format.h"
 
@@ -97,7 +98,7 @@ Status InitTimeoutsFromDispatch(int64_t capturedRemainingUs, std::chrono::steady
         return Status(K_RPC_DEADLINE_EXCEEDED,
                       FormatString("RPC deadline exceeded after queue wait, remaining %ld us.", actualRemainingUs));
     }
-    reqTimeoutDuration.InitUs(actualRemainingUs);
+    GetRequestContext()->reqTimeoutDuration.InitUs(actualRemainingUs);
     ApiDeadline::Instance().InitUs(actualRemainingUs);
     return Status::OK();
 }
@@ -115,7 +116,7 @@ int64_t GetRemainingUsForMeta()
         VLOG_EVERY_N(1, K_API_DEADLINE_FALLBACK_LOG_EVERY_N)
             << "ApiDeadline uninitialized, falling back to reqTimeoutDuration.";
     }
-    return reqTimeoutDuration.CalcRealRemainingTimeUs();
+    return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
 }
 
 }  // namespace datasystem

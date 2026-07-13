@@ -31,7 +31,7 @@
 namespace datasystem {
 #define SET_RPC_TIMEOUT(_timeoutDuration_, _opts_)                                                                    \
     do {                                                                                                              \
-        int64_t _remainingTimeUs_ = (_timeoutDuration_).CalcRemainingAfterDeductionUs();                              \
+        int64_t _remainingTimeUs_ = (_timeoutDuration_)->CalcRemainingAfterDeductionUs();                             \
         CHECK_FAIL_RETURN_STATUS(_remainingTimeUs_ > 0, K_RPC_DEADLINE_EXCEEDED,                                      \
                                  FormatString("The remaining time of the RPC request is %ld us, which has exceeded " \
                                                "the deadline and cannot be continued.",                               \

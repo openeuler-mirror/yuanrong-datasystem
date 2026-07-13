@@ -29,6 +29,7 @@
 #include "../../../common/binmock/binmock.h"
 
 #include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #define private public
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
@@ -115,9 +116,9 @@ TEST_F(WorkerRemoteMasterRpcDiagnosticTest, SealCreateMetaTimeoutReportsRpcDiagn
     master::CreateMetaRspPb rsp;
     req.mutable_meta()->set_life_state(static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED));
 
-    reqTimeoutDuration.Init(0);
+    GetRequestContext()->reqTimeoutDuration.Init(0);
     Status rc = api.CreateMeta(req, rsp);
-    reqTimeoutDuration.Init();
+    GetRequestContext()->reqTimeoutDuration.Init();
 
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
     EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-CreateMeta->[" + master.ToString() + "]"), std::string::npos)

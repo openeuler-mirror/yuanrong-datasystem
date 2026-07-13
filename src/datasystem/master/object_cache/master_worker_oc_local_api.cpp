@@ -112,7 +112,7 @@ Status MasterLocalWorkerOCApi::DeleteNotificationReceive(int64_t tag, DeleteObje
 
 Status MasterLocalWorkerOCApi::QueryGlobalRefNumOnWorker(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspPb &rsp)
 {
-    req.set_timeout(MasterGetRequestTimeout(timeoutDuration.CalcRemainingTime()));
+    req.set_timeout(MasterGetRequestTimeout(GetRequestContext()->timeoutDuration.CalcRemainingTime()));
     LOG(INFO) << "QueryGlobalRefNumOnWorker " << masterHostPort_.ToString() << " : " << LogHelper::IgnoreSensitive(req);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(workerOC_->QueryGlobalRefNumOnWorker(req, rsp));

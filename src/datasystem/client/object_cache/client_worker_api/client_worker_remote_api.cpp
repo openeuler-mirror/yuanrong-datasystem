@@ -335,7 +335,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
@@ -391,7 +391,7 @@ Status ClientWorkerRemoteApi::MultiCreate(bool skipCheckExistence, std::vector<M
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when create date.");
             return DS_OC_DISPATCH(MultiCreate, opts, req, rsp);
@@ -534,7 +534,7 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
         [this, &req, &rsp, &payloads, &getStatus, &config](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when get date.");
             VLOG(1) << AppendSrcDstForLog(
@@ -598,7 +598,7 @@ Status ClientWorkerRemoteApi::InvalidateBuffer(const std::string &objectKey)
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     InvalidateBufferRspPb rsp;
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_INVALIDATE_BUFFER);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -631,7 +631,7 @@ Status ClientWorkerRemoteApi::Publish(const std::shared_ptr<ObjectBufferInfo> &b
                 req.set_is_retry(isRetry);
                 RpcOptions opts;
                 opts.SetTimeout(realRpcTimeout);
-                reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+                GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 VLOG(1) << "Start to send rpc to publish object: " << req.object_key();
                 Status s = DS_OC_DISPATCH(Publish, opts, req, rsp, payloads);
@@ -691,7 +691,7 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
             [this, &req, &rsp, &payloads](int32_t realRpcTimeout) {
                 RpcOptions opts;
                 opts.SetTimeout(realRpcTimeout);
-                reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+                GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
                 RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
                 return DS_OC_DISPATCH(MultiPublish, opts, req, rsp, payloads);
             },
@@ -867,7 +867,7 @@ Status ClientWorkerRemoteApi::DecreaseWorkerRef(const std::vector<ShmKey> &objec
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when decreaseWorkerRef data.");
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     DecreaseReferenceResponse resp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(DS_OC_DISPATCH(DecreaseReference, opts, req, resp));
@@ -886,7 +886,7 @@ Status ClientWorkerRemoteApi::ReconcileShmRef(const std::unordered_set<ShmKey> &
     RpcOptions opts;
     // using rpc timeout 60s for reconcile shm ref
     opts.SetTimeout(RPC_TIMEOUT);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
     ReconcileShmRefRspPb resp;
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(DS_OC_DISPATCH(ReconcileShmRef, opts, req, resp));
@@ -906,7 +906,7 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
 #ifdef BUILD_PIPLN_H2D
     if (!pipelineConsumer_)
         return Status(K_NOT_SUPPORTED, "pipeline msg queue is null, server may not support pipeline rh2d");
-    reqTimeoutDuration.Init(connectTimeoutMs_);
+    GetRequestContext()->reqTimeoutDuration.Init(connectTimeoutMs_);
     GetReqPb req;
 
     RETURN_IF_NOT_OK(PreparePipelineRH2DReq(piplnRh2dParam, pipelineConsumer_, req));
@@ -920,7 +920,7 @@ Status ClientWorkerRemoteApi::PipelineRH2D(PiplnRh2dParam &piplnRh2dParam, GetRs
         [this, &req, &rsp, &piplnRh2dParam](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                              "Fail to generate signature when sending H2D request.");
             VLOG(1) << "Start to send rpc to do H2D, rpc timeout: " << realRpcTimeout;
@@ -962,7 +962,7 @@ Status ClientWorkerRemoteApi::GIncreaseWorkerRef(const std::vector<std::string> 
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             auto rc = DS_OC_DISPATCH(GIncreaseRef, opts, req, rsp);
             return WithRpcDiag(rc, "GIncreaseRef", hostPort_);
@@ -1001,7 +1001,7 @@ Status ClientWorkerRemoteApi::GDecreaseWorkerRef(const std::vector<std::string> 
         [this, &req, &rsp, &finishDecIds, &failedObjectKeys](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             Status rc = DS_OC_DISPATCH(GDecreaseRef, opts, req, rsp);
             if (rc.IsError()) {
@@ -1039,7 +1039,7 @@ Status ClientWorkerRemoteApi::ReleaseGRefs(const std::string &remoteClientId)
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             auto rc = DS_OC_DISPATCH(ReleaseGRefs, opts, req, rsp);
             return WithRpcDiag(rc, "ReleaseGRefs", hostPort_);
@@ -1081,7 +1081,7 @@ Status ClientWorkerRemoteApi::Delete(const std::vector<std::string> &objectKeys,
             failedObjectKeys.clear();
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(opts.GetTimeout()));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to delete object: " << VectorToString(objectKeys);
             Status status = DS_OC_DISPATCH(DeleteAllCopy, opts, req, rsp);
@@ -1118,7 +1118,7 @@ Status ClientWorkerRemoteApi::QueryGlobalRefNum(
     QueryGlobalRefNumRspCollectionPb rsp;
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     LOG(INFO) << "[GRef] Client Send Rpc QueryGlobalRefNum to worker";
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     RETURN_IF_NOT_OK(DS_OC_DISPATCH(QueryGlobalRefNum, opts, req, rsp));
@@ -1143,7 +1143,7 @@ Status ClientWorkerRemoteApi::PublishDeviceObject(const std::shared_ptr<DeviceBu
     }
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     PublishDeviceObjectRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when PublishDeviceObject data.");
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -1170,7 +1170,7 @@ Status ClientWorkerRemoteApi::GetDeviceObject(const std::vector<std::string> &de
     RpcOptions opts;
     auto rpcTimeout = std::max<int32_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     return DS_OC_DISPATCH(GetDeviceObject, opts, req, rsp, payloads);
 }
 
@@ -1194,7 +1194,7 @@ Status ClientWorkerRemoteApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeR
         return Status::OK();
     });
     opts.SetTimeout(rpcTimeout);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SubscribeReceiveEvent data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
@@ -1211,10 +1211,10 @@ Status ClientWorkerRemoteApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo>
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
     INJECT_POINT("ClientWorkerApi.PutP2PMeta.timeoutDuration", [](int time) {
-        reqTimeoutDuration.Init(time);
+        GetRequestContext()->reqTimeoutDuration.Init(time);
         return Status::OK();
     });
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when FillDevObjMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
@@ -1247,7 +1247,7 @@ Status ClientWorkerRemoteApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBuffe
     RpcOptions opts;
     auto rpcTimeout = std::max<int64_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when GetP2PMeta data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when create date.");
@@ -1259,7 +1259,7 @@ Status ClientWorkerRemoteApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoR
 {
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SendRootInfo data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -1276,7 +1276,7 @@ Status ClientWorkerRemoteApi::RecvRootInfo(RecvRootInfoReqPb &req, RecvRootInfoR
     RpcOptions opts;
     auto rpcTimeout = std::max<int64_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when RecvRootInfo data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -1289,7 +1289,7 @@ Status ClientWorkerRemoteApi::AckRecvFinish(AckRecvFinishReqPb &req)
     AckRecvFinishRspPb resp;
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when AckRecvFinish.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -1302,7 +1302,7 @@ Status ClientWorkerRemoteApi::GetBlobsInfo(const std::string &devObjKey, int32_t
     RpcOptions opts;
     auto rpcTimeout = std::max<int64_t>(timeoutMs, rpcTimeoutMs_);
     opts.SetTimeout(rpcTimeout);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(rpcTimeout));
 
     GetDataInfoReqPb req;
     int64_t subTimeout = ClientGetRequestTimeout(timeoutMs);
@@ -1333,7 +1333,7 @@ Status ClientWorkerRemoteApi::RemoveP2PLocation(const std::string &objectKey, in
     RemoveP2PLocationRspPb resp;
     RpcOptions opts;
     opts.SetTimeout(requestTimeoutMs_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when RemoveP2PLocation.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data.");
@@ -1355,7 +1355,7 @@ Status ClientWorkerRemoteApi::GetObjMetaInfo(const std::string &tenantId, const 
         [this, &req, &rsp, tenantId](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys()) << " of tenant "
                     << tenantId;
@@ -1389,7 +1389,7 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to get obj meta: " << VectorToString(req.object_keys());
             auto rc = DS_OC_DISPATCH(QuerySize, opts, req, rsp);
@@ -1436,7 +1436,7 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+            GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to check existence";
             return DS_OC_DISPATCH(Exist, opts, req, rsp);
@@ -1478,7 +1478,7 @@ Status ClientWorkerRemoteApi::Expire(const std::vector<std::string> &keys, uint3
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             VLOG(1) << "Start to send rpc to set expire ttl time";
             return DS_OC_DISPATCH(Expire, opts, req, rsp);
@@ -1510,7 +1510,7 @@ Status ClientWorkerRemoteApi::GetMetaInfo(const std::vector<std::string> &keys, 
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
-            reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
+            GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(realRpcTimeout));
             RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
             return DS_OC_DISPATCH(GetMetaInfo, opts, req, rsp);
         },

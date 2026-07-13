@@ -26,6 +26,7 @@
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/client/hetero_cache/device_util.h"
 #include "datasystem/master/object_cache/device/master_dev_dead_lock_manager.h"
 #include "datasystem/master/object_cache/device/master_dev_hccl_rootinfo.h"
@@ -239,10 +240,11 @@ private:
     {
         RETURN_OK_IF_TRUE(request->isReturn_);
         // Check whether the result is found. If yes, the result can be directly returned to client.
-        int64_t subTimeout = (subTimeoutMs == -1) ? reqTimeoutDuration.CalcRemainingTime() : subTimeoutMs;
+        int64_t subTimeout = (subTimeoutMs == -1) ? GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()
+                                                   : subTimeoutMs;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                              "SubTimeout is out of range.");
-        int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+        int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         if (request->numSatisfiedObjects_ == request->numWaitingObjects_ || subTimeout == 0 || remainingTimeMs <= 0) {
             VLOG(1) << "The satisfied objects num: " << request->numSatisfiedObjects_
                     << ", the waiting objects num: " << request->numWaitingObjects_

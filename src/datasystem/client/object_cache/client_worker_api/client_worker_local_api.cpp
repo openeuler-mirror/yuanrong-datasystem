@@ -68,7 +68,7 @@ Status ClientWorkerLocalApi::Create(const std::string &objectKey, int64_t dataSi
     CHECK_FAIL_RETURN_STATUS(dataSize > 0, StatusCode::K_INVALID,
                              FormatString("data size:%lld must be more than 0!", dataSize));
     int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
-    reqTimeoutDuration.InitUs(remainingUs);
+    GetRequestContext()->reqTimeoutDuration.InitUs(remainingUs);
     CreateReqPb req;
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
@@ -93,7 +93,7 @@ Status ClientWorkerLocalApi::Publish(const std::shared_ptr<ObjectBufferInfo> &bu
                                      int existence)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     PublishReqPb req;
     RETURN_IF_NOT_OK(PreparePublishReq(bufferInfo, isSeal, nestedKeys, ttlSecond, existence, req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -118,7 +118,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
                                           const std::vector<std::vector<uint64_t>> &blobSizes)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_PUBLISH_LATENCY);
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     MultiPublishReqPb req;
     req.set_client_id(clientId_);
     req.set_ttl_second(param.ttlSecond);
@@ -161,7 +161,7 @@ Status ClientWorkerLocalApi::MultiPublish(const std::vector<std::shared_ptr<Obje
 
 Status ClientWorkerLocalApi::DecreaseWorkerRef(const std::vector<ShmKey> &objectKeys)
 {
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     DecreaseReferenceRequest req;
     req.set_client_id(clientId_);
     for (const auto &objectKey : objectKeys) {
@@ -189,7 +189,7 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
     GetReqPb req;
     RETURN_IF_NOT_OK(PreGet(getParam, subTimeoutMs, req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req), "Fail to generate signature when get date.");
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     std::promise<std::pair<GetRspPb, Status>> promise;
     auto future = promise.get_future();
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> serverApi =
@@ -217,7 +217,7 @@ Status ClientWorkerLocalApi::Get(const GetParam &getParam, uint32_t &version, Ge
 
 Status ClientWorkerLocalApi::InvalidateBuffer(const std::string &objectKey)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     InvalidateBufferReqPb req;
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
@@ -231,7 +231,7 @@ Status ClientWorkerLocalApi::GIncreaseWorkerRef(const std::vector<std::string> &
                                                 std::vector<std::string> &failedObjectKeys,
                                                 const std::string &remoteClientId)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     GIncreaseReqPb req;
     GIncreaseRspPb rsp;
     req.set_address(clientId_);
@@ -257,7 +257,7 @@ Status ClientWorkerLocalApi::GIncreaseWorkerRef(const std::vector<std::string> &
 
 Status ClientWorkerLocalApi::ReleaseGRefs(const std::string &remoteClientId)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     ReleaseGRefsReqPb req;
     ReleaseGRefsRspPb rsp;
     req.set_client_id(clientId_);
@@ -278,7 +278,7 @@ Status ClientWorkerLocalApi::GDecreaseWorkerRef(const std::vector<std::string> &
                                                 std::vector<std::string> &failedObjectKeys,
                                                 const std::string &remoteClientId)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     GDecreaseReqPb req;
     GDecreaseRspPb rsp;
     req.set_address(clientId_);
@@ -307,7 +307,7 @@ Status ClientWorkerLocalApi::Delete(const std::vector<std::string> &objectKeys,
 {
     LOG(INFO) << FormatString("Begin to delete object, client id: %s, worker address: %s, object key: %s", clientId_,
                               hostPort_.ToString(), VectorToString(objectKeys));
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     DeleteAllCopyReqPb req;
     DeleteAllCopyRspPb rsp;
     req.set_client_id(clientId_);
@@ -337,7 +337,7 @@ Status ClientWorkerLocalApi::QueryGlobalRefNum(
 {
     QueryGlobalRefNumReqPb req;
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
@@ -353,7 +353,7 @@ Status ClientWorkerLocalApi::QueryGlobalRefNum(
 Status ClientWorkerLocalApi::PublishDeviceObject(const std::shared_ptr<DeviceBufferInfo> &bufferInfo, size_t dataSize,
                                                  bool isShm, void *nonShmPointer)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     PublishDeviceObjectReqPb req;
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     req.set_client_id(clientId_);
@@ -394,7 +394,7 @@ Status ClientWorkerLocalApi::SubscribeReceiveEvent(int32_t deviceId, SubscribeRe
 Status ClientWorkerLocalApi::PutP2PMeta(const std::shared_ptr<DeviceBufferInfo> &bufferInfo,
                                         const std::vector<Blob> &blobs)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     PutP2PMetaReqPb req;
     PutP2PMetaRspPb resp;
     auto subReq = req.add_dev_obj_meta();
@@ -418,7 +418,7 @@ Status ClientWorkerLocalApi::GetP2PMeta(std::vector<std::shared_ptr<DeviceBuffer
 
 Status ClientWorkerLocalApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when SendRootInfo data.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
                                      "Fail to generate signature when creating data");
@@ -442,7 +442,7 @@ Status ClientWorkerLocalApi::GetBlobsInfo(const std::string &devObjKey, int32_t 
 
 Status ClientWorkerLocalApi::AckRecvFinish(AckRecvFinishReqPb &req)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     AckRecvFinishRspPb resp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetTokenAndTenantId(req), "Fail to set token when AckRecvFinish.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(signature_->GenerateSignature(req),
@@ -452,7 +452,7 @@ Status ClientWorkerLocalApi::AckRecvFinish(AckRecvFinishReqPb &req)
 
 Status ClientWorkerLocalApi::RemoveP2PLocation(const std::string &objectKey, int32_t deviceId)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RemoveP2PLocationReqPb req;
     req.set_object_key(objectKey);
     req.set_client_id(clientId_);
@@ -467,7 +467,7 @@ Status ClientWorkerLocalApi::RemoveP2PLocation(const std::string &objectKey, int
 Status ClientWorkerLocalApi::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objectKeys,
                                             std::vector<ObjMetaInfo> &objMetas)
 {
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     GetObjMetaInfoReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_tenantid(tenantId);
@@ -488,7 +488,7 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
                                          uint32_t &version, std::vector<bool> &exists, bool &useShmTransfer)
 {
     METRIC_TIMER(metrics::KvMetricId::CLIENT_RPC_CREATE_LATENCY);
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     MultiCreateReqPb req;
     req.set_skip_check_existence(skipCheckExistence);
     req.set_client_id(clientId_);
@@ -522,7 +522,7 @@ Status ClientWorkerLocalApi::MultiCreate(bool skipCheckExistence, std::vector<Mu
 Status ClientWorkerLocalApi::ReconcileShmRef(const std::unordered_set<ShmKey> &confirmedExpiredShmIds,
                                              std::vector<ShmKey> &maybeExpiredShmIds)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(RPC_TIMEOUT));
     ReconcileShmRefReqPb req;
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SetToken(*req.mutable_token()), "Fail to set token when ReconcileShmRef");
@@ -540,7 +540,7 @@ Status ClientWorkerLocalApi::ReconcileShmRef(const std::unordered_set<ShmKey> &c
 
 Status ClientWorkerLocalApi::QuerySize(const std::vector<std::string> &objectKeys, QuerySizeRspPb &rsp)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     QuerySizeReqPb req;
     *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
     req.set_client_id(clientId_);
@@ -554,7 +554,7 @@ Status ClientWorkerLocalApi::QuerySize(const std::vector<std::string> &objectKey
 
 Status ClientWorkerLocalApi::HealthCheck(ServerState &state)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(MIN_HEARTBEAT_INTERVAL_MS));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(MIN_HEARTBEAT_INTERVAL_MS));
     HealthCheckRequestPb req;
     HealthCheckReplyPb rsp;
     req.set_client_id(clientId_);
@@ -568,7 +568,7 @@ Status ClientWorkerLocalApi::Exist(const std::vector<std::string> &keys, std::ve
                                    const bool queryL2Cache, const bool isLocal)
 {
     PerfPoint point(PerfKey::CLIENT_EXIST_LOCAL);
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     req.set_client_id(clientId_);
@@ -591,7 +591,7 @@ Status ClientWorkerLocalApi::Exist(const std::vector<std::string> &keys, std::ve
 Status ClientWorkerLocalApi::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,
                                     std::vector<std::string> &failedKeys)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     ExpireReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     req.set_client_id(clientId_);
@@ -611,7 +611,7 @@ Status ClientWorkerLocalApi::Expire(const std::vector<std::string> &keys, uint32
 Status ClientWorkerLocalApi::GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
                                          GetMetaInfoRspPb &rsp)
 {
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     GetMetaInfoReqPb req;
     req.set_client_id(clientId_);
     req.set_is_dev_key(isDevKey);

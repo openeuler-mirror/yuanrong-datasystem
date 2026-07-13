@@ -26,6 +26,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
 #include "datasystem/utils/status.h"
@@ -132,7 +133,7 @@ Status ObjectGetDataInfosReqSubscriptionTable::ReturnGetDataInfosRequest(std::sh
     }
 
     // Case 1: Timeout.
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         VLOG(1) << FormatString("[ReturnGetDataInfoRequest] timeout, client id: %d, deviceId: %d", request->clientId_,
                                 request->deviceId_);
@@ -460,7 +461,7 @@ Status ObjectGetP2PMetaReqSubscriptionTable::ReturnGetP2PMetaRequest(std::shared
     }
 
     // Case 1: Timeout.
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         VLOG(1) << FormatString("ReturnGetP2PMetaRequest timeout, client id: %d, deviceId: %d", request->clientId_,
                                 request->deviceId_);

@@ -347,7 +347,7 @@ Status GetRequest::ReturnToClient(const Status &rc)
             WorkerRequestManager::DeleteObjects(keysWithVersion);
         });
     });
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         LOG(ERROR) << "ReturnFromGetRequest timeout when get object: " << VectorToString(rawObjectKeys_);
         if (traceEnabled) {

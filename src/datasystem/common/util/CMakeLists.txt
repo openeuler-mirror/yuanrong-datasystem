@@ -51,4 +51,4 @@ target_link_libraries(common_util PRIVATE ${UTIL_LIBS})
 # common_log — request_context.cpp does not call any function defined in common_log.
 # Kept as a separate target so common_util stays brpc-free.
 add_library(common_request_context STATIC request_context.cpp)
-target_link_libraries(common_request_context PUBLIC ${BRPC_LIBRARIES})
+target_link_libraries(common_request_context PUBLIC ${BRPC_LIBRARIES} common_util)

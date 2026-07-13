@@ -42,6 +42,7 @@
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -106,11 +107,12 @@ public:
             LOG(ERROR) << "The AK/SK authorized failed, the access key of req is not found.";
             RETURN_STATUS(K_NOT_AUTHORIZED, "The AK/SK authorized failed.");
         }
-        if (!g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()) {
-            auto signature = std::move(g_ReqSignature);
-            auto accessKey = std::move(g_ReqAk);
-            auto timestamp = g_ReqTimestamp;
-            ZmqMessage serializedStr = std::move(g_SerializedMessage);
+        auto* ctx = GetRequestContext();
+        if (!ctx->reqAk.empty() && !ctx->reqSignature.empty() && !ctx->serializedMessage.Empty()) {
+            auto signature = std::move(ctx->reqSignature);
+            auto accessKey = std::move(ctx->reqAk);
+            auto timestamp = ctx->reqTimestamp;
+            ZmqMessage serializedStr = std::move(ctx->serializedMessage);
             return VerifySignatureAndTimestamp(signature, timestamp, accessKey,
                                                static_cast<const char *>(serializedStr.Data()), serializedStr.Size());
         }

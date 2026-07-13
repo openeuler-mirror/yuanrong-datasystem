@@ -31,6 +31,7 @@
 #include "datasystem/common/stream_cache/stream_data_page.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/lock_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -1279,7 +1280,7 @@ Status StreamManager::SendBlockProducerReq(const std::string &remoteWorkerAddr)
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     // Send only. No need to wait for any reply, and let clientApi goes out of scope by itself.

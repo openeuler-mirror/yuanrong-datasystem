@@ -99,6 +99,22 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "bthread_utils",
+    hdrs = ["bthread_utils.h"],
+    deps = [
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
+    name = "scoped_bthread_local",
+    hdrs = ["scoped_bthread_local.h"],
+    deps = [
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
     name = "rpc_server",
     srcs = [
         "rpc_server.cpp",
@@ -107,6 +123,7 @@ ds_cc_library(
         "rpc_server.h",
     ],
     deps = [
+        ":bthread_utils",
         ":rpc_auth_key_manager",
         ":rpc_constants",
         ":rpc_credential",

@@ -29,6 +29,7 @@
 #include "datasystem/common/rdma/ucp_segment.h"
 #include "datasystem/common/rdma/ucp_worker_pool.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -242,7 +243,7 @@ Status UcpManager::UcpPutPayload(const UcpRemoteInfoPb &ucpInfo, const uint64_t 
     }
     point.Record();
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();
@@ -295,7 +296,7 @@ Status UcpManager::UcpGatherPut(const UcpRemoteInfoPb &ucpInfo, uint64_t metaDat
 
     point.Record();
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();

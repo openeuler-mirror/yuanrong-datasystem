@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,7 +15,18 @@
  */
 
 /**
- * Description: some thread_local object.
+ * Description: Per-request context type bundle.
+ *
+ * Historically this header declared 8 global ScopedBthreadLocal<T> variables
+ * (timeoutDuration, scTimeoutDuration, reqTimeoutDuration, g_SerializedMessage,
+ * g_ContextTenantId, g_ReqAk, g_ReqSignature, g_ReqTimestamp). Those globals
+ * have been migrated INTO the RequestContext struct — see
+ * common/util/request_context.h — and are accessed via GetRequestContext()->field.
+ *
+ * This header now only forwards the per-request type definitions
+ * (TimeoutDuration, ZmqMessage, ScopedBthreadLocal) so the many translation
+ * units that historically included it for those types continue to build. New
+ * code should include request_context.h directly and use GetRequestContext().
  */
 
 #ifndef DATASYSTEM_COMMON_UTIL_THREAD_LOCAL_H
@@ -24,20 +35,18 @@
 #include <string>
 
 #include "datasystem/common/log/time_cost.h"
+#include "datasystem/common/rpc/scoped_bthread_local.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
+
 namespace datasystem {
-extern thread_local TimeoutDuration timeoutDuration;
-extern thread_local TimeoutDuration scTimeoutDuration;
-extern thread_local TimeoutDuration reqTimeoutDuration;
-extern thread_local ZmqMessage g_SerializedMessage;
-// ZMQ fallback: used when GetRequestContext() returns nullptr (ZMQ pthread handler paths).
-// In brpc M:N handlers, per-request isolation is provided by RequestContext::workerTimeCost
-// and RequestContext::masterTimeCost via GetRequestContext().
-extern thread_local std::string g_ContextTenantId;
-extern thread_local std::string g_ReqAk;
-extern thread_local std::string g_ReqSignature;
-extern thread_local uint64_t g_ReqTimestamp;
+
+// The 8 per-request variables formerly declared here now live as fields of
+// RequestContext. Access them via GetRequestContext()->xxxTimeoutDuration /
+// ->serializedMessage / ->tenantId / ->reqAk / ->reqSignature / ->reqTimestamp
+// (see common/util/request_context.h). ScopedBthreadLocal<T> is retained as a
+// standalone template for direct unit testing (tests/ut/common/rpc/bthread_local_test.cpp).
+
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_COMMON_THREAD_LOCAL_H
+#endif  // DATASYSTEM_COMMON_UTIL_THREAD_LOCAL_H

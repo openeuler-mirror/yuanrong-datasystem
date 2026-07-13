@@ -35,6 +35,7 @@
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
@@ -248,7 +249,7 @@ Status StreamClientImpl::CreateProducer(const std::string &streamName, std::shar
         senderProducerNo = 0;
         return Status::OK();
     });
-    std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
+    std::string tenantId = GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId;
     std::shared_ptr<ProducerConsumerWorkerApi> clientWorkerApi =
         std::make_shared<ProducerConsumerWorkerApi>(tenantId, clientWorkerApi_);
     auto impl = std::make_shared<ProducerImpl>(
@@ -298,7 +299,7 @@ Status StreamClientImpl::Subscribe(const std::string &streamName, const struct S
     SubscribeRspPb rsp;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clientWorkerApi_->Subscribe(streamName, consumerId, config, rsp),
                                      "Subscribe request error");
-    std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
+    std::string tenantId = GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId;
     std::shared_ptr<ProducerConsumerWorkerApi> clientWorkerApi =
         std::make_shared<ProducerConsumerWorkerApi>(tenantId, clientWorkerApi_);
     auto consumerImpl = std::make_unique<ConsumerImpl>(streamName, tenantId, config, consumerId, rsp, clientWorkerApi,

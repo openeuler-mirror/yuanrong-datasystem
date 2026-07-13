@@ -60,7 +60,7 @@ Status WorkerSCAllocateMemory::AllocateMemoryForStream(const std::string &tenant
     static const std::vector<int> WAIT_MSECOND = { 1, 10, 50, 100, 200, 400, 800, 1600, 3200 };
     if (rc.GetCode() == K_OUT_OF_MEMORY && evict && retryOnOOM) {
         for (int t : WAIT_MSECOND) {
-            auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+            auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             auto sleepTime = std::min<int64_t>(remainingTime, t);
             streamMemoryUsageSize =
                 datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::STREAM);

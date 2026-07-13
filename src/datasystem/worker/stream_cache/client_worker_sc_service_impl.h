@@ -31,6 +31,7 @@
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/lock_map.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/protos/stream_posix.irpc.pb.h"
@@ -737,7 +738,7 @@ private:
                                        std::function<Status(Req &, Rsp &)> fun)
     {
         CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
-        while (reqTimeoutDuration.CalcRealRemainingTime() > 0) {
+        while (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0) {
             RETURN_IF_NOT_OK(fun(req, rsp));
             if (rsp.info().redirect_meta_address().empty()) {
                 return Status::OK();
@@ -768,7 +769,7 @@ private:
                                         std::function<Status(Req &, Rsp &)> fun)
     {
         CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
-        while (reqTimeoutDuration.CalcRealRemainingTime() > 0) {
+        while (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0) {
             RETURN_IF_NOT_OK(fun(req, rsp));
             if (rsp.info().empty()) {
                 return Status::OK();

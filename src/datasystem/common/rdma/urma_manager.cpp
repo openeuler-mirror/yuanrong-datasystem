@@ -1468,7 +1468,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
+        auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();
@@ -1628,7 +1628,7 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
                                              ret, URMA_ERROR_SUGGEST));
     }
     if (blocking) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
+        auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
         eventKeys.clear();

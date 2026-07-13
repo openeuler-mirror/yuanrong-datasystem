@@ -29,6 +29,7 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/timer.h"
 
 namespace OsXprtPipln {
@@ -75,7 +76,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, GetRspPb::ObjectInfoPb &object, cons
     mgr.GetReqId(key, reqId);
     ReqInfo *info = mgr.GetReqInfo(reqId);
     if (isOk) {
-        info->WaitCancelOrDone(datasystem::reqTimeoutDuration.CalcRealRemainingTime());
+        info->WaitCancelOrDone(datasystem::GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime());
     } else {
         mgr.MarkCancelOrDone(reqId, false /* isDone */);
     }
@@ -93,7 +94,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, GetRspPb::ObjectInfoPb &object, size
     uint32_t reqId;
     mgr.GetReqId(info->key, reqId);
     if (isOk) {
-        info->WaitCancelOrDone(datasystem::reqTimeoutDuration.CalcRealRemainingTime());
+        info->WaitCancelOrDone(datasystem::GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime());
     } else {
         mgr.MarkCancelOrDone(reqId, false /* isDone */);
     }

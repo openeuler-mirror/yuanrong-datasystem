@@ -770,9 +770,9 @@ Status WorkerOcServiceGlobalReferenceImpl::DecNestedRef(const std::vector<std::s
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "Hash master get failed, DecNestedRef failed");
 
-        int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+        int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
         remainingTime = remainingTime > 0 ? remainingTime : RPC_TIMEOUT;  // maybe call by local master
-        reqTimeoutDuration.InitWithPositiveTime(remainingTime);
+        GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(remainingTime);
         req.set_timeout(remainingTime);
         std::function<Status(master::GDecNestedRefReqPb &, master::GDecNestedRefRspPb &)> func =
             [&workerMasterApi](master::GDecNestedRefReqPb &req, master::GDecNestedRefRspPb &rsp) {

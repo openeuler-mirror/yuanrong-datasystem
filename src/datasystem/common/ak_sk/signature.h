@@ -36,6 +36,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 #include "datasystem/utils/sensitive_value.h"
@@ -111,11 +112,11 @@ public:
         std::string serializedSignature;
         RETURN_IF_NOT_OK(
             GetSignature(clientKey_, canonicalRequest.c_str(), canonicalRequest.size(), serializedSignature));
-        g_ReqAk = clientKey_.accessKey;
-        g_ReqSignature = std::move(serializedSignature);
-        g_ReqTimestamp = req.timestamp();
+        GetRequestContext()->reqAk = clientKey_.accessKey;
+        GetRequestContext()->reqSignature = std::move(serializedSignature);
+        GetRequestContext()->reqTimestamp = req.timestamp();
         ZmqMessage emptyMsg;
-        g_SerializedMessage= std::move(emptyMsg);
+        GetRequestContext()->serializedMessage = std::move(emptyMsg);
         return Status::OK();
     }
 

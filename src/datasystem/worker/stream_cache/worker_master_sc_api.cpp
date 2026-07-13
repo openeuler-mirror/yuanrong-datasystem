@@ -38,10 +38,10 @@ namespace stream_cache {
 
 #define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                              \
     do {                                                                                      \
-        int64_t remainingUs_ = (timeoutDuration_).CalcRemainingAfterDeductionUs();            \
+        int64_t remainingUs_ = (timeoutDuration_)->CalcRemainingAfterDeductionUs();           \
         CHECK_FAIL_RETURN_STATUS(remainingUs_ > 0, K_RPC_DEADLINE_EXCEEDED,                   \
                                  FormatString("Request timeout, remaining %ld us.",           \
-                                              (timeoutDuration_).CalcRealRemainingTimeUs())); \
+                                              (timeoutDuration_)->CalcRealRemainingTimeUs())); \
         int64_t remainingMs_ = TimeoutDuration::CeilUsToMs(remainingUs_);                     \
         (request_).set_timeout(TimeoutDuration::WorkerGetRequestTimeout(remainingMs_));       \
         (opts_).SetTimeout(remainingMs_);                                                     \
@@ -98,7 +98,7 @@ Status WorkerRemoteMasterSCApi::Init()
 Status WorkerRemoteMasterSCApi::CreateProducer(master::CreateProducerReqPb &req, master::CreateProducerRspPb &rsp)
 {
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     INJECT_POINT("worker.CreateProducer.beforeSendToMaster", [&opts](const std::string &code) {
         const int timeout = 10 * 1000;  // 10s;
         opts.SetTimeout(timeout);
@@ -117,7 +117,7 @@ Status WorkerRemoteMasterSCApi::CreateProducer(master::CreateProducerReqPb &req,
 Status WorkerRemoteMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, master::CloseProducerRspPb &rsp)
 {
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     INJECT_POINT("worker.CloseProducer.beforeSendToMaster", [&opts](const std::string &code) {
         const int timeout = 10 * 1000;  // 10s;
         opts.SetTimeout(timeout);
@@ -137,7 +137,7 @@ Status WorkerRemoteMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::S
 {
     // Construct master::SubscribeReqPb req
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     INJECT_POINT("worker.Subscribe.beforeSendToMaster", [&opts](const std::string &code) {
         const int timeout = 10 * 1000;  // 10s;
         opts.SetTimeout(timeout);
@@ -162,7 +162,7 @@ Status WorkerRemoteMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::S
 Status WorkerRemoteMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, master::CloseConsumerRspPb &rsp)
 {
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     INJECT_POINT("worker.CloseConsumer.beforeSendToMaster", [&opts](const std::string &code) {
         const int timeout = 10 * 1000;  // 10s;
         opts.SetTimeout(timeout);
@@ -181,7 +181,7 @@ Status WorkerRemoteMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, m
 Status WorkerRemoteMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, master::DeleteStreamRspPb &rsp)
 {
     RpcOptions opts;
-    CHECK_AND_SET_TIMEOUT(scTimeoutDuration, req, opts);
+    CHECK_AND_SET_TIMEOUT(&GetRequestContext()->scTimeoutDuration, req, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DeleteStream(opts, req, rsp)
                                   : rpcSession_->DeleteStream(opts, req, rsp));
@@ -227,7 +227,7 @@ Status WorkerLocalMasterSCApi::Init()
 Status WorkerLocalMasterSCApi::CreateProducer(master::CreateProducerReqPb &req, master::CreateProducerRspPb &rsp)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     INJECT_POINT("worker.CreateProducer.beforeSendToMaster", [&opts](const std::string &code) {
         const int timeout = 10 * 1000;  // 10s;
         opts.SetTimeout(timeout);
@@ -244,7 +244,7 @@ Status WorkerLocalMasterSCApi::CreateProducer(master::CreateProducerReqPb &req, 
 Status WorkerLocalMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, master::CloseProducerRspPb &rsp)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->CloseProducerImpl(nullptr, req, rsp));
@@ -257,7 +257,7 @@ Status WorkerLocalMasterSCApi::CloseProducer(master::CloseProducerReqPb &req, ma
 Status WorkerLocalMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::SubscribeRspPb &rsp)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->SubscribeImpl(nullptr, req, rsp));
@@ -269,7 +269,7 @@ Status WorkerLocalMasterSCApi::Subscribe(master::SubscribeReqPb &req, master::Su
 Status WorkerLocalMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, master::CloseConsumerRspPb &rsp)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->CloseConsumerImpl(nullptr, req, rsp));
@@ -281,7 +281,7 @@ Status WorkerLocalMasterSCApi::CloseConsumer(master::CloseConsumerReqPb &req, ma
 Status WorkerLocalMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, master::DeleteStreamRspPb &rsp)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(masterSC_->DeleteStream(req, rsp));

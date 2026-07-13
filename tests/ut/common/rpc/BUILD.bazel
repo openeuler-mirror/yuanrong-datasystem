@@ -100,3 +100,21 @@ ds_cc_test(
         "//src/datasystem/common/rpc/zmq:zmq_payload",
     ],
 )
+
+ds_cc_test(
+    name = "scoped_bthread_local_test",
+    srcs = ["scoped_bthread_local_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:bthread_local",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
+    name = "bthread_utils_test",
+    srcs = ["bthread_utils_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:bthread_utils",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)

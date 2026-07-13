@@ -47,6 +47,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/utils/status.h"
 
@@ -300,6 +301,7 @@ Status ObjectMetaStore::PutToEtcdStore(const std::string &tablePrefix, const std
     std::string etcdKey = Hash2Str(hash) + "/" + key;
     if (type == WriteType::ROCKS_SYNC_ETCD) {
         INJECT_POINT("PutToEtcdStore.failed");
+        auto &timeoutDuration = GetRequestContext()->timeoutDuration;
         RETURN_IF_NOT_OK(etcdStore_->Put(table, etcdKey, value, timeoutDuration.CalcRemainingTime()));
     } else if (isAsync(type)) {
         INJECT_POINT("master.before_sub_async_send_etcd_req");

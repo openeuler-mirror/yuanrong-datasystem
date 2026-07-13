@@ -27,6 +27,7 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/protos/ut_object.stub.rpc.pb.h"
 #include "datasystem/utils/status.h"
@@ -189,9 +190,9 @@ TEST_F(OcAuthCompatibilityTest, TestUnaryAuthCompatibilityWithOldVersion)
     req.set_filed5(num);  // filed5 not exist in TestReqPbV1.
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     ASSERT_EQ(stub_->TestUnaryCompatibilityV2(req, rsp).GetCode(), StatusCode::K_NOT_AUTHORIZED);
 
     req.clear_filed5();
@@ -201,17 +202,17 @@ TEST_F(OcAuthCompatibilityTest, TestUnaryAuthCompatibilityWithOldVersion)
     uint32_t authType = 1;
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
 
     authType = 2;  // set auth type as 2
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
 }
 
@@ -228,9 +229,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility)
     }
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream;
     DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream));
     DS_ASSERT_OK(stream->Write(req));
@@ -241,9 +242,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility)
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream1;
     DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream1));
     DS_ASSERT_OK(stream1->Write(req));
@@ -254,9 +255,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility)
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriterReader<TestReqPbV2, TestRspPbV1>> stream2;
     DS_ASSERT_OK(stub_->TestStreamCompatibilityV2(&stream2));
     DS_ASSERT_OK(stream2->Write(req));
@@ -277,9 +278,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility1)
     }
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream;
     DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream));
     DS_ASSERT_OK(stream->Write(req));
@@ -290,9 +291,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility1)
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream1;
     DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream1));
     DS_ASSERT_OK(stream1->Write(req));
@@ -303,9 +304,9 @@ TEST_F(OcAuthCompatibilityTest, TestStreamAuthWithOldVersionCompatibility1)
     req.set_auth_req(authType);
     DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
     // old version will not carry these message.
-    g_ReqAk.clear();
-    g_ReqSignature.clear();
-    g_ReqTimestamp = 0;
+    GetRequestContext()->reqAk.clear();
+    GetRequestContext()->reqSignature.clear();
+    GetRequestContext()->reqTimestamp = 0;
     std::unique_ptr<datasystem::ClientWriter<TestReqPbV2>> stream2;
     DS_ASSERT_OK(stub_->TestStreamCompatibility1V2(&stream2));
     DS_ASSERT_OK(stream2->Write(req));
@@ -331,9 +332,9 @@ TEST_F(OcAuthCompatibilityTest, TestUnaryAuthMixOldAndNewVersion)
         DS_ASSERT_OK(akSkManager_->GenerateSignature(req));
         if (!newVersion) {
             // old version will not carry these message.
-            g_ReqAk.clear();
-            g_ReqSignature.clear();
-            g_ReqTimestamp = 0;
+            GetRequestContext()->reqAk.clear();
+            GetRequestContext()->reqSignature.clear();
+            GetRequestContext()->reqTimestamp = 0;
         }
         DS_ASSERT_OK(stub_->TestUnaryCompatibilityV2(req, rsp));
     };

@@ -22,6 +22,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/validator.h"
@@ -41,9 +42,10 @@ Status Context::SetTraceId(const std::string &traceId)
 
 void Context::SetTenantId(const std::string &tenantId)
 {
-    if (g_ContextTenantId != tenantId) {
-        g_ContextTenantId = tenantId;
-        LOG(INFO) << "Set tenant id: " << g_ContextTenantId;
+    auto *ctx = GetRequestContext();
+    if (ctx->tenantId != tenantId) {
+        ctx->tenantId = tenantId;
+        LOG(INFO) << "Set tenant id: " << ctx->tenantId;
     }
 }
 }  // namespace datasystem

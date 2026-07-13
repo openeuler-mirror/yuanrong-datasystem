@@ -24,6 +24,7 @@
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -133,7 +134,7 @@ Status WorkerDeviceOcManager::ProcessGetDeviceObjectRequest(
     RETURN_IF_NOT_OK(TryGetDeviceObjectFromRemote(subTimeout, request, objectsNeedGetRemote));
 
     RETURN_OK_IF_TRUE(request->isReturn_);
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (request->numSatisfiedObjects_ == request->numWaitingObjects_ || subTimeout == 0 || remainingTimeMs <= 0) {
         LOG(INFO) << "The satisfied objects num: " << request->numSatisfiedObjects_
                   << ", the waiting objects num: " << request->numWaitingObjects_
@@ -237,7 +238,8 @@ Status WorkerDeviceOcManager::TryGetDeviceObjectFromRemote(const int64_t subTime
             if (status.IsOk()) {
                 break;
             }
-            if (status.GetCode() == K_OUT_OF_MEMORY || reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+            if (status.GetCode() == K_OUT_OF_MEMORY ||
+                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
                 std::for_each(needRetryIds.begin(), needRetryIds.end(),
                               [&failedIds](const ReadKey &key) { failedIds.emplace(key.objectKey); });
                 break;

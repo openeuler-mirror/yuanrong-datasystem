@@ -39,6 +39,7 @@
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/strings_util.h"
@@ -707,7 +708,7 @@ public:
     {
         master::QueryMetaReqPb queryReq;
         master::QueryMetaRspPb queryRsp;
-        reqTimeoutDuration.Reset();
+        GetRequestContext()->reqTimeoutDuration.Reset();
         *queryReq.mutable_ids() = { objKeys.begin(), objKeys.end() };
         queryReq.set_address(hostPort_.ToString());
         std::vector<RpcMessage> payloads;

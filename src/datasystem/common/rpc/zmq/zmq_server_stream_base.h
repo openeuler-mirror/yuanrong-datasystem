@@ -32,6 +32,7 @@
 #include "datasystem/common/rpc/zmq/zmq_service.h"
 #include "datasystem/common/rpc/zmq/zmq_stream_base.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -154,10 +155,10 @@ public:
         ZmqMessage protoMsg = std::move(inMsg_.front());
         inMsg_.pop_front();
         RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
-        g_SerializedMessage = std::move(protoMsg);
-        g_ReqAk = meta_.access_key();
-        g_ReqSignature = meta_.signature();
-        g_ReqTimestamp = meta_.timestamp();
+        GetRequestContext()->serializedMessage = std::move(protoMsg);
+        GetRequestContext()->reqAk = meta_.access_key();
+        GetRequestContext()->reqSignature = meta_.signature();
+        GetRequestContext()->reqTimestamp = meta_.timestamp();
         return Status::OK();
     }
 
@@ -506,10 +507,10 @@ public:
             RETURN_IF_NOT_OK(ParseFromZmqMessage(protoMsg, pb));
             point.Record();
             PerfPoint::RecordElapsed(PerfKey::ZMQ_REQUEST_SIZE_BEFORE_DESERIALIZE, protoMsg.Size());
-            g_SerializedMessage = std::move(protoMsg);
-            g_ReqAk = meta_.access_key();
-            g_ReqSignature = meta_.signature();
-            g_ReqTimestamp = meta_.timestamp();
+            GetRequestContext()->serializedMessage = std::move(protoMsg);
+            GetRequestContext()->reqAk = meta_.access_key();
+            GetRequestContext()->reqSignature = meta_.signature();
+            GetRequestContext()->reqTimestamp = meta_.timestamp();
             return Status::OK();
         } else {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "ServerUnaryWriterReaderImpl is only supposed to be used once!");

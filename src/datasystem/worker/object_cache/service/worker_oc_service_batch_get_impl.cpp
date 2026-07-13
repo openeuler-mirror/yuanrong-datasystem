@@ -39,6 +39,7 @@
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/status_helper.h"
@@ -274,7 +275,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
             lastRc = rc;
         }
     };
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED, "RPC deadline exceeded");
     auto dispatchTime = std::chrono::steady_clock::now();
     for (size_t index = 0; index < tasks.size(); ++index) {
@@ -730,7 +731,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
                                              "Create remote worker api failed.");
             std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
-            int64_t timeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
+            int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             timeoutMs = !isMigrateData ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
             point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
             auto inflightGauge =

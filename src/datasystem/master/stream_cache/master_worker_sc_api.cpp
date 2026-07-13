@@ -24,6 +24,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
+#include "datasystem/common/util/request_context.h"
 
 namespace datasystem {
 namespace master {
@@ -132,7 +133,7 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcast(const std::string &str
     INJECT_POINT("MasterRemoteWorkerSCApi.DelStreamContextBroadcast.sleep");
     DelStreamContextRspPb rsp;
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     Status rc = brpcSession_ ? brpcSession_->DelStreamContext(opts, req, rsp)
@@ -152,7 +153,7 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncWrite(const std::s
     req.set_force_delete(forceDelete);
     INJECT_POINT("MasterRemoteWorkerSCApi.DelStreamContextBroadcast.sleep");
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->DelStreamContextAsyncWrite(opts, req, tagId)
@@ -179,7 +180,7 @@ Status MasterRemoteWorkerSCApi::SyncPubNode(const std::string &streamName, const
 
     SyncPubNodeRspPb rsp;
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->SyncPubNode(opts, req, rsp)
                                     : rpcSession_->SyncPubNode(opts, req, rsp));
@@ -197,7 +198,7 @@ Status MasterRemoteWorkerSCApi::SyncConsumerNode(const std::string &streamName,
 
     SyncConsumerNodeRspPb rsp;
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->SyncConsumerNode(opts, req, rsp)
                                     : rpcSession_->SyncConsumerNode(opts, req, rsp));
@@ -213,7 +214,7 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePub(const std::string &streamName)
 
     ClearRemoteInfoRspPb rsp;
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Send ClearAllRemotePub request to worker", LogPrefix(),
                                               streamName);
@@ -238,7 +239,7 @@ Status MasterRemoteWorkerSCApi::QueryMetadata(
 Status MasterRemoteWorkerSCApi::UpdateTopoNotification(UpdateTopoNotificationReq &req)
 {
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     INJECT_POINT("master.UpdateTopoNotification.setTimeout", [&opts](int timeout) {
         LOG(INFO) << "set rpc timeout to " << timeout;
         opts.SetTimeout(timeout);
@@ -256,7 +257,7 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynWrite(const std::string &st
     req.set_stream_name(streamName);
 
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s]Asyn write ClearAllRemotePub request to worker", LogPrefix(),
                                               streamName);
@@ -301,7 +302,7 @@ Status MasterLocalWorkerSCApi::DelStreamContextBroadcast(const std::string &stre
     INJECT_POINT("MasterLocalWorkerSCApi.DelStreamContextBroadcast.sleep");
     // We use timeout to avoid deadlock
     RpcOptions opts;
-    SET_RPC_TIMEOUT(scTimeoutDuration, opts);
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     req.set_timeout(opts.GetTimeout());
     INJECT_POINT("MasterLocalWorkerSCApi.DelStreamContextBroadcast.setTimeout", [&req](int timeout) {
         LOG(INFO) << "set rpc timeout to " << timeout;

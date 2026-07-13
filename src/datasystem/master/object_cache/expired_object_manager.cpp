@@ -351,7 +351,7 @@ Status ExpiredObjectManager::AsyncDelete(std::unordered_map<std::string, uint64_
     // from master. If we fill in with master address, the metadata manager will skip this address when deleting some
     // copies, even if the worker in this address has a copy (as we know the worker and master are merged). To cheat
     // the sanity check in metadata manager with an invalid address, let's use loopback IP without port number.
-    timeoutDuration.Init(NOTIFY_DELETE_TIMEOUT);
+    GetRequestContext()->timeoutDuration.Init(NOTIFY_DELETE_TIMEOUT);
     DeleteObjectMediator mediator("127.0.0.1", requestObjectKeyMap);
     mediator.SetObjKey2Version(std::move(expiredObjMap));
     ocMetadataManager_->FindNeedDeleteIds(mediator);

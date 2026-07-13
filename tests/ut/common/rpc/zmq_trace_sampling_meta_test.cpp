@@ -24,6 +24,7 @@
 
 #include "datasystem/common/log/log_sampler.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -35,7 +36,7 @@ protected:
     {
         Trace::Instance().Invalidate();
         LogSampler::Instance().ResetForTest();
-        reqTimeoutDuration.Init();
+        GetRequestContext()->reqTimeoutDuration.Init();
     }
 
     void TearDown() override

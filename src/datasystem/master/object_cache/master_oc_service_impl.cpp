@@ -108,8 +108,8 @@ Status MasterOCServiceImpl::GDecNestedRef(const GDecNestedRefReqPb &req, GDecNes
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->DecreaseNestedRefCnt(req, resp),
                                      "Dec global nested refs failed with error");
     GetMasterTimeCost().Append("Total GDecNestedRef", timer.ElapsedMilliSecond());
@@ -125,8 +125,8 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     PerfPoint point(PerfKey::MASTER_CREATE_META);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::META_CREATE_META_START);
@@ -180,8 +180,8 @@ Status MasterOCServiceImpl::CreateMultiMeta(const CreateMultiMetaReqPb &req, Cre
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     Status status = ocMetadataManager->CreateMultiMeta(req, rsp);
     if (status.IsError()) {
         LOG(ERROR) << FormatString("CreateMultiMeta objects failed with error: %s", status.ToString());
@@ -319,8 +319,8 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
 {
     ScopedRequestContext ctx;
     Timer timer;
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
 
     PerfPoint point(PerfKey::MASTER_REMOVE_META);
     INJECT_POINT("master.remove_meta");
@@ -368,8 +368,8 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
 
     // Call MetadataManager to update object meta.
     Status status = ocMetadataManager->UpdateMeta(req, rsp);
@@ -439,8 +439,8 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
     }
 
     Timer timer;
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->DeleteAllCopyMetaWithServerApi(req, serverApi);
     auto totalMs = timer.ElapsedMilliSecond();
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
@@ -462,8 +462,8 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
         ocMetadataManager->GetDeviceOcManager()->DeleteDevObjectsImpl(req, rsp);
         return Status::OK();
     }
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->DeleteAllCopyMeta(req, rsp);
     auto totalMs = timer.ElapsedMilliSecond();
     GetMasterTimeCost().Append("Total DeleteAllCopyMeta", totalMs);
@@ -522,8 +522,8 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    timeoutDuration.InitWithPositiveTime(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.InitWithPositiveTime(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
 
     // Iterate all workers concurrently.
     std::vector<HostPort> allWorkers;
@@ -628,8 +628,8 @@ Status MasterOCServiceImpl::GDecreaseRef(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     INJECT_POINT("master.GDecreaseRef.before");
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->GDecreaseRefWithServerApi(req, serverApi);
     LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
@@ -646,8 +646,8 @@ Status MasterOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
     INJECT_POINT("master.GDecreaseRef.before");
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->GDecreaseRef(req, resp);
     GetMasterTimeCost().Append("Total GDecreaseRef", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
@@ -661,8 +661,8 @@ Status MasterOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->ReleaseGRefs(req, resp);
     return Status::OK();
 }
@@ -674,8 +674,8 @@ Status MasterOCServiceImpl::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     ocMetadataManager->ReleaseGRefsOfRemoteClientId(req, resp);
     return Status::OK();
 }
@@ -982,8 +982,8 @@ Status MasterOCServiceImpl::RollbackMultiMeta(const RollbackMultiMetaReqPb &req,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
 
-    timeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+    GetRequestContext()->timeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     LOG(INFO) << FormatString("Processing RollbackMultiMeta, address: %s objectKeys: %s", req.address(),
                               VectorToString(req.object_keys()));
     return ocMetadataManager->RollbackMultiMeta(req, rsp);

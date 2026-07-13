@@ -58,7 +58,8 @@ Status AuthenticateRequest(std::shared_ptr<AkSkManager> akSkManager, const ReqTy
     if (FLAGS_skip_authenticate) {
         return CheckTenantId(reqTenantId);
     }
-    if (!g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()) {
+    if (!GetRequestContext()->reqAk.empty() && !GetRequestContext()->reqSignature.empty()
+        && !GetRequestContext()->serializedMessage.Empty()) {
         return worker::AuthenticateMessageInternal(akSkManager, reqTenantId, req.token(), tenantId);
     }
     CHECK_FAIL_RETURN_STATUS(akSkManager != nullptr, StatusCode::K_INVALID, "AK/SK manager has not been initialized.");
@@ -134,7 +135,8 @@ Status Authenticate(std::shared_ptr<AkSkManager> akSkManager, const ReqType &req
     if (FLAGS_skip_authenticate) {
         return CheckTenantId(req.tenant_id());
     }
-    return !g_ReqAk.empty() && !g_ReqSignature.empty() && !g_SerializedMessage.Empty()
+    return !GetRequestContext()->reqAk.empty() && !GetRequestContext()->reqSignature.empty()
+               && !GetRequestContext()->serializedMessage.Empty()
                ? AuthenticateMessage(akSkManager, req, ClientKey::Intern(req.client_id()), tenantId)
                : Authenticate(akSkManager, req, tenantId, ClientKey::Intern(req.client_id()));
 }
