@@ -22,7 +22,7 @@ namespace client {
 
 bool StateFilter::IsAvailable(const HostPort &addr) const
 {
-    return router_->GetRingState(addr) == WorkerRingState::ACTIVE;
+    return router_ != nullptr && router_->GetRingState(addr) == WorkerRingState::ACTIVE;
 }
 
 }  // namespace client

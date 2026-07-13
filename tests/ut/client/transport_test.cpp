@@ -173,6 +173,8 @@ public:
     Status InvokeSet(int64_t, PublishReqPb &request, const std::vector<MemView> &payloads,
                      PublishRspPb &response, uint32_t &workerVersion) override
     {
+        (void)response;
+        (void)workerVersion;
         ++setInvokeCount;
         invokedSetRequests.push_back(request);
         invokedSetPayloadSizes.push_back(payloads.size());
@@ -251,10 +253,14 @@ public:
 
     int getObjectInvokeCount = 0;
     int metadataInvokeCount = 0;
+    int hashRingCount = 0;
     int dataRpcTimeout = 0;
     int metadataRpcTimeout = 0;
+    int hashRingRpcTimeout = 0;
+    uint64_t hashRingVersion = 0;
     GetObjectRemoteReqPb invokedDataRequest;
     master::QueryAndGetReqPb invokedMetadataRequest;
+    GetHashRingReqPb invokedHashRingRequest;
     CreateReqPb invokedCreateRequest;
     PublishReqPb invokedSetRequest;
     int createInvokeCount = 0;
@@ -294,6 +300,17 @@ protected:
         ++setInvokeCount;
         invokedSetRequest = request;
         return setInvokeStatus;
+    }
+
+    Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
+                               GetHashRingRspPb &response) override
+    {
+        ++hashRingCount;
+        hashRingRpcTimeout = options.GetTimeout();
+        hashRingVersion = request.version();
+        invokedHashRingRequest = request;
+        response.set_version(request.version() + 1);
+        return Status::OK();
     }
 };
 
@@ -343,6 +360,7 @@ public:
 
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
     {
+        (void)buffer;
         ++setCount;
         setParams.push_back(param);
         if (!setStatuses.empty()) {
@@ -708,6 +726,22 @@ TEST(WorkerRpcClientTest, ExpiredApiDeadlineDoesNotSendRpc)
     EXPECT_EQ(client.metadataInvokeCount, 0);
 }
 
+TEST(WorkerRpcClientTest, HashRingRefreshSignsRequestAndUsesControlTimeoutOutsideApiDeadline)
+{
+    ApiDeadlineGuard deadline(-1, InUs{});
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    GetHashRingRspPb response;
+
+    ASSERT_TRUE(client.InvokeGetHashRing(17, response).IsOk());
+    EXPECT_EQ(client.hashRingCount, 1);
+    EXPECT_EQ(client.hashRingVersion, 17u);
+    EXPECT_EQ(client.invokedHashRingRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedHashRingRequest.signature().empty());
+    EXPECT_GT(client.hashRingRpcTimeout, 0);
+    EXPECT_EQ(response.version(), 18u);
+}
+
 TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
 {
     FakeDataPlaneManager manager;
@@ -718,6 +752,19 @@ TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
     EXPECT_EQ(first, second);
     EXPECT_EQ(manager.rpcBuildCount, 1);
     EXPECT_EQ(manager.transportBuildCount, 1);
+}
+
+TEST(DataPlaneManagerTest, ReusesRpcClientWithoutCreatingTransporter)
+{
+    FakeDataPlaneManager manager;
+    std::shared_ptr<WorkerRpcClient> first;
+    std::shared_ptr<WorkerRpcClient> second;
+
+    ASSERT_TRUE(manager.GetOrCreateRpcClient(MakeAddress(1), first).IsOk());
+    ASSERT_TRUE(manager.GetOrCreateRpcClient(MakeAddress(1), second).IsOk());
+    EXPECT_EQ(first, second);
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 0);
 }
 
 TEST(DataPlaneManagerTest, DifferentAddressesUseIndependentEntries)

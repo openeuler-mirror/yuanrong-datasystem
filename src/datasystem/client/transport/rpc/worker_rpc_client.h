@@ -66,6 +66,9 @@ public:
     /** @brief Exchange URMA connection data over this worker's cached brpc channel. */
     virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response);
 
+    /** @brief Fetch the versioned routing hash ring through the cached worker channel. */
+    virtual Status InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response);
+
     /** @return Whether this client still owns an initialized channel and all required stubs. */
     virtual bool IsAlive() const;
 
@@ -87,6 +90,9 @@ protected:
 
     virtual Status DoInvokeSet(const RpcOptions &options, const PublishReqPb &request,
                                PublishRspPb &response, const std::vector<MemView> &payloads);
+
+    virtual Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
+                                       GetHashRingRspPb &response);
 
     /** @brief Release the channel and stubs during object destruction. */
     virtual void Close();

@@ -22,6 +22,7 @@ ds_cc_library(
         "//src/datasystem/client/object_cache/client_worker_api:client_worker_remote_api",
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
         "//src/datasystem/client/object_cache/device:object_cache_header",
+        "//src/datasystem/client/routing:routing",
         "//src/datasystem/common/device:comm_wrapper",
         "//src/datasystem/common/device:device_helper",
         "//src/datasystem/common/device/ascend:acl_device_manager",

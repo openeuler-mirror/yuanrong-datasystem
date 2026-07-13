@@ -44,6 +44,7 @@
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
+#include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/log/access_recorder.h"
@@ -1413,6 +1414,13 @@ private:
 
     void ConstructTreadPool();
 
+    Status FetchRoutingHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
+
+    client::HashRingRefresher::FetchRpc BuildRoutingFetchRpc(
+        const std::shared_ptr<client::WorkerRouter> &router, const HostPort &initialWorker, bool initialWorkerIsLocal);
+
+    Status InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal);
+
     Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1);
 
     Status InitClientWorkerConnectAt(WorkerNode node, const HostPort &address, bool enableHeartbeat,
@@ -1651,6 +1659,7 @@ private:
     std::shared_ptr<ThreadPool> asyncReleasePool_;
     std::shared_ptr<Signature> transportSignature_;
     std::unique_ptr<client::TransportLayer> transportLayer_;
+    std::shared_ptr<client::Routing> routing_;
 
     // Listenworker needs to be placed at the bottom to ensure that it is destructed first.
     std::vector<std::shared_ptr<client::ListenWorker>> listenWorker_;

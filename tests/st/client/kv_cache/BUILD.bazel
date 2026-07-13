@@ -192,7 +192,10 @@ ds_cc_test(
     tags = ["manual"],
     deps = KV_COMMON_DEPS + [
         "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/protos:hash_ring_cc_proto",
     ],
 )
 

@@ -17,19 +17,38 @@
 #include "datasystem/client/routing/worker_router.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <iterator>
 #include <utility>
+
+#include "datasystem/client/routing/broken_filter.h"
+#include "datasystem/client/routing/state_filter.h"
 
 namespace datasystem {
 namespace client {
+namespace {
+constexpr size_t DEFAULT_FILTER_COUNT = 2;
+}  // namespace
 
-WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWorkerFilter>> filters)
-    : myHostId_(std::move(myHostId)), filters_(std::move(filters))
+WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters)
+    : myHostId_(std::move(myHostId))
 {
+    filters_.reserve(additionalFilters.size() + DEFAULT_FILTER_COUNT);
+    filters_.emplace_back(std::make_shared<StateFilter>(this));
+    filters_.emplace_back(std::make_shared<BrokenFilter>());
+    filters_.insert(filters_.end(), std::make_move_iterator(additionalFilters.begin()),
+                    std::make_move_iterator(additionalFilters.end()));
+
     auto view = std::make_shared<RingView>();
     view->ring = std::make_shared<HashRingPb>();
     view->sameNodeWorkers = std::make_shared<std::vector<HostPort>>();
     view->tokenIndex = std::make_shared<RingView::TokenIndex>();
     std::atomic_store(&ringView_, std::shared_ptr<const RingView>(std::move(view)));
+}
+
+void WorkerRouter::SetHostId(std::string hostId)
+{
+    myHostId_ = std::move(hostId);
 }
 
 std::shared_ptr<const WorkerRouter::RingView::TokenIndex> WorkerRouter::BuildTokenIndex(const HashRingPb &ring)
@@ -75,10 +94,22 @@ Status WorkerRouter::SelectWorker(const std::string &key, SelectStrategy strateg
                                   HostPort &worker, const std::vector<HostPort> &exclude) const
 {
     auto view = std::atomic_load(&ringView_);
+    return SelectWorkerFromView(key, strategy, worker, exclude, view);
+}
+
+Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy strategy, HostPort &worker,
+                                          const std::vector<HostPort> &exclude,
+                                          const std::shared_ptr<const RingView> &view) const
+{
     const auto &idx = view->tokenIndex;
+    uint32_t keyHash = MurmurHash3_32(key);
 
     if (strategy == SelectStrategy::SAME_NODE_PREFERRED) {
-        for (const auto &w : *view->sameNodeWorkers) {
+        const auto &sameNodeWorkers = *view->sameNodeWorkers;
+        const size_t sameNodeCount = sameNodeWorkers.size();
+        const size_t start = sameNodeCount == 0 ? 0 : keyHash % sameNodeCount;
+        for (size_t i = 0; i < sameNodeCount; ++i) {
+            const auto &w = sameNodeWorkers[(start + i) % sameNodeCount];
             if (IsExcluded(w, exclude)) continue;
             if (IsWorkerAvailable(w)) {
                 worker = w;
@@ -93,7 +124,6 @@ Status WorkerRouter::SelectWorker(const std::string &key, SelectStrategy strateg
         return Status(K_NOT_FOUND, "Hash ring is empty, no routable workers");
     }
 
-    uint32_t keyHash = MurmurHash3_32(key);
     auto iter = std::upper_bound(idx->tokenToWorker.begin(), idx->tokenToWorker.end(), keyHash,
         [](uint32_t val, const std::pair<uint32_t, int> &token) { return val < token.first; });
     int start = (iter == idx->tokenToWorker.end()) ? 0 : static_cast<int>(iter - idx->tokenToWorker.begin());
@@ -117,18 +147,24 @@ Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, SelectS
                                    std::unordered_map<HostPort, std::vector<std::string>> &groups) const
 {
     auto view = std::atomic_load(&ringView_);
+    if (keys.empty()) {
+        groups.clear();
+        return Status::OK();
+    }
     if (view->tokenIndex->tokenToWorker.empty()) {
         return Status(K_NOT_FOUND, "Hash ring is empty");
     }
 
+    std::unordered_map<HostPort, std::vector<std::string>> newGroups;
     for (const auto &key : keys) {
         HostPort owner;
-        Status s = SelectWorker(key, strategy, owner);
+        Status s = SelectWorkerFromView(key, strategy, owner, {}, view);
         if (s.IsError()) {
             return s;
         }
-        groups[owner].push_back(key);
+        newGroups[owner].push_back(key);
     }
+    groups = std::move(newGroups);
     return Status::OK();
 }
 
@@ -158,7 +194,7 @@ void WorkerRouter::UpdateHashRing(std::shared_ptr<const HashRingPb> ring,
             continue;
         }
         auto it = hostIdMap->find(entry.first);
-        if (it != hostIdMap->end() && it->second == myHostId_) {
+        if (!myHostId_.empty() && it != hostIdMap->end() && it->second == myHostId_) {
             HostPort hp;
             if (hp.ParseString(entry.first).IsOk()) {
                 sameNode->push_back(std::move(hp));

@@ -44,8 +44,8 @@ void BrokenFilter::OnWorkerStateChange(const HostPort &addr, StatusCode status)
         return;  // Only handle connection failures
     }
     auto old = std::atomic_load(&brokenMap_);
-    static constexpr int MAX_CAS_RETRIES = 100;
-    for (int retry = 0; retry < MAX_CAS_RETRIES; ++retry) {
+    bool updated = false;
+    do {
         auto newMap = std::make_shared<BrokenMap>(*old);
         auto now = std::chrono::steady_clock::now();
         for (auto it = newMap->begin(); it != newMap->end();) {
@@ -56,12 +56,13 @@ void BrokenFilter::OnWorkerStateChange(const HostPort &addr, StatusCode status)
             }
         }
         (*newMap)[addr.ToString()] = now + BROKEN_TTL;
-        if (std::atomic_compare_exchange_weak(&brokenMap_, &old, std::shared_ptr<const BrokenMap>(std::move(newMap)))) {
-            break;
+        updated =
+            std::atomic_compare_exchange_weak(&brokenMap_, &old, std::shared_ptr<const BrokenMap>(std::move(newMap)));
+        if (!updated) {
+            // CAS failed: yield to reduce contention under high concurrent MarkBroken.
+            std::this_thread::yield();
         }
-        // CAS failed: yield to reduce contention under high concurrent MarkBroken
-        std::this_thread::yield();
-    }
+    } while (!updated);
 }
 
 }  // namespace client
