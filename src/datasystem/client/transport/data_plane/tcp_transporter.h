@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-/** Description: Defines the TCP object Get transporter. */
+/** Description: Defines the TCP object data transporter. */
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TCP_TRANSPORTER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TCP_TRANSPORTER_H
 
@@ -44,6 +44,10 @@ public:
     }
 
     Status Get(const DataGetRequest &input, DataGetResult &output) override;
+
+    Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                  const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
 
 private:
     std::shared_ptr<WorkerRpcClient> rpcClient_;

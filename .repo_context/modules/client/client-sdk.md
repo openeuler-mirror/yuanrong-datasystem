@@ -43,6 +43,14 @@
     `TransportLayer`, which batches metadata queries by meta owner and reads successful keys independently, while the
     default path keeps the existing client-worker behavior.
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
+  - `client::TransportLayer` provides worker-address-based `Get` plus transport-native `Create`/`Set` primitives. Its
+    TCP Set path publishes an RPC payload, while its UB Set path writes the payload through URMA and publishes an empty
+    payload, with bounded TCP fallback on UB write failure. These primitives are not yet wired into
+    `ObjectClientImpl`; that integration remains a separate behavior change.
+  - Public `ObjectBuffer` keeps transport-owned state opaque and exposes a status-returning `Create` factory; callers
+    must pass state whose dynamic type is `ObjectBufferInfo`. Source-tree transport code uses
+    `src/datasystem/client/transport/object_buffer_internal.h` for typed access, preventing installed SDK headers from
+    depending on client transport or common object-cache implementation headers.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
@@ -159,6 +167,9 @@
   - `ds_router_client` is a separate client-facing library built from `router_client.cpp`
   - Python bindings are built from `src/datasystem/pybind_api` when Python API build is enabled; for Bazel wheel builds on `0.8.2`, `libds_client_py` must link from its own deps instead of `dynamic_deps = ["//:datasystem"]`, otherwise the installed wheel can fail at import time with unresolved Abseil log symbols.
   - transfer engine is only added from the root build when transfer-engine, hetero, and NPU-related conditions are satisfied
+  - client transport sources are listed explicitly in both `src/datasystem/client/BUILD.bazel` and
+    `src/datasystem/client/CMakeLists.txt`; transport buffer implementations likewise require synchronized Bazel and
+    CMake source lists under `src/datasystem/common/object_cache`
   - Bazel target `//bazel:datasystem_sdk` packages a C++ SDK directory tree at `bazel-bin/bazel/datasystem_sdk/cpp` and also outputs `bazel-bin/bazel/datasystem_sdk.tar`; headers are under `cpp/include/datasystem/`, and the shared library is `lib/libdatasystem.so`
 
 ## Review And Bugfix Notes

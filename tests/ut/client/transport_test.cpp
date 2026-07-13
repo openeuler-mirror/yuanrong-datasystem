@@ -20,6 +20,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <future>
 #include <memory>
@@ -39,13 +41,20 @@
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/mem_view.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/utils/connection.h"
+#include "datasystem/object/object_buffer.h"
 
 namespace datasystem {
 namespace client {
@@ -143,6 +152,47 @@ public:
         return queryAndGetStatus;
     }
 
+    Status InvokeCreate(int64_t, CreateReqPb &request, CreateRspPb &response, uint32_t &workerVersion) override
+    {
+        ++createInvokeCount;
+        invokedCreateRequests.push_back(request);
+        if (createInvokeStatus.IsError()) {
+            return createInvokeStatus;
+        }
+        workerVersion = version;
+        if (createResponseHasUrmaInfo) {
+            auto *urmaInfo = response.mutable_urma_info();
+            urmaInfo->set_seg_va(0x1000);
+            urmaInfo->set_seg_data_offset(0);
+        }
+        response.set_metadata_size(createResponseMetadataSize);
+        response.set_shm_id("test-shm-id");
+        return Status::OK();
+    }
+
+    Status InvokeSet(int64_t, PublishReqPb &request, const std::vector<MemView> &payloads,
+                     PublishRspPb &response, uint32_t &workerVersion) override
+    {
+        ++setInvokeCount;
+        invokedSetRequests.push_back(request);
+        invokedSetPayloadSizes.push_back(payloads.size());
+        invokedSetPayloadData.emplace_back();
+        for (const auto &payload : payloads) {
+            invokedSetPayloadData.back().emplace_back(static_cast<const char *>(payload.Data()), payload.Size());
+        }
+        if (onSetInvoke) {
+            onSetInvoke();
+        }
+        if (setInvokeStatus.IsError()) {
+            return setInvokeStatus;
+        }
+        workerVersion = version;
+        if (afterSetInvoke) {
+            afterSetInvoke();
+        }
+        return Status::OK();
+    }
+
     bool IsAlive() const override
     {
         return alive;
@@ -154,6 +204,7 @@ public:
     }
 
     bool alive = true;
+    uint32_t version = 1;
     Status initStatus = Status::OK();
     int getObjectCount = 0;
     int queryAndGetCount = 0;
@@ -167,7 +218,24 @@ public:
         queryAndGetHandler;
     std::function<void()> onInvoke;
     std::function<void()> afterInvoke;
+
+    // Create/Set fake state
+    int createInvokeCount = 0;
+    int setInvokeCount = 0;
+    Status createInvokeStatus = Status::OK();
+    Status setInvokeStatus = Status::OK();
+    bool createResponseHasUrmaInfo = false;
+    int64_t createResponseMetadataSize = 0;
+    StatusCode createResponseCode = K_OK;
+    StatusCode setResponseCode = K_OK;
+    std::vector<CreateReqPb> invokedCreateRequests;
+    std::vector<PublishReqPb> invokedSetRequests;
+    std::vector<size_t> invokedSetPayloadSizes;
+    std::vector<std::vector<std::string>> invokedSetPayloadData;
+    std::function<void()> onSetInvoke;
+    std::function<void()> afterSetInvoke;
 };
+
 
 class AuthBoundaryWorkerRpcClient : public WorkerRpcClient {
 public:
@@ -187,6 +255,12 @@ public:
     int metadataRpcTimeout = 0;
     GetObjectRemoteReqPb invokedDataRequest;
     master::QueryAndGetReqPb invokedMetadataRequest;
+    CreateReqPb invokedCreateRequest;
+    PublishReqPb invokedSetRequest;
+    int createInvokeCount = 0;
+    int setInvokeCount = 0;
+    Status createInvokeStatus = Status::OK();
+    Status setInvokeStatus = Status::OK();
 
 protected:
     Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &,
@@ -205,6 +279,21 @@ protected:
         metadataRpcTimeout = options.GetTimeout();
         invokedMetadataRequest = request;
         return Status::OK();
+    }
+
+    Status DoInvokeCreate(const RpcOptions &, const CreateReqPb &request, CreateRspPb &) override
+    {
+        ++createInvokeCount;
+        invokedCreateRequest = request;
+        return createInvokeStatus;
+    }
+
+    Status DoInvokeSet(const RpcOptions &, const PublishReqPb &request, PublishRspPb &,
+                       const std::vector<MemView> &) override
+    {
+        ++setInvokeCount;
+        invokedSetRequest = request;
+        return setInvokeStatus;
     }
 };
 
@@ -230,6 +319,40 @@ public:
         return Status::OK();
     }
 
+    Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                  const TransportCreateParam &, std::shared_ptr<ObjectBuffer> &buffer) override
+    {
+        ++createCount;
+        createdKeys.push_back(key);
+        createdSizes.push_back(size);
+        if (!createStatuses.empty()) {
+            Status rc = createStatuses.front();
+            createStatuses.erase(createStatuses.begin());
+            return rc;
+        }
+        // Create a minimal ObjectBuffer for testing
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = key;
+        info->dataSize = size;
+        info->metadataSize = 0;
+        info->workerAddr = workerAddr;
+        info->pointer = static_cast<uint8_t *>(malloc(size + 1));
+        memset(info->pointer, 0, size + 1);
+        return ObjectBufferInternal::Create(info, buffer);
+    }
+
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
+    {
+        ++setCount;
+        setParams.push_back(param);
+        if (!setStatuses.empty()) {
+            Status rc = setStatuses.front();
+            setStatuses.erase(setStatuses.begin());
+            return rc;
+        }
+        return Status::OK();
+    }
+
     void CloseDataPlane() override
     {
         ++closeCount;
@@ -245,6 +368,15 @@ public:
     int closeCount = 0;
     std::vector<Status> getStatuses;
     std::function<void()> onClose;
+
+    // Create/Set fake state
+    int createCount = 0;
+    int setCount = 0;
+    std::vector<Status> createStatuses;
+    std::vector<Status> setStatuses;
+    std::vector<std::string> createdKeys;
+    std::vector<uint64_t> createdSizes;
+    std::vector<TransportSetParam> setParams;
 };
 
 class FakeDataPlaneManager : public DataPlaneManager {
@@ -284,6 +416,10 @@ public:
             transporter->getStatuses = std::move(transporterGetStatuses.front());
             transporterGetStatuses.erase(transporterGetStatuses.begin());
         }
+        if (!transporterSetStatuses.empty()) {
+            transporter->setStatuses = std::move(transporterSetStatuses.front());
+            transporterSetStatuses.erase(transporterSetStatuses.begin());
+        }
         lastTransporter = transporter;
         builtTransporters.emplace_back(transporter);
         output = std::move(transporter);
@@ -297,6 +433,7 @@ public:
     std::vector<std::shared_ptr<WorkerRpcClient>> rpcClientsSeen;
     std::vector<Status> transportBuildStatuses;
     std::vector<std::vector<Status>> transporterGetStatuses;
+    std::vector<std::vector<Status>> transporterSetStatuses;
     std::vector<std::shared_ptr<FakeTransporter>> builtTransporters;
     std::function<Status(const HostPort &, const master::QueryAndGetReqPb &, master::QueryAndGetRspPb &)>
         queryAndGetHandler;
@@ -395,6 +532,32 @@ public:
     std::atomic<bool> *invokeFinished = nullptr;
 };
 
+class TestUbTransporter : public UbTransporter {
+public:
+    TestUbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> connection)
+        : UbTransporter(std::move(rpcClient), std::move(connection))
+    {
+    }
+
+    Status writeStatus = Status::OK();
+    int writeCount = 0;
+
+protected:
+    Status WritePayload(ObjectBufferInfo &) override
+    {
+        ++writeCount;
+        return writeStatus;
+    }
+};
+
+class TestTransportLayer : public TransportLayer {
+public:
+    explicit TestTransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager)
+        : TransportLayer(std::move(dataPlaneManager), std::make_shared<TransportAdvisor>())
+    {
+    }
+};
+
 class FakeBufferOwner : public IReceiveBufferOwner {
 public:
     explicit FakeBufferOwner(uint64_t size) : data(size)
@@ -433,7 +596,7 @@ public:
     std::weak_ptr<FakeBufferOwner> lastOwner;
 };
 
-TEST(WorkerRpcClientTest, AuthenticatesFinalTransportRequestsBeforeRpc)
+TEST(WorkerRpcClientTest, SignsFinalReadRequestsBeforeRpc)
 {
     auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
     AuthBoundaryWorkerRpcClient client(signature);
@@ -458,6 +621,50 @@ TEST(WorkerRpcClientTest, AuthenticatesFinalTransportRequestsBeforeRpc)
     EXPECT_EQ(client.invokedMetadataRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedMetadataRequest.signature().empty());
     EXPECT_TRUE(client.invokedMetadataRequest.redirect());
+
+}
+
+TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
+{
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    uint32_t workerVersion = 0;
+
+    CreateReqPb createRequest;
+    createRequest.set_object_key("create-key");
+    CreateRspPb createResponse;
+    ASSERT_TRUE(client.InvokeCreate(100, createRequest, createResponse, workerVersion).IsOk());
+    EXPECT_EQ(client.invokedCreateRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedCreateRequest.signature().empty());
+    EXPECT_EQ(client.invokedCreateRequest.object_key(), "create-key");
+
+    PublishReqPb publishRequest;
+    publishRequest.set_object_key("publish-key");
+    PublishRspPb publishResponse;
+    std::vector<MemView> payloads;
+    ASSERT_TRUE(client.InvokeSet(100, publishRequest, payloads, publishResponse, workerVersion).IsOk());
+    EXPECT_EQ(client.invokedSetRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedSetRequest.signature().empty());
+    EXPECT_EQ(client.invokedSetRequest.object_key(), "publish-key");
+}
+
+TEST(WorkerRpcClientTest, RetrySealAlreadySealedIsSuccess)
+{
+    AuthBoundaryWorkerRpcClient client(MakeSignature());
+    client.setInvokeStatus = Status(K_OC_ALREADY_SEALED, "already sealed");
+    PublishReqPb request;
+    request.set_is_retry(true);
+    request.set_is_seal(true);
+    PublishRspPb response;
+    std::vector<MemView> payloads;
+    uint32_t workerVersion = 0;
+
+    EXPECT_TRUE(client.InvokeSet(100, request, payloads, response, workerVersion).IsOk());
+    EXPECT_EQ(client.setInvokeCount, 1);
+
+    request.set_is_retry(false);
+    EXPECT_EQ(client.InvokeSet(100, request, payloads, response, workerVersion).GetCode(), K_OC_ALREADY_SEALED);
+    EXPECT_EQ(client.setInvokeCount, 2);
 }
 
 TEST(WorkerRpcClientTest, BoundsRpcTimeoutByApiDeadline)
@@ -1173,6 +1380,383 @@ TEST(ReplicaReaderTest, StartsAnotherRoundWithoutRefreshingMetadata)
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+// --- ObjectBuffer tests ---
+
+TEST(ObjectBufferTest, MemoryCopyWritesDataAndGetSizeReflectsCapacity)
+{
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "test-key";
+    info->dataSize = 64;
+    info->metadataSize = 0;
+    info->workerAddr = MakeAddress(9000);
+    info->pointer = static_cast<uint8_t *>(malloc(64 + 1));
+    memset(info->pointer, 0, 65);
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBuffer::Create(info, buffer).IsOk());
+    EXPECT_EQ(buffer->GetSize(), 64);
+
+    const char data[] = "hello world";
+    ASSERT_TRUE(buffer->MemoryCopy(data, sizeof(data)).IsOk());
+    EXPECT_EQ(memcmp(buffer->ImmutableData(), data, sizeof(data)), 0);
+}
+
+TEST(ObjectBufferTest, MemoryCopyRejectsMissingBackingMemory)
+{
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "remote-buffer";
+    info->dataSize = 4;
+    info->metadataSize = 0;
+    info->pointer = nullptr;
+    info->remoteHostInfo = std::make_shared<RemoteH2DHostInfoPb>();
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    const char data[] = "abc";
+    EXPECT_EQ(buffer->MemoryCopy(data, sizeof(data)).GetCode(), K_INVALID);
+}
+
+TEST(ObjectBufferTest, DestructorFreesMallocedMemory)
+{
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "test-key";
+    info->dataSize = 32;
+    info->metadataSize = 0;
+    info->workerAddr = MakeAddress(9000);
+    info->pointer = static_cast<uint8_t *>(malloc(32 + 1));
+    memset(info->pointer, 0, 33);
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    // Buffer is destroyed when shared_ptr goes out of scope -- covered by ASan
+    buffer.reset();
+    SUCCEED();
+}
+
+TEST(ObjectBufferTest, RejectsAllocationSizeOverflow)
+{
+    auto expectOverflow = [](uint64_t dataSize, uint64_t metadataSize) {
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = "overflow";
+        info->dataSize = dataSize;
+        info->metadataSize = metadataSize;
+        info->pointer = nullptr;
+        std::shared_ptr<ObjectBuffer> buffer;
+
+        EXPECT_EQ(ObjectBufferInternal::Create(info, buffer).GetCode(), K_RUNTIME_ERROR);
+        EXPECT_EQ(buffer, nullptr);
+    };
+
+    expectOverflow(UINT64_MAX, 0);
+    expectOverflow(UINT64_MAX - 1, 1);
+}
+
+TEST(ObjectBufferTest, DestructorReleasesUbPoolHandle)
+{
+    auto storage = std::make_shared<std::vector<uint8_t>>(16);
+    std::weak_ptr<std::vector<uint8_t>> weakStorage = storage;
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "ub-buffer";
+    info->dataSize = storage->size();
+    info->metadataSize = 0;
+    info->pointer = storage->data();
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    info->ubGetBufferHandle = std::static_pointer_cast<void>(storage);
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    storage.reset();
+    info.reset();
+    EXPECT_FALSE(weakStorage.expired());
+    buffer.reset();
+    EXPECT_TRUE(weakStorage.expired());
+}
+
+TEST(ObjectBufferTest, MoveAssignmentTransfersOwnershipAndData)
+{
+    auto sourceInfo = std::make_shared<ObjectBufferInfo>();
+    sourceInfo->objectKey = "source";
+    sourceInfo->dataSize = 8;
+    sourceInfo->metadataSize = 0;
+    sourceInfo->pointer = static_cast<uint8_t *>(calloc(9, 1));
+    auto destinationInfo = std::make_shared<ObjectBufferInfo>();
+    destinationInfo->objectKey = "destination";
+    destinationInfo->dataSize = 4;
+    destinationInfo->metadataSize = 0;
+    destinationInfo->pointer = static_cast<uint8_t *>(calloc(5, 1));
+
+    std::shared_ptr<ObjectBuffer> source;
+    std::shared_ptr<ObjectBuffer> destination;
+    ASSERT_TRUE(ObjectBufferInternal::Create(sourceInfo, source).IsOk());
+    ASSERT_TRUE(ObjectBufferInternal::Create(destinationInfo, destination).IsOk());
+    const char payload[] = "payload";
+    ASSERT_TRUE(source->MemoryCopy(payload, sizeof(payload)).IsOk());
+
+    *destination = std::move(*source);
+    EXPECT_EQ(destination->GetSize(), 8);
+    EXPECT_EQ(memcmp(destination->ImmutableData(), payload, sizeof(payload)), 0);
+    EXPECT_EQ(source->GetSize(), 0);
+}
+
+// --- TcpTransporter Create/Set tests ---
+
+TEST(TcpTransporterTest, CreateAllocatesBuffer)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    TcpTransporter transporter(rpcClient);
+    std::shared_ptr<ObjectBuffer> buffer;
+
+    TransportCreateParam param;
+    param.cacheType = CacheType::MEMORY;
+    param.consistencyType = ConsistencyType::PRAM;
+
+    Status rc = transporter.Create(MakeAddress(9000), "my-key", 128, param, buffer);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(buffer->GetSize(), 128);
+    EXPECT_NE(buffer->MutableData(), nullptr);
+}
+
+TEST(TcpTransporterTest, CreateRejectsInvalidArguments)
+{
+    TcpTransporter transporter(std::make_shared<FakeWorkerRpcClient>());
+    std::shared_ptr<ObjectBuffer> buffer;
+    TransportCreateParam param;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "", 1, param, buffer).GetCode(), K_INVALID);
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 0, param, buffer).GetCode(), K_INVALID);
+    param.subTimeoutMs = -1;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 1, param, buffer).GetCode(), K_INVALID);
+    param.subTimeoutMs = 0;
+    EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", UINT64_MAX, param, buffer).GetCode(), K_INVALID);
+}
+
+TEST(TcpTransporterTest, SetCallsInvokeSet)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    TcpTransporter transporter(rpcClient);
+
+    // Create a buffer first
+    std::shared_ptr<ObjectBuffer> buffer;
+    TransportCreateParam createParam;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9000), "set-key", 64, createParam, buffer).IsOk());
+
+    // Write data
+    const char data[] = "test payload";
+    ASSERT_TRUE(buffer->MemoryCopy(data, sizeof(data)).IsOk());
+
+    // Set
+    TransportSetParam setParam;
+    setParam.subTimeoutMs = 500;
+    setParam.ttlSecond = 60;
+    Status rc = transporter.Set(*buffer, setParam);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_EQ(rpcClient->setInvokeCount, 1);
+    EXPECT_EQ(rpcClient->invokedSetPayloadSizes.size(), 1u);
+    EXPECT_EQ(rpcClient->invokedSetPayloadSizes[0], 1u);  // one payload
+}
+
+TEST(TcpTransporterTest, SetPropagatesRpcError)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->setInvokeStatus = Status(K_RPC_DEADLINE_EXCEEDED, "timeout");
+    TcpTransporter transporter(rpcClient);
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    TransportCreateParam createParam;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9000), "err-key", 64, createParam, buffer).IsOk());
+
+    TransportSetParam setParam;
+    EXPECT_EQ(transporter.Set(*buffer, setParam).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(rpcClient->setInvokeCount, 1);
+}
+
+TEST(UbTransporterTest, SetUrmaSuccessPublishesWithoutTcpPayload)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto connection = std::make_shared<FakeUbConnection>();
+    TestUbTransporter transporter(rpcClient, connection);
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "ub-success";
+    info->dataSize = 4;
+    info->metadataSize = 0;
+    info->pointer = static_cast<uint8_t *>(calloc(5, 1));
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
+
+    ASSERT_TRUE(transporter.Set(*buffer, {}).IsOk());
+    EXPECT_EQ(transporter.writeCount, 1);
+    ASSERT_EQ(rpcClient->invokedSetPayloadSizes.size(), 1u);
+    EXPECT_EQ(rpcClient->invokedSetPayloadSizes[0], 0u);
+}
+
+TEST(UbTransporterTest, SetUrmaFailureFallsBackToCorrectTcpPayload)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto connection = std::make_shared<FakeUbConnection>();
+    TestUbTransporter transporter(rpcClient, connection);
+    transporter.writeStatus = Status(K_URMA_ERROR, "write failed");
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "ub-fallback";
+    info->dataSize = 4;
+    info->metadataSize = 3;
+    info->pointer = static_cast<uint8_t *>(calloc(8, 1));
+    memcpy(info->pointer, "hdr", 3);
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
+
+    ASSERT_TRUE(transporter.Set(*buffer, {}).IsOk());
+    EXPECT_EQ(transporter.writeCount, 1);
+    ASSERT_EQ(rpcClient->invokedSetPayloadData.size(), 1u);
+    ASSERT_EQ(rpcClient->invokedSetPayloadData[0].size(), 1u);
+    EXPECT_EQ(rpcClient->invokedSetPayloadData[0][0], "data");
+}
+
+TEST(UbTransporterTest, RejectedFallbackPreservesReconnectStatus)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    TestUbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>());
+    transporter.writeStatus = Status(K_URMA_NEED_CONNECT, "connection lost");
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "ub-reconnect";
+    info->dataSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    info->metadataSize = 0;
+    info->pointer = static_cast<uint8_t *>(calloc(info->dataSize + 1, 1));
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>();
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+
+    EXPECT_EQ(transporter.Set(*buffer, {}).GetCode(), K_URMA_NEED_CONNECT);
+    EXPECT_EQ(rpcClient->setInvokeCount, 0);
+}
+
+TEST(UbTransporterTest, CloseDataPlaneWaitsForInflightSet)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto connection = std::make_shared<FakeUbConnection>();
+    std::atomic<bool> invokeFinished{ false };
+    connection->invokeFinished = &invokeFinished;
+    std::promise<void> invokeStarted;
+    auto invokeStartedFuture = invokeStarted.get_future();
+    std::promise<void> allowInvoke;
+    auto allowInvokeFuture = allowInvoke.get_future().share();
+    rpcClient->onSetInvoke = [&invokeStarted, allowInvokeFuture]() {
+        invokeStarted.set_value();
+        allowInvokeFuture.wait();
+    };
+    rpcClient->afterSetInvoke = [&invokeFinished]() { invokeFinished.store(true); };
+
+    TestUbTransporter transporter(rpcClient, connection);
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "ub-inflight";
+    info->dataSize = 4;
+    info->metadataSize = 0;
+    info->pointer = static_cast<uint8_t *>(calloc(5, 1));
+    info->ubDataSentByMemoryCopy = true;
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+
+    Status setStatus;
+    std::thread setThread([&]() { setStatus = transporter.Set(*buffer, {}); });
+    invokeStartedFuture.wait();
+    std::thread closeThread([&]() { transporter.CloseDataPlane(); });
+    allowInvoke.set_value();
+    setThread.join();
+    closeThread.join();
+    EXPECT_TRUE(setStatus.IsOk());
+    EXPECT_FALSE(connection->teardownDuringInvoke.load());
+}
+
+// --- TransportLayer Create/Set tests ---
+
+TEST(TransportLayerTest, CreateDelegatesToTransporter)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+
+    TransportCreateParam param;
+    std::shared_ptr<ObjectBuffer> buffer;
+    Status rc = layer.Create(MakeAddress(30), "layer-create-key", 256, param, buffer);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_NE(buffer, nullptr);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(TransportLayerTest, CreateRejectsInvalidRequestBeforeBuildingTransport)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    TransportCreateParam param;
+    std::shared_ptr<ObjectBuffer> buffer;
+
+    EXPECT_EQ(layer.Create(MakeAddress(30), "", 256, param, buffer).GetCode(), K_INVALID);
+    EXPECT_EQ(layer.Create(MakeAddress(30), "key", UINT64_MAX, param, buffer).GetCode(), K_INVALID);
+    EXPECT_EQ(manager->transportBuildCount, 0);
+}
+
+TEST(TransportLayerTest, SetRetryOnUrmaNeedConnect)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterSetStatuses = {
+        { Status(K_URMA_NEED_CONNECT, "reconnect") }, { Status::OK() }
+    };
+    TestTransportLayer layer(manager);
+
+    // Create first
+    TransportCreateParam createParam;
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(MakeAddress(31), "retry-key", 64, createParam, buffer).IsOk());
+
+    TransportSetParam setParam;
+    Status rc = layer.Set(*buffer, setParam);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_GE(manager->rpcBuildCount, 1);
+    EXPECT_GE(manager->transportBuildCount, 2);
+    ASSERT_GE(manager->builtTransporters.size(), 2u);
+    ASSERT_EQ(manager->builtTransporters[1]->setParams.size(), 1u);
+    EXPECT_TRUE(manager->builtTransporters[1]->setParams[0].isRetry);
+}
+
+TEST(TransportLayerTest, SetRetryOnRpcUnavailable)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterSetStatuses = {
+        { Status(K_RPC_UNAVAILABLE, "unavailable") }, { Status::OK() }
+    };
+    TestTransportLayer layer(manager);
+
+    TransportCreateParam createParam;
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(MakeAddress(32), "rpc-retry-key", 64, createParam, buffer).IsOk());
+
+    TransportSetParam setParam;
+    Status rc = layer.Set(*buffer, setParam);
+    EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_EQ(manager->rpcBuildCount, 2);       // RPC client rebuilt
+    EXPECT_EQ(manager->transportBuildCount, 2);  // transporter rebuilt once
+}
+
+TEST(TransportLayerTest, SetDoesNotRetrySecondFailure)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    // Inject two failing statuses: first triggers rebuild, second (retry) also fails.
+    manager->transporterSetStatuses = {
+        { Status(K_URMA_NEED_CONNECT, "first") }, { Status(K_URMA_NEED_CONNECT, "second") }
+    };
+    TestTransportLayer layer(manager);
+
+    TransportCreateParam createParam;
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(MakeAddress(33), "no-retry-key", 64, createParam, buffer).IsOk());
+
+    TransportSetParam setParam;
+    Status rc = layer.Set(*buffer, setParam);
+    EXPECT_EQ(rc.GetCode(), K_URMA_NEED_CONNECT) << rc.ToString();
+    EXPECT_GE(manager->transportBuildCount, 2);
+}
 }  // namespace
 }  // namespace client
 }  // namespace datasystem

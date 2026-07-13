@@ -25,11 +25,13 @@
 
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/protos/master_object.brpc.stub.pb.h"
+#include "datasystem/protos/meta_transport.pb.h"
+#include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/protos/worker_object.brpc.stub.pb.h"
 #include "datasystem/utils/status.h"
 
@@ -45,17 +47,26 @@ public:
     /** @brief Create the brpc channel and transport service stubs for this endpoint. */
     virtual Status Init();
 
-    /** @brief Authenticate and invoke a direct object read on this worker. */
+    /** @brief Sign and invoke a direct object read on this worker. */
     virtual Status InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                    std::vector<RpcMessage> &payloads);
 
-    /** @brief Authenticate and query object locations from the master service at this endpoint. */
+    /** @brief Sign and query object locations from the master service at this endpoint. */
     virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response);
+
+    /** @brief Sign and invoke Create through the cached control connection. */
+    virtual Status InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
+                                uint32_t &workerVersion);
+
+    /** @brief Sign and invoke Set (Publish) with optional TCP payload through the cached control connection. */
+    virtual Status InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
+                             const std::vector<MemView> &payloads, PublishRspPb &response,
+                             uint32_t &workerVersion);
 
     /** @brief Exchange URMA connection data over this worker's cached brpc channel. */
     virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response);
 
-    /** @return Whether this client still owns an initialized channel and stub. */
+    /** @return Whether this client still owns an initialized channel and all required stubs. */
     virtual bool IsAlive() const;
 
     /** @return Logical worker address supplied by routing. */
@@ -71,6 +82,12 @@ protected:
     virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
                                        master::QueryAndGetRspPb &response);
 
+    virtual Status DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
+                                  CreateRspPb &response);
+
+    virtual Status DoInvokeSet(const RpcOptions &options, const PublishReqPb &request,
+                               PublishRspPb &response, const std::vector<MemView> &payloads);
+
     /** @brief Release the channel and stubs during object destruction. */
     virtual void Close();
 
@@ -79,10 +96,13 @@ private:
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;
     std::shared_ptr<brpc::Channel> channel_;
+    std::shared_ptr<WorkerOCService_BrpcGenericStub> controlStub_;
     std::shared_ptr<WorkerWorkerTransportService_BrpcGenericStub> transportStub_;
     std::shared_ptr<WorkerWorkerOCService_BrpcGenericStub> dataStub_;
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> masterStub_;
     std::atomic<bool> alive_{ false };
+    uint32_t connectionGeneration_ = 0;
+    static std::atomic<uint32_t> nextConnectionGeneration_;
 };
 
 }  // namespace client

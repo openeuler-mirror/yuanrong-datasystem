@@ -47,6 +47,7 @@ list(APPEND CLIENT_SRCS
         transport/data_plane/tcp_transporter.cpp
         transport/data_plane/ub_connection.cpp
         transport/data_plane/ub_transporter.cpp
+        transport/rpc/set_request_builder.cpp
         transport/rpc/worker_rpc_client.cpp
         routing/broken_filter.cpp
         routing/hash_ring_refresher.cpp

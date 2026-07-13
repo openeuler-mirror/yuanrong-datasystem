@@ -38,6 +38,18 @@ public:
     {
         return Status(K_NOT_SUPPORTED, "ShmTransporter::Get not implemented");
     }
+
+    // SHM Create and Set remain explicit unsupported placeholders until transport integration is available.
+    Status Create(const HostPort & /* workerAddr */, const std::string & /* key */, uint64_t /* size */,
+                  const TransportCreateParam & /* param */, std::shared_ptr<ObjectBuffer> & /* buffer */) override
+    {
+        return Status(K_NOT_SUPPORTED, "ShmTransporter::Create not implemented");
+    }
+
+    Status Set(ObjectBuffer & /* buffer */, const TransportSetParam & /* param */) override
+    {
+        return Status(K_NOT_SUPPORTED, "ShmTransporter::Set not implemented");
+    }
 };
 }  // namespace client
 }  // namespace datasystem
