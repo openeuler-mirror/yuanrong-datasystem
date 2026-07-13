@@ -127,6 +127,25 @@ TEST_F(ValidatorTest, IsIdFormat)
     EXPECT_FALSE(Validator::IsIdFormat("$tj9420j"));
 }
 
+TEST_F(ValidatorTest, ValidateKeyLength)
+{
+    for (auto len : {256UL, 300UL, 512UL, 768UL, 1023UL, 1024UL}) {
+        std::string key(len, 'a');
+        EXPECT_TRUE(Validator::IsIdFormat(key));
+    }
+    EXPECT_FALSE(Validator::IsIdFormat(std::string(1025UL, 'a')));
+}
+
+TEST_F(ValidatorTest, ValidateRegexMatchKeyLength)
+{
+    re2::RE2 anyRe{ "^.*$" };
+    for (auto len : {256UL, 300UL, 512UL, 768UL, 1023UL, 1024UL}) {
+        std::string key(len, 'a');
+        EXPECT_TRUE(Validator::IsRegexMatch(anyRe, key));
+    }
+    EXPECT_FALSE(Validator::IsRegexMatch(anyRe, std::string(1025UL, 'a')));
+}
+
 TEST_F(ValidatorTest, IsInPortRange)
 {
     std::vector<std::string> validPort {"65530", "65528", "43267", "4325"};

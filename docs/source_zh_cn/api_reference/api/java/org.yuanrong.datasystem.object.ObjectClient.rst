@@ -36,7 +36,7 @@ public Buffer create(String objectKey, int size, CreateParam param)
 调用 Worker 客户端创建一个对象。
 
 参数：
-    - **objectKey** - 要创建的对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+    - **objectKey** - 要创建的对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
     - **size** - 对象的大小（字节）。
     - **param** - 创建参数，详见 :doc:`org.yuanrong.datasystem.object.CreateParam` 章节。
 
@@ -52,7 +52,7 @@ public void put(String objectKey, ByteBuffer buffer, CreateParam param, List<Str
 调用 Worker 客户端放置一个对象（发布语义）。
 
 参数：
-    - **objectKey** - 对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+    - **objectKey** - 对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
     - **buffer** - 用户的 ByteBuffer 对象。
     - **param** - 创建参数，详见 :doc:`org.yuanrong.datasystem.object.CreateParam` 章节。
     - **nestedObjectKeys** - 依赖于 objectKey 的对象列表。
@@ -66,7 +66,7 @@ public void put(String objectKey, ByteBuffer buffer, CreateParam param)
 调用 Worker 客户端放置一个对象（发布语义）。
 
 参数：
-    - **objectKey** - 对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+    - **objectKey** - 对象 ID。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
     - **buffer** - 用户的 ByteBuffer 对象。
     - **param** - 创建参数，详见 :doc:`org.yuanrong.datasystem.object.CreateParam` 章节。
 
@@ -79,7 +79,7 @@ public List<Buffer> get(List<String> objectKeys, int timeoutMs)
 调用 Worker 客户端获取所有给定对象键的缓冲区。
 
 参数：
-    - **objectKeys** - 对象键的列表，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为255字节。
+    - **objectKeys** - 对象键的列表，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为1024字节。
     - **timeoutMs** - 获取操作的超时时间（毫秒）。
 
 返回：
@@ -94,7 +94,7 @@ public List<String> gIncreaseRef(List<String> objectKeys)
 增加数据系统中对象的全局引用计数。
 
 参数：
-    - **objectKeys** - 要增加引用的对象键列表，不能为空，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为255字节。
+    - **objectKeys** - 要增加引用的对象键列表，不能为空，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为1024字节。
 
 返回：
     增加引用失败的对象键列表。
@@ -108,7 +108,7 @@ public List<String> gDecreaseRef(List<String> objectKeys)
 减少数据系统中对象的全局引用计数。全局引用计数为0时，删除对象。
 
 参数：
-    - **objectKeys** - 要减少引用的对象键列表，不能为空，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为255字节。
+    - **objectKeys** - 要减少引用的对象键列表，不能为空，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个对象名称最大长度为1024字节。
 
 返回：
     减少引用失败的对象键列表。
@@ -122,7 +122,7 @@ public int queryGlobalRefNum(String objectKey)
 获取指定对象的全局引用计数数量。
 
 参数：
-    - **objectKey** - 要查询的对象键。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+    - **objectKey** - 要查询的对象键。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
 
 返回：
     引用计数数量。

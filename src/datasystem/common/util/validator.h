@@ -45,6 +45,8 @@ constexpr int32_t NODE_TIMEOUT_LIMIT = 1;
 constexpr int32_t MS_PER_SECOND = 1000;
 constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
 static std::string ENCRYPT_KIT_PLAINTEXT = "plaintext";
+constexpr uint32_t MAX_KEY_LENGTH = 1024;
+
 
 DS_DECLARE_double(eviction_high_watermark_ratio);
 DS_DECLARE_double(eviction_low_watermark_ratio);
@@ -655,7 +657,7 @@ public:
     {
         static const re2::RE2 re(objKeyFormat);
 
-        if (value.size() <= UINT8_MAX && (re2::RE2::FullMatch(value, re) || value.empty())) {
+        if (value.size() <= MAX_KEY_LENGTH && (re2::RE2::FullMatch(value, re) || value.empty())) {
             return true;
         }
         LOG(ERROR) << value << " is not a legal ID format, allowed format: " << objKeyFormat;
@@ -670,7 +672,7 @@ public:
      */
     static bool IsRegexMatch(const re2::RE2 &re, const std::string &value)
     {
-        if (value.size() <= UINT8_MAX && (re2::RE2::FullMatch(value, re) || value.empty())) {
+        if (value.size() <= MAX_KEY_LENGTH && (re2::RE2::FullMatch(value, re) || value.empty())) {
             return true;
         }
         LOG(ERROR) << value << " is miss match";

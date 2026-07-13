@@ -212,7 +212,7 @@ public:
      * one extra memory copy.
      *
      * @param[in] keys The ID of the object to create. ID should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[in] size The size in bytes of object.
      * @param[in] param The create parameters.
      * @param[out] buffer The buffer for the object.
@@ -477,7 +477,7 @@ public:
     /**
      * @brief Invoke worker client to create a device object with p2p.
      * @param[in] objectKey The ID of the device object to create. ID should not be empty and should only contains
-     * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[in] devBlobList The list of blob info.
      * @param[in] param The create param of device object.
      * @param[out] deviceBuffer The device buffer for the object.
@@ -489,7 +489,7 @@ public:
     /**
      * @brief Invoke worker client to get the given device object keys and copy to the destinationdevice buffer.
      * @param[in] devObjKeys The vector of the object key. ID should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * Pass one object key to vector if you just want to get an device object. Don't support to pass multi object keys
      * now.
      * @param[out] dstDevBuffer The destination of device buffer.
@@ -516,7 +516,7 @@ public:
     /**
      * @brief Obtains the DBlobInfos, including the number of blobs, and the count
      * @param[in] devObjKey The object key. ID should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[in] timeoutMs Waiting for the result return if object not ready. A positive integer number required.
      * 0 means no waiting time allowed. And the range is [0, INT32_MAX].
      * @param[out] blobs The list of data info. (Include pointer、count and data type)

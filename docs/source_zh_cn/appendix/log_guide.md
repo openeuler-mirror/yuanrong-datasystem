@@ -94,9 +94,9 @@ openYuanrong datasystem 的日志分为以下类型：
 
 | 关键请求参数 | 长度 Byte | 描述 |
 |------------|-------------|---------|
-| Object_key | 255 | 对象的ID。长度：255Byte； |
-| object_keys | 1024 | 多个对象 KEY。单个 Item 最长 255 Byte，展示总长上限约 1KB；超出时仅显示总数等缩写。示例 JSON：`{"object_keys":["id1xx","id2xx","id3xx","id4xx"],"total":100}` |
-| Nested_keys | 1024 | 嵌套引用的对象KEY。单个Item长度：255Byte，全部长度：1KB； |
+| Object_key | 1024 | 对象的ID。长度：1024Byte； |
+| object_keys | 1024 | 多个对象 KEY。单个 Item 最长 1024 Byte，展示总长上限约 1KB；超出时仅显示总数等缩写。示例 JSON：`{"object_keys":["id1xx","id2xx","id3xx","id4xx"],"total":100}` |
+| Nested_keys | 1024 | 嵌套引用的对象KEY。单个Item长度：1024Byte，全部长度：1KB； |
 | keep | 1 | 是否手动管理对象生命周期。取值：true/false, 长度：5Byte |
 | Write_mode | 1 | 写数据的模式，影响数据可靠性。取值：int32 |
 | consistency_type | 1 | 数据一致性模式。取值：uint32 |

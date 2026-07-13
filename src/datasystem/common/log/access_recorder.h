@@ -43,7 +43,7 @@ class HardDiskExporter;
 class ObjectAccessRecorder;
 class StreamAccessRecorder;
 class RequestOutRecorder;
-constexpr uint64_t LOG_OBJECT_KEY_SIZE_LIMIT = 255;
+constexpr uint64_t LOG_OBJECT_KEY_SIZE_LIMIT = 1024;
 constexpr uint64_t LOG_TOTAL_KEYS_SIZE_LIMIT = 1024;
 constexpr uint64_t LOG_OBJECT_KEYS_COUNT_LIMIT = 10;
 #define ACCESS_RECORDER_KEY_DEF(keyEnum, keyType) keyEnum,
