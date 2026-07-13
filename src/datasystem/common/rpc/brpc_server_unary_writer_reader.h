@@ -41,10 +41,13 @@
 #define DATASYSTEM_COMMON_RPC_BRPC_SERVER_UNARY_WRITER_READER_H
 
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include <brpc/controller.h>
 #include <sys/time.h>
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/rpc/brpc_perf_trace.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/rpc/mem_view.h"
@@ -79,7 +82,8 @@ public:
      * @param response  Pointer to the response protobuf to be filled.
      */
     BrpcServerUnaryWriterReader(brpc::Controller *cntl, const google::protobuf::Message *request,
-                                google::protobuf::Message *response, google::protobuf::Closure *done = nullptr)
+                                google::protobuf::Message *response, google::protobuf::Closure *done = nullptr,
+                                std::string methodName = "unknown")
         : ServerUnaryWriterReader<W, R>(std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>(nullptr)),
           cntl_(cntl),
           request_(nullptr),
@@ -88,8 +92,11 @@ public:
           readOnce_(false),
           writeOnce_(false),
           doneConsumed_(false),
-          recvPayloadOp_(false)
+          recvPayloadOp_(false),
+          traceRecorded_(false),
+          trace_(Trace::Instance().GetTraceID(), std::move(methodName))
     {
+        trace_.MarkServerRecv();
         // Cast the generic Message pointers to typed pointers.
         // The brpc adapter generator guarantees the types match.
         request_ = dynamic_cast<const R *>(request);
@@ -161,6 +168,7 @@ public:
             if (request_ == nullptr) {
                 RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Request protobuf is null (type mismatch?)");
             }
+            trace_.MarkServerExecStart();
             pb.CopyFrom(*request_);
         } else {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
@@ -178,10 +186,13 @@ public:
     {
         bool expected = false;
         if (writeOnce_.compare_exchange_strong(expected, true)) {
+            trace_.MarkServerExecEnd();
             if (response_ != nullptr) {
                 response_->CopyFrom(pb);
             }
             if (!recvPayloadOp_) {
+                trace_.MarkServerSend();
+                RecordTraceOnce();
                 doneConsumed_.store(true, std::memory_order_release);
                 if (done_ != nullptr) {
                     done_->Run();
@@ -204,6 +215,7 @@ public:
     {
         bool expected = false;
         if (writeOnce_.compare_exchange_strong(expected, true)) {
+            trace_.MarkServerExecEnd();
             if (cntl_ != nullptr && rc.IsError()) {
                 cntl_->SetFailed(rc.GetMsg() + "\x01" "DS_ERR:"
                     + std::to_string(static_cast<int>(rc.GetCode())) + "\x02");
@@ -211,6 +223,8 @@ public:
             // Mark done as consumed and run done closure immediately — same as
             // Write() and TryCompleteDeferred(). Without this, the RPC hangs until
             // the destructor fires done->Run() + spurious LOG(ERROR).
+            trace_.MarkServerSend();
+            RecordTraceOnce();
             doneConsumed_.store(true, std::memory_order_release);
             if (done_ != nullptr) {
                 done_->Run();
@@ -370,6 +384,13 @@ public:
      */
     const TimeoutDuration& GetScTimeoutDuration() const { return scTimeoutDuration_; }
 
+    void RecordTraceOnce()
+    {
+        if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
+            RecordBrpcRpcTrace(trace_);
+        }
+    }
+
 private:
     /**
      * @brief Complete the deferred RPC by running done_->Run().
@@ -381,6 +402,8 @@ private:
     {
         bool expected = false;
         if (doneConsumed_.compare_exchange_strong(expected, true) && done_ != nullptr) {
+            trace_.MarkServerSend();
+            RecordTraceOnce();
             done_->Run();
             done_ = nullptr;
         }
@@ -475,6 +498,8 @@ private:
     std::atomic<bool> doneConsumed_;
     bool recvPayloadOp_;
     TimeoutDuration scTimeoutDuration_;
+    std::atomic<bool> traceRecorded_;
+    BrpcPerfTrace trace_;
 };
 
 }  // namespace datasystem

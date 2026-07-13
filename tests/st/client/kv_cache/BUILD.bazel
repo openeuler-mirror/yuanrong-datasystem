@@ -29,6 +29,13 @@ KV_COMMON_DEPS = [
 ]
 
 ds_cc_test(
+    name = "kv_client_brpc_remote_get_test",
+    srcs = ["kv_client_brpc_remote_get_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS,
+)
+
+ds_cc_test(
     name = "kv_cache_client_evict_test",
     srcs = ["kv_cache_client_evict_test.cpp"],
     tags = ["manual"],

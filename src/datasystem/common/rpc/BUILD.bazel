@@ -246,6 +246,16 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "brpc_perf_trace",
+    hdrs = ["brpc_perf_trace.h"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+    ],
+)
+
+ds_cc_library(
     name = "rpc_stub",
     hdrs = [
         "brpc_client_stream_impl.h",
@@ -255,6 +265,7 @@ ds_cc_library(
         "trace_attachment.h",
     ],
     deps = [
+        ":brpc_perf_trace",
         ":brpc_status_util",
         ":brpc_stream_close_helper",
         ":rpc_message",
@@ -295,6 +306,7 @@ ds_cc_library(
         "trace_attachment.h",
     ],
     deps = [
+        ":brpc_perf_trace",
         ":brpc_status_util",
         ":brpc_stream_close_helper",
         "//src/datasystem/common/rpc/zmq:zmq_unary_client_impl",
@@ -321,6 +333,7 @@ ds_cc_library(
         "rpc_server_stream_base.h",
     ],
     deps = [
+        ":brpc_perf_trace",
         ":rpc_message",
         ":server_writer_reader_base",
         "//src/datasystem/common/log:common_log",
@@ -349,6 +362,7 @@ ds_cc_library(
         "brpc_server_writer_reader_impl.h",
     ],
     deps = [
+        ":brpc_perf_trace",
         ":rpc_message",
         ":rpc_server_stream_base",
         ":server_writer_reader_base",

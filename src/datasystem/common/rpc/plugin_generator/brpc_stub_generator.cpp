@@ -71,7 +71,9 @@ void RpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
     impl +=
         "#include <brpc/channel.h>\n"
         "#include <google/protobuf/descriptor.h>\n"
+        "#include \"datasystem/common/log/trace.h\"\n"
         "#include \"datasystem/common/rpc/brpc_async_context.h\"\n"
+        "#include \"datasystem/common/rpc/brpc_perf_trace.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_unary_writer_reader.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_stream_writer_reader.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_stream_impl.h\"\n"
@@ -345,7 +347,12 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         ? ", const std::vector<::datasystem::MemView> &payload" : "";
     vars["optRecvPayload1"] = HasPayloadRecvOption(method)
         ? ", std::vector<::datasystem::RpcMessage> &recvBuffer" : "";
+    std::string impl = BuildBrpcStubNoStreamImpl(method);
+    printer.Print(vars, impl.c_str());
+}
 
+std::string RpcGenerator::BuildBrpcStubNoStreamImpl(const google::protobuf::MethodDescriptor &method)
+{
     std::string impl =
         "::datasystem::Status $stub$::$methodName$(const ::datasystem::RpcOptions &opt,\n"
         "                                          const $inputTypeName$& rq,\n"
@@ -364,12 +371,19 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         impl += BuildSendPayloadFramingSnippet();
     }
     impl +=
+        "    ::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
+        "        svcDesc_->method($methodIndex$)->full_name());\n"
+        "    rpcTrace.MarkClientStart();\n"
+        "    rpcTrace.MarkClientSend();\n"
         "    channel_->CallMethod(svcDesc_->method($methodIndex$),\n"
-        "                         &cntl, &rq, &reply, nullptr);\n";
+        "                         &cntl, &rq, &reply, nullptr);\n"
+        "    rpcTrace.MarkClientRecv();\n";
     if (HasPayloadRecvOption(method)) {
         impl += BuildRecvPayloadFramingSnippet();
     }
     impl +=
+        "    rpcTrace.MarkClientEnd();\n"
+        "    ::datasystem::RecordBrpcRpcTrace(rpcTrace);\n"
         "    if (cntl.Failed()) {\n"
         "        ::datasystem::Status embedded = ::datasystem::TryExtractStatusFromResponse(reply);\n"
         "        if (embedded.IsError()) {\n"
@@ -381,7 +395,7 @@ void RpcGenerator::ImplementBrpcStubNoStreamDef(io::Printer &printer,
         "    }\n"
         "    return ::datasystem::Status::OK();\n"
         "}\n";
-    printer.Print(vars, impl.c_str());
+    return impl;
 }
 
 std::string RpcGenerator::BuildTraceIDAttachSnippet()

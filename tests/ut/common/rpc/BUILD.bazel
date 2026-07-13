@@ -82,6 +82,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_perf_trace_test",
+    srcs = ["brpc_perf_trace_test.cpp"],
+    deps = [
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/rpc:brpc_perf_trace",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_async_context_test",
     srcs = ["brpc_async_context_test.cpp"],
     deps = [
