@@ -177,6 +177,7 @@ void UbTransporter::CloseDataPlane()
 Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                              const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer)
 {
+    (void)buffer;
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
 
     CreateReqPb createReq;
