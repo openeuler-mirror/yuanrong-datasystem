@@ -14,16 +14,18 @@
  * limitations under the License.
  */
 
-/** Description: Defines the UB object Get transporter. */
+/** Description: Defines the UB object data transporter. */
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_UB_TRANSPORTER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_UB_TRANSPORTER_H
 
+#include <atomic>
 #include <memory>
 #include <shared_mutex>
 
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/common/object_cache/object_base.h"
 
 namespace datasystem {
 namespace client {
@@ -62,7 +64,15 @@ public:
 
     Status Get(const DataGetRequest &input, DataGetResult &output) override;
 
+    Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                  const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
+    Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+
     void CloseDataPlane() override;
+
+protected:
+    /** @brief Write one ObjectBuffer payload through UB. Overridable for deterministic transport tests. */
+    virtual Status WritePayload(ObjectBufferInfo &info);
 
 private:
     Status GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output, uint64_t &actualSize);
@@ -71,6 +81,7 @@ private:
     std::shared_ptr<UbConnection> conn_;
     std::shared_ptr<IUbReceiveBufferProvider> bufferProvider_;
     mutable std::shared_mutex lifecycleMutex_;
+    std::atomic<uint64_t> urmaFallbackTcpPendingBytes_{0};
 };
 }  // namespace client
 }  // namespace datasystem

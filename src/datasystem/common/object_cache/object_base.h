@@ -33,6 +33,7 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/meta_transport.pb.h"
@@ -374,6 +375,7 @@ struct ObjectBufferInfo {
     std::shared_ptr<UrmaRemoteAddrPb> ubUrmaDataInfo = nullptr;
     bool ubDataSentByMemoryCopy = false;
     std::shared_ptr<void> ubGetBufferHandle;  // UB Get zero-copy: type-erased BufferHandle ref
+    HostPort workerAddr;                       // Worker address for Set(buffer) recovery
 };
 
 enum class TransferType : uint8_t { HOST = 0, P2P = 1 };

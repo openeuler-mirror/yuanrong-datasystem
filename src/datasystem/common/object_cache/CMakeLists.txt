@@ -4,7 +4,8 @@ set(COMMON_BUFFER_SRCS
         shm_guard.cpp
         urma_fallback_tcp_limiter.cpp
         device_buffer.cpp
-        buffer_composer.cpp)
+        buffer_composer.cpp
+        object_buffer.cpp)
 
 set(COMMON_BUFFER_DEPEND_LIBS
         ${SECUREC_LIBRARY}

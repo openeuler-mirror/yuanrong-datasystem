@@ -8,7 +8,7 @@ ds_cc_library(
     name = "common_object_cache",
     srcs = glob(
         ["*.cpp"],
-        exclude = ["buffer.cpp", "device_buffer.cpp"],
+        exclude = ["buffer.cpp", "device_buffer.cpp", "buffer_composer.cpp", "object_buffer.cpp"],
     ),
     hdrs = glob(["*.h"]),
     deps = [
@@ -70,10 +70,35 @@ ds_cc_library(
 
 alias(name = "device_buffer", actual = ":buffer")
 alias(name = "object_base", actual = ":common_object_cache")
-alias(name = "buffer_composer", actual = ":common_object_cache")
 alias(name = "lock", actual = ":common_object_cache")
 alias(name = "object_ref_info", actual = ":common_object_cache")
 alias(name = "shm_guard", actual = ":common_object_cache")
 alias(name = "safe_object", actual = ":common_object_cache")
 alias(name = "safe_table", actual = ":common_object_cache")
+alias(name = "buffer_composer", actual = ":buffer_composer_impl")
+
+# Keep the implementation out of common_object_cache because it calls Buffer methods.
+# Do not depend on :buffer here: :buffer reaches client/device users of this target.
+ds_cc_library(
+    name = "buffer_composer_impl",
+    srcs = ["buffer_composer.cpp"],
+    deps = [
+        ":common_object_cache",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 alias(name = "node_info", actual = ":common_object_cache")
+
+ds_cc_library(
+    name = "object_buffer",
+    srcs = ["object_buffer.cpp"],
+    deps = [
+        ":common_object_cache",
+        ":lock",
+        ":object_base",
+        "//include/datasystem/object:object_headers",
+        "//src/datasystem/common/util:memory",
+    ],
+    visibility = ["//visibility:public"],
+)

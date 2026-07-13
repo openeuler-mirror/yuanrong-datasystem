@@ -21,15 +21,13 @@
 #include <algorithm>
 #include <utility>
 
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
-#include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/protos/master_object.brpc.stub.pb.h"
-#include "datasystem/protos/worker_object.brpc.stub.pb.h"
 
 namespace datasystem {
 namespace client {
@@ -49,9 +47,12 @@ Status GetRpcTimeout(int64_t maxRpcTimeoutMs, int32_t &rpcTimeoutMs)
 
 }  // namespace
 
+std::atomic<uint32_t> WorkerRpcClient::nextConnectionGeneration_{ 1 };
+
 WorkerRpcClient::WorkerRpcClient(HostPort workerAddress, std::shared_ptr<Signature> signature,
                                  BrpcChannelConfig channelConfig)
-    : workerAddress_(std::move(workerAddress)), signature_(std::move(signature)),
+    : workerAddress_(std::move(workerAddress)),
+      signature_(std::move(signature)),
       channelConfig_(std::move(channelConfig))
 {
 }
@@ -65,24 +66,25 @@ Status WorkerRpcClient::Init()
 {
     RETURN_RUNTIME_ERROR_IF_NULL(signature_);
     channelConfig_.endpoint = workerAddress_.ToString();
-    // TransportLayer owns the single reconnect retry and must re-authenticate before that retry.
     channelConfig_.max_retry = 0;
     auto channel = std::shared_ptr<brpc::Channel>(BrpcChannelFactory::Create(channelConfig_));
     CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
                              "Failed to create routed worker brpc channel");
+    auto controlStub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
     auto transportStub = std::make_shared<WorkerWorkerTransportService_BrpcGenericStub>(
         channel.get(), channelConfig_.timeout_ms);
-    CHECK_FAIL_RETURN_STATUS(transportStub != nullptr, K_RUNTIME_ERROR,
-                             "Failed to create routed worker transport stub");
     auto dataStub = std::make_shared<WorkerWorkerOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
-    CHECK_FAIL_RETURN_STATUS(dataStub != nullptr, K_RUNTIME_ERROR, "Failed to create routed worker data stub");
     auto masterStub =
         std::make_shared<master::MasterOCService_BrpcGenericStub>(channel.get(), channelConfig_.timeout_ms);
-    CHECK_FAIL_RETURN_STATUS(masterStub != nullptr, K_RUNTIME_ERROR, "Failed to create routed master OC stub");
+    CHECK_FAIL_RETURN_STATUS(controlStub != nullptr && transportStub != nullptr && dataStub != nullptr
+                                 && masterStub != nullptr,
+                             K_RUNTIME_ERROR, "Failed to create routed worker RPC stubs");
     channel_ = std::move(channel);
+    controlStub_ = std::move(controlStub);
     transportStub_ = std::move(transportStub);
     dataStub_ = std::move(dataStub);
     masterStub_ = std::move(masterStub);
+    connectionGeneration_ = nextConnectionGeneration_.fetch_add(1, std::memory_order_relaxed);
     alive_.store(true, std::memory_order_release);
     return Status::OK();
 }
@@ -99,12 +101,23 @@ Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const mas
     return masterStub_->QueryAndGet(options, request, response);
 }
 
+Status WorkerRpcClient::DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
+                                       CreateRspPb &response)
+{
+    return controlStub_->Create(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeSet(const RpcOptions &options, const PublishReqPb &request,
+                                    PublishRspPb &response, const std::vector<MemView> &payloads)
+{
+    return controlStub_->Publish(options, request, response, payloads);
+}
+
 Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                         std::vector<RpcMessage> &payloads)
 {
-    if (!IsAlive()) {
-        return Status(K_RPC_UNAVAILABLE, "Routed worker data client is not initialized");
-    }
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker data client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
@@ -116,9 +129,8 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
 
 Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response)
 {
-    if (!IsAlive()) {
-        return Status(K_RPC_UNAVAILABLE, "Routed master RPC client is not initialized");
-    }
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed master RPC client is not initialized");
     int32_t rpcTimeout;
     RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
@@ -128,11 +140,56 @@ Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, mas
     return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
 }
 
+Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
+                                     uint32_t &workerVersion)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
+    Status rc = DoInvokeCreate(options, request, response);
+    if (rc.IsError()) {
+        return WithRpcDiag(rc, "Create", workerAddress_);
+    }
+    workerVersion = connectionGeneration_;
+    perfPoint.Record();
+    return Status::OK();
+}
+
+Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
+                                  const std::vector<MemView> &payloads, PublishRspPb &response,
+                                  uint32_t &workerVersion)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
+    Status rc = DoInvokeSet(options, request, response, payloads);
+    if (rc.IsError()) {
+        if (request.is_retry() && request.is_seal() && rc.GetCode() == K_OC_ALREADY_SEALED) {
+            workerVersion = connectionGeneration_;
+            perfPoint.Record();
+            return Status::OK();
+        }
+        return WithRpcDiag(rc, "Publish", workerAddress_);
+    }
+    workerVersion = connectionGeneration_;
+    perfPoint.Record();
+    return Status::OK();
+}
+
 Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
 {
-    if (!IsAlive() || transportStub_ == nullptr) {
-        return Status(K_RPC_UNAVAILABLE, "Routed worker RPC client is not initialized");
-    }
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
     UrmaHandshakeReqPb request;
     RETURN_IF_NOT_OK(ConstructHandshakePb(workerAddress_.ToString(), request, ""));
     int32_t rpcTimeout;
@@ -145,8 +202,8 @@ Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
 
 bool WorkerRpcClient::IsAlive() const
 {
-    return alive_.load(std::memory_order_acquire) && channel_ != nullptr && transportStub_ != nullptr
-           && dataStub_ != nullptr && masterStub_ != nullptr;
+    return alive_.load(std::memory_order_acquire) && channel_ != nullptr && controlStub_ != nullptr
+           && transportStub_ != nullptr && dataStub_ != nullptr && masterStub_ != nullptr;
 }
 
 void WorkerRpcClient::Close()
@@ -155,6 +212,7 @@ void WorkerRpcClient::Close()
     masterStub_.reset();
     dataStub_.reset();
     transportStub_.reset();
+    controlStub_.reset();
     channel_.reset();
 }
 

@@ -51,7 +51,11 @@ ds_cc_test(
     deps = [
         "//include/datasystem:headers",
         "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:object_buffer",
         "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/protos:object_posix_brpc",
