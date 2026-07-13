@@ -13,6 +13,7 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client:client_flags_monitor",
         "//src/datasystem/client:client_state_manager",
+        "//src/datasystem/client:client_transport",
         "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/client:listen_worker",
         "//src/datasystem/client:mmap_manager",
