@@ -515,6 +515,14 @@ public:
     Status GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp);
 
     /**
+     * @brief Query object locations for client direct reads.
+     * @param[in] req The query request.
+     * @param[out] rsp The object locations and redirect state.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp);
+
+    /**
      * @brief Delete metadata and notify other workers to delete these objects synchronously.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf. Valid if serverApi is empty.

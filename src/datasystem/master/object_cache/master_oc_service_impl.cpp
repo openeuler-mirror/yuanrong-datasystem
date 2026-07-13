@@ -415,6 +415,16 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
     return Status::OK();
 }
 
+Status MasterOCServiceImpl::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp)
+{
+    ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+    return ocMetadataManager->QueryAndGet(req, resp);
+}
+
 Status MasterOCServiceImpl::DeleteAllCopyMeta(
     std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> serverApi)
 {

@@ -18,19 +18,23 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 
+#include <cstdint>
 #include <memory>
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
-#include "datasystem/client/transport/data_plane/i_data_transporter.h"
-#include "datasystem/client/transport/transport_advisor.h"
-#include "datasystem/common/util/net_util.h"
+#include "datasystem/client/transport/object_read/object_read_flow.h"
+#include "datasystem/client/transport/object_read/object_read_types.h"
+#include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/util/thread_pool.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
 class TransportLayer {
 public:
-    explicit TransportLayer(std::shared_ptr<ClientRequestAuth> auth,
-                            uint64_t fastTransportMemSize = DataPlaneManager::DEFAULT_FAST_TRANSPORT_MEM_SIZE,
+    explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
+                            uint64_t fastTransportMemSize,
                             BrpcChannelConfig channelConfig = {});
     ~TransportLayer();
 
@@ -38,24 +42,18 @@ public:
     Status Init();
 
     /**
-     * @brief Execute Get and rebuild the selected data-plane connection once when required.
-     * @param[in] workerAddr Address returned by the routing layer.
-     * @param[in] input Logical Get request.
-     * @param[out] output Get batches and their payload ownership.
+     * @brief Execute an object read through metadata lookup and direct data-worker access.
+     * @param[in] input Routed object read request.
+     * @param[out] output Owned object read results.
      * @return K_OK on success; the error code otherwise.
      */
-    Status Get(const HostPort &workerAddr, const TransportGetRequest &input, TransportGetResult &output);
+    Status Get(const ObjectReadRequest &input, ObjectReadResult &output);
 
     void Shutdown();
 
-protected:
-    /** @brief Construct the facade with injected collaborators for focused orchestration tests. */
-    TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
-                   std::shared_ptr<TransportAdvisor> advisor);
-
 private:
-    std::shared_ptr<DataPlaneManager> dm_;
-    std::shared_ptr<TransportAdvisor> advisor_;
+    std::shared_ptr<DataPlaneManager> manager_;
+    std::unique_ptr<ObjectReadFlow> objectRead_;
 };
 }  // namespace client
 }  // namespace datasystem

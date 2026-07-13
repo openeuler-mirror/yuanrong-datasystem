@@ -18,15 +18,19 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_DATA_PLANE_MANAGER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_DATA_PLANE_MANAGER_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 
+#include <tbb/concurrent_hash_map.h>
+
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
-#include "datasystem/client/transport/rpc/client_request_auth.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/client/transport/worker_snapshot.h"
+#include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/net_util.h"
 
 namespace datasystem {
@@ -34,10 +38,7 @@ namespace client {
 
 class DataPlaneManager {
 public:
-    static constexpr uint64_t DEFAULT_FAST_TRANSPORT_MEM_SIZE = 256UL * 1024UL * 1024UL;
-
-    explicit DataPlaneManager(std::shared_ptr<ClientRequestAuth> auth,
-                              uint64_t fastTransportMemSize = DEFAULT_FAST_TRANSPORT_MEM_SIZE,
+    explicit DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                               BrpcChannelConfig channelConfig = {});
     virtual ~DataPlaneManager();
 
@@ -53,10 +54,18 @@ public:
      */
     Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out);
 
-    /** @brief Drop only the selected data-plane transporter while retaining the brpc control connection. */
+    /**
+     * @brief Get or lazily create the shared RPC client for an endpoint without creating a data transporter.
+     * @param[in] workerAddr Target endpoint address.
+     * @param[out] out Cached or newly initialized RPC client.
+     * @return K_OK when out is ready; the error code otherwise.
+     */
+    virtual Status GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out);
+
+    /** @brief Drop only the selected data-plane transporter while retaining the shared RPC connection. */
     void ResetDataPlane(const HostPort &workerAddr);
 
-    /** @brief Drop the complete worker entry, including its brpc control connection. */
+    /** @brief Drop the complete worker entry, including its shared RPC connection. */
     void Teardown(const HostPort &workerAddr);
 
     /**
@@ -75,7 +84,18 @@ protected:
                                     std::shared_ptr<IDataTransporter> &out);
 
 private:
-    struct WorkerTransportEntry;
+    struct WorkerTransportEntry {
+        bool HasAliveTransporter(AccessTransportKind expectedKind) const;
+        void ResetDataPlaneLocked();
+        void ResetDataPlane();
+
+        std::shared_mutex mutex;
+        std::shared_ptr<WorkerRpcClient> rpcClient;
+        std::shared_ptr<IDataTransporter> transporter;
+        AccessTransportKind kind = AccessTransportKind::TCP;
+    };
+
+    using EntryMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerTransportEntry>>;
 
     Status GetOrCreateEntry(const std::string &workerKey, std::shared_ptr<WorkerTransportEntry> &entry);
 
@@ -89,10 +109,15 @@ private:
                                    const std::shared_ptr<WorkerTransportEntry> &entry);
 
     Status BuildUbTransporter(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
-                              const std::string &errorPrefix, std::shared_ptr<IDataTransporter> &out);
+                              std::shared_ptr<IDataTransporter> &out);
 
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    EntryMap entries_;
+    std::shared_mutex mutex_;
+    std::atomic<bool> shutdown_{ false };
+    std::shared_ptr<Signature> signature_;
+    BrpcChannelConfig channelConfig_;
+    uint64_t fastTransportMemSize_ = 0;
+    std::atomic<bool> initialized_{ false };
 };
 }  // namespace client
 }  // namespace datasystem

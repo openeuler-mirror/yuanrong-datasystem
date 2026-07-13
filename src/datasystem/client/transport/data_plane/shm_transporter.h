@@ -34,7 +34,7 @@ public:
         return false;
     }
 
-    Status Get(const TransportGetRequest & /* input */, TransportGetResult & /* output */) override
+    Status Get(const DataGetRequest & /* input */, DataGetResult & /* output */) override
     {
         return Status(K_NOT_SUPPORTED, "ShmTransporter::Get not implemented");
     }

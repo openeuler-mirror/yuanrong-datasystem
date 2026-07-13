@@ -37,13 +37,16 @@ list(APPEND CLIENT_SRCS
         stream_cache/stream_client_impl.cpp
         stream_cache/producer_consumer_worker_api.cpp
         transport/transport_advisor.cpp
+        transport/common/deadline_retry.cpp
+        transport/metadata/object_metadata_client.cpp
+        transport/object_read/object_read_flow.cpp
+        transport/object_read/replica_reader.cpp
         transport/transport_layer.cpp
+        transport/data_plane/data_plane_executor.cpp
         transport/data_plane/data_plane_manager.cpp
         transport/data_plane/tcp_transporter.cpp
         transport/data_plane/ub_connection.cpp
         transport/data_plane/ub_transporter.cpp
-        transport/rpc/client_request_auth.cpp
-        transport/rpc/get_request_builder.cpp
         transport/rpc/worker_rpc_client.cpp
         routing/broken_filter.cpp
         routing/hash_ring_refresher.cpp
@@ -73,6 +76,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         share_memory_protos_client
         common_log_proto
         worker_object_protos_client
+        master_object_protos_client
         worker_stream_protos_client
         common_device
         common_shared_memory

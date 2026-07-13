@@ -18,36 +18,27 @@
 
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 
-#include <numeric>
-#include <utility>
-
-#include "datasystem/client/transport/rpc/get_request_builder.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/kv_client.h"
-#include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
 
-Status TcpTransporter::Get(const TransportGetRequest &input, TransportGetResult &output)
+Status TcpTransporter::Get(const DataGetRequest &input, DataGetResult &output)
 {
-    output.Clear();
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
-
-    TransportGetBatchResult batch;
-    batch.requestIndices.resize(input.objectKeys.size());
-    std::iota(batch.requestIndices.begin(), batch.requestIndices.end(), 0);
-
-    GetReqPb request;
-    RETURN_IF_NOT_OK(BuildGetRequest(input, {}, request));
-    Status rc = rpcClient_->InvokeGet(input.subTimeoutMs, request, batch.response, batch.rpcPayloads,
-                                      batch.workerVersion);
-    RETURN_IF_NOT_OK(rc);
-    RETURN_IF_NOT_OK(GetTransportResponseStatus(batch.response, AccessTransportKind::TCP));
-
-    batch.kind = AccessTransportKind::TCP;
-    output.batches.emplace_back(std::move(batch));
-    output.actualKind = AccessTransportKind::TCP;
+    CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
+    output = DataGetResult{};
+    GetObjectRemoteReqPb request;
+    request.set_object_key(input.objectKey);
+    request.set_data_size(input.expectedSize);
+    request.set_try_lock(true);
+    RETURN_IF_NOT_OK(rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads));
+    Status responseStatus(static_cast<StatusCode>(output.response.error().error_code()),
+                          output.response.error().error_msg());
+    RETURN_IF_NOT_OK(responseStatus);
+    CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD, K_RUNTIME_ERROR,
+                             "TCP GetObjectRemote returned an invalid data source");
+    output.kind = AccessTransportKind::TCP;
     return Status::OK();
 }
 

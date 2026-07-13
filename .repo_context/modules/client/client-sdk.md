@@ -24,6 +24,8 @@
   - `src/datasystem/client/kv_cache/kv_client.cpp`
   - `src/datasystem/client/object_cache/object_client.cpp`
   - `src/datasystem/client/object_cache/object_client_impl.cpp`
+  - `src/datasystem/client/transport/transport_layer.cpp`
+  - `src/datasystem/client/transport/object_read/object_read_flow.cpp`
   - `src/datasystem/client/stream_cache/stream_client.cpp`
   - `src/datasystem/client/hetero_cache/hetero_client.cpp`
   - `src/datasystem/client/context/context.cpp`
@@ -37,6 +39,9 @@
   - `datasystem` shared library is built from `src/datasystem/client/*` and is the main user-facing client library.
   - `DsClient` is only a convenience aggregator. It constructs `KVClient`, `HeteroClient`, and `ObjectClient`, then initializes and shuts them down in order.
   - `ConnectOptions` is the common connection/auth/config carrier for C++ clients.
+  - `ConnectOptions::enableLocalCache` defaults to `true`; setting it to `false` routes full-object `Get` through
+    `TransportLayer`, which batches metadata queries by meta owner and reads successful keys independently, while the
+    default path keeps the existing client-worker behavior.
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
@@ -72,6 +77,7 @@
 | `KVClient` | `src/datasystem/client/kv_cache/kv_client.cpp` -> `object_cache::ObjectClientImpl` | KV create/set/get path is layered over object-cache client backend |
 | `PerfClient` | `src/datasystem/client/perf_client/perf_client.cpp` | perf log reset/get helper for worker/client performance diagnostics |
 | `ObjectClient` | `src/datasystem/client/object_cache/object_client.cpp` -> `object_cache::ObjectClientImpl` | object semantics are thin wrappers around shared implementation |
+| direct object read | `src/datasystem/client/transport/transport_layer.cpp` -> `object_read/ObjectReadFlow` | groups keys by routed meta owner, then independently polls each key's returned data-worker locations through endpoint transporters |
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
@@ -84,6 +90,8 @@
   - connection and request timeout controls
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
+  - local-cache routing toggle; `enableLocalCache=false` supports single- and multi-key full-object `Get`, with
+    per-key partial results and without L2 loading or RH2D
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size
@@ -158,11 +166,29 @@
 - Common change risks:
   - `ConnectOptions` can affect multiple language bindings and shared backend initialization at once; `serviceDiscovery` is intentionally typed as `std::shared_ptr<IServiceDiscovery>` so SDK clients do not depend on the ETCD implementation;
   - `ObjectClientImpl` is shared by both KV and Object API families, so “KV-only” changes may regress object behavior;
+  - direct-read metadata and replica retries share the caller's API deadline; the data phase reuses the fixed location
+    snapshot and does not query metadata again between replica rounds;
   - Python-facing behavior can differ from C++ because pybind wrappers convert statuses into exceptions and sometimes rename methods;
   - context propagation changes can affect tracing and multi-tenant behavior across all client operations.
 - Important invariants:
   - `DsClient` init order is KV -> Hetero -> Object; shutdown order is Object -> Hetero -> KV.
   - worker connectivity and auth material may come from explicit options or environment fallback in shared client backend code.
+  - direct-read mode does not dynamically update AK/SK and does not load missing objects from L2; callers must recreate
+    the client to change credentials for that mode.
+  - direct-read endpoint entries use a TBB concurrent map under a lifecycle shared mutex, while each entry has its own
+    mutex; different endpoints can initialize connections concurrently and the same endpoint is initialized once.
+  - transport RPC clients share a transport-owned `Signature` instance and sign each fully populated request immediately
+    before sending it.
+  - transport-layer Get keeps flow-stage summaries plus endpoint, retry, redirect, and replica details in
+    `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every key
+    fails, it returns the first failure in input order without logging that user-visible error again. Transport-specific
+    route, location, missing-result, and data-response errors use concise messages. Partial success still returns
+    `K_OK`, and debug-only diagnostics avoid hot-path log volume.
+  - `QueryAndGet` returns at most five copy locations per object. The primary address from object metadata is returned
+    first, followed by non-primary locations, so replica retry always starts with the primary copy.
+  - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
+    reads. It disables the local cache, injects the temporary metadata owner route, pins keys to that owner, and
+    asserts TCP in a normal build or UB when `USE_URMA` is enabled.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:

@@ -20,22 +20,27 @@
 
 #include <utility>
 
-#include "datasystem/common/log/log.h"
+#include "datasystem/client/transport/common/deadline_retry.h"
+#include "datasystem/client/transport/data_plane/data_plane_manager.h"
+#include "datasystem/client/transport/data_plane/data_plane_executor.h"
+#include "datasystem/client/transport/metadata/object_metadata_client.h"
+#include "datasystem/client/transport/object_read/object_read_flow.h"
+#include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace client {
-
-TransportLayer::TransportLayer(std::shared_ptr<ClientRequestAuth> auth, uint64_t fastTransportMemSize,
-                               BrpcChannelConfig channelConfig)
-    : dm_(std::make_shared<DataPlaneManager>(std::move(auth), fastTransportMemSize, std::move(channelConfig))),
-      advisor_(std::make_shared<TransportAdvisor>())
-{}
-
-TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
-                               std::shared_ptr<TransportAdvisor> advisor)
-    : dm_(std::move(dataPlaneManager)), advisor_(std::move(advisor))
+TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
+                               uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig)
 {
+    manager_ =
+        std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize, std::move(channelConfig));
+    auto retry = std::make_shared<DeadlineRetry>();
+    auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry);
+    auto executor = std::make_shared<DataPlaneExecutor>(manager_, std::make_shared<TransportAdvisor>());
+    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry));
+    objectRead_ = std::make_unique<ObjectReadFlow>(std::move(metadata), std::move(replicas), std::move(taskPool));
 }
 
 TransportLayer::~TransportLayer()
@@ -45,41 +50,21 @@ TransportLayer::~TransportLayer()
 
 Status TransportLayer::Init()
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(dm_);
-    return dm_->Init();
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    return manager_->Init();
 }
 
-Status TransportLayer::Get(const HostPort &workerAddr, const TransportGetRequest &input, TransportGetResult &output)
+Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &output)
 {
-    TransportHint hint = advisor_->GetTransportHint(workerAddr);
-    std::shared_ptr<IDataTransporter> tp;
-    Status rc = dm_->GetOrCreate(workerAddr, hint, tp);
-    RETURN_IF_NOT_OK(rc);
-    rc = tp->Get(input, output);
-    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
-        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Get failed: " << rc;
-        dm_->ResetDataPlane(workerAddr);
-    } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
-                     << " after Get failed: " << rc;
-        dm_->Teardown(workerAddr);
-    } else {
-        return rc;
-    }
-    rc = dm_->GetOrCreate(workerAddr, hint, tp);
-    RETURN_IF_NOT_OK(rc);
-    rc = tp->Get(input, output);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Get still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
-                     << rc;
-    }
-    return rc;
+    RETURN_RUNTIME_ERROR_IF_NULL(objectRead_);
+    return objectRead_->Run(input, output);
 }
 
 void TransportLayer::Shutdown()
 {
-    if (dm_ != nullptr) {
-        dm_->Shutdown();
+    objectRead_.reset();
+    if (manager_ != nullptr) {
+        manager_->Shutdown();
     }
 }
 }  // namespace client

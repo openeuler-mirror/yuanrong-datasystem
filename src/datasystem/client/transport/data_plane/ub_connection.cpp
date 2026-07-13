@@ -44,10 +44,10 @@ UbConnection::~UbConnection()
 Status UbConnection::Establish(const HostPort &workerAddr)
 {
     workerAddr_ = workerAddr;
-    return EstablishUrma(workerAddr);
+    return EstablishUrma();
 }
 
-Status UbConnection::EstablishUrma(const HostPort &workerAddr)
+Status UbConnection::EstablishUrma()
 {
 #ifdef USE_URMA
     if (!UrmaManager::IsUrmaEnabled()) {
@@ -60,7 +60,6 @@ Status UbConnection::EstablishUrma(const HostPort &workerAddr)
     urmaReady_.store(true, std::memory_order_release);
     return Status::OK();
 #else
-    (void)workerAddr;
     return Status(K_NOT_SUPPORTED, "USE_URMA not compiled");
 #endif
 }

@@ -44,6 +44,7 @@
 
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
+#include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
@@ -335,6 +336,10 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
+    enableLocalCache_ = connectOptions.enableLocalCache;
+    if (!enableLocalCache_) {
+        transportSignature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
+    }
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
@@ -380,6 +385,10 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
 
+    if (transportLayer_ != nullptr) {
+        transportLayer_->Shutdown();
+        transportLayer_.reset();
+    }
     asyncSetRPCPool_ = nullptr;
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
@@ -489,6 +498,21 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
 }
 
+Status ObjectClientImpl::InitTransportLayer()
+{
+    if (enableLocalCache_ || transportLayer_ != nullptr) {
+        return Status::OK();
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
+    RETURN_RUNTIME_ERROR_IF_NULL(asyncGetRPCPool_);
+    auto transportLayer =
+        std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_);
+    RETURN_IF_NOT_OK(transportLayer->Init());
+    transportLayer_ = std::move(transportLayer);
+    LOG(INFO) << "[TransportGet] Transport layer initialized";
+    return Status::OK();
+}
+
 Status ObjectClientImpl::InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs)
 {
     int32_t timeoutMs = connectTimeoutMs >= 0 ? connectTimeoutMs : connectTimeoutMs_;
@@ -579,6 +603,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     auto &workerApi = workerApi_[node];
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
     ConstructTreadPool();
+    RETURN_IF_NOT_OK(InitTransportLayer());
 
     RETURN_IF_NOT_OK(workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2)));
@@ -678,6 +703,10 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     workerSwitchState_ = WorkerSwitchState::AVAILABLE;
     mmapManager_.reset();
     devOcImpl_.reset();
+    if (transportLayer_ != nullptr) {
+        transportLayer_->Shutdown();
+        transportLayer_.reset();
+    }
     asyncSetRPCPool_ = nullptr;
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
@@ -2409,6 +2438,9 @@ Status ObjectClientImpl::UpdateToken(SensitiveValue &token)
 
 Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
 {
+    if (!enableLocalCache_) {
+        return Status(K_NOT_SUPPORTED, "UpdateAkSk is not supported when local cache is disabled");
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -3017,6 +3049,151 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
     return rc;
 }
 
+Status ObjectClientImpl::ResolveTransportMetaOwner(const std::string &objectKey, HostPort &metaOwner) const
+{
+    (void)objectKey;
+    std::string address;
+    INJECT_POINT("client.transport.meta_owner", [&address, &objectKey](const std::string &injectedAddress) {
+        (void)objectKey;
+        address = injectedAddress;
+        return Status::OK();
+    });
+    CHECK_FAIL_RETURN_STATUS(!address.empty(), K_NOT_READY, "Object route is not ready");
+    return metaOwner.ParseString(address);
+}
+
+void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> &objectKeys,
+                                                 client::ObjectReadRequest &request,
+                                                 std::vector<Status> &itemStatuses) const
+{
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        HostPort metaOwner;
+        itemStatuses[i] = ResolveTransportMetaOwner(objectKeys[i], metaOwner);
+        if (itemStatuses[i].IsOk()) {
+            request.items.push_back({ i, objectKeys[i], metaOwner });
+        }
+    }
+}
+
+Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
+                                                  std::shared_ptr<Buffer> &buffer)
+{
+    CHECK_FAIL_RETURN_STATUS(item.objectKey == objectKey, K_RUNTIME_ERROR, "Invalid object data response");
+    auto &data = item.data;
+    const uint64_t dataSize = data.externalOwner != nullptr
+                                  ? data.externalSize
+                                  : static_cast<uint64_t>(std::max<int64_t>(data.response.data_size(), 0));
+    GetRspPb response;
+    auto *payloadInfo = response.add_payload_info();
+    payloadInfo->set_object_key(item.objectKey);
+    payloadInfo->set_object_index(0);
+    payloadInfo->set_data_size(static_cast<int64_t>(dataSize));
+    std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> ubBufferInfos;
+    if (data.externalOwner != nullptr) {
+        CHECK_FAIL_RETURN_STATUS(data.response.data_size() >= 0
+                                     && static_cast<uint64_t>(data.response.data_size()) == data.externalSize,
+                                 K_RUNTIME_ERROR, "Invalid object data response");
+        CHECK_FAIL_RETURN_STATUS(data.externalData != nullptr || dataSize == 0, K_RUNTIME_ERROR,
+                                 "Invalid object data response");
+        FullParam param;
+        auto bufferInfo = MakeObjectBufferInfo(item.objectKey,
+                                               const_cast<uint8_t *>(data.externalData), dataSize, 0, param, false, 0);
+        bufferInfo->ubGetBufferHandle = data.externalOwner;
+        ubBufferInfos.emplace(item.objectKey, std::move(bufferInfo));
+        payloadInfo->add_part_index(0);
+        data.rpcPayloads.emplace_back();
+    } else {
+        CHECK_FAIL_RETURN_STATUS(data.externalData == nullptr && data.externalSize == 0, K_RUNTIME_ERROR,
+                                 "Invalid object data response");
+        uint64_t payloadSize = 0;
+        for (size_t i = 0; i < data.rpcPayloads.size(); ++i) {
+            CHECK_FAIL_RETURN_STATUS(payloadSize <= UINT64_MAX - data.rpcPayloads[i].Size(), K_RUNTIME_ERROR,
+                                     "Invalid object data response");
+            payloadSize += data.rpcPayloads[i].Size();
+            payloadInfo->add_part_index(static_cast<uint32_t>(i));
+        }
+        CHECK_FAIL_RETURN_STATUS(payloadSize == dataSize, K_RUNTIME_ERROR, "Invalid object data response");
+    }
+    std::vector<std::shared_ptr<Buffer>> itemBuffers(1);
+    std::vector<std::string> failedKeys;
+    RETURN_IF_NOT_OK(ProcessGetResponse({ item.objectKey }, {}, response, 0, data.rpcPayloads, itemBuffers, failedKeys,
+                                        ubBufferInfos));
+    CHECK_FAIL_RETURN_STATUS(failedKeys.empty() && itemBuffers.front() != nullptr, K_NOT_FOUND,
+                             "Cannot get objects from worker");
+    buffer = std::move(itemBuffers.front());
+    return Status::OK();
+}
+
+Status ObjectClientImpl::ApplyTransportReadResult(const std::vector<std::string> &objectKeys,
+                                                  const client::ObjectReadRequest &request,
+                                                  client::ObjectReadResult &result, const Status &transportStatus,
+                                                  std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                  std::vector<Status> &itemStatuses,
+                                                  AccessTransportKind &actualKind)
+{
+    std::vector<bool> returned(objectKeys.size(), false);
+    for (auto &item : result.items) {
+        CHECK_FAIL_RETURN_STATUS(item.requestIndex < objectKeys.size(), K_RUNTIME_ERROR,
+                                 "Invalid response while getting objects");
+        CHECK_FAIL_RETURN_STATUS(!returned[item.requestIndex], K_RUNTIME_ERROR,
+                                 "Invalid response while getting objects");
+        CHECK_FAIL_RETURN_STATUS(item.objectKey == objectKeys[item.requestIndex], K_RUNTIME_ERROR,
+                                 "Invalid response while getting objects");
+        returned[item.requestIndex] = true;
+        itemStatuses[item.requestIndex] = item.status;
+        if (item.status.IsOk()) {
+            itemStatuses[item.requestIndex] =
+                MaterializeTransportItem(item.objectKey, item, buffers[item.requestIndex]);
+            if (itemStatuses[item.requestIndex].IsOk()) {
+                actualKind = static_cast<AccessTransportKind>(std::max(
+                    static_cast<uint8_t>(actualKind), static_cast<uint8_t>(item.data.kind)));
+            }
+        }
+    }
+    for (const auto &item : request.items) {
+        if (!returned[item.requestIndex]) {
+            itemStatuses[item.requestIndex] = transportStatus.IsError()
+                                                  ? transportStatus
+                                                  : Status(K_RUNTIME_ERROR, "Cannot get objects from worker");
+        }
+    }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::FinishTransportRead(const std::vector<Status> &itemStatuses,
+                                             AccessTransportKind actualKind, const Status &transportStatus)
+{
+    if (std::any_of(itemStatuses.begin(), itemStatuses.end(), [](const Status &status) { return status.IsOk(); })) {
+        AccessTransportTracker::Record(actualKind);
+        return Status::OK();
+    }
+    for (const auto &status : itemStatuses) {
+        if (status.IsError()) {
+            return status;
+        }
+    }
+    return transportStatus.IsError() ? transportStatus : Status(K_RUNTIME_ERROR, "Failed to get objects");
+}
+
+Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &objectKeys,
+                                               std::vector<std::shared_ptr<Buffer>> &buffers)
+{
+    CHECK_FAIL_RETURN_STATUS(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
+    CHECK_FAIL_RETURN_STATUS(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
+                             "Failed to prepare object Get request");
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    client::ObjectReadRequest request;
+    std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
+    BuildTransportReadRequest(objectKeys, request, itemStatuses);
+    client::ObjectReadResult result;
+    Status transportStatus = request.items.empty() ? Status(K_NOT_READY, "No object route is available")
+                                                   : transportLayer_->Get(request, result);
+    AccessTransportKind actualKind = AccessTransportKind::SHM;
+    RETURN_IF_NOT_OK(ApplyTransportReadResult(objectKeys, request, result, transportStatus, buffers, itemStatuses,
+                                              actualKind));
+    return FinishTransportRead(itemStatuses, actualKind, transportStatus);
+}
+
 Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
                              std::vector<Optional<Buffer>> &buffers, bool queryL2Cache, bool isRH2DSupported)
 {
@@ -3031,16 +3208,23 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_START);
     }
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     std::vector<std::shared_ptr<Buffer>> objectBuffers(objectKeys.size());
-    GetParam getParam{ .objectKeys = objectKeys,
-                       .subTimeoutMs = subTimeoutMs,
-                       .readParams = {},
-                       .queryL2Cache = queryL2Cache,
-                       .isRH2DSupported = isRH2DSupported };
-    Status rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
+    Status rc;
+    if (!enableLocalCache_) {
+        CHECK_FAIL_RETURN_STATUS(!isRH2DSupported, K_NOT_SUPPORTED,
+                                 "Remote H2D is not supported when local cache is disabled");
+        rc = GetFromTransportLayer(objectKeys, objectBuffers);
+    } else {
+        std::shared_ptr<IClientWorkerApi> workerApi;
+        std::unique_ptr<Raii> raii;
+        RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+        GetParam getParam{ .objectKeys = objectKeys,
+                           .subTimeoutMs = subTimeoutMs,
+                           .readParams = {},
+                           .queryL2Cache = queryL2Cache,
+                           .isRH2DSupported = isRH2DSupported };
+        rc = GetBuffersFromWorker(workerApi, getParam, objectBuffers);
+    }
     buffers.clear();
     for (auto &objectBuffer : objectBuffers) {
         if (objectBuffer == nullptr) {

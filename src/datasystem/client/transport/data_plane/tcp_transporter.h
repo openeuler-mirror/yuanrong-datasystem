@@ -43,7 +43,7 @@ public:
         return rpcClient_ != nullptr && rpcClient_->IsAlive();
     }
 
-    Status Get(const TransportGetRequest &input, TransportGetResult &output) override;
+    Status Get(const DataGetRequest &input, DataGetResult &output) override;
 
 private:
     std::shared_ptr<WorkerRpcClient> rpcClient_;

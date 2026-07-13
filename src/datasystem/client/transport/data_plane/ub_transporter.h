@@ -47,13 +47,6 @@ public:
                             UrmaRemoteAddrPb &remoteAddr, std::shared_ptr<IReceiveBufferOwner> &owner) = 0;
 };
 
-/** @brief Indices and UB feasibility for one Get batch. */
-struct GetBatchPlan {
-    std::vector<size_t> requestIndices;
-    uint64_t totalSize = 0;
-    bool useUb = true;
-};
-
 class UbTransporter : public IDataTransporter {
 public:
     explicit UbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> conn,
@@ -67,12 +60,12 @@ public:
 
     bool IsAlive() const override;
 
-    Status Get(const TransportGetRequest &input, TransportGetResult &output) override;
+    Status Get(const DataGetRequest &input, DataGetResult &output) override;
 
     void CloseDataPlane() override;
 
 private:
-    Status ExecutePlan(const TransportGetRequest &input, const GetBatchPlan &plan, TransportGetBatchResult &batch);
+    Status GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output, uint64_t &actualSize);
 
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::shared_ptr<UbConnection> conn_;
