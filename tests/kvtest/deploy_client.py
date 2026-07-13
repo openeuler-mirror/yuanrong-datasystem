@@ -166,6 +166,46 @@ class Deployer:
                 self._build_scp_cmd(node) + ['-r', src, f'{user}@{target}:{dst}'],
                 check=True, timeout=120)
 
+    @staticmethod
+    def _local_path_for(remote_path, local_dir, remote_dir):
+        """Map a remote path to a local path, preserving subpath under remote_dir.
+
+        Mirrors `tar` extraction semantics so that files with the same basename
+        but different directories (e.g. ``run.log`` and ``metrics_*/run.log``)
+        do not overwrite each other in ``local_dir``.
+
+        Falls back to ``os.path.basename`` when ``remote_path`` is not strictly
+        under ``remote_dir`` (escapes the dir, sits on a different drive, equals
+        ``remote_dir`` itself, or ``remote_dir`` is None).
+        """
+        rel = None
+        if remote_dir:
+            try:
+                candidate = os.path.relpath(remote_path, remote_dir)
+            except ValueError:
+                # Different drive on Windows — cannot compute relpath.
+                candidate = None
+            if candidate is not None:
+                # Normalize so '.', '..', trailing slashes etc. are canonical
+                # before the escape check.
+                candidate = os.path.normpath(candidate)
+                if (candidate == '.'
+                        or candidate == '..'
+                        or candidate.startswith('..' + os.sep)
+                        or os.path.isabs(candidate)):
+                    # remote_path is remote_dir itself, escapes remote_dir,
+                    # or is absolute and unrelated — fall back to basename.
+                    rel = None
+                else:
+                    rel = candidate
+        if rel is None:
+            rel = os.path.basename(remote_path)
+        local_path = os.path.join(local_dir, rel)
+        parent = os.path.dirname(local_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return local_path
+
     def _collect_remote_files(self, node, local_dir, files, file_label='files', remote_dir=None, tar_pattern=None):
         """Collect remote files to local directory (internal helper)."""
         transport = self._transport(node)
@@ -183,18 +223,18 @@ class Deployer:
             # kubectl cp requires tar inside container; use cat instead
             ns = self._namespace(node)
             for remote_path in files:
-                fname = os.path.basename(remote_path)
-                local_path = os.path.join(local_dir, fname)
+                local_path = self._local_path_for(remote_path, local_dir, remote_dir)
                 cmd = ['kubectl', 'exec', target, '-n', ns, '--', 'cat', remote_path]
                 try:
                     with open(local_path, 'wb') as f:
                         subprocess.run(cmd, stdout=f, check=True, timeout=120)
                 except Exception as e:
-                    print(f'    {fname} -> FAILED: {e}')
+                    # Use the full remote_path (not basename) so failures of
+                    # same-named files in different dirs are distinguishable.
+                    print(f'    {remote_path} -> {local_path} FAILED: {e}')
         elif transport == 'localhost':
             for remote_path in files:
-                fname = os.path.basename(remote_path)
-                local_path = os.path.join(local_dir, fname)
+                local_path = self._local_path_for(remote_path, local_dir, remote_dir)
                 shutil.copy2(remote_path, local_path)
         else:
             # SSH: tar + scp
@@ -673,8 +713,9 @@ class Deployer:
                 collect_fn(node, local_dir)
                 if not os.path.isdir(local_dir):
                     return 'empty'
-                count = len([f for f in os.listdir(local_dir)
-                             if os.path.isfile(os.path.join(local_dir, f))])
+                # Files may now land in subdirs (metrics_*/run.log etc.),
+                # so walk recursively instead of only counting top-level files.
+                count = sum(len(files) for _, _, files in os.walk(local_dir))
                 if count == 0:
                     print(f'  {target} -> 0 {file_label}')
                     return 'empty'

@@ -104,4 +104,5 @@ ds_cc_library(
         "//src/datasystem/common/util:validator",
         "@re2",
     ],
+    alwayslink = True,
 )
