@@ -31,7 +31,12 @@ namespace bench {
 Status StrToInt(const std::string &str, uint64_t &num)
 {
     try {
-        num = std::stoul(str);
+        size_t pos = 0;
+        num = std::stoul(str, &pos);
+        if (pos != str.size()) {
+            return Status(StatusCode::K_INVALID,
+                          "Failed to parse '" + str + "' as number: unexpected trailing characters");
+        }
     } catch (std::invalid_argument &invalidArgument) {
         return Status(StatusCode::K_INVALID, "Failed to parse '" + str + "' as number: invalid argument");
     } catch (std::out_of_range &outOfRange) {
@@ -43,7 +48,12 @@ Status StrToInt(const std::string &str, uint64_t &num)
 Status StrToInt(const std::string &str, int32_t &num)
 {
     try {
-        num = std::stol(str);
+        size_t pos = 0;
+        num = std::stol(str, &pos);
+        if (pos != str.size()) {
+            return Status(StatusCode::K_INVALID,
+                          "Failed to parse '" + str + "' as number: unexpected trailing characters");
+        }
     } catch (std::invalid_argument &invalidArgument) {
         return Status(StatusCode::K_INVALID, "Failed to parse '" + str + "' as number: invalid argument");
     } catch (std::out_of_range &outOfRange) {
